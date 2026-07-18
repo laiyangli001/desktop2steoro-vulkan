@@ -1,0 +1,23 @@
+schema_version: 1
+graphics:
+  backend: auto
+  open_gl_fallback: true
+capture:
+  tool: WindowsCaptureCUDA
+  mode: Monitor
+  monitor_index: 1
+inference:
+  backend: auto
+  model: Distill-Any-Depth-Base
+stereo:
+  render_scale: 4K
+  depth_strength: 0.15
+  convergence: 0.5
+openxr:
+  enabled: true
+  graphics_binding: vulkan
+scene:
+  environment: Default
+output:
+  mode: openxr
+

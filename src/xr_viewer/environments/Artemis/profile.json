@@ -1,0 +1,137 @@
+{
+  "display_name": {
+    "EN": "Artemis",
+    "CN": "阿特弥斯"
+  },
+  "glb": "environment.glb",
+  "model_position": [
+    0.0,
+    843.0854,
+    -0.1649
+  ],
+  "model_rotation_deg": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "model_scale": [
+    1,
+    1,
+    1
+  ],
+  "skybox": {
+    "nodes": [
+      "Model_Artemis__SkyBox",
+      "Model_Artemis__SkyBox_hybrid_pbr"
+    ],
+    "force_opaque": true,
+    "double_sided": true
+  },
+  "env_exposure": 0.5,
+  "env_gamma": 2.2,
+  "env_emissive_strength": 10.0,
+  "env_khr_light_scale": 1.0,
+  "panda_light_scale": 4.0,
+  "xr_render_scale": 1.0,
+  "xr_projection_near": 0.1,
+  "xr_projection_far": 20000.0,
+  "screen_quality_filter": false,
+  "screen_quality_sharpness": 0.35,
+  "screen_quality_oversample": 1.0,
+  "xr_quad_layer_debug_offset": 0.0,
+  "xr_quad_layer_stereo_boost": 1.0,
+  "env_ambient_color": [
+    0.06,
+    0.05,
+    0.05
+  ],
+  "env_head_light_color": [
+    0.45,
+    0.45,
+    0.48
+  ],
+  "screen_light_intensity": 3.5,
+  "controller_hdr_lighting": false,
+  "env_fill_lights": [],
+  "lighting_presets": [
+    {
+      "name": "Day",
+      "env_exposure": 0.5,
+      "env_ambient_color": [
+        0.06,
+        0.05,
+        0.05
+      ],
+      "env_head_light_color": [
+        0.45,
+        0.45,
+        0.48
+      ]
+    },
+    {
+      "name": "Night",
+      "env_exposure": 0.5,
+      "env_ambient_color": [
+        0.01,
+        0.01,
+        0.012
+      ],
+      "env_head_light_color": [
+        0.03,
+        0.03,
+        0.05
+      ]
+    }
+  ],
+  "view_pose_index": 1,
+  "view_poses": [
+    {
+      "name": "Bridge Approach",
+      "x": 0.0,
+      "y": 110.0,
+      "z": -650.0,
+      "angle": 0.0
+    },
+    {
+      "name": "Model Center",
+      "x": -24.5487,
+      "y": 901.0986,
+      "z": -961.4048,
+      "angle": 897.72,
+      "rotation_deg": [
+        897.72,
+        -4.76,
+        0.0
+      ]
+    },
+    {
+      "name": "Wide Overview",
+      "x": 0.0,
+      "y": 1550.0,
+      "z": -3600.0,
+      "angle": 0.0,
+      "rotation_deg": [
+        0.0,
+        -18.0,
+        0.0
+      ]
+    }
+  ],
+  "screen": {
+    "allow_controller_move": true,
+    "width": 90.5689,
+    "position": [
+      -22.3741,
+      896.0241,
+      -903.2128
+    ],
+    "rotation_deg": [
+      -179.48,
+      0.0,
+      0.0
+    ],
+    "curved": false,
+    "allow_curve": true,
+    "name": "Preview Screen"
+  }
+}

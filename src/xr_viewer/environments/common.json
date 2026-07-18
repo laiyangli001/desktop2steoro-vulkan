@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "gltf_material_fields": {
+    "baseColorFactor": true,
+    "alpha": true,
+    "doubleSided": true,
+    "sampler": true,
+    "textureTransform": true,
+    "colorSpace": true,
+    "normalTexture": true,
+    "metallicRoughnessTexture": true,
+    "occlusionTexture": true,
+    "emissiveTexture": true
+  },
+  "defaults": {
+    "baseColorFactor": [1.0, 1.0, 1.0],
+    "baseAlpha": 1.0,
+    "alphaMode": "OPAQUE",
+    "alphaCutoff": 0.5,
+    "doubleSided": false,
+    "roughnessFactor": 1.0,
+    "metallicFactor": 0.0,
+    "emissiveFactor": [0.0, 0.0, 0.0],
+    "normalScale": 1.0,
+    "occlusionStrength": 1.0,
+    "texOffset": [0.0, 0.0],
+    "texScale": [1.0, 1.0],
+    "texRotation": 0.0,
+    "baseTexcoord": 0,
+    "normalTexcoord": 0,
+    "occlusionTexcoord": 0,
+    "metallicRoughnessTexcoord": 0,
+    "emissiveTexcoord": 0
+  },
+  "pbr": {
+    "mode": "environment_pbr",
+    "useEnvironmentPbr": true,
+    "shareEnvironmentLighting": true,
+    "enableNormalTexture": true,
+    "enableMetallicRoughnessTexture": true,
+    "enableOcclusionTexture": true,
+    "enableEmissiveTexture": true,
+    "enableAlphaBlend": true,
+    "enableDoubleSided": true
+  },
+  "diagnostics": {
+    "materialMode": ""
+  },
+  "textureUnits": {
+    "base": 3,
+    "normal": 4,
+    "occlusion": 5,
+    "metallicRoughness": 6,
+    "emissive": 7
+  },
+  "colorSpace": {
+    "baseColor": "srgb",
+    "emissive": "srgb",
+    "normal": "linear",
+    "metallicRoughness": "linear",
+    "occlusion": "linear"
+  }
+}

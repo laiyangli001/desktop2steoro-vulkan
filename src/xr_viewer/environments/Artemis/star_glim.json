@@ -1,0 +1,17 @@
+{
+    "schema_version": 1,
+    "effect": "star_glim",
+    "node_name_patterns": [
+        "*SkyBox*"
+    ],
+    "stars_texture": "star_glim_stars.png",
+    "mask_texture": "star_glim_mask.png",
+    "intensity": 10.0,
+    "speed": 0.0010000000474974514,
+    "shine_speed": 0.5,
+    "cell_density": 300.0,
+    "cell_offset": 10.0,
+    "cell_soft": 0.07100000232458115,
+    "cell_value": 0.0,
+    "strength": 1.0
+}

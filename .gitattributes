@@ -1,0 +1,2 @@
+src/xr_viewer/environments/**/*.hdr filter=lfs diff=lfs merge=lfs -text
+src/xr_viewer/environments/**/*.glb filter=lfs diff=lfs merge=lfs -text

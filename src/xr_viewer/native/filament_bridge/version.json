@@ -1,0 +1,18 @@
+{
+  "version": "1.74.0",
+  "release_url": "https://github.com/google/filament/releases/tag/v1.74.0",
+  "platforms": {
+    "windows": {
+      "asset": "filament-v1.74.0-windows.tgz",
+      "sha256": "dafe3e329a44d60c9f9a891c04f94d49b33bd13b2c733a7deefc5f2f39973e0d"
+    },
+    "linux": {
+      "asset": "filament-v1.74.0-linux.tgz",
+      "sha256": "47020e876fa9b9a22ba6ce3e0ebd45ed2595a41b87f2a18098f2b8f595a7e117"
+    },
+    "macos": {
+      "asset": "filament-v1.74.0-mac.tgz",
+      "sha256": "f606f776ad0ac53eb5ed6f266cd7c3f37f18e160bc5cfa7ea291ffd12182f092"
+    }
+  }
+}

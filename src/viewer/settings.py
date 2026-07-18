@@ -1,0 +1,97 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from stereo_runtime.render_size import RenderSizeConfig, render_size_config_from_settings
+from utils.display import compute_output_resolution, get_fps
+from utils.xr_headset_presets import DEFAULT_XR_HEADSET_MODEL, resolve_xr_headset_preset
+from viewer.controller_help import get_controller_help_rows
+from viewer.upscaler import normalize_upscaler, normalize_upscaler_sharpness
+
+
+@dataclass(frozen=True)
+class ViewerSettings:
+    monitor_index: int
+    display_mode: str
+    stereo_display_index: int | None
+    stereo_display_selection: bool
+    output_resolution: int | tuple[int, int]
+    render_size_config: RenderSizeConfig
+    show_fps: bool
+    depth_strength: float
+    convergence: float
+    capture_mode: str
+    window_title: str | None
+    target_fps: int
+    fps: int
+    fill_16_9: bool
+    local_vsync: bool
+    upscaler: str
+    upscaler_sharpness: float
+    language: str
+    controller_help_rows: list
+    environment_help_rows: list
+    controller_model: str
+    environment_model: str
+    xr_headset_model: str
+    openxr_screen_width: float
+    openxr_screen_distance: float
+    xr_preview_window: bool
+
+
+def resolve_viewer_settings(settings: dict) -> ViewerSettings:
+    monitor_index = settings["Monitor Index"]
+    display_mode = settings["Display Mode"]
+    stereo_display_index = settings.get("Stereo Output")
+    stereo_display_selection = False if not stereo_display_index else True
+    # Only the 3D Monitor run mode actually renders onto the stereo-output
+    # display, so only it should size the processing resolution to that screen.
+    # Other modes (OpenXR Link, Local Viewer, streamers) must follow the
+    # captured (input) monitor; otherwise a leftover "Stereo Output" index
+    # makes the pipeline process at the wrong screen's resolution.
+    use_stereo_monitor = settings.get("Run Mode") == "3D Monitor"
+    output_resolution = compute_output_resolution(
+        settings.get("Processing Resolution", "Auto"),
+        display_mode,
+        monitor_index,
+        stereo_display_index,
+        use_stereo_monitor=use_stereo_monitor,
+    )
+    render_size_config = render_size_config_from_settings(settings)
+    capture_mode = settings["Capture Mode"]
+    window_title = settings["Window Title"] if capture_mode == "Window" else None
+    target_fps = int(settings.get("Target FPS", 0) or 0)
+    fps = target_fps if 1 <= target_fps <= 240 else get_fps(window_title, monitor_index)
+    language = settings["Language"]
+    controller_help_rows, environment_help_rows = get_controller_help_rows(language)
+    xr_headset_model = settings.get("XR Headset Model", DEFAULT_XR_HEADSET_MODEL)
+    xr_headset_preset = resolve_xr_headset_preset(xr_headset_model)
+
+    return ViewerSettings(
+        monitor_index=monitor_index,
+        display_mode=display_mode,
+        stereo_display_index=stereo_display_index,
+        stereo_display_selection=stereo_display_selection,
+        output_resolution=output_resolution,
+        render_size_config=render_size_config,
+        show_fps=settings["Show FPS"],
+        depth_strength=settings["Depth Strength"],
+        convergence=settings["Convergence"],
+        capture_mode=capture_mode,
+        window_title=window_title,
+        target_fps=target_fps,
+        fps=fps,
+        fill_16_9=settings["Fill 16:9"],
+        local_vsync=settings["VSync"],
+        upscaler=normalize_upscaler(settings.get("Upscaler", "Off")),
+        upscaler_sharpness=normalize_upscaler_sharpness(settings.get("Upscaler Sharpness", 0.35)),
+        language=language,
+        controller_help_rows=controller_help_rows,
+        environment_help_rows=environment_help_rows,
+        controller_model=settings["Controller Model"],
+        environment_model=settings.get("Environment Model", "Default"),
+        xr_headset_model=xr_headset_preset.key,
+        openxr_screen_width=xr_headset_preset.width_m,
+        openxr_screen_distance=xr_headset_preset.distance_m,
+        xr_preview_window=settings.get("XR Preview Window", True),
+    )

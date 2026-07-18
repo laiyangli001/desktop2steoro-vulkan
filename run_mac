@@ -1,0 +1,111 @@
+#!/bin/bash
+# ----------------------------------------------------------------------
+# macOS launcher for Desktop2Stereo
+# Uses the Python virtual environment at src/.env
+# ----------------------------------------------------------------------
+
+set -e  # exit on error, but we handle errors manually below
+
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+# ----------------------------------------------------------------------
+# Configuration
+# ----------------------------------------------------------------------
+APP_DIR="src"
+PYTHON_EXE="${APP_DIR}/.env/bin/python"          # virtual env inside src
+LOG_DIR="${APP_DIR}/logs"
+GUI_READY_FILE="${LOG_DIR}/gui_ready.flag"
+LAUNCH_STDOUT="${LOG_DIR}/launcher_stdout.log"
+LAUNCH_STDERR="${LOG_DIR}/launcher_stderr.log"
+APP_LOG="${LOG_DIR}/desktop2stereo.log"
+
+# ----------------------------------------------------------------------
+# Pre-flight checks
+# ----------------------------------------------------------------------
+if [ ! -f "${PYTHON_EXE}" ]; then
+    echo "[Error] [EN] Python not found at ${PYTHON_EXE}"
+    echo "[Error] [CN] 初始化 Python 环境 ...失败，未找到 ${PYTHON_EXE}"
+    exit 1
+fi
+
+if [ ! -f "${APP_DIR}/gui/gui.py" ]; then
+    echo "[Error] [EN] ${APP_DIR}/gui/gui.py not found."
+    echo "[Error] [CN] 初始化 Python 环境 ...失败，未找到 ${APP_DIR}/gui/gui.py"
+    exit 1
+fi
+
+mkdir -p "${LOG_DIR}"
+
+echo "[Preflight] [EN] Force-killing existing Python processes before Desktop2Stereo starts."
+echo "             [CN] 启动 Desktop2Stereo 前强制结束所有现有 Python 进程."
+
+# Kill any running Python processes (be careful: this kills ALL python processes)
+pkill -f python 2>/dev/null || true
+
+# Remove old flag and log files
+rm -f "${GUI_READY_FILE}" "${LAUNCH_STDOUT}" "${LAUNCH_STDERR}" 2>/dev/null
+# Clear the app log (create empty file)
+> "${APP_LOG}" 2>/dev/null
+
+echo "[1/2] [EN] Starting Desktop2Stereo GUI first ..."
+echo "       [CN] 优先显示 Desktop2Stereo GUI ..."
+echo "[2/2] [EN] Waiting for GUI ready signal. Startup details continue in the GUI log panel."
+echo "       [CN] 正在等待 GUI 就绪标志。首次运行的编译和加载过程将在 GUI 右侧日志窗口显示。"
+echo "       [EN] This terminal window will close automatically after the GUI reports ready."
+echo "       [CN] 收到 GUI 就绪标志后，此终端窗口会自动关闭."
+
+# ----------------------------------------------------------------------
+# Launch the GUI in the background
+# ----------------------------------------------------------------------
+# Set PYTHONPATH so the 'gui' module is found
+export PYTHONPATH="${SCRIPT_DIR}/${APP_DIR}"
+
+# Start the GUI process, redirect stdout/stderr to log files, run in background
+"${PYTHON_EXE}" -m gui > "${LAUNCH_STDOUT}" 2> "${LAUNCH_STDERR}" &
+GUI_PID=$!
+
+# ----------------------------------------------------------------------
+# Wait for the ready flag (timeout after 60 seconds)
+# ----------------------------------------------------------------------
+timeout_seconds=60
+elapsed=0
+while [ $elapsed -lt $timeout_seconds ]; do
+    if [ -f "${GUI_READY_FILE}" ]; then
+        # GUI is ready – exit cleanly
+        exit 0
+    fi
+    # Check if the GUI process is still running
+    if ! kill -0 $GUI_PID 2>/dev/null; then
+        # Process has exited prematurely
+        echo ""
+        echo "[Error] [EN] Desktop2Stereo GUI failed before reporting ready. This terminal will stay open."
+        echo "[Error] [CN] Desktop2Stereo GUI 在回传就绪标志前失败，终端将保留用于查看错误。"
+        echo ""
+        echo "[Hint] [EN] Check the messages below, then run this script again after fixing the issue."
+        echo "[Hint] [CN] 请先查看下面的错误信息，修复后再次运行本脚本。"
+        echo ""
+        if [ -f "${LAUNCH_STDERR}" ]; then
+            echo "===== launcher_stderr.log ====="
+            cat "${LAUNCH_STDERR}"
+        fi
+        exit 1
+    fi
+    sleep 0.25
+    elapsed=$((elapsed + 1))   # rough count, 0.25s increments
+done
+
+# If we get here, timeout occurred
+echo ""
+echo "[Error] [EN] Desktop2Stereo GUI did not report ready within 60 seconds. This terminal will stay open."
+echo "[Error] [CN] Desktop2Stereo GUI 未在 60 秒内回传就绪标志，终端将保留用于查看状态。"
+echo ""
+echo "[Hint] [EN] Check the messages below, then run this script again after fixing the issue."
+echo "[Hint] [CN] 请先查看下面的错误信息，修复后再次运行本脚本。"
+echo ""
+if [ -f "${LAUNCH_STDERR}" ]; then
+    echo "===== launcher_stderr.log ====="
+    cat "${LAUNCH_STDERR}"
+fi
+exit 1
