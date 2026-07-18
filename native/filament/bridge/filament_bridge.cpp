@@ -313,7 +313,8 @@ int filament_bridge_create_swapchain(
         set_error(bridge, "Filament Vulkan SwapChain creation failed");
         return 0;
     }
-    bridge->external_swapchain = external;
+    bridge->external_swapchain =
+            static_cast<OpenXrVulkanPlatform::ExternalSwapChain*>(external);
     bridge->camera->setProjection(
             45.0,
             static_cast<double>(width) / static_cast<double>(height),
