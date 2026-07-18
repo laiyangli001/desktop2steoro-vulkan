@@ -38,12 +38,45 @@ endif()
 
 find_path(D2S_VULKAN_INCLUDE_DIR vulkan/vulkan.h)
 if(NOT D2S_VULKAN_INCLUDE_DIR)
-    message(FATAL_ERROR "Vulkan headers are required to compile the Filament Vulkan bridge")
+    set(_vulkan_headers_root "${CMAKE_CURRENT_BINARY_DIR}/vulkan-headers")
+    set(_vulkan_headers_archive "${CMAKE_CURRENT_BINARY_DIR}/vulkan-headers.tar.gz")
+    if(NOT EXISTS "${_vulkan_headers_root}/include/vulkan/vulkan.h")
+        file(DOWNLOAD
+            "https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v1.3.275.tar.gz"
+            "${_vulkan_headers_archive}"
+            SHOW_PROGRESS
+            STATUS _vulkan_headers_download_status
+            TLS_VERIFY ON)
+        list(GET _vulkan_headers_download_status 0 _vulkan_headers_download_code)
+        if(NOT _vulkan_headers_download_code EQUAL 0)
+            message(FATAL_ERROR "Unable to download pinned Vulkan headers: ${_vulkan_headers_download_status}")
+        endif()
+        execute_process(
+            COMMAND "${CMAKE_COMMAND}" -E tar xzf "${_vulkan_headers_archive}"
+            WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+            RESULT_VARIABLE _vulkan_headers_extract_code)
+        if(NOT _vulkan_headers_extract_code EQUAL 0)
+            message(FATAL_ERROR "Unable to extract pinned Vulkan headers")
+        endif()
+        file(GLOB _vulkan_headers_extracted LIST_DIRECTORIES true
+            "${CMAKE_CURRENT_BINARY_DIR}/Vulkan-Headers-*")
+        list(LENGTH _vulkan_headers_extracted _vulkan_headers_extracted_count)
+        if(NOT _vulkan_headers_extracted_count EQUAL 1)
+            message(FATAL_ERROR "Unexpected Vulkan headers archive layout")
+        endif()
+        file(RENAME "${_vulkan_headers_extracted}" "${_vulkan_headers_root}")
+    endif()
+    set(D2S_VULKAN_INCLUDE_DIR "${_vulkan_headers_root}/include")
 endif()
 
 add_library(filament_bridge SHARED filament_bridge.cpp)
 target_compile_features(filament_bridge PRIVATE cxx_std_20)
 target_compile_definitions(filament_bridge PRIVATE FILAMENT_BRIDGE_BUILD=1)
+if(MSVC)
+    target_compile_options(filament_bridge PRIVATE /GR-)
+else()
+    target_compile_options(filament_bridge PRIVATE -fno-rtti)
+endif()
 target_include_directories(filament_bridge PRIVATE
     "${FILAMENT_SDK_ROOT}/include"
     "${_bluevk_include_dir}"
