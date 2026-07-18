@@ -19,7 +19,7 @@
 
 ### 验证结果
 
-- Filament Bridge的Windows、Linux和macOS GitHub Actions构建已通过。
+- Filament Vulkan Bridge的Windows、Linux和macOS GitHub Actions构建已通过（run `29650016647`）。
 - 本机Vulkan探针识别到NVIDIA GeForce RTX 3090、Vulkan 1.4.341和Graphics Queue Family 0。
 - Virtual Desktop OpenXR Runtime可加载，并声明支持`XR_KHR_vulkan_enable2`。
 - Vulkan/OpenXR新增及迁移状态测试共13项通过。
@@ -35,8 +35,8 @@
 
 - CodeGraph数据库被当前MCP进程占用，本轮无法重建索引；代码和测试不受影响。
 - 既有Hugging Face Provider测试依赖外部站点可达性，需要后续消除测试对网络状态的依赖。
-- Filament SDK CI编译和真实场景渲染尚未验证；当前Python封装只覆盖Bridge ABI和生命周期，不接管OpenXR acquire/release。
+- Filament Bridge的真实场景渲染尚未验证；当前Python封装只覆盖Bridge ABI和生命周期，不接管OpenXR acquire/release。
 
 ### 下一项内容
 
-下一项：运行三平台 Filament SDK CI 编译，修复版本接口差异；编译通过后把 Python ctypes Bridge 接入 OpenXR Presenter，并进行头显场景渲染实测。
+下一项：把已通过三平台CI编译的Python ctypes Bridge接入OpenXR Presenter，完成外部VkImage绑定、Projection Layer提交和头显场景渲染实测。
