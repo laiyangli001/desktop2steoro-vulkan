@@ -36,7 +36,7 @@ src\python3\python.exe src\tools\openxr_vulkan_smoke.py --frames 300
 src\python3\python.exe src\tools\openxr_vulkan_smoke.py `
   --seconds 120 `
   --filament-bridge src\xr_viewer\native\filament_bridge.dll `
-  --filament-glb src\xr_viewer\environments\Artemis\environment3.glb `
+  --filament-glb src\xr_viewer\environments\Artemis\environment.glb `
   --filament-profile src\xr_viewer\environments\Artemis\profile.json
 ```
 
