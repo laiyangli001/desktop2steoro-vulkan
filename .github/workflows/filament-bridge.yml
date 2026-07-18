@@ -85,6 +85,10 @@ jobs:
         if: matrix.needs_vulkan_dev
         run: sudo apt-get update && sudo apt-get install --yes libvulkan-dev
 
+      - name: Install macOS Vulkan headers
+        if: matrix.platform == 'macos'
+        run: brew install vulkan-headers
+
       - name: Download and verify Filament SDK
         shell: bash
         run: |

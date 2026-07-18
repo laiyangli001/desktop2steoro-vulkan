@@ -16,10 +16,38 @@ if(NOT EXISTS "${FILAMENT_SDK_ROOT}/include/filament/Engine.h")
     message(FATAL_ERROR "FILAMENT_SDK_ROOT does not contain include/filament/Engine.h")
 endif()
 
+# Filament's public VulkanPlatform header includes BlueVK, but release SDK
+# archives do not ship that generated header. Keep the source revision pinned
+# and materialize it only in the build tree.
+set(_bluevk_include_dir "${CMAKE_CURRENT_BINARY_DIR}/bluevk/include")
+set(_bluevk_header "${_bluevk_include_dir}/bluevk/BlueVK.h")
+if(NOT EXISTS "${_bluevk_header}")
+    file(MAKE_DIRECTORY "${_bluevk_include_dir}/bluevk")
+    file(DOWNLOAD
+        "https://raw.githubusercontent.com/google/filament/v1.74.0/libs/bluevk/include/bluevk/BlueVK.h"
+        "${_bluevk_header}"
+        EXPECTED_HASH SHA256=6d8ad3dced6b1cfe93a57dde5f181b40265a280b1b4b660964964ab346a0456a
+        STATUS _bluevk_download_status
+        TLS_VERIFY ON)
+    list(GET _bluevk_download_status 0 _bluevk_download_code)
+    if(NOT _bluevk_download_code EQUAL 0)
+        file(REMOVE "${_bluevk_header}")
+        message(FATAL_ERROR "Unable to download pinned Filament BlueVK header: ${_bluevk_download_status}")
+    endif()
+endif()
+
+find_path(D2S_VULKAN_INCLUDE_DIR vulkan/vulkan.h)
+if(NOT D2S_VULKAN_INCLUDE_DIR)
+    message(FATAL_ERROR "Vulkan headers are required to compile the Filament Vulkan bridge")
+endif()
+
 add_library(filament_bridge SHARED filament_bridge.cpp)
 target_compile_features(filament_bridge PRIVATE cxx_std_20)
 target_compile_definitions(filament_bridge PRIVATE FILAMENT_BRIDGE_BUILD=1)
-target_include_directories(filament_bridge PRIVATE "${FILAMENT_SDK_ROOT}/include")
+target_include_directories(filament_bridge PRIVATE
+    "${FILAMENT_SDK_ROOT}/include"
+    "${_bluevk_include_dir}"
+    "${D2S_VULKAN_INCLUDE_DIR}")
 
 set(_filament_arch x86_64)
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64)$" OR CMAKE_OSX_ARCHITECTURES MATCHES "arm64")
