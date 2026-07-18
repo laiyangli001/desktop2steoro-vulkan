@@ -7,16 +7,20 @@
 #include <vector>
 
 #include <backend/platforms/VulkanPlatform.h>
+#include <filament/Camera.h>
 #include <filament/Engine.h>
 #include <filament/Renderer.h>
 #include <filament/Scene.h>
 #include <filament/SwapChain.h>
+#include <filament/View.h>
 #include <gltfio/Animator.h>
 #include <gltfio/AssetLoader.h>
 #include <gltfio/FilamentAsset.h>
 #include <gltfio/MaterialProvider.h>
 #include <gltfio/ResourceLoader.h>
 #include <gltfio/TextureProvider.h>
+#include <math/vec3.h>
+#include <utils/EntityManager.h>
 
 namespace {
 
@@ -159,6 +163,9 @@ private:
 struct FilamentBridge {
     filament::Engine* engine = nullptr;
     filament::Renderer* renderer = nullptr;
+    filament::Scene* scene = nullptr;
+    filament::View* view = nullptr;
+    filament::Camera* camera = nullptr;
     filament::gltfio::MaterialProvider* materials = nullptr;
     filament::gltfio::TextureProvider* texture_provider = nullptr;
     filament::gltfio::AssetLoader* asset_loader = nullptr;
@@ -180,6 +187,10 @@ void set_error(FilamentBridge* bridge, const char* message) {
 }
 
 void destroy_asset(FilamentBridge* bridge) {
+    if (bridge->asset && bridge->scene) {
+        bridge->scene->removeEntities(
+                bridge->asset->getEntities(), bridge->asset->getEntityCount());
+    }
     if (bridge->asset && bridge->asset_loader) {
         bridge->asset_loader->destroyAsset(bridge->asset);
     }
@@ -217,12 +228,23 @@ FilamentBridge* filament_bridge_create_vulkan(
         return bridge.release();
     }
     bridge->renderer = bridge->engine->createRenderer();
+    bridge->scene = bridge->engine->createScene();
+    bridge->view = bridge->engine->createView();
+    bridge->camera = bridge->engine->createCamera(
+            utils::EntityManager::get().create());
     bridge->materials = filament::gltfio::createJitShaderProvider(bridge->engine);
     bridge->texture_provider = filament::gltfio::createStbProvider(bridge->engine);
-    if (!bridge->renderer || !bridge->materials || !bridge->texture_provider) {
+    if (!bridge->renderer || !bridge->scene || !bridge->view || !bridge->camera ||
+            !bridge->materials || !bridge->texture_provider) {
         set_error(bridge.get(), "Filament Vulkan resource creation failed");
         return bridge.release();
     }
+    bridge->camera->lookAt(
+            math::float3{0.0f, 0.0f, 3.0f},
+            math::float3{0.0f, 0.0f, 0.0f},
+            math::float3{0.0f, 1.0f, 0.0f});
+    bridge->view->setScene(bridge->scene);
+    bridge->view->setCamera(bridge->camera);
     filament::gltfio::AssetConfiguration config{bridge->engine, bridge->materials};
     bridge->asset_loader = filament::gltfio::AssetLoader::create(config);
     if (!bridge->asset_loader) {
@@ -236,6 +258,15 @@ void filament_bridge_destroy(FilamentBridge* bridge) {
     destroy_asset(bridge);
     if (bridge->swapchain && bridge->engine) {
         bridge->engine->destroy(bridge->swapchain);
+    }
+    if (bridge->view && bridge->engine) {
+        bridge->engine->destroy(bridge->view);
+    }
+    if (bridge->camera && bridge->engine) {
+        bridge->engine->destroy(bridge->camera);
+    }
+    if (bridge->scene && bridge->engine) {
+        bridge->engine->destroy(bridge->scene);
     }
     if (bridge->renderer && bridge->engine) {
         bridge->engine->destroy(bridge->renderer);
@@ -279,6 +310,12 @@ int filament_bridge_create_swapchain(
         set_error(bridge, "Filament Vulkan SwapChain creation failed");
         return 0;
     }
+    bridge->camera->setProjection(
+            45.0,
+            static_cast<double>(width) / static_cast<double>(height),
+            0.05,
+            1000.0);
+    bridge->view->setViewport({0, 0, width, height});
     return 1;
 }
 
@@ -295,6 +332,7 @@ int filament_bridge_begin_frame(FilamentBridge* bridge) {
     if (!bridge->frame_active) {
         set_error(bridge, "Filament Renderer::beginFrame failed");
     }
+    bridge->renderer->render(bridge->view);
     return bridge->frame_active ? 1 : 0;
 }
 
@@ -326,6 +364,8 @@ int filament_bridge_load_glb(FilamentBridge* bridge, const uint8_t* bytes, uint3
         set_error(bridge, "Filament could not load GLB resources");
         return 0;
     }
+    bridge->scene->addEntities(
+            bridge->asset->getEntities(), bridge->asset->getEntityCount());
     bridge->asset->releaseSourceData();
     return 1;
 }
