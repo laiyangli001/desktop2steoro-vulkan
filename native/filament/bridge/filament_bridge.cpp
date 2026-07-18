@@ -172,6 +172,7 @@ struct FilamentBridge {
     filament::gltfio::AssetLoader* asset_loader = nullptr;
     filament::gltfio::FilamentAsset* asset = nullptr;
     filament::SwapChain* swapchain = nullptr;
+    OpenXrVulkanPlatform::ExternalSwapChain* external_swapchain = nullptr;
     OpenXrVulkanPlatform* platform = nullptr;
     filament::backend::VulkanPlatform::VulkanSharedContext shared_context{};
     std::vector<uint8_t> glb_bytes;
@@ -298,6 +299,7 @@ int filament_bridge_create_swapchain(
     if (bridge->swapchain) {
         bridge->engine->destroy(bridge->swapchain);
         bridge->swapchain = nullptr;
+        bridge->external_swapchain = nullptr;
     }
     auto* external = bridge->platform->create_external_swapchain(
             image_handles, image_count, static_cast<VkFormat>(format), width, height);
@@ -311,6 +313,7 @@ int filament_bridge_create_swapchain(
         set_error(bridge, "Filament Vulkan SwapChain creation failed");
         return 0;
     }
+    bridge->external_swapchain = external;
     bridge->camera->setProjection(
             45.0,
             static_cast<double>(width) / static_cast<double>(height),
@@ -323,7 +326,7 @@ int filament_bridge_create_swapchain(
 int filament_bridge_set_acquired_image(FilamentBridge* bridge, uint32_t image_index) {
     if (!bridge || !bridge->swapchain || !bridge->platform) return 0;
     return bridge->platform->set_pending_image(
-            bridge->swapchain, image_index) ? 1 : 0;
+            bridge->external_swapchain, image_index) ? 1 : 0;
 }
 
 int filament_bridge_set_camera_look_at(
