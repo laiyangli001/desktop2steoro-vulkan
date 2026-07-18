@@ -17,6 +17,7 @@
 extern "C" {
 
 struct FilamentBridge;
+struct FilamentPreview;
 
 // Handles are borrowed from the Python-owned OpenXR Vulkan session.
 struct FilamentBridgeVulkanCreateInfo {
@@ -67,5 +68,23 @@ FILAMENT_BRIDGE_API float filament_bridge_animation_duration(
         const FilamentBridge* bridge, uint32_t animation_index);
 FILAMENT_BRIDGE_API const char* filament_bridge_last_error(
         const FilamentBridge* bridge);
+
+FILAMENT_BRIDGE_API FilamentPreview* filament_preview_create(
+        void* native_window, uint32_t width, uint32_t height);
+FILAMENT_BRIDGE_API void filament_preview_destroy(FilamentPreview* preview);
+FILAMENT_BRIDGE_API int filament_preview_load_glb(
+        FilamentPreview* preview, const uint8_t* bytes, uint32_t byte_count);
+FILAMENT_BRIDGE_API int filament_preview_set_camera(
+        FilamentPreview* preview,
+        float eye_x, float eye_y, float eye_z,
+        float center_x, float center_y, float center_z,
+        float up_x, float up_y, float up_z);
+FILAMENT_BRIDGE_API int filament_preview_set_projection(
+        FilamentPreview* preview,
+        double vertical_fov_degrees, double aspect,
+        double near_plane, double far_plane);
+FILAMENT_BRIDGE_API int filament_preview_render(FilamentPreview* preview);
+FILAMENT_BRIDGE_API const char* filament_preview_last_error(
+        const FilamentPreview* preview);
 
 }

@@ -181,6 +181,21 @@ struct FilamentBridge {
     bool frame_active = false;
 };
 
+struct FilamentPreview {
+    filament::Engine* engine = nullptr;
+    filament::Renderer* renderer = nullptr;
+    filament::Scene* scene = nullptr;
+    filament::View* view = nullptr;
+    filament::Camera* camera = nullptr;
+    filament::gltfio::MaterialProvider* materials = nullptr;
+    filament::gltfio::TextureProvider* texture_provider = nullptr;
+    filament::gltfio::AssetLoader* asset_loader = nullptr;
+    filament::gltfio::FilamentAsset* asset = nullptr;
+    filament::SwapChain* swapchain = nullptr;
+    std::vector<uint8_t> glb_bytes;
+    std::string last_error;
+};
+
 namespace {
 
 void set_error(FilamentBridge* bridge, const char* message) {
@@ -199,6 +214,24 @@ void destroy_asset(FilamentBridge* bridge) {
     }
     bridge->asset = nullptr;
     bridge->glb_bytes.clear();
+}
+
+void set_preview_error(FilamentPreview* preview, const char* message) {
+    if (preview) {
+        preview->last_error = message;
+    }
+}
+
+void destroy_preview_asset(FilamentPreview* preview) {
+    if (preview->asset && preview->scene) {
+        preview->scene->removeEntities(
+                preview->asset->getEntities(), preview->asset->getEntityCount());
+    }
+    if (preview->asset && preview->asset_loader) {
+        preview->asset_loader->destroyAsset(preview->asset);
+    }
+    preview->asset = nullptr;
+    preview->glb_bytes.clear();
 }
 
 }  // namespace
@@ -448,4 +481,124 @@ float filament_bridge_animation_duration(const FilamentBridge* bridge, uint32_t 
 
 const char* filament_bridge_last_error(const FilamentBridge* bridge) {
     return bridge ? bridge->last_error.c_str() : "bridge is null";
+}
+
+FilamentPreview* filament_preview_create(void* native_window, uint32_t width, uint32_t height) {
+    auto preview = std::make_unique<FilamentPreview>();
+    if (!native_window || width == 0 || height == 0) {
+        set_preview_error(preview.get(), "Preview window or dimensions are invalid");
+        return preview.release();
+    }
+    preview->engine = filament::Engine::Builder()
+            .backend(filament::Engine::Backend::DEFAULT)
+            .build();
+    if (!preview->engine) {
+        set_preview_error(preview.get(), "Filament preview Engine creation failed");
+        return preview.release();
+    }
+    preview->renderer = preview->engine->createRenderer();
+    preview->scene = preview->engine->createScene();
+    preview->view = preview->engine->createView();
+    preview->camera = preview->engine->createCamera(
+            utils::EntityManager::get().create());
+    preview->materials = filament::gltfio::createJitShaderProvider(preview->engine);
+    preview->texture_provider = filament::gltfio::createStbProvider(preview->engine);
+    preview->swapchain = preview->engine->createSwapChain(native_window);
+    if (!preview->renderer || !preview->scene || !preview->view || !preview->camera ||
+            !preview->materials || !preview->texture_provider || !preview->swapchain) {
+        set_preview_error(preview.get(), "Filament preview resource creation failed");
+        return preview.release();
+    }
+    preview->camera->lookAt(
+            filament::math::float3{0.0f, 0.0f, 3.0f},
+            filament::math::float3{0.0f, 0.0f, 0.0f},
+            filament::math::float3{0.0f, 1.0f, 0.0f});
+    preview->view->setScene(preview->scene);
+    preview->view->setCamera(preview->camera);
+    preview->view->setViewport(filament::Viewport{0, 0, width, height});
+    filament::gltfio::AssetConfiguration config{preview->engine, preview->materials};
+    preview->asset_loader = filament::gltfio::AssetLoader::create(config);
+    if (!preview->asset_loader) {
+        set_preview_error(preview.get(), "Filament preview AssetLoader creation failed");
+    }
+    return preview.release();
+}
+
+void filament_preview_destroy(FilamentPreview* preview) {
+    if (!preview) return;
+    destroy_preview_asset(preview);
+    if (preview->swapchain && preview->engine) preview->engine->destroy(preview->swapchain);
+    if (preview->view && preview->engine) preview->engine->destroy(preview->view);
+    if (preview->camera && preview->engine) preview->engine->destroy(preview->camera->getEntity());
+    if (preview->scene && preview->engine) preview->engine->destroy(preview->scene);
+    if (preview->renderer && preview->engine) preview->engine->destroy(preview->renderer);
+    if (preview->asset_loader) filament::gltfio::AssetLoader::destroy(&preview->asset_loader);
+    if (preview->materials) {
+        preview->materials->destroyMaterials();
+        delete preview->materials;
+    }
+    delete preview->texture_provider;
+    if (preview->engine) filament::Engine::destroy(&preview->engine);
+    delete preview;
+}
+
+int filament_preview_load_glb(FilamentPreview* preview, const uint8_t* bytes, uint32_t byte_count) {
+    if (!preview || !preview->engine || !preview->asset_loader || !bytes || !byte_count) return 0;
+    destroy_preview_asset(preview);
+    preview->last_error.clear();
+    preview->glb_bytes.assign(bytes, bytes + byte_count);
+    preview->asset = preview->asset_loader->createAsset(preview->glb_bytes.data(), byte_count);
+    if (!preview->asset) {
+        set_preview_error(preview, "Filament preview could not parse GLB");
+        return 0;
+    }
+    filament::gltfio::ResourceConfiguration config{preview->engine, nullptr, true};
+    filament::gltfio::ResourceLoader resources(config);
+    resources.addTextureProvider("image/png", preview->texture_provider);
+    resources.addTextureProvider("image/jpeg", preview->texture_provider);
+    if (!resources.loadResources(preview->asset)) {
+        destroy_preview_asset(preview);
+        set_preview_error(preview, "Filament preview could not load GLB resources");
+        return 0;
+    }
+    preview->scene->addEntities(
+            preview->asset->getEntities(), preview->asset->getEntityCount());
+    preview->asset->releaseSourceData();
+    return 1;
+}
+
+int filament_preview_set_camera(
+        FilamentPreview* preview,
+        float eye_x, float eye_y, float eye_z,
+        float center_x, float center_y, float center_z,
+        float up_x, float up_y, float up_z) {
+    if (!preview || !preview->camera) return 0;
+    preview->camera->lookAt(
+            filament::math::float3{eye_x, eye_y, eye_z},
+            filament::math::float3{center_x, center_y, center_z},
+            filament::math::float3{up_x, up_y, up_z});
+    return 1;
+}
+
+int filament_preview_set_projection(
+        FilamentPreview* preview,
+        double vertical_fov_degrees, double aspect,
+        double near_plane, double far_plane) {
+    if (!preview || !preview->camera || vertical_fov_degrees <= 0.0 ||
+            aspect <= 0.0 || near_plane <= 0.0 || far_plane <= near_plane) return 0;
+    preview->camera->setProjection(
+            vertical_fov_degrees, aspect, near_plane, far_plane);
+    return 1;
+}
+
+int filament_preview_render(FilamentPreview* preview) {
+    if (!preview || !preview->renderer || !preview->swapchain || !preview->view) return 0;
+    if (!preview->renderer->beginFrame(preview->swapchain)) return 1;
+    preview->renderer->render(preview->view);
+    preview->renderer->endFrame();
+    return 1;
+}
+
+const char* filament_preview_last_error(const FilamentPreview* preview) {
+    return preview ? preview->last_error.c_str() : "preview is null";
 }

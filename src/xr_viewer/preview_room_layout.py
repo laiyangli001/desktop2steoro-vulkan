@@ -12,7 +12,6 @@ import warnings
 from pathlib import Path
 
 import glfw
-import moderngl
 import numpy as np
 
 
@@ -27,17 +26,7 @@ warnings.filterwarnings(
     category=UserWarning,
 )
 
-from xr_viewer.gl_state import set_depth_mask  # noqa: E402
-from xr_viewer.gltf import (  # noqa: E402
-    OPENGL_VERTEX_FORMAT,
-    apply_skybox_profile,
-    format_gltf_scene_summary,
-    load_glb_model,
-    render_pass_from_primitive,
-    sort_transparent_primitives,
-    summarize_gltf_scene,
-    validate_mesh_contract,
-)
+from xr_viewer.filament_preview_bridge import FilamentDesktopPreview  # noqa: E402
 
 
 ENV_VERT = """
@@ -213,6 +202,17 @@ def _resolve_room_dir(room: str) -> Path:
             if candidate.is_dir() and candidate.name.lower() == room_key:
                 return candidate
     return room_dir
+
+
+def _native_window_handle(window) -> int:
+    """Return the platform window handle accepted by Filament's SwapChain."""
+    if sys.platform == "win32":
+        return int(glfw.get_win32_window(window))
+    if sys.platform == "linux":
+        return int(glfw.get_x11_window(window))
+    if sys.platform == "darwin":
+        return int(glfw.get_cocoa_window(window))
+    raise RuntimeError(f"Unsupported desktop platform: {sys.platform}")
 
 
 def _load_profile(room: str):
@@ -432,37 +432,23 @@ def main():
 
     if not glfw.init():
         raise RuntimeError("GLFW init failed")
-    glfw.window_hint(glfw.CONTEXT_VERSION_MAJOR, 3)
-    glfw.window_hint(glfw.CONTEXT_VERSION_MINOR, 3)
-    glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
+    glfw.window_hint(glfw.CLIENT_API, glfw.NO_API)
     window = glfw.create_window(1280, 720, f"Room Layout Preview - {args.room}", None, None)
     if not window:
         glfw.terminate()
         raise RuntimeError("GLFW window creation failed")
-    glfw.make_context_current(window)
-    glfw.swap_interval(1)
-
-    ctx = moderngl.create_context()
-    ctx.enable(moderngl.DEPTH_TEST)
-    env_prog = ctx.program(vertex_shader=ENV_VERT, fragment_shader=ENV_FRAG)
-    screen_prog = ctx.program(vertex_shader=SCREEN_VERT, fragment_shader=SCREEN_FRAG)
-
-    env_prims, tex_cache, env_local_min, env_local_max = _make_env_resources(ctx, env_prog, glb_path, profile)
-    screen_vbo = ctx.buffer(reserve=4 * 5 * 4)
-    screen_vao = ctx.vertex_array(screen_prog, [(screen_vbo, "3f 2f", "in_position", "in_uv")])
-
-    env_model = _environment_model_matrix(profile)
+    native_window = _native_window_handle(window)
+    preview = FilamentDesktopPreview(native_window, 1280, 720)
+    preview.load_glb(glb_path.read_bytes())
 
     view_pos = _pose_position(view_pose, [0.0, 1.2, 0.0])
-    env_world_min, env_world_max = _world_bounds_from_local(env_local_min, env_local_max, env_model)
-    if args.center_view and env_world_min is not None and env_world_max is not None:
-        view_pos = ((env_world_min + env_world_max) * 0.5).astype(float).tolist()
-        _set_pose_position(view_pose, view_pos)
+    if args.center_view:
+        print("--center-view is ignored by the Filament preview; use VIEW controls to adjust the profile seat.")
     view_rot_deg = _pose_rotation_deg(view_pose, [0.0, 0.0, 0.0])
     view_rot = [math.radians(v) for v in view_rot_deg]
     preview_exposure = float(args.exposure if args.exposure is not None else profile.get("preview_exposure", 2.2))
     preview_gamma = float(args.gamma if args.gamma is not None else profile.get("preview_gamma", 2.2))
-    speed, size_speed = _preview_motion_speeds(env_world_min, env_world_max)
+    speed, size_speed = 1.0, 0.8
     rot_speed = 45.0
     saved_flash = 0.0
     edit_target = "SCREEN"
@@ -631,9 +617,7 @@ def main():
             view_pos = _pose_position(view_pose, [0.0, 1.2, 0.0])
             view_rot_deg = _pose_rotation_deg(view_pose, [0.0, 0.0, 0.0])
             view_rot = [math.radians(v) for v in view_rot_deg]
-            env_model = _environment_model_matrix(profile)
-            env_world_min, env_world_max = _world_bounds_from_local(env_local_min, env_local_max, env_model)
-            speed, size_speed = _preview_motion_speeds(env_world_min, env_world_max)
+            speed, size_speed = 1.0, 0.8
         if glfw.get_key(window, glfw.KEY_ESCAPE) == glfw.PRESS:
             glfw.set_window_should_close(window, True)
 
@@ -652,86 +636,17 @@ def main():
         if ww <= 0 or wh <= 0:
             glfw.poll_events()
             continue
-        ctx.viewport = (0, 0, ww, wh)
         aspect = ww / wh
-        proj = _projection(aspect, near=projection_near, far=projection_far)
-        view = _view_matrix(view_pos, view_rot)
-        vp = proj @ view
-        cam_pos = np.array(view_pos, dtype="f4")
+        yaw, pitch, roll = view_rot
+        rotation = _mat_from_trs(view_pos, (yaw, pitch, roll))[:3, :3]
+        forward = rotation @ np.array([0.0, 0.0, -1.0], dtype="f4")
+        up = rotation @ np.array([0.0, 1.0, 0.0], dtype="f4")
+        center = np.asarray(view_pos, dtype="f4") + forward
+        preview.set_camera(view_pos, center.tolist(), up.tolist())
+        preview.set_projection(80.0, aspect, projection_near, projection_far)
+        preview.render()
 
-        ctx.clear(1.0, 1.0, 1.0, 1.0)
-        ctx.enable(moderngl.DEPTH_TEST)
-        ctx.disable(moderngl.BLEND)
-
-        env_prog["u_mvp"].write(vp.T.astype("f4").tobytes())
-        env_prog["u_model"].write(env_model.T.astype("f4").tobytes())
-        env_prog["u_camera_pos"].write(cam_pos.tobytes())
-        ambient = np.maximum(np.array(_vec3(profile.get("env_ambient_color"), [0.24, 0.24, 0.26]), dtype="f4"), 0.22)
-        light = np.maximum(np.array(_vec3(profile.get("env_head_light_color"), [0.70, 0.70, 0.72]), dtype="f4"), 0.85)
-        env_prog["u_ambient_color"].value = (float(ambient[0]), float(ambient[1]), float(ambient[2]))
-        env_prog["u_light_color"].value = (float(light[0]), float(light[1]), float(light[2]))
-        env_prog["u_exposure"].value = max(0.05, preview_exposure)
-        env_prog["u_gamma"].value = max(0.1, preview_gamma)
-        def draw_env_prim(prim):
-            tid = prim["tex_id"]
-            if tid in tex_cache:
-                tex_cache[tid].use(location=0)
-                env_prog["u_use_texture"].value = 1
-            else:
-                env_prog["u_use_texture"].value = 0
-            bc = prim["base_color"]
-            alpha_mode = "OPAQUE" if prim.get("render_pass") == "sky" else prim.get("alpha_mode", "OPAQUE")
-            alpha_mode_id = 1 if alpha_mode == "MASK" else (2 if alpha_mode == "BLEND" else 0)
-            env_prog["u_base_texcoord"].value = 1 if int(prim.get("base_texcoord", 0) or 0) == 1 else 0
-            env_prog["u_base_color"].value = (float(bc[0]), float(bc[1]), float(bc[2]))
-            env_prog["u_alpha"].value = min(max(float(prim["base_alpha"]), 0.0), 1.0)
-            env_prog["u_alpha_mode"].value = alpha_mode_id
-            env_prog["u_alpha_cutoff"].value = float(prim.get("alpha_cutoff", 0.5))
-            prim["vao"].render(moderngl.TRIANGLES)
-
-        sky_prims = [prim for prim in env_prims if prim.get("render_pass") == "sky"]
-        solid_prims = [
-            prim for prim in env_prims
-            if prim.get("render_pass") in ("opaque", "mask")
-        ]
-        transparent_prims = [
-            prim for prim in env_prims if prim.get("render_pass") == "transparent"
-        ]
-        if sky_prims:
-            ctx.disable(moderngl.CULL_FACE)
-            set_depth_mask(False)
-            for prim in sky_prims:
-                draw_env_prim(prim)
-            set_depth_mask(True)
-        for prim in solid_prims:
-            draw_env_prim(prim)
-        if transparent_prims:
-            transparent_prims = sort_transparent_primitives(
-                transparent_prims,
-                cam_pos,
-                env_model,
-            )
-            ctx.enable(moderngl.BLEND)
-            ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
-            set_depth_mask(False)
-            for prim in transparent_prims:
-                draw_env_prim(prim)
-            set_depth_mask(True)
-            ctx.disable(moderngl.BLEND)
-
-        # Render the configured screen as a translucent blue grid.
-        sv = _screen_vertices(screen)
-        screen_vbo.write(sv.astype("f4").tobytes())
-        screen_prog["u_mvp"].write(vp.T.astype("f4").tobytes())
-        screen_prog["u_color"].value = (0.1, 0.45, 1.0, 0.72)
-        ctx.enable(moderngl.BLEND)
-        ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
-        ctx.disable(moderngl.CULL_FACE)
-        screen_vao.render(moderngl.TRIANGLE_STRIP)
-        ctx.disable(moderngl.BLEND)
-
-        glfw.swap_buffers(window)
-
+    preview.close()
     glfw.terminate()
 
 
