@@ -322,7 +322,8 @@ int filament_bridge_create_swapchain(
 
 int filament_bridge_set_acquired_image(FilamentBridge* bridge, uint32_t image_index) {
     if (!bridge || !bridge->swapchain || !bridge->platform) return 0;
-    return bridge->platform->set_pending_image(image_index) ? 1 : 0;
+    return bridge->platform->set_pending_image(
+            bridge->swapchain, image_index) ? 1 : 0;
 }
 
 int filament_bridge_set_camera_look_at(

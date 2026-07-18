@@ -100,14 +100,15 @@ class FilamentVulkanBridge:
             int(width),
             int(height),
         )
-        self._check_result(result)
+        self._check_result(result, "create_swapchain")
 
     def set_acquired_image(self, image_index: int) -> None:
         self._ensure_loaded()
         self._check_result(
             self._library.filament_bridge_set_acquired_image(
                 self._handle, int(image_index)
-            )
+            ),
+            "set_acquired_image",
         )
 
     def set_camera_look_at(
@@ -121,7 +122,8 @@ class FilamentVulkanBridge:
         self._check_result(
             self._library.filament_bridge_set_camera_look_at(
                 self._handle, *values
-            )
+            ),
+            "set_camera_look_at",
         )
 
     def set_camera_projection(
@@ -140,16 +142,21 @@ class FilamentVulkanBridge:
                 float(aspect),
                 float(near_plane),
                 float(far_plane),
-            )
+            ),
+            "set_camera_projection",
         )
 
     def begin_frame(self) -> None:
         self._ensure_loaded()
-        self._check_result(self._library.filament_bridge_begin_frame(self._handle))
+        self._check_result(
+            self._library.filament_bridge_begin_frame(self._handle), "begin_frame"
+        )
 
     def end_frame(self) -> None:
         self._ensure_loaded()
-        self._check_result(self._library.filament_bridge_end_frame(self._handle))
+        self._check_result(
+            self._library.filament_bridge_end_frame(self._handle), "end_frame"
+        )
 
     def load_glb(self, data: bytes | bytearray | memoryview) -> None:
         self._ensure_loaded()
@@ -160,7 +167,8 @@ class FilamentVulkanBridge:
         self._check_result(
             self._library.filament_bridge_load_glb(
                 self._handle, buffer, len(payload)
-            )
+            ),
+            "load_glb",
         )
 
     def apply_animations(self, time_seconds: float) -> None:
@@ -168,7 +176,8 @@ class FilamentVulkanBridge:
         self._check_result(
             self._library.filament_bridge_apply_animations(
                 self._handle, float(time_seconds)
-            )
+            ),
+            "apply_animations",
         )
 
     def close(self) -> None:
@@ -241,10 +250,10 @@ class FilamentVulkanBridge:
             self.close()
             raise FilamentBridgeError(message)
 
-    def _check_result(self, result: int) -> None:
+    def _check_result(self, result: int, operation: str) -> None:
         if int(result) == 0:
             message = self._last_error() or "Filament Bridge operation failed"
-            raise FilamentBridgeError(message)
+            raise FilamentBridgeError(f"{operation}: {message}")
 
     def _last_error(self) -> str:
         value = self._library.filament_bridge_last_error(self._handle)
