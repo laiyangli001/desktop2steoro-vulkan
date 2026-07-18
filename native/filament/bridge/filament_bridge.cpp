@@ -366,6 +366,7 @@ int filament_bridge_set_camera_projection_frustum(
         return 0;
     }
     bridge->camera->setProjection(
+            filament::Camera::Projection::PERSPECTIVE,
             left, right, bottom, top, near_plane, far_plane);
     return 1;
 }
