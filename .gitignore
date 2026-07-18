@@ -25,4 +25,4 @@ native/filament/build/
 native/filament/bridge/*.obj
 native/filament/bridge/*.exp
 native/filament/bridge/*.lib
-
+.ci-artifacts/

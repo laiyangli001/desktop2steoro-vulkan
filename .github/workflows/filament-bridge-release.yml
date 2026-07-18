@@ -1,0 +1,76 @@
+name: Publish Filament Bridge Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: "Successful Build Filament Bridge workflow run ID"
+        required: true
+        type: string
+      tag:
+        description: "Release tag, for example filament-bridge-v1"
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    name: Publish bridge binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Windows bridge
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.source_run_id }}
+          name: filament-bridge-windows-latest
+          path: dist/windows
+
+      - name: Download Linux bridge
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.source_run_id }}
+          name: filament-bridge-ubuntu-latest
+          path: dist/linux
+
+      - name: Download macOS bridge
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.source_run_id }}
+          name: filament-bridge-macos-14
+          path: dist/macos
+
+      - name: Verify and package binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f dist/windows/filament_bridge.dll
+          test -f dist/linux/libfilament_bridge.so
+          test -f dist/macos/libfilament_bridge.dylib
+          tar -czf filament-bridge-windows-x86_64.tar.gz -C dist/windows filament_bridge.dll
+          tar -czf filament-bridge-linux-x86_64.tar.gz -C dist/linux libfilament_bridge.so
+          tar -czf filament-bridge-macos-arm64.tar.gz -C dist/macos libfilament_bridge.dylib
+          sha256sum filament-bridge-*.tar.gz > filament-bridge-sha256.txt
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+        shell: bash
+        run: |
+          gh release create "$RELEASE_TAG" \
+            --target "${GITHUB_SHA}" \
+            --title "Filament Vulkan Bridge ${RELEASE_TAG}" \
+            --notes "Built from successful Filament Bridge workflow run ${SOURCE_RUN_ID}." \
+            filament-bridge-windows-x86_64.tar.gz \
+            filament-bridge-linux-x86_64.tar.gz \
+            filament-bridge-macos-arm64.tar.gz \
+            filament-bridge-sha256.txt

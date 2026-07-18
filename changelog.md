@@ -20,6 +20,7 @@
 ### 验证结果
 
 - Filament Vulkan Bridge的Windows、Linux和macOS GitHub Actions构建已通过（run `29650016647`）。
+- 新增手动发布工作流，可从成功的三平台 CI 运行中下载 DLL、so、dylib，打包为 GitHub Release 资产并生成 SHA-256 校验文件。
 - 本机Vulkan探针识别到NVIDIA GeForce RTX 3090、Vulkan 1.4.341和Graphics Queue Family 0。
 - Virtual Desktop OpenXR Runtime可加载，并声明支持`XR_KHR_vulkan_enable2`。
 - Vulkan/OpenXR新增及迁移状态测试共13项通过。
@@ -39,4 +40,4 @@
 
 ### 下一项内容
 
-下一项：把已通过三平台CI编译的Python ctypes Bridge接入OpenXR Presenter，完成外部VkImage绑定、Projection Layer提交和头显场景渲染实测。
+下一项：使用 `Publish Filament Bridge Release` 发布首个三平台二进制包，然后把 Python ctypes Bridge 接入OpenXR Presenter，完成外部VkImage绑定、Projection Layer提交和头显场景渲染实测。
