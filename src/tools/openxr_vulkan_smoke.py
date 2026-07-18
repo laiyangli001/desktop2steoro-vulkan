@@ -19,6 +19,18 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--frames", type=int, default=300)
     parser.add_argument("--render-scale", type=float, default=1.0)
     parser.add_argument("--session-timeout", type=float, default=30.0)
+    parser.add_argument(
+        "--filament-bridge",
+        type=Path,
+        default=None,
+        help="Enable Filament rendering with a platform bridge library.",
+    )
+    parser.add_argument(
+        "--filament-glb",
+        type=Path,
+        default=None,
+        help="GLB file to load when Filament rendering is enabled.",
+    )
     return parser
 
 
@@ -26,9 +38,23 @@ def main() -> int:
     args = _parser().parse_args()
     if args.frames <= 0:
         raise SystemExit("--frames must be greater than zero")
+    if args.filament_glb and not args.filament_bridge:
+        raise SystemExit("--filament-glb requires --filament-bridge")
+    for option_name, path in (
+        ("--filament-bridge", args.filament_bridge),
+        ("--filament-glb", args.filament_glb),
+    ):
+        if path is not None and not path.is_file():
+            raise SystemExit(f"{option_name} does not exist: {path}")
 
     presenter = OpenXrVulkanPresenter(
-        OpenXrVulkanConfig(render_scale=args.render_scale)
+        OpenXrVulkanConfig(
+            render_scale=args.render_scale,
+            filament_bridge_path=str(args.filament_bridge)
+            if args.filament_bridge
+            else None,
+            filament_glb_path=str(args.filament_glb) if args.filament_glb else None,
+        )
     )
     try:
         presenter.initialize()

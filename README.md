@@ -30,6 +30,17 @@ src\python3\python.exe src\tools\openxr_vulkan_smoke.py --frames 300
 
 该入口只验证OpenXR Vulkan会话与交换链闭环，不代表Filament场景渲染已经接入。
 
+启用Filament GLB场景渲染时，显式指定当前平台Bridge和GLB资源：
+
+```powershell
+src\python3\python.exe src\tools\openxr_vulkan_smoke.py `
+  --frames 300 `
+  --filament-bridge src\xr_viewer\native\filament_bridge.dll `
+  --filament-glb "src\xr_viewer\environments\Bedroom\environment.glb"
+```
+
+Linux使用`libfilament_bridge.so`，macOS使用`libfilament_bridge.dylib`。该模式需要连接并唤醒头显。
+
 ## 文档
 
 - [项目日志](changelog.md)
