@@ -35,6 +35,7 @@
 - 将Bridge以显式配置方式接入`OpenXrVulkanPresenter`：左右眼分别绑定外部OpenXR VkImage，帧内传递acquire index，关闭顺序先Bridge后OpenXR交换链；未配置Bridge时保持原有Vulkan清屏路径。
 - 在Filament Bridge内建立`Scene`、`Camera`和`View`，加载GLB后将实体加入场景，并在每帧调用`Renderer::render`；三平台CI重新编译通过，最新二进制已自动回写`src/xr_viewer/native/`。
 - 增加每眼OpenXR Camera同步：Python根据View pose计算look-at参数，根据View FOV计算垂直视场角和aspect，并通过C ABI更新Filament Camera；三平台新Bridge构建和19项聚焦测试通过。
+- 扩展`openxr_vulkan_smoke.py`支持显式指定`--filament-bridge`和`--filament-glb`，默认仍保持纯Vulkan清屏模式；README补充Bedroom环境GLB的Filament头显测试命令。
 
 ### 未决事项
 
@@ -45,4 +46,4 @@
 
 ### 下一项内容
 
-下一项：配置实际GLB资源路径，进行Projection Layer头显场景渲染实测，并根据头显画面校正Filament外部SwapChain布局和非对称投影。
+下一项：连接并唤醒头显，运行Filament GLB Smoke命令，记录实际场景画面、模型尺度、双眼视差和外部SwapChain布局问题。
