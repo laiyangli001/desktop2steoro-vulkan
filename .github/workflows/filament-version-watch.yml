@@ -1,0 +1,43 @@
+name: Watch Filament Releases
+
+on:
+  schedule:
+    - cron: '23 2 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Report a new upstream release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          current="$(jq -r '.version' native/filament/version.json)"
+          latest_json="$(gh api repos/google/filament/releases/latest)"
+          latest="$(jq -r '.tag_name | ltrimstr("v")' <<<"$latest_json")"
+          release_url="$(jq -r '.html_url' <<<"$latest_json")"
+
+          if [ "$latest" = "$current" ]; then
+            echo "Filament is current at v$latest"
+            exit 0
+          fi
+
+          title="chore: evaluate Filament v$latest upgrade"
+          existing="$(gh issue list --repo "$REPOSITORY" --state open --search "in:title $title" --json number --jq '.[0].number')"
+          if [ -n "$existing" ]; then
+            echo "Upgrade issue #$existing is already open"
+            exit 0
+          fi
+
+          body="A new Filament release is available.\n\n- Current validated SDK: v$current\n- Candidate SDK: v$latest\n- Upstream release: $release_url\n\nBefore merging an upgrade, update native/filament/version.json with the official Windows, Linux, and macOS asset SHA-256 values. The Build Filament Bridge workflow must pass on all three platforms, then refresh the three binaries in src/xr_viewer/native/."
+          gh issue create --repo "$REPOSITORY" --title "$title" --body "$body"

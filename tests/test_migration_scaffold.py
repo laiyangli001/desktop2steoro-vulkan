@@ -24,6 +24,8 @@ def test_current_style_source_layout_is_present():
         "src/stereo_runtime",
         "src/viewer",
         "src/xr_viewer",
+        "native/filament/bridge/CMakeLists.txt",
+        ".github/workflows/filament-bridge.yml",
     ]
     for relative in expected:
         assert (PROJECT_ROOT / relative).exists(), relative

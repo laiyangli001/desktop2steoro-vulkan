@@ -14,7 +14,7 @@
 - `src/streaming/`中非Legacy模块。
 - `src/xr_viewer/controllers/`和`src/xr_viewer/environments/`全部资产，GLB/HDR继续使用Git LFS。
 - `src/xr_viewer/`中平台无关的输入、姿态、帧门控、时间和交互模块。
-- Filament Bridge源码和版本清单，迁移到`src/xr_viewer/native/filament_bridge/`。
+- Filament Bridge源码和版本清单迁移到`native/filament/`，关联GitHub Actions工作流同步迁移；多平台产物输出到`src/xr_viewer/native/`。
 - 27个Capture、推理、模型和GPU合成相关脚本。
 - 46个与已迁移模块相关的测试文件；旧启动器、旧渲染器和D3D11诊断断言不迁移。
 

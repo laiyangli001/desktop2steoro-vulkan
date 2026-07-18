@@ -1,0 +1,118 @@
+name: Build Filament Bridge
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'native/filament/bridge/**'
+      - 'native/filament/version.json'
+      - '.github/workflows/filament-bridge.yml'
+  pull_request:
+    paths:
+      - 'native/filament/bridge/**'
+      - 'native/filament/version.json'
+      - '.github/workflows/filament-bridge.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    name: Windows x86_64
+    # The bridge uses the Visual Studio 2022 CMake generator explicitly.
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download and verify Filament SDK
+        shell: pwsh
+        run: |
+          $config = Get-Content -Raw -Encoding utf8 'native/filament/version.json' | ConvertFrom-Json
+          $asset = $config.platforms.windows.asset
+          $expectedSha256 = $config.platforms.windows.sha256
+          $archive = Join-Path $env:RUNNER_TEMP $asset
+          Invoke-WebRequest `
+            -Uri "https://github.com/google/filament/releases/download/v$($config.version)/$asset" `
+            -OutFile $archive
+          $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expectedSha256) {
+            throw "Filament SDK SHA-256 mismatch: $actual"
+          }
+          $sdkRoot = Join-Path $env:RUNNER_TEMP 'filament-sdk'
+          New-Item -ItemType Directory -Path $sdkRoot -Force | Out-Null
+          tar -xzf $archive -C $sdkRoot
+          "FILAMENT_SDK_ROOT=$sdkRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Configure and build bridge
+        shell: pwsh
+        run: |
+          cmake -S native/filament/bridge -B native/filament/build/ci-windows `
+            -G 'Visual Studio 17 2022' -A x64 `
+            -DFILAMENT_SDK_ROOT="$env:FILAMENT_SDK_ROOT"
+          cmake --build native/filament/build/ci-windows --config Release --parallel 2
+          if (-not (Test-Path -LiteralPath 'src/xr_viewer/native/filament_bridge.dll')) {
+            throw 'Windows Filament bridge was not produced'
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: filament-bridge-windows-latest
+          path: src/xr_viewer/native/filament_bridge.dll
+          if-no-files-found: error
+
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            runner: ubuntu-latest
+            platform: linux
+            output: libfilament_bridge.so
+            needs_opengl_dev: true
+          - name: macOS arm64
+            runner: macos-14
+            platform: macos
+            output: libfilament_bridge.dylib
+            needs_opengl_dev: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux OpenGL development files
+        if: matrix.needs_opengl_dev
+        run: sudo apt-get update && sudo apt-get install --yes libgl1-mesa-dev
+
+      - name: Download and verify Filament SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(jq -r '.version' native/filament/version.json)"
+          asset="$(jq -r '.platforms.${{ matrix.platform }}.asset' native/filament/version.json)"
+          expected_sha256="$(jq -r '.platforms.${{ matrix.platform }}.sha256' native/filament/version.json)"
+          archive="$RUNNER_TEMP/$asset"
+          curl --fail --location --retry 3 \
+            "https://github.com/google/filament/releases/download/v$version/$asset" \
+            --output "$archive"
+          actual="$(shasum -a 256 "$archive" | awk '{print $1}')"
+          test "$actual" = "$expected_sha256"
+          mkdir -p "$RUNNER_TEMP/filament-sdk"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/filament-sdk"
+
+      - name: Configure and build bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S native/filament/bridge -B native/filament/build/ci \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DFILAMENT_SDK_ROOT="$RUNNER_TEMP/filament-sdk/filament"
+          cmake --build native/filament/build/ci --config Release --parallel 2
+          test -f "src/xr_viewer/native/${{ matrix.output }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: filament-bridge-${{ matrix.runner }}
+          path: src/xr_viewer/native/${{ matrix.output }}
+          if-no-files-found: error

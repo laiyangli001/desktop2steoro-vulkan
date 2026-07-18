@@ -6,7 +6,7 @@ It never accepts or returns CPU pixel buffers.
 
 Each target platform needs its matching official Filament SDK archive. Configure
 CMake with `FILAMENT_SDK_ROOT` pointing at that extracted archive. The generated
-library is placed in the parent `src/xr_viewer/native` directory for packaging:
+library is placed in `src/xr_viewer/native` for packaging:
 
 ```text
 Windows: filament_bridge.dll

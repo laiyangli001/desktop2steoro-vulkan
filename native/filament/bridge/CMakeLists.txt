@@ -58,5 +58,5 @@ target_link_libraries(filament_bridge PRIVATE ${_filament_libraries})
 
 set_target_properties(filament_bridge PROPERTIES
     OUTPUT_NAME filament_bridge
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.."
-    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/..")
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/../../../src/xr_viewer/native"
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/../../../src/xr_viewer/native")

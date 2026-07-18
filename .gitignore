@@ -20,9 +20,9 @@ src/logs/
 src/gui/flet_clients/
 src/gui/flet_packages/*.partial
 src/.env
-src/xr_viewer/native/filament_bridge/sdk/
-src/xr_viewer/native/filament_bridge/build/
-src/xr_viewer/native/filament_bridge/*.obj
-src/xr_viewer/native/filament_bridge/*.exp
-src/xr_viewer/native/filament_bridge/*.lib
+native/filament/sdk/
+native/filament/build/
+native/filament/bridge/*.obj
+native/filament/bridge/*.exp
+native/filament/bridge/*.lib
 
