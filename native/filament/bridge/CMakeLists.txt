@@ -89,7 +89,9 @@ endif()
 
 if(WIN32)
     set(_filament_lib_dir "${FILAMENT_SDK_ROOT}/lib/${_filament_arch}/md")
-    target_link_libraries(filament_bridge PRIVATE user32 gdi32 shlwapi)
+    # Filament's Windows static backend contains PlatformWGL symbols even
+    # when the selected engine backend is Vulkan.
+    target_link_libraries(filament_bridge PRIVATE user32 gdi32 shlwapi opengl32)
 elseif(APPLE)
     set(_filament_lib_dir "${FILAMENT_SDK_ROOT}/lib/${_filament_arch}")
     find_library(COCOA_FRAMEWORK Cocoa REQUIRED)
