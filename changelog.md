@@ -1,0 +1,39 @@
+# Desktop2Stereo Vulkan 项目日志
+
+本文件记录项目重大更新和每日工作收尾。新记录按日期倒序追加；每个工作日结束时更新“已实现”“验证结果”“未决事项”和“下一项内容”。
+
+## 2026-07-18
+
+### 已实现
+
+- 建立独立项目`desktop2steoro-vulkan`，保持原项目的Python源码组织方式，不在运行时依赖原仓库。
+- 迁移可复用的Capture、AI推理、Stereo、GUI、OpenXR平台无关模块、Samples、测试和工具；原项目文件保持不变。
+- 迁移`native/filament`及Windows、Linux、macOS多平台GitHub Actions构建流程，统一产物目录为`src/xr_viewer/native/`。
+- 确立Vulkan为主图形路径、OpenGL为隔离Fallback，不迁入旧Panda3D、D3D11 OpenXR、WGL/CUDA-GL Bridge和旧OpenGL上传链路。
+- 实现Python Vulkan基础层，包括Instance、物理设备选择、Device、Graphics Queue、Command Pool、Command Buffer、Fence、图像布局转换、清屏提交和资源释放。
+- 实现基于`XR_KHR_vulkan_enable2`的Python OpenXR Vulkan Phase 1，包括运行时选定物理设备、Session、双眼交换链、Projection Layer、事件处理和纯色帧提交。
+- 新增`src/tools/openxr_vulkan_smoke.py`，用于头显环境下独立验证双眼Vulkan交换链。
+- 更新`src/requirements.txt`，明确`pyopenxr==1.1.5301`和`vulkan==1.3.275.1`为Vulkan/OpenXR主路径依赖，PyOpenGL归入Fallback依赖。
+- 修正pyopenxr Composition Layer提交方式，使用`ctypes.pointer(layer)`满足`FrameEndInfo.layers`的Base Header指针约定。
+- 更新能力探针、README和迁移清单，使Phase 1状态与头显实测结果一致。
+
+### 验证结果
+
+- Filament Bridge的Windows、Linux和macOS GitHub Actions构建已通过。
+- 本机Vulkan探针识别到NVIDIA GeForce RTX 3090、Vulkan 1.4.341和Graphics Queue Family 0。
+- Virtual Desktop OpenXR Runtime可加载，并声明支持`XR_KHR_vulkan_enable2`。
+- Vulkan/OpenXR新增及迁移状态测试共13项通过。
+- 最终全量测试394项全部通过；期间既有Hugging Face Provider测试曾因外部站点SSL EOF短暂失败，网络恢复后复测通过。
+- `py_compile`和`git diff --check`通过。
+- 未连接头显时，Smoke入口按设计返回`FormFactorUnavailableError`并完成资源清理。
+- 连接头显后成功创建双眼3648x3648 Vulkan交换链，并完成300/300帧提交。
+- 用户确认头显内稳定显示深蓝色双眼画面，无OpenXR调用顺序、Vulkan同步或资源释放错误。
+
+### 未决事项
+
+- CodeGraph数据库被当前MCP进程占用，本轮无法重建索引；代码和测试不受影响。
+- 既有Hugging Face Provider测试依赖外部站点可达性，需要后续消除测试对网络状态的依赖。
+
+### 下一项内容
+
+开始Filament Vulkan Render Target Bridge：设计并实现由Python传入OpenXR创建的Vulkan Instance、Physical Device、Device、Queue和Swapchain Image，使Filament直接渲染到OpenXR Vulkan目标，不引入旧OpenGL Bridge兼容路径。

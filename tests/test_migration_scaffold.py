@@ -12,7 +12,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 def test_capability_report_identifies_new_project():
     report = build_capability_report()
     assert report["project"] == "desktop2steoro-vulkan"
-    assert report["migration"]["python_vulkan_runtime"] == "scaffold"
+    assert report["migration"]["python_vulkan_runtime"] == "phase1_implemented"
+    assert report["migration"]["openxr_vulkan_session"] == "phase1_validated"
 
 
 def test_current_style_source_layout_is_present():

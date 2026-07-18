@@ -24,6 +24,47 @@ def _module_available(module_name: str) -> bool:
         return False
 
 
+def _probe_vulkan_device() -> dict[str, object]:
+    try:
+        from viewer.vulkan_context import VulkanContext
+
+        with VulkanContext.create() as context:
+            device = context.device_info
+            return {
+                "available": True,
+                "device": device.name,
+                "api_version": device.api_version_text,
+                "graphics_queue_family": device.queue_family_index,
+            }
+    except Exception as exc:
+        return {
+            "available": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+
+def _probe_openxr_extensions() -> dict[str, object]:
+    try:
+        import xr
+
+        extensions = {
+            item.extension_name.decode("utf-8")
+            if isinstance(item.extension_name, bytes)
+            else str(item.extension_name)
+            for item in xr.enumerate_instance_extension_properties()
+        }
+        return {
+            "loader_available": True,
+            "vulkan_enable2": "XR_KHR_vulkan_enable2" in extensions,
+        }
+    except Exception as exc:
+        return {
+            "loader_available": False,
+            "vulkan_enable2": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+
 def build_capability_report() -> dict[str, object]:
     src_root = Path(__file__).resolve().parents[1]
     filament_names = {
@@ -48,13 +89,15 @@ def build_capability_report() -> dict[str, object]:
         "python_modules": {
             name: _module_available(module_name) for name, module_name in _OPTIONAL_MODULES.items()
         },
+        "vulkan": _probe_vulkan_device(),
+        "openxr": _probe_openxr_extensions(),
         "filament_bridge": {
             "expected_path": str(filament_path) if filament_path else None,
             "available": bool(filament_path and filament_path.is_file()),
         },
         "migration": {
-            "python_vulkan_runtime": "scaffold",
-            "openxr_vulkan_session": "pending",
+            "python_vulkan_runtime": "phase1_implemented",
+            "openxr_vulkan_session": "phase1_validated",
             "filament_vulkan_bridge": "pending",
         },
     }

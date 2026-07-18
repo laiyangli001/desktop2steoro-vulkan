@@ -28,11 +28,17 @@
 - 旧Filament OpenGL Bridge预编译DLL/SO/dylib和编译中间文件。
 - `__pycache__`、日志、下载模型、内置Python环境、构建目录和本地输出。
 
+## 已实现并通过头显实测
+
+1. Python Vulkan Instance、Device、Graphics Queue、Command Pool、Fence和队列同步基础层。
+2. 基于`XR_KHR_vulkan_enable2`的Python OpenXR Vulkan Session。
+3. 双眼Vulkan交换链、Projection Layer和纯色清屏帧提交入口。
+4. 独立能力探针与`src/tools/openxr_vulkan_smoke.py`实测工具。
+5. Virtual Desktop OpenXR Runtime、RTX 3090、双眼3648x3648交换链的300帧实机验证。
+
 ## 待实现
 
-1. Python Vulkan Instance、Device、Queue、Allocator和同步层。
-2. Python OpenXR Vulkan Session与交换链闭环。
-3. Vulkan Compute Stereo Graph和SPIR-V Shader。
-4. Filament DLL Bridge的Vulkan Render Target接口。
-5. Capture/Inference GPU资源到Vulkan的external-memory或一次GPU copy路径。
-6. 新运行时装配、GUI配置Schema和OpenGL Fallback。
+1. Vulkan资源分配器、Compute Stereo Graph和SPIR-V Shader。
+2. Filament DLL Bridge的Vulkan Render Target接口。
+3. Capture/Inference GPU资源到Vulkan的external-memory或一次GPU copy路径。
+4. 新运行时装配、GUI配置Schema和OpenGL Fallback。
