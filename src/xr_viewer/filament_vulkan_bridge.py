@@ -248,7 +248,7 @@ class FilamentVulkanBridge:
         message = self._last_error()
         if message:
             self.close()
-            raise FilamentBridgeError(message)
+            raise FilamentBridgeError(f"create_vulkan: {message}")
 
     def _check_result(self, result: int, operation: str) -> None:
         if int(result) == 0:
