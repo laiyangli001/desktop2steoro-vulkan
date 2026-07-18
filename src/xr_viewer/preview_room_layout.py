@@ -29,108 +29,6 @@ warnings.filterwarnings(
 from xr_viewer.filament_preview_bridge import FilamentDesktopPreview  # noqa: E402
 
 
-ENV_VERT = """
-#version 330
-in vec3 in_position;
-in vec3 in_normal;
-in vec2 in_uv;
-in vec2 in_uv1;
-out vec3 v_normal;
-out vec3 v_position;
-out vec2 v_uv;
-uniform mat4 u_mvp;
-uniform mat4 u_model;
-uniform int u_base_texcoord;
-void main() {
-    vec4 world_pos = u_model * vec4(in_position, 1.0);
-    v_position = world_pos.xyz;
-    v_normal = mat3(transpose(inverse(u_model))) * in_normal;
-    v_uv = u_base_texcoord == 1 ? in_uv1 : in_uv;
-    gl_Position = u_mvp * world_pos;
-}
-"""
-
-ENV_FRAG = """
-#version 330
-in vec3 v_normal;
-in vec3 v_position;
-in vec2 v_uv;
-out vec4 fragColor;
-uniform sampler2D u_tex;
-uniform int u_use_texture;
-uniform vec3 u_base_color;
-uniform vec3 u_camera_pos;
-uniform vec3 u_ambient_color;
-uniform vec3 u_light_color;
-uniform float u_alpha;
-uniform int u_alpha_mode;
-uniform float u_alpha_cutoff;
-uniform float u_exposure;
-uniform float u_gamma;
-
-vec3 gltfSrgbToLinear(vec3 c) {
-    c = clamp(c, 0.0, 1.0);
-    vec3 lo = c / 12.92;
-    vec3 hi = pow((c + vec3(0.055)) / 1.055, vec3(2.4));
-    return mix(lo, hi, step(vec3(0.04045), c));
-}
-
-vec3 gltfToneMap(vec3 linearColor) {
-    linearColor = max(linearColor, vec3(0.0));
-    return linearColor / (linearColor + vec3(1.0));
-}
-
-vec3 gltfLinearToOutput(vec3 linearColor, float gamma) {
-    return pow(clamp(gltfToneMap(linearColor), 0.0, 1.0), vec3(1.0 / max(gamma, 0.001)));
-}
-
-void main() {
-    vec3 base = u_base_color;
-    float alpha = u_alpha;
-    if (u_use_texture == 1) {
-        vec4 texel = texture(u_tex, v_uv);
-        base *= gltfSrgbToLinear(texel.rgb);
-        if (u_alpha_mode != 0) {
-            alpha *= texel.a;
-        }
-    }
-    if (u_alpha_mode == 1 && alpha < u_alpha_cutoff) {
-        discard;
-    }
-    vec3 N = normalize(v_normal);
-    vec3 L = normalize(u_camera_pos + vec3(0.0, 0.2, 0.0) - v_position);
-    float diff = max(abs(dot(N, L)), 0.12);
-    vec3 color = base * (u_ambient_color + u_light_color * diff) * u_exposure;
-    fragColor = vec4(gltfLinearToOutput(color, u_gamma), alpha);
-}
-"""
-
-SCREEN_VERT = """
-#version 330
-in vec3 in_position;
-in vec2 in_uv;
-out vec2 v_uv;
-uniform mat4 u_mvp;
-void main() {
-    v_uv = in_uv;
-    gl_Position = u_mvp * vec4(in_position, 1.0);
-}
-"""
-
-SCREEN_FRAG = """
-#version 330
-in vec2 v_uv;
-out vec4 fragColor;
-uniform vec4 u_color;
-void main() {
-    vec2 g = abs(fract(v_uv * vec2(16.0, 9.0)) - 0.5);
-    float line = step(0.47, max(g.x, g.y));
-    vec3 grid = mix(u_color.rgb, vec3(1.0), line * 0.35);
-    fragColor = vec4(grid, u_color.a);
-}
-"""
-
-
 def _vec3(data, default):
     if isinstance(data, (list, tuple)) and len(data) >= 3:
         try:
@@ -258,19 +156,6 @@ def _mat_from_trs(pos, rot_rad, scale=(1.0, 1.0, 1.0)):
     return tm @ ry @ rx @ rz @ sm
 
 
-def _view_matrix(pos, rot_rad):
-    yaw, pitch, roll = rot_rad
-    model = _mat_from_trs(pos, (yaw, pitch, roll), (1.0, 1.0, 1.0))
-    return np.linalg.inv(model).astype("f4")
-
-
-def _environment_model_matrix(profile):
-    model_pos = _vec3(profile.get("model_position"), [0.0, -1.0, -3.0])
-    model_rot = _rot_deg(profile.get("model_rotation_deg", profile.get("model_rotation")), [0.0, 0.0, 0.0])
-    model_scale = _vec3(profile.get("model_scale"), [1.0, 1.0, 1.0])
-    return _mat_from_trs(model_pos, model_rot, model_scale)
-
-
 def _profile_projection_planes(profile):
     try:
         near = max(0.01, float(profile.get("xr_projection_near", 0.03)))
@@ -283,138 +168,9 @@ def _profile_projection_planes(profile):
     return near, far
 
 
-def _projection(aspect, fov_deg=80.0, near=0.03, far=200.0):
-    try:
-        aspect = float(aspect)
-    except (TypeError, ValueError):
-        aspect = 1.0
-    if not math.isfinite(aspect) or aspect <= 0.0:
-        aspect = 1.0
-    f = 1.0 / math.tan(math.radians(fov_deg) * 0.5)
-    return np.array([
-        [f / aspect, 0, 0, 0],
-        [0, f, 0, 0],
-        [0, 0, (far + near) / (near - far), (2 * far * near) / (near - far)],
-        [0, 0, -1, 0],
-    ], dtype="f4")
-
-
-def _screen_vertices(screen):
-    width = float(screen.get("width", 2.4))
-    height = float(screen.get("height", width * 9.0 / 16.0))
-    pos = _vec3(screen.get("position"), [0.0, 1.2, -2.0])
-    rot = _rot_deg(screen.get("rotation_deg", screen.get("rotation")), [0.0, 0.0, 0.0])
-    model = _mat_from_trs(pos, rot, (1.0, 1.0, 1.0))
-    corners = np.array([
-        [-width / 2, -height / 2, 0, 0, 0],
-        [ width / 2, -height / 2, 0, 1, 0],
-        [-width / 2,  height / 2, 0, 0, 1],
-        [ width / 2,  height / 2, 0, 1, 1],
-    ], dtype="f4")
-    p = np.c_[corners[:, :3], np.ones(4, dtype="f4")]
-    corners[:, :3] = (model @ p.T).T[:, :3]
-    return corners
-
-
-def _make_env_resources(ctx, prog, glb_path: Path, profile):
-    prims_data, textures, lights = load_glb_model(str(glb_path))
-    apply_skybox_profile(prims_data, profile)
-    summary = summarize_gltf_scene(prims_data, textures, lights)
-    print("[Preview] " + format_gltf_scene_summary(summary, label=f"Active environment {glb_path}"))
-    skybox = profile.get("skybox", {})
-    skybox_mipmaps = bool(skybox.get("mipmaps", False)) if isinstance(skybox, dict) else False
-    skybox_tex_ids = {
-        int(pd.get("tex_id", -1))
-        for pd in prims_data
-        if pd.get("render_pass") == "sky"
-    }
-    local_min = None
-    local_max = None
-    tex_cache = {}
-    for tid, arr in enumerate(textures):
-        if arr is None:
-            continue
-        h, w = arr.shape[:2]
-        tex = ctx.texture((w, h), 4, arr.tobytes())
-        if tid in skybox_tex_ids and not skybox_mipmaps:
-            tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
-        else:
-            tex.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
-            tex.build_mipmaps()
-            tex.anisotropy = 8.0
-        tex_cache[tid] = tex
-
-    prims = []
-    for pd in prims_data:
-        validate_mesh_contract(pd["vertices"], pd["tangent"], pd["indices"])
-        vertices = pd["vertices"].astype("f4", copy=False)
-        if vertices.size:
-            pos = vertices[:, :3]
-            mn = pos.min(axis=0)
-            mx = pos.max(axis=0)
-            local_min = mn if local_min is None else np.minimum(local_min, mn)
-            local_max = mx if local_max is None else np.maximum(local_max, mx)
-        vbo = ctx.buffer(vertices.tobytes())
-        ibo = ctx.buffer(pd["indices"].astype("u4").tobytes())
-        vao = ctx.vertex_array(
-            prog,
-            [(vbo, OPENGL_VERTEX_FORMAT, "in_position", "in_normal", "in_uv", "in_uv1")],
-            ibo,
-        )
-        prims.append({
-            "vao": vao,
-            "tex_id": int(pd.get("tex_id", -1)),
-            "base_color": np.array(pd.get("base_color", [1.0, 1.0, 1.0]), dtype="f4"),
-            "base_alpha": float(pd.get("base_alpha", 1.0)),
-            "alpha_mode": str(pd.get("alpha_mode", "OPAQUE") or "OPAQUE").upper(),
-            "alpha_cutoff": float(pd.get("alpha_cutoff", 0.5)),
-            "base_texcoord": int(pd.get("base_texcoord", 0) or 0),
-            "render_pass": render_pass_from_primitive(pd),
-            "sort_center_local": (
-                vertices[:, :3].mean(axis=0).astype("f4")
-                if vertices.size
-                else np.zeros(3, dtype="f4")
-            ),
-        })
-    return prims, tex_cache, local_min, local_max
-
-
-def _world_bounds_from_local(local_min, local_max, model):
-    if local_min is None or local_max is None:
-        return None, None
-    corners = np.array([
-        [x, y, z, 1.0]
-        for x in (float(local_min[0]), float(local_max[0]))
-        for y in (float(local_min[1]), float(local_max[1]))
-        for z in (float(local_min[2]), float(local_max[2]))
-    ], dtype="f4")
-    world = (model @ corners.T).T[:, :3]
-    return world.min(axis=0), world.max(axis=0)
-
-
-def _preview_motion_speeds(env_world_min, env_world_max):
-    base_move_speed = 0.75
-    base_size_speed = 0.8
-    if env_world_min is None or env_world_max is None:
-        return base_move_speed, base_size_speed
-
-    bounds_size = np.asarray(env_world_max, dtype=np.float64) - np.asarray(env_world_min, dtype=np.float64)
-    if bounds_size.size == 0:
-        return base_move_speed, base_size_speed
-
-    max_extent = float(np.nanmax(np.abs(bounds_size)))
-    if not np.isfinite(max_extent) or max_extent <= 0.0:
-        return base_move_speed, base_size_speed
-
-    scene_scale = max(1.0, min(80.0, max_extent / 50.0))
-    return base_move_speed * scene_scale, base_size_speed * scene_scale
-
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("room", nargs="?", default="bedroom")
-    parser.add_argument("--exposure", type=float, default=None, help="Preview-only brightness multiplier")
-    parser.add_argument("--gamma", type=float, default=None, help="Preview-only output gamma")
     parser.add_argument("--center-view", action="store_true", help="Start camera at the transformed model bounds center")
     args = parser.parse_args()
 
@@ -446,8 +202,6 @@ def main():
         print("--center-view is ignored by the Filament preview; use VIEW controls to adjust the profile seat.")
     view_rot_deg = _pose_rotation_deg(view_pose, [0.0, 0.0, 0.0])
     view_rot = [math.radians(v) for v in view_rot_deg]
-    preview_exposure = float(args.exposure if args.exposure is not None else profile.get("preview_exposure", 2.2))
-    preview_gamma = float(args.gamma if args.gamma is not None else profile.get("preview_gamma", 2.2))
     speed, size_speed = 1.0, 0.8
     rot_speed = 45.0
     saved_flash = 0.0
@@ -458,7 +212,6 @@ def main():
 
     print(f"Room: {args.room}")
     print(f"Profile: {profile_path}")
-    print(f"Preview lighting: exposure={preview_exposure:.2f} gamma={preview_gamma:.2f}")
     print(f"Preview projection: clip={projection_near:.3f}/{projection_far:.1f}")
     print(f"Preview navigation: move_speed={speed:.2f}m/s size_speed={size_speed:.2f}m/s")
     print(f"Preview fine mode: hold Ctrl for {PREVIEW_FINE_MOVE_SPEED_MPS:.2f}m/s movement/size adjustment")
@@ -637,6 +390,9 @@ def main():
             glfw.poll_events()
             continue
         aspect = ww / wh
+        if (ww, wh) != getattr(preview, "viewport_size", None):
+            preview.set_viewport(ww, wh)
+            preview.viewport_size = (ww, wh)
         yaw, pitch, roll = view_rot
         rotation = _mat_from_trs(view_pos, (yaw, pitch, roll))[:3, :3]
         forward = rotation @ np.array([0.0, 0.0, -1.0], dtype="f4")

@@ -591,6 +591,12 @@ int filament_preview_set_projection(
     return 1;
 }
 
+int filament_preview_set_viewport(FilamentPreview* preview, uint32_t width, uint32_t height) {
+    if (!preview || !preview->view || width == 0 || height == 0) return 0;
+    preview->view->setViewport(filament::Viewport{0, 0, width, height});
+    return 1;
+}
+
 int filament_preview_render(FilamentPreview* preview) {
     if (!preview || !preview->renderer || !preview->swapchain || !preview->view) return 0;
     if (!preview->renderer->beginFrame(preview->swapchain)) return 1;

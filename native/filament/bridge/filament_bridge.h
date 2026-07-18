@@ -83,6 +83,8 @@ FILAMENT_BRIDGE_API int filament_preview_set_projection(
         FilamentPreview* preview,
         double vertical_fov_degrees, double aspect,
         double near_plane, double far_plane);
+FILAMENT_BRIDGE_API int filament_preview_set_viewport(
+        FilamentPreview* preview, uint32_t width, uint32_t height);
 FILAMENT_BRIDGE_API int filament_preview_render(FilamentPreview* preview);
 FILAMENT_BRIDGE_API const char* filament_preview_last_error(
         const FilamentPreview* preview);

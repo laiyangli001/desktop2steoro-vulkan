@@ -63,6 +63,14 @@ class FilamentDesktopPreview:
             "set_projection",
         )
 
+    def set_viewport(self, width: int, height: int) -> None:
+        self._check(
+            self._library.filament_preview_set_viewport(
+                self._handle, int(width), int(height)
+            ),
+            "set_viewport",
+        )
+
     def render(self) -> None:
         self._check(self._library.filament_preview_render(self._handle), "render")
 
@@ -92,6 +100,10 @@ class FilamentDesktopPreview:
             ctypes.c_void_p, *([ctypes.c_double] * 4)
         ]
         library.filament_preview_set_projection.restype = ctypes.c_int
+        library.filament_preview_set_viewport.argtypes = [
+            ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32
+        ]
+        library.filament_preview_set_viewport.restype = ctypes.c_int
         library.filament_preview_render.argtypes = [ctypes.c_void_p]
         library.filament_preview_render.restype = ctypes.c_int
         library.filament_preview_last_error.argtypes = [ctypes.c_void_p]
