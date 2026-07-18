@@ -13,6 +13,7 @@
 #include <filament/Scene.h>
 #include <filament/SwapChain.h>
 #include <filament/View.h>
+#include <filament/Viewport.h>
 #include <gltfio/Animator.h>
 #include <gltfio/AssetLoader.h>
 #include <gltfio/FilamentAsset.h>
@@ -240,9 +241,9 @@ FilamentBridge* filament_bridge_create_vulkan(
         return bridge.release();
     }
     bridge->camera->lookAt(
-            math::float3{0.0f, 0.0f, 3.0f},
-            math::float3{0.0f, 0.0f, 0.0f},
-            math::float3{0.0f, 1.0f, 0.0f});
+            filament::math::float3{0.0f, 0.0f, 3.0f},
+            filament::math::float3{0.0f, 0.0f, 0.0f},
+            filament::math::float3{0.0f, 1.0f, 0.0f});
     bridge->view->setScene(bridge->scene);
     bridge->view->setCamera(bridge->camera);
     filament::gltfio::AssetConfiguration config{bridge->engine, bridge->materials};
@@ -263,7 +264,7 @@ void filament_bridge_destroy(FilamentBridge* bridge) {
         bridge->engine->destroy(bridge->view);
     }
     if (bridge->camera && bridge->engine) {
-        bridge->engine->destroy(bridge->camera);
+        bridge->engine->destroy(bridge->camera->getEntity());
     }
     if (bridge->scene && bridge->engine) {
         bridge->engine->destroy(bridge->scene);
@@ -315,7 +316,7 @@ int filament_bridge_create_swapchain(
             static_cast<double>(width) / static_cast<double>(height),
             0.05,
             1000.0);
-    bridge->view->setViewport({0, 0, width, height});
+    bridge->view->setViewport(filament::Viewport{0, 0, width, height});
     return 1;
 }
 
