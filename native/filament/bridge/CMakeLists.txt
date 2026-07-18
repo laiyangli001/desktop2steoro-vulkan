@@ -56,7 +56,14 @@ if(NOT _filament_libraries)
 endif()
 target_link_libraries(filament_bridge PRIVATE ${_filament_libraries})
 
+set(_filament_output_dir "${CMAKE_SOURCE_DIR}/../../../src/xr_viewer/native")
 set_target_properties(filament_bridge PROPERTIES
     OUTPUT_NAME filament_bridge
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/../../../src/xr_viewer/native"
-    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/../../../src/xr_viewer/native")
+    RUNTIME_OUTPUT_DIRECTORY "${_filament_output_dir}"
+    LIBRARY_OUTPUT_DIRECTORY "${_filament_output_dir}")
+
+foreach(_config DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+    set_target_properties(filament_bridge PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY_${_config} "${_filament_output_dir}"
+        LIBRARY_OUTPUT_DIRECTORY_${_config} "${_filament_output_dir}")
+endforeach()
