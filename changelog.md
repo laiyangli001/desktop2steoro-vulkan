@@ -2,6 +2,33 @@
 
 本文件记录项目重大更新和每日工作收尾。新记录按日期倒序追加；每个工作日结束时更新“已实现”“验证结果”“未决事项”和“下一项内容”。
 
+## 2026-07-19
+
+### 已实现
+
+- 将`src/xr_viewer/preview_room_layout.py`的场景加载和逐帧渲染全面切换到Filament Desktop Preview Bridge。
+- 新增`FilamentDesktopPreview` ctypes封装，通过Filament AssetLoader/ResourceLoader加载profile对应GLB，使用Filament Scene、Camera、View和Renderer提交桌面窗口帧。
+- 桌面窗口使用GLFW原生句柄创建Filament SwapChain，支持Windows、Linux和macOS平台句柄，并同步窗口尺寸变化到Filament viewport。
+- 删除预览入口中遗留的ModernGL shader、手写GLB解析、OpenGL资源上传和旧渲染辅助代码。
+- Filament Bridge新增桌面预览生命周期、GLB加载、相机、投影、viewport和render C ABI；三平台产物自动回写`src/xr_viewer/native/`。
+
+### 验证结果
+
+- Python `py_compile`和`git diff --check`通过。
+- GitHub Actions run `29654473319`和`29654653736`的Windows、Linux、macOS构建全部通过。
+- Windows DLL已确认导出`filament_preview_create`、`filament_preview_load_glb`、`filament_preview_set_viewport`和`filament_preview_render`。
+- Artemis桌面预览进程可正常启动并持续运行，GLB资源加载无Python异常；日志仅有源图片的libpng iCCP警告。
+- 代码提交：`7c38fbd`、`fee0eee`；原生二进制提交：`b06bad0`、`d905408`。
+
+### 未决事项
+
+- 需要用户确认Filament桌面窗口中的房间画面、profile座位高度和场景完整性。
+- 尚未进行桌面预览与头显Projection Layer的最终视觉一致性对比。
+
+### 下一项内容
+
+下一项：根据用户观察结果调整Filament Camera初始姿态和GLB坐标映射；确认桌面预览后再进行头显场景实测。
+
 ## 2026-07-18
 
 ### 已实现
