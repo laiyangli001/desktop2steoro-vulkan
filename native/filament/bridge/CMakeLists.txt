@@ -28,24 +28,21 @@ endif()
 
 if(WIN32)
     set(_filament_lib_dir "${FILAMENT_SDK_ROOT}/lib/${_filament_arch}/md")
-    target_link_libraries(filament_bridge PRIVATE opengl32 user32 gdi32 shlwapi)
+    target_link_libraries(filament_bridge PRIVATE user32 gdi32 shlwapi)
 elseif(APPLE)
     set(_filament_lib_dir "${FILAMENT_SDK_ROOT}/lib/${_filament_arch}")
     find_library(COCOA_FRAMEWORK Cocoa REQUIRED)
-    find_library(OPENGL_FRAMEWORK OpenGL REQUIRED)
     find_library(COREVIDEO_FRAMEWORK CoreVideo REQUIRED)
     find_library(METAL_FRAMEWORK Metal REQUIRED)
     find_library(QUARTZCORE_FRAMEWORK QuartzCore REQUIRED)
     target_link_libraries(filament_bridge PRIVATE
         ${COCOA_FRAMEWORK}
-        ${OPENGL_FRAMEWORK}
         ${COREVIDEO_FRAMEWORK}
         ${METAL_FRAMEWORK}
         ${QUARTZCORE_FRAMEWORK})
 elseif(UNIX)
     set(_filament_lib_dir "${FILAMENT_SDK_ROOT}/lib/${_filament_arch}")
-    find_package(OpenGL REQUIRED)
-    target_link_libraries(filament_bridge PRIVATE OpenGL::GL dl pthread)
+    target_link_libraries(filament_bridge PRIVATE dl pthread)
 else()
     message(FATAL_ERROR "Unsupported platform")
 endif()

@@ -28,12 +28,15 @@
 - 未连接头显时，Smoke入口按设计返回`FormFactorUnavailableError`并完成资源清理。
 - 连接头显后成功创建双眼3648x3648 Vulkan交换链，并完成300/300帧提交。
 - 用户确认头显内稳定显示深蓝色双眼画面，无OpenXR调用顺序、Vulkan同步或资源释放错误。
+- 开始实现Filament Vulkan Render Target Bridge：新增VulkanSharedContext接入、OpenXR VkImage外部SwapChain、Python ctypes封装和跨平台构建配置。
+- Bridge明确借用Python/OpenXR所有Vulkan对象，不创建或销毁OpenXR资源；结束帧前使用Filament `flushAndWait`完成GPU同步。
 
 ### 未决事项
 
 - CodeGraph数据库被当前MCP进程占用，本轮无法重建索引；代码和测试不受影响。
 - 既有Hugging Face Provider测试依赖外部站点可达性，需要后续消除测试对网络状态的依赖。
+- Filament SDK CI编译和真实场景渲染尚未验证；当前Python封装只覆盖Bridge ABI和生命周期，不接管OpenXR acquire/release。
 
 ### 下一项内容
 
-开始Filament Vulkan Render Target Bridge：设计并实现由Python传入OpenXR创建的Vulkan Instance、Physical Device、Device、Queue和Swapchain Image，使Filament直接渲染到OpenXR Vulkan目标，不引入旧OpenGL Bridge兼容路径。
+下一项：运行三平台 Filament SDK CI 编译，修复版本接口差异；编译通过后把 Python ctypes Bridge 接入 OpenXR Presenter，并进行头显场景渲染实测。

@@ -18,13 +18,41 @@ extern "C" {
 
 struct FilamentBridge;
 
-// The caller must have made the OpenXR OpenGL context current on this thread.
-FILAMENT_BRIDGE_API FilamentBridge* filament_bridge_create(void* shared_gl_context);
+// Handles are borrowed from the Python-owned OpenXR Vulkan session.
+struct FilamentBridgeVulkanCreateInfo {
+    void* instance;
+    void* physical_device;
+    void* device;
+    uint32_t graphics_queue_family_index;
+    uint32_t graphics_queue_index;
+};
+
+FILAMENT_BRIDGE_API FilamentBridge* filament_bridge_create_vulkan(
+        const FilamentBridgeVulkanCreateInfo* info);
 FILAMENT_BRIDGE_API void filament_bridge_destroy(FilamentBridge* bridge);
-FILAMENT_BRIDGE_API int filament_bridge_load_glb(FilamentBridge* bridge, const uint8_t* bytes, uint32_t byte_count);
-FILAMENT_BRIDGE_API int filament_bridge_apply_animations(FilamentBridge* bridge, double time_seconds);
-FILAMENT_BRIDGE_API uint32_t filament_bridge_animation_count(const FilamentBridge* bridge);
-FILAMENT_BRIDGE_API float filament_bridge_animation_duration(const FilamentBridge* bridge, uint32_t animation_index);
-FILAMENT_BRIDGE_API const char* filament_bridge_last_error(const FilamentBridge* bridge);
+
+// image_handles points to borrowed VkImage handles owned by an OpenXR swapchain.
+FILAMENT_BRIDGE_API int filament_bridge_create_swapchain(
+        FilamentBridge* bridge,
+        const void* const* image_handles,
+        uint32_t image_count,
+        int32_t format,
+        uint32_t width,
+        uint32_t height);
+FILAMENT_BRIDGE_API int filament_bridge_set_acquired_image(
+        FilamentBridge* bridge, uint32_t image_index);
+FILAMENT_BRIDGE_API int filament_bridge_begin_frame(FilamentBridge* bridge);
+FILAMENT_BRIDGE_API int filament_bridge_end_frame(FilamentBridge* bridge);
+
+FILAMENT_BRIDGE_API int filament_bridge_load_glb(
+        FilamentBridge* bridge, const uint8_t* bytes, uint32_t byte_count);
+FILAMENT_BRIDGE_API int filament_bridge_apply_animations(
+        FilamentBridge* bridge, double time_seconds);
+FILAMENT_BRIDGE_API uint32_t filament_bridge_animation_count(
+        const FilamentBridge* bridge);
+FILAMENT_BRIDGE_API float filament_bridge_animation_duration(
+        const FilamentBridge* bridge, uint32_t animation_index);
+FILAMENT_BRIDGE_API const char* filament_bridge_last_error(
+        const FilamentBridge* bridge);
 
 }

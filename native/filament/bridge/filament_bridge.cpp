@@ -6,7 +6,11 @@
 #include <string>
 #include <vector>
 
+#include <backend/platforms/VulkanPlatform.h>
 #include <filament/Engine.h>
+#include <filament/Renderer.h>
+#include <filament/Scene.h>
+#include <filament/SwapChain.h>
 #include <gltfio/Animator.h>
 #include <gltfio/AssetLoader.h>
 #include <gltfio/FilamentAsset.h>
@@ -14,17 +18,166 @@
 #include <gltfio/ResourceLoader.h>
 #include <gltfio/TextureProvider.h>
 
+namespace {
+
+using VulkanPlatform = filament::backend::VulkanPlatform;
+using VkImage = ::VkImage;
+
+constexpr uint32_t kInvalidImageIndex = UINT32_MAX;
+
+class OpenXrVulkanPlatform final : public VulkanPlatform {
+public:
+    struct ExternalSwapChain final : Platform::SwapChain {
+        std::vector<VkImage> images;
+        VkFormat format = VK_FORMAT_UNDEFINED;
+        VkExtent2D extent{0, 0};
+        uint32_t pending_image = kInvalidImageIndex;
+        uint32_t current_image = kInvalidImageIndex;
+    };
+
+    SwapChainPtr create_external_swapchain(
+            const void* const* image_handles,
+            uint32_t image_count,
+            VkFormat format,
+            uint32_t width,
+            uint32_t height) {
+        if (!image_handles || image_count == 0 || width == 0 || height == 0) {
+            return nullptr;
+        }
+        auto swapchain = std::make_unique<ExternalSwapChain>();
+        swapchain->images.reserve(image_count);
+        for (uint32_t index = 0; index < image_count; ++index) {
+            const auto image = reinterpret_cast<VkImage>(
+                    const_cast<void*>(image_handles[index]));
+            if (image == VK_NULL_HANDLE) {
+                return nullptr;
+            }
+            swapchain->images.push_back(image);
+        }
+        swapchain->format = format;
+        swapchain->extent = {width, height};
+        return swapchain.release();
+    }
+
+    bool set_pending_image(SwapChainPtr handle, uint32_t image_index) noexcept {
+        auto* swapchain = as_external(handle);
+        if (!swapchain || image_index >= swapchain->images.size()) {
+            return false;
+        }
+        swapchain->pending_image = image_index;
+        return true;
+    }
+
+    bool set_pending_image(uint32_t image_index) noexcept {
+        return set_pending_image(m_active_swapchain, image_index);
+    }
+
+    SwapChainPtr createSwapChain(void* native_window, uint64_t,
+            VkExtent2D) override {
+        auto* swapchain = static_cast<ExternalSwapChain*>(native_window);
+        m_active_swapchain = swapchain;
+        return swapchain;
+    }
+
+    SwapChainBundle getSwapChainBundle(SwapChainPtr handle) override {
+        SwapChainBundle bundle;
+        auto* swapchain = as_external(handle);
+        if (!swapchain) {
+            return bundle;
+        }
+        for (VkImage image : swapchain->images) {
+            bundle.colors.push_back(image);
+        }
+        bundle.colorFormat = swapchain->format;
+        bundle.extent = swapchain->extent;
+        bundle.layerCount = 1;
+        return bundle;
+    }
+
+    VkResult acquire(SwapChainPtr handle, ImageSyncData* out_sync) override {
+        auto* swapchain = as_external(handle);
+        if (!swapchain || !out_sync ||
+                swapchain->pending_image == kInvalidImageIndex) {
+            return VK_NOT_READY;
+        }
+        swapchain->current_image = swapchain->pending_image;
+        swapchain->pending_image = kInvalidImageIndex;
+        out_sync->imageIndex = swapchain->current_image;
+        out_sync->imageReadySemaphore = VK_NULL_HANDLE;
+        return VK_SUCCESS;
+    }
+
+    VkResult present(SwapChainPtr handle, uint32_t image_index,
+            VkSemaphore finished_drawing) override {
+        (void) finished_drawing;
+        auto* swapchain = as_external(handle);
+        if (!swapchain || image_index >= swapchain->images.size()) {
+            return VK_ERROR_OUT_OF_DATE_KHR;
+        }
+        return VK_SUCCESS;
+    }
+
+    bool hasResized(SwapChainPtr) override { return false; }
+
+    bool isProtected(SwapChainPtr) override { return false; }
+
+    Customization getCustomization() const noexcept override {
+        Customization customization;
+        customization.transitionSwapChainImageLayoutForPresent = false;
+        return customization;
+    }
+
+    VkResult recreate(SwapChainPtr) override { return VK_SUCCESS; }
+
+    void destroy(SwapChainPtr handle) override {
+        if (as_external(handle) == m_active_swapchain) {
+            m_active_swapchain = nullptr;
+        }
+        delete as_external(handle);
+    }
+
+    void terminate() override { VulkanPlatform::terminate(); }
+
+protected:
+    ExtensionSet getSwapchainInstanceExtensions() const override { return {}; }
+
+    SurfaceBundle createVkSurfaceKHR(void*, VkInstance,
+            uint64_t) const noexcept override {
+        return {VK_NULL_HANDLE, {0, 0}};
+    }
+
+private:
+    ExternalSwapChain* m_active_swapchain = nullptr;
+
+    static ExternalSwapChain* as_external(SwapChainPtr handle) noexcept {
+        return static_cast<ExternalSwapChain*>(handle);
+    }
+};
+
+}  // namespace
+
 struct FilamentBridge {
     filament::Engine* engine = nullptr;
+    filament::Renderer* renderer = nullptr;
     filament::gltfio::MaterialProvider* materials = nullptr;
     filament::gltfio::TextureProvider* texture_provider = nullptr;
     filament::gltfio::AssetLoader* asset_loader = nullptr;
     filament::gltfio::FilamentAsset* asset = nullptr;
+    filament::SwapChain* swapchain = nullptr;
+    OpenXrVulkanPlatform* platform = nullptr;
+    filament::backend::VulkanPlatform::VulkanSharedContext shared_context{};
     std::vector<uint8_t> glb_bytes;
     std::string last_error;
+    bool frame_active = false;
 };
 
 namespace {
+
+void set_error(FilamentBridge* bridge, const char* message) {
+    if (bridge) {
+        bridge->last_error = message;
+    }
+}
 
 void destroy_asset(FilamentBridge* bridge) {
     if (bridge->asset && bridge->asset_loader) {
@@ -34,28 +187,40 @@ void destroy_asset(FilamentBridge* bridge) {
     bridge->glb_bytes.clear();
 }
 
-void set_error(FilamentBridge* bridge, const char* message) {
-    if (bridge) {
-        bridge->last_error = message;
-    }
-}
-
 }  // namespace
 
-FilamentBridge* filament_bridge_create(void* shared_gl_context) {
+FilamentBridge* filament_bridge_create_vulkan(
+        const FilamentBridgeVulkanCreateInfo* info) {
     auto bridge = std::make_unique<FilamentBridge>();
-    bridge->engine = filament::Engine::Builder()
-            .backend(filament::Engine::Backend::OPENGL)
-            .sharedContext(shared_gl_context)
-            .build();
-    if (!bridge->engine) {
-        bridge->last_error = "Filament Engine creation failed; OpenXR GL context must be current";
+    if (!info || !info->instance || !info->physical_device || !info->device) {
+        set_error(bridge.get(), "Vulkan create info contains a null handle");
         return bridge.release();
     }
+
+    bridge->shared_context.instance = reinterpret_cast<VkInstance>(info->instance);
+    bridge->shared_context.physicalDevice = reinterpret_cast<VkPhysicalDevice>(
+            info->physical_device);
+    bridge->shared_context.logicalDevice = reinterpret_cast<VkDevice>(info->device);
+    bridge->shared_context.graphicsQueueFamilyIndex =
+            info->graphics_queue_family_index;
+    bridge->shared_context.graphicsQueueIndex = info->graphics_queue_index;
+    bridge->platform = new OpenXrVulkanPlatform();
+    bridge->engine = filament::Engine::Builder()
+            .backend(filament::Engine::Backend::VULKAN)
+            .platform(bridge->platform)
+            .sharedContext(&bridge->shared_context)
+            .build();
+    if (!bridge->engine) {
+        set_error(bridge.get(), "Filament Vulkan Engine creation failed");
+        delete bridge->platform;
+        bridge->platform = nullptr;
+        return bridge.release();
+    }
+    bridge->renderer = bridge->engine->createRenderer();
     bridge->materials = filament::gltfio::createJitShaderProvider(bridge->engine);
     bridge->texture_provider = filament::gltfio::createStbProvider(bridge->engine);
-    if (!bridge->materials || !bridge->texture_provider) {
-        set_error(bridge.get(), "Filament gltfio material or texture provider creation failed");
+    if (!bridge->renderer || !bridge->materials || !bridge->texture_provider) {
+        set_error(bridge.get(), "Filament Vulkan resource creation failed");
         return bridge.release();
     }
     filament::gltfio::AssetConfiguration config{bridge->engine, bridge->materials};
@@ -69,14 +234,77 @@ FilamentBridge* filament_bridge_create(void* shared_gl_context) {
 void filament_bridge_destroy(FilamentBridge* bridge) {
     if (!bridge) return;
     destroy_asset(bridge);
-    if (bridge->asset_loader) filament::gltfio::AssetLoader::destroy(&bridge->asset_loader);
+    if (bridge->swapchain && bridge->engine) {
+        bridge->engine->destroy(bridge->swapchain);
+    }
+    if (bridge->renderer && bridge->engine) {
+        bridge->engine->destroy(bridge->renderer);
+    }
+    if (bridge->asset_loader) {
+        filament::gltfio::AssetLoader::destroy(&bridge->asset_loader);
+    }
     if (bridge->materials) {
         bridge->materials->destroyMaterials();
         delete bridge->materials;
     }
     delete bridge->texture_provider;
-    if (bridge->engine) filament::Engine::destroy(&bridge->engine);
+    if (bridge->engine) {
+        filament::Engine::destroy(&bridge->engine);
+    }
+    delete bridge->platform;
     delete bridge;
+}
+
+int filament_bridge_create_swapchain(
+        FilamentBridge* bridge,
+        const void* const* image_handles,
+        uint32_t image_count,
+        int32_t format,
+        uint32_t width,
+        uint32_t height) {
+    if (!bridge || !bridge->engine || !bridge->platform) return 0;
+    if (bridge->swapchain) {
+        bridge->engine->destroy(bridge->swapchain);
+        bridge->swapchain = nullptr;
+    }
+    auto* external = bridge->platform->create_external_swapchain(
+            image_handles, image_count, static_cast<VkFormat>(format), width, height);
+    if (!external) {
+        set_error(bridge, "Invalid OpenXR Vulkan swapchain image list");
+        return 0;
+    }
+    bridge->swapchain = bridge->engine->createSwapChain(external);
+    if (!bridge->swapchain) {
+        bridge->platform->destroy(external);
+        set_error(bridge, "Filament Vulkan SwapChain creation failed");
+        return 0;
+    }
+    return 1;
+}
+
+int filament_bridge_set_acquired_image(FilamentBridge* bridge, uint32_t image_index) {
+    if (!bridge || !bridge->swapchain || !bridge->platform) return 0;
+    return bridge->platform->set_pending_image(image_index) ? 1 : 0;
+}
+
+int filament_bridge_begin_frame(FilamentBridge* bridge) {
+    if (!bridge || !bridge->renderer || !bridge->swapchain || bridge->frame_active) {
+        return 0;
+    }
+    bridge->frame_active = bridge->renderer->beginFrame(bridge->swapchain);
+    if (!bridge->frame_active) {
+        set_error(bridge, "Filament Renderer::beginFrame failed");
+    }
+    return bridge->frame_active ? 1 : 0;
+}
+
+int filament_bridge_end_frame(FilamentBridge* bridge) {
+    if (!bridge || !bridge->renderer || !bridge->frame_active) return 0;
+    bridge->renderer->endFrame();
+    bridge->frame_active = false;
+    if (!bridge->engine) return 0;
+    bridge->engine->flushAndWait();
+    return 1;
 }
 
 int filament_bridge_load_glb(FilamentBridge* bridge, const uint8_t* bytes, uint32_t byte_count) {

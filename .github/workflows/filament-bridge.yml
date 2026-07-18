@@ -71,19 +71,19 @@ jobs:
             runner: ubuntu-latest
             platform: linux
             output: libfilament_bridge.so
-            needs_opengl_dev: true
+            needs_vulkan_dev: true
           - name: macOS arm64
             runner: macos-14
             platform: macos
             output: libfilament_bridge.dylib
-            needs_opengl_dev: false
+            needs_vulkan_dev: false
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Linux OpenGL development files
-        if: matrix.needs_opengl_dev
-        run: sudo apt-get update && sudo apt-get install --yes libgl1-mesa-dev
+      - name: Install Linux Vulkan development files
+        if: matrix.needs_vulkan_dev
+        run: sudo apt-get update && sudo apt-get install --yes libvulkan-dev
 
       - name: Download and verify Filament SDK
         shell: bash

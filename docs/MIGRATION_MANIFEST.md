@@ -39,6 +39,6 @@
 ## 待实现
 
 1. Vulkan资源分配器、Compute Stereo Graph和SPIR-V Shader。
-2. Filament DLL Bridge的Vulkan Render Target接口。
+2. Filament Vulkan Render Target Bridge的CI编译和Python运行时联调。
 3. Capture/Inference GPU资源到Vulkan的external-memory或一次GPU copy路径。
 4. 新运行时装配、GUI配置Schema和OpenGL Fallback。
