@@ -14,7 +14,7 @@ on:
       - '.github/workflows/filament-bridge.yml'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-windows:
@@ -120,3 +120,53 @@ jobs:
           name: filament-bridge-${{ matrix.runner }}
           path: src/xr_viewer/native/${{ matrix.output }}
           if-no-files-found: error
+
+  commit-native-binaries:
+    name: Commit native bridge binaries
+    needs:
+      - build-windows
+      - build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Download Windows bridge
+        uses: actions/download-artifact@v4
+        with:
+          name: filament-bridge-windows-latest
+          path: src/xr_viewer/native
+
+      - name: Download Linux bridge
+        uses: actions/download-artifact@v4
+        with:
+          name: filament-bridge-ubuntu-latest
+          path: src/xr_viewer/native
+
+      - name: Download macOS bridge
+        uses: actions/download-artifact@v4
+        with:
+          name: filament-bridge-macos-14
+          path: src/xr_viewer/native
+
+      - name: Commit binaries to main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f src/xr_viewer/native/filament_bridge.dll
+          test -f src/xr_viewer/native/libfilament_bridge.so
+          test -f src/xr_viewer/native/libfilament_bridge.dylib
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/xr_viewer/native/filament_bridge.dll \
+            src/xr_viewer/native/libfilament_bridge.so \
+            src/xr_viewer/native/libfilament_bridge.dylib
+          if git diff --cached --quiet; then
+            echo "Native bridge binaries are already up to date."
+            exit 0
+          fi
+          git commit -m "build: update Filament bridge binaries"
+          git push origin HEAD:main
