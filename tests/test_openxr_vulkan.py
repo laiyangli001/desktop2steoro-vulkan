@@ -135,8 +135,8 @@ def test_filament_camera_receives_openxr_pose_and_fov() -> None:
         def set_camera_look_at(self, eye, center, up):
             calls.append(("look_at", (*eye, *center, *up)))
 
-        def set_camera_projection(self, fov_degrees, aspect):
-            calls.append(("projection", (fov_degrees, aspect)))
+        def set_camera_projection(self, fov_degrees, aspect, **kwargs):
+            calls.append(("projection", (fov_degrees, aspect, kwargs)))
 
     view = SimpleNamespace(
         pose=SimpleNamespace(
@@ -159,6 +159,7 @@ def test_filament_camera_receives_openxr_pose_and_fov() -> None:
     assert calls[0][1][6:] == (0.0, 1.0, 0.0)
     assert calls[1][0] == "projection"
     assert calls[1][1][0] == pytest.approx(68.7549, rel=1e-4)
+    assert calls[1][1][2]["far_plane"] == 1000.0
 
 
 def test_swapchain_image_is_not_released_when_wait_fails() -> None:

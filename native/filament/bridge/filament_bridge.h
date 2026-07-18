@@ -50,6 +50,10 @@ FILAMENT_BRIDGE_API int filament_bridge_set_camera_projection(
         FilamentBridge* bridge,
         double vertical_fov_degrees, double aspect,
         double near_plane, double far_plane);
+FILAMENT_BRIDGE_API int filament_bridge_set_camera_projection_frustum(
+        FilamentBridge* bridge,
+        double left, double right, double bottom, double top,
+        double near_plane, double far_plane);
 FILAMENT_BRIDGE_API int filament_bridge_begin_frame(FilamentBridge* bridge);
 FILAMENT_BRIDGE_API int filament_bridge_end_frame(FilamentBridge* bridge);
 

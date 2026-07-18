@@ -357,6 +357,19 @@ int filament_bridge_set_camera_projection(
     return 1;
 }
 
+int filament_bridge_set_camera_projection_frustum(
+        FilamentBridge* bridge,
+        double left, double right, double bottom, double top,
+        double near_plane, double far_plane) {
+    if (!bridge || !bridge->camera || right <= left || top <= bottom ||
+            near_plane <= 0.0 || far_plane <= near_plane) {
+        return 0;
+    }
+    bridge->camera->setProjection(
+            left, right, bottom, top, near_plane, far_plane);
+    return 1;
+}
+
 int filament_bridge_begin_frame(FilamentBridge* bridge) {
     if (!bridge || !bridge->renderer || !bridge->swapchain || bridge->frame_active) {
         return 0;

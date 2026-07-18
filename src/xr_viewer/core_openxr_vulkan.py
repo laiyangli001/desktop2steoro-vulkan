@@ -78,6 +78,8 @@ class OpenXrVulkanPresenter:
         self._profile_head_transform: np.ndarray | None = None
         self._profile_initial_head: np.ndarray | None = None
         self._profile_view_name: str | None = None
+        self._profile_near_plane = 0.05
+        self._profile_far_plane = 1000.0
         self._initialized = False
 
     @property
@@ -544,6 +546,11 @@ class OpenXrVulkanPresenter:
         transform[:3, 3] = np.asarray(position, dtype=np.float32)
         self._profile_head_transform = transform
         self._profile_view_name = str(view_pose.get("name", "profile"))
+        self._profile_near_plane = max(0.001, float(profile.get("xr_projection_near", 0.05)))
+        self._profile_far_plane = max(
+            self._profile_near_plane + 1.0,
+            float(profile.get("xr_projection_far", 1000.0)),
+        )
         print(
             f"Loaded Filament profile view: {self._profile_view_name} "
             f"world_position={world_position_vec.tolist()} glb_position={position.tolist()} "
@@ -585,7 +592,12 @@ class OpenXrVulkanPresenter:
                 image_ready = True
                 if eye_index < len(self.filament_bridges):
                     bridge = self.filament_bridges[eye_index]
-                    _update_filament_camera(bridge, views[eye_index])
+                    _update_filament_camera(
+                        bridge,
+                        views[eye_index],
+                        near_plane=self._profile_near_plane,
+                        far_plane=self._profile_far_plane,
+                    )
                     bridge.set_acquired_image(image_index)
                     bridge.begin_frame()
                     bridge.end_frame()
@@ -631,7 +643,13 @@ def _xr_view_pose_to_model_mat4(pose: Any) -> np.ndarray:
     return matrix
 
 
-def _update_filament_camera(bridge: Any, view: Any) -> None:
+def _update_filament_camera(
+    bridge: Any,
+    view: Any,
+    *,
+    near_plane: float = 0.05,
+    far_plane: float = 1000.0,
+) -> None:
     pose = view.pose
     rotation = _xr_quat_to_mat4(pose.orientation)[:3, :3]
     position = (
@@ -645,10 +663,26 @@ def _update_filament_camera(bridge: Any, view: Any) -> None:
     bridge.set_camera_look_at(position, center, tuple(float(value) for value in up))
 
     fov = view.fov
+    left = math.tan(float(fov.angle_left)) * near_plane
+    right = math.tan(float(fov.angle_right)) * near_plane
+    bottom = math.tan(float(fov.angle_down)) * near_plane
+    top = math.tan(float(fov.angle_up)) * near_plane
+    if hasattr(bridge, "set_camera_projection_frustum"):
+        bridge.set_camera_projection_frustum(
+            left, right, bottom, top,
+            near_plane=near_plane,
+            far_plane=far_plane,
+        )
+        return
     horizontal = max(0.01, abs(float(fov.angle_right) - float(fov.angle_left)))
     vertical = max(0.01, abs(float(fov.angle_up) - float(fov.angle_down)))
     aspect = math.tan(horizontal * 0.5) / max(math.tan(vertical * 0.5), 1e-6)
-    bridge.set_camera_projection(math.degrees(vertical), aspect)
+    bridge.set_camera_projection(
+        math.degrees(vertical),
+        aspect,
+        near_plane=near_plane,
+        far_plane=far_plane,
+    )
 
 
 def _import_openxr() -> Any:

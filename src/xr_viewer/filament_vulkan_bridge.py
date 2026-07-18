@@ -146,6 +146,26 @@ class FilamentVulkanBridge:
             "set_camera_projection",
         )
 
+    def set_camera_projection_frustum(
+        self,
+        left: float,
+        right: float,
+        bottom: float,
+        top: float,
+        *,
+        near_plane: float = 0.05,
+        far_plane: float = 1000.0,
+    ) -> None:
+        self._ensure_loaded()
+        self._check_result(
+            self._library.filament_bridge_set_camera_projection_frustum(
+                self._handle,
+                float(left), float(right), float(bottom), float(top),
+                float(near_plane), float(far_plane),
+            ),
+            "set_camera_projection_frustum",
+        )
+
     def begin_frame(self) -> None:
         self._ensure_loaded()
         self._check_result(
@@ -225,6 +245,12 @@ class FilamentVulkanBridge:
             ctypes.c_double, ctypes.c_double,
         ]
         library.filament_bridge_set_camera_projection.restype = ctypes.c_int
+        library.filament_bridge_set_camera_projection_frustum.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_double,
+            ctypes.c_double, ctypes.c_double,
+        ]
+        library.filament_bridge_set_camera_projection_frustum.restype = ctypes.c_int
         for name in ("filament_bridge_begin_frame", "filament_bridge_end_frame"):
             function = getattr(library, name)
             function.argtypes = [ctypes.c_void_p]
