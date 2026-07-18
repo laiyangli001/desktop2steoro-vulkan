@@ -521,35 +521,14 @@ class OpenXrVulkanPresenter:
             if not isinstance(model_scale, (list, tuple)) or len(model_scale) < 3:
                 model_scale = [1.0, 1.0, 1.0]
 
-            screen = profile.get("screen")
-            if isinstance(screen, dict) and isinstance(screen.get("position"), (list, tuple)):
-                screen_rotation_deg = screen.get("rotation_deg", [0.0, 0.0, 0.0])
-                screen_rotation_rad = [math.radians(float(value)) for value in screen_rotation_deg[:3]]
-                screen_matrix = euler_to_mat4(*screen_rotation_rad).astype(np.float32)
-                screen_position = np.asarray(screen["position"][:3], dtype=np.float32)
-                seat_offset = np.asarray(
-                    [float(view_pose[key]) for key in ("x", "y", "z")],
-                    dtype=np.float32,
-                )
-                world_position_vec = (
-                    screen_position
-                    + screen_matrix[:3, 0] * seat_offset[0]
-                    + screen_matrix[:3, 2] * seat_offset[1]
-                    + screen_matrix[:3, 1] * seat_offset[2]
-                )
-                screen_normal = screen_matrix[:3, 2]
-                viewer_yaw = math.atan2(float(screen_normal[0]), float(screen_normal[2]))
-                viewer_yaw += math.radians(float(view_pose.get("angle", 0.0)))
-                rotation_rad = [viewer_yaw, 0.0, 0.0]
-            else:
-                world_position_vec = np.asarray(
-                    [float(view_pose[key]) for key in ("x", "y", "z")],
-                    dtype=np.float32,
-                )
-                rotation_deg = view_pose.get("rotation_deg")
-                if not isinstance(rotation_deg, (list, tuple)) or len(rotation_deg) < 3:
-                    rotation_deg = [float(view_pose.get("angle", 0.0)), 0.0, 0.0]
-                rotation_rad = [math.radians(float(value)) for value in rotation_deg[:3]]
+            world_position_vec = np.asarray(
+                [float(view_pose[key]) for key in ("x", "y", "z")],
+                dtype=np.float32,
+            )
+            rotation_deg = view_pose.get("rotation_deg")
+            if not isinstance(rotation_deg, (list, tuple)) or len(rotation_deg) < 3:
+                rotation_deg = [float(view_pose.get("angle", 0.0)), 0.0, 0.0]
+            rotation_rad = [math.radians(float(value)) for value in rotation_deg[:3]]
 
             model_matrix = euler_to_mat4(
                 *(math.radians(float(value)) for value in model_rotation_deg[:3])
