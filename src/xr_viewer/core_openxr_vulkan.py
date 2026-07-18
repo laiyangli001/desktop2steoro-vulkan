@@ -504,9 +504,10 @@ class OpenXrVulkanPresenter:
                     bridge.set_acquired_image(image_index)
                     bridge.begin_frame()
                     bridge.end_frame()
-                image_address = _ctypes_handle_address(eye.images[image_index].image)
-                image = self.vulkan.image_handle_from_address(image_address)
-                self.vulkan.clear_color_image(image, self.config.clear_color)
+                else:
+                    image_address = _ctypes_handle_address(eye.images[image_index].image)
+                    image = self.vulkan.image_handle_from_address(image_address)
+                    self.vulkan.clear_color_image(image, self.config.clear_color)
             finally:
                 if image_ready:
                     xr.release_swapchain_image(eye.handle)
