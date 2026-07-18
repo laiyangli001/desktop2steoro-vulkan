@@ -110,6 +110,39 @@ class FilamentVulkanBridge:
             )
         )
 
+    def set_camera_look_at(
+        self,
+        eye: tuple[float, float, float],
+        center: tuple[float, float, float],
+        up: tuple[float, float, float],
+    ) -> None:
+        self._ensure_loaded()
+        values = tuple(float(value) for value in (*eye, *center, *up))
+        self._check_result(
+            self._library.filament_bridge_set_camera_look_at(
+                self._handle, *values
+            )
+        )
+
+    def set_camera_projection(
+        self,
+        vertical_fov_degrees: float,
+        aspect: float,
+        *,
+        near_plane: float = 0.05,
+        far_plane: float = 1000.0,
+    ) -> None:
+        self._ensure_loaded()
+        self._check_result(
+            self._library.filament_bridge_set_camera_projection(
+                self._handle,
+                float(vertical_fov_degrees),
+                float(aspect),
+                float(near_plane),
+                float(far_plane),
+            )
+        )
+
     def begin_frame(self) -> None:
         self._ensure_loaded()
         self._check_result(self._library.filament_bridge_begin_frame(self._handle))
@@ -170,6 +203,19 @@ class FilamentVulkanBridge:
             ctypes.c_void_p, ctypes.c_uint32
         ]
         library.filament_bridge_set_acquired_image.restype = ctypes.c_int
+        library.filament_bridge_set_camera_look_at.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_float, ctypes.c_float, ctypes.c_float,
+            ctypes.c_float, ctypes.c_float, ctypes.c_float,
+            ctypes.c_float, ctypes.c_float, ctypes.c_float,
+        ]
+        library.filament_bridge_set_camera_look_at.restype = ctypes.c_int
+        library.filament_bridge_set_camera_projection.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_double, ctypes.c_double,
+            ctypes.c_double, ctypes.c_double,
+        ]
+        library.filament_bridge_set_camera_projection.restype = ctypes.c_int
         for name in ("filament_bridge_begin_frame", "filament_bridge_end_frame"):
             function = getattr(library, name)
             function.argtypes = [ctypes.c_void_p]

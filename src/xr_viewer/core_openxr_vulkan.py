@@ -3,6 +3,7 @@ from __future__ import annotations
 import ctypes
 import ctypes.util
 import importlib
+import math
 import os
 import sys
 import time
@@ -11,6 +12,8 @@ from pathlib import Path
 from typing import Any
 
 from viewer.vulkan_context import VulkanContext, find_graphics_queue_family, make_vulkan_version
+
+from .xr_math import _xr_quat_to_mat4
 
 
 class OpenXrVulkanUnavailableError(RuntimeError):
@@ -497,6 +500,7 @@ class OpenXrVulkanPresenter:
                 image_ready = True
                 if eye_index < len(self.filament_bridges):
                     bridge = self.filament_bridges[eye_index]
+                    _update_filament_camera(bridge, views[eye_index])
                     bridge.set_acquired_image(image_index)
                     bridge.begin_frame()
                     bridge.end_frame()
@@ -529,6 +533,26 @@ class OpenXrVulkanPresenter:
     def _ensure_initialized(self) -> None:
         if not self._initialized:
             raise RuntimeError("OpenXrVulkanPresenter is not initialized")
+
+
+def _update_filament_camera(bridge: Any, view: Any) -> None:
+    pose = view.pose
+    rotation = _xr_quat_to_mat4(pose.orientation)[:3, :3]
+    position = (
+        float(pose.position.x),
+        float(pose.position.y),
+        float(pose.position.z),
+    )
+    forward = rotation @ (0.0, 0.0, -1.0)
+    up = rotation @ (0.0, 1.0, 0.0)
+    center = tuple(position[index] + float(forward[index]) for index in range(3))
+    bridge.set_camera_look_at(position, center, tuple(float(value) for value in up))
+
+    fov = view.fov
+    horizontal = max(0.01, abs(float(fov.angle_right) - float(fov.angle_left)))
+    vertical = max(0.01, abs(float(fov.angle_up) - float(fov.angle_down)))
+    aspect = math.tan(horizontal * 0.5) / max(math.tan(vertical * 0.5), 1e-6)
+    bridge.set_camera_projection(math.degrees(vertical), aspect)
 
 
 def _import_openxr() -> Any:

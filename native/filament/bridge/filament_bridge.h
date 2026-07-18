@@ -41,6 +41,15 @@ FILAMENT_BRIDGE_API int filament_bridge_create_swapchain(
         uint32_t height);
 FILAMENT_BRIDGE_API int filament_bridge_set_acquired_image(
         FilamentBridge* bridge, uint32_t image_index);
+FILAMENT_BRIDGE_API int filament_bridge_set_camera_look_at(
+        FilamentBridge* bridge,
+        float eye_x, float eye_y, float eye_z,
+        float center_x, float center_y, float center_z,
+        float up_x, float up_y, float up_z);
+FILAMENT_BRIDGE_API int filament_bridge_set_camera_projection(
+        FilamentBridge* bridge,
+        double vertical_fov_degrees, double aspect,
+        double near_plane, double far_plane);
 FILAMENT_BRIDGE_API int filament_bridge_begin_frame(FilamentBridge* bridge);
 FILAMENT_BRIDGE_API int filament_bridge_end_frame(FilamentBridge* bridge);
 

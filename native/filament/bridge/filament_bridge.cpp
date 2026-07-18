@@ -325,6 +325,32 @@ int filament_bridge_set_acquired_image(FilamentBridge* bridge, uint32_t image_in
     return bridge->platform->set_pending_image(image_index) ? 1 : 0;
 }
 
+int filament_bridge_set_camera_look_at(
+        FilamentBridge* bridge,
+        float eye_x, float eye_y, float eye_z,
+        float center_x, float center_y, float center_z,
+        float up_x, float up_y, float up_z) {
+    if (!bridge || !bridge->camera) return 0;
+    bridge->camera->lookAt(
+            filament::math::float3{eye_x, eye_y, eye_z},
+            filament::math::float3{center_x, center_y, center_z},
+            filament::math::float3{up_x, up_y, up_z});
+    return 1;
+}
+
+int filament_bridge_set_camera_projection(
+        FilamentBridge* bridge,
+        double vertical_fov_degrees, double aspect,
+        double near_plane, double far_plane) {
+    if (!bridge || !bridge->camera || vertical_fov_degrees <= 0.0 ||
+            aspect <= 0.0 || near_plane <= 0.0 || far_plane <= near_plane) {
+        return 0;
+    }
+    bridge->camera->setProjection(
+            vertical_fov_degrees, aspect, near_plane, far_plane);
+    return 1;
+}
+
 int filament_bridge_begin_frame(FilamentBridge* bridge) {
     if (!bridge || !bridge->renderer || !bridge->swapchain || bridge->frame_active) {
         return 0;

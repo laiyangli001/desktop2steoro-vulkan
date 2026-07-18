@@ -22,6 +22,7 @@ from xr_viewer.core_openxr_vulkan import (
     _scaled_dimension,
     _select_swapchain_format,
     _select_vulkan_api_version,
+    _update_filament_camera,
 )
 
 
@@ -125,6 +126,39 @@ def test_filament_bridge_binds_each_openxr_eye(monkeypatch) -> None:
         ("create", 3),
         ("swapchain", (["right-image"], 43)),
     ]
+
+
+def test_filament_camera_receives_openxr_pose_and_fov() -> None:
+    calls: list[tuple[str, tuple[float, ...]]] = []
+
+    class FakeBridge:
+        def set_camera_look_at(self, eye, center, up):
+            calls.append(("look_at", (*eye, *center, *up)))
+
+        def set_camera_projection(self, fov_degrees, aspect):
+            calls.append(("projection", (fov_degrees, aspect)))
+
+    view = SimpleNamespace(
+        pose=SimpleNamespace(
+            position=SimpleNamespace(x=1.0, y=2.0, z=3.0),
+            orientation=SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0),
+        ),
+        fov=SimpleNamespace(
+            angle_left=-0.7,
+            angle_right=0.7,
+            angle_up=0.6,
+            angle_down=-0.6,
+        ),
+    )
+
+    _update_filament_camera(FakeBridge(), view)
+
+    assert calls[0][0] == "look_at"
+    assert calls[0][1][:3] == (1.0, 2.0, 3.0)
+    assert calls[0][1][3:6] == (1.0, 2.0, 2.0)
+    assert calls[0][1][6:] == (0.0, 1.0, 0.0)
+    assert calls[1][0] == "projection"
+    assert calls[1][1][0] == pytest.approx(68.7549, rel=1e-4)
 
 
 def test_swapchain_image_is_not_released_when_wait_fails() -> None:
