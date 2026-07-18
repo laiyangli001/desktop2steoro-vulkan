@@ -3,9 +3,11 @@ from __future__ import annotations
 import ctypes
 import ctypes.util
 import importlib
+import os
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from viewer.vulkan_context import VulkanContext, find_graphics_queue_family, make_vulkan_version
@@ -21,6 +23,8 @@ class OpenXrVulkanConfig:
     render_scale: float = 1.0
     clear_color: tuple[float, float, float, float] = (0.02, 0.04, 0.08, 1.0)
     requested_vulkan_version: int = make_vulkan_version(1, 2, 0)
+    filament_bridge_path: str | None = None
+    filament_glb_path: str | None = None
 
 
 @dataclass(slots=True)
@@ -51,6 +55,7 @@ class OpenXrVulkanPresenter:
         self.vulkan: VulkanContext | None = None
         self.swapchain_format: int | None = None
         self.swapchains: list[_EyeSwapchain] = []
+        self.filament_bridges: list[Any] = []
         self.session_state: Any = None
         self.session_running = False
         self.exit_requested = False
@@ -110,6 +115,7 @@ class OpenXrVulkanPresenter:
             )
             self._create_vulkan_objects(api_version)
             self._create_session_and_swapchains()
+            self._initialize_filament_bridges()
             self._initialized = True
         except Exception:
             self.close()
@@ -207,6 +213,13 @@ class OpenXrVulkanPresenter:
                 self.vulkan.wait_idle()
             except Exception:
                 pass
+
+        for bridge in reversed(self.filament_bridges):
+            try:
+                bridge.close()
+            except Exception:
+                pass
+        self.filament_bridges.clear()
 
         if xr is not None:
             for eye in reversed(self.swapchains):
@@ -429,6 +442,45 @@ class OpenXrVulkanPresenter:
                 _EyeSwapchain(handle=handle, images=images, width=width, height=height)
             )
 
+    def _initialize_filament_bridges(self) -> None:
+        bridge_path = self.config.filament_bridge_path or os.environ.get(
+            "D2S_FILAMENT_BRIDGE"
+        )
+        if not bridge_path:
+            return
+
+        from .filament_vulkan_bridge import FilamentVulkanBridge
+
+        try:
+            for eye in self.swapchains:
+                bridge = FilamentVulkanBridge(bridge_path)
+                try:
+                    bridge.create(
+                        instance=self.vulkan.instance,
+                        physical_device=self.vulkan.physical_device,
+                        device=self.vulkan.device,
+                        queue_family_index=self.vulkan.queue_family_index,
+                        queue_index=0,
+                    )
+                    bridge.create_swapchain(
+                        (image.image for image in eye.images),
+                        format=self.swapchain_format,
+                        width=eye.width,
+                        height=eye.height,
+                    )
+                    glb_path = self.config.filament_glb_path
+                    if glb_path:
+                        bridge.load_glb(Path(glb_path).read_bytes())
+                    self.filament_bridges.append(bridge)
+                except Exception:
+                    bridge.close()
+                    raise
+        except Exception:
+            for bridge in reversed(self.filament_bridges):
+                bridge.close()
+            self.filament_bridges.clear()
+            raise
+
     def _render_projection_layer(self, views: list[Any]) -> Any | None:
         if len(views) < len(self.swapchains):
             return None
@@ -443,6 +495,11 @@ class OpenXrVulkanPresenter:
                     xr.SwapchainImageWaitInfo(timeout=xr.INFINITE_DURATION),
                 )
                 image_ready = True
+                if eye_index < len(self.filament_bridges):
+                    bridge = self.filament_bridges[eye_index]
+                    bridge.set_acquired_image(image_index)
+                    bridge.begin_frame()
+                    bridge.end_frame()
                 image_address = _ctypes_handle_address(eye.images[image_index].image)
                 image = self.vulkan.image_handle_from_address(image_address)
                 self.vulkan.clear_color_image(image, self.config.clear_color)

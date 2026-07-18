@@ -31,13 +31,15 @@
 - 用户确认头显内稳定显示深蓝色双眼画面，无OpenXR调用顺序、Vulkan同步或资源释放错误。
 - 开始实现Filament Vulkan Render Target Bridge：新增VulkanSharedContext接入、OpenXR VkImage外部SwapChain、Python ctypes封装和跨平台构建配置。
 - Bridge明确借用Python/OpenXR所有Vulkan对象，不创建或销毁OpenXR资源；结束帧前使用Filament `flushAndWait`完成GPU同步。
+- 将Bridge以显式配置方式接入`OpenXrVulkanPresenter`：左右眼分别绑定外部OpenXR VkImage，帧内传递acquire index，关闭顺序先Bridge后OpenXR交换链；未配置Bridge时保持原有Vulkan清屏路径。
 
 ### 未决事项
 
 - CodeGraph数据库被当前MCP进程占用，本轮无法重建索引；代码和测试不受影响。
 - 既有Hugging Face Provider测试依赖外部站点可达性，需要后续消除测试对网络状态的依赖。
 - Filament Bridge的真实场景渲染尚未验证；当前Python封装只覆盖Bridge ABI和生命周期，不接管OpenXR acquire/release。
+- Filament Bridge当前只完成外部SwapChain和帧生命周期接入，尚未在Bridge内建立Scene、Camera、View并完成GLB头显渲染。
 
 ### 下一项内容
 
-下一项：使用 `Publish Filament Bridge Release` 发布首个三平台二进制包，然后把 Python ctypes Bridge 接入OpenXR Presenter，完成外部VkImage绑定、Projection Layer提交和头显场景渲染实测。
+下一项：使用 `Publish Filament Bridge Release` 发布首个三平台二进制包；随后在Bridge内补齐Scene/Camera/View和GLB绘制，完成Projection Layer头显场景渲染实测。

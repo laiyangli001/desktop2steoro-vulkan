@@ -80,6 +80,53 @@ def test_presenter_validates_configuration() -> None:
         OpenXrVulkanPresenter(OpenXrVulkanConfig(render_scale=0))
 
 
+def test_filament_bridge_binds_each_openxr_eye(monkeypatch) -> None:
+    calls: list[tuple[str, object]] = []
+
+    class FakeBridge:
+        def __init__(self, path):
+            calls.append(("load", path))
+
+        def create(self, **kwargs):
+            calls.append(("create", kwargs["device"]))
+
+        def create_swapchain(self, images, **kwargs):
+            calls.append(("swapchain", (list(images), kwargs["format"])))
+
+        def close(self):
+            calls.append(("close", None))
+
+    import xr_viewer.filament_vulkan_bridge as bridge_module
+
+    monkeypatch.setattr(bridge_module, "FilamentVulkanBridge", FakeBridge)
+    presenter = OpenXrVulkanPresenter(
+        OpenXrVulkanConfig(filament_bridge_path="bridge.dll")
+    )
+    presenter.vulkan = SimpleNamespace(
+        instance=1,
+        physical_device=2,
+        device=3,
+        queue_family_index=4,
+    )
+    presenter.swapchain_format = 43
+    presenter.swapchains = [
+        _EyeSwapchain("left", [SimpleNamespace(image="left-image")], 10, 20),
+        _EyeSwapchain("right", [SimpleNamespace(image="right-image")], 30, 40),
+    ]
+
+    presenter._initialize_filament_bridges()
+
+    assert len(presenter.filament_bridges) == 2
+    assert calls == [
+        ("load", "bridge.dll"),
+        ("create", 3),
+        ("swapchain", (["left-image"], 43)),
+        ("load", "bridge.dll"),
+        ("create", 3),
+        ("swapchain", (["right-image"], 43)),
+    ]
+
+
 def test_swapchain_image_is_not_released_when_wait_fails() -> None:
     calls: list[str] = []
 
