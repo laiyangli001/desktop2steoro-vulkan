@@ -90,6 +90,7 @@ public:
         if (!swapchain) {
             return bundle;
         }
+        bundle.colors.reserve(swapchain->images.size());
         for (VkImage image : swapchain->images) {
             bundle.colors.push_back(image);
         }
