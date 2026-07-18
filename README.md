@@ -34,12 +34,13 @@ src\python3\python.exe src\tools\openxr_vulkan_smoke.py --frames 300
 
 ```powershell
 src\python3\python.exe src\tools\openxr_vulkan_smoke.py `
-  --frames 300 `
+  --seconds 120 `
   --filament-bridge src\xr_viewer\native\filament_bridge.dll `
-  --filament-glb src\xr_viewer\environments\Artemis\environment3.glb
+  --filament-glb src\xr_viewer\environments\Artemis\environment3.glb `
+  --filament-profile src\xr_viewer\environments\Artemis\profile.json
 ```
 
-Linux使用`libfilament_bridge.so`，macOS使用`libfilament_bridge.dylib`。该模式需要连接并唤醒头显。
+`--filament-profile`会把profile中选中的座位映射到初始头部位置，同时保留后续头部移动和双眼视差；`--seconds`用于按时间进行长测。Linux使用`libfilament_bridge.so`，macOS使用`libfilament_bridge.dylib`。该模式需要连接并唤醒头显。
 
 ## 文档
 

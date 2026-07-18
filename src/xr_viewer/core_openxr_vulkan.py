@@ -3,17 +3,21 @@ from __future__ import annotations
 import ctypes
 import ctypes.util
 import importlib
+import json
 import math
 import os
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+
+import numpy as np
 
 from viewer.vulkan_context import VulkanContext, find_graphics_queue_family, make_vulkan_version
 
-from .xr_math import _xr_quat_to_mat4
+from .xr_math import _xr_quat_to_mat4, euler_to_mat4, mat4_to_xr_posef
 
 
 class OpenXrVulkanUnavailableError(RuntimeError):
@@ -28,6 +32,7 @@ class OpenXrVulkanConfig:
     requested_vulkan_version: int = make_vulkan_version(1, 2, 0)
     filament_bridge_path: str | None = None
     filament_glb_path: str | None = None
+    filament_profile_path: str | None = None
 
 
 @dataclass(slots=True)
@@ -70,6 +75,9 @@ class OpenXrVulkanPresenter:
         self._graphics_binding: Any = None
         self._provisional_vk_instance: Any = None
         self._provisional_vk_device: Any = None
+        self._profile_head_transform: np.ndarray | None = None
+        self._profile_initial_head: np.ndarray | None = None
+        self._profile_view_name: str | None = None
         self._initialized = False
 
     @property
@@ -118,6 +126,7 @@ class OpenXrVulkanPresenter:
             )
             self._create_vulkan_objects(api_version)
             self._create_session_and_swapchains()
+            self._load_filament_profile()
             self._initialize_filament_bridges()
             self._initialized = True
         except Exception:
@@ -484,9 +493,71 @@ class OpenXrVulkanPresenter:
             self.filament_bridges.clear()
             raise
 
+    def _load_filament_profile(self) -> None:
+        profile_path = self.config.filament_profile_path
+        if not profile_path:
+            return
+        with open(profile_path, "r", encoding="utf-8-sig") as handle:
+            profile = json.load(handle)
+        if not isinstance(profile, dict):
+            raise ValueError("Filament profile root must be an object")
+
+        view_pose = profile.get("view_pose", profile.get("camera"))
+        view_poses = profile.get("view_poses")
+        if isinstance(view_poses, list) and view_poses:
+            index = int(profile.get("view_pose_index", 0)) % len(view_poses)
+            view_pose = view_poses[index]
+        if not isinstance(view_pose, dict):
+            raise ValueError("Filament profile does not contain a view pose")
+
+        try:
+            world_position = [float(view_pose[key]) for key in ("x", "y", "z")]
+            model_position = profile.get("model_position", profile.get("position", [0.0, 0.0, 0.0]))
+            if not isinstance(model_position, (list, tuple)) or len(model_position) < 3:
+                model_position = [0.0, 0.0, 0.0]
+            position = [
+                world_position[index] - float(model_position[index])
+                for index in range(3)
+            ]
+            rotation_deg = view_pose.get("rotation_deg")
+            if not isinstance(rotation_deg, (list, tuple)) or len(rotation_deg) < 3:
+                rotation_deg = [float(view_pose.get("angle", 0.0)), 0.0, 0.0]
+            rotation_rad = [math.radians(float(value)) for value in rotation_deg[:3]]
+        except (TypeError, ValueError, KeyError) as exc:
+            raise ValueError("Filament profile view pose contains invalid values") from exc
+
+        transform = euler_to_mat4(*rotation_rad).astype(np.float32)
+        transform[:3, 3] = np.asarray(position, dtype=np.float32)
+        self._profile_head_transform = transform
+        self._profile_view_name = str(view_pose.get("name", "profile"))
+        print(
+            f"Loaded Filament profile view: {self._profile_view_name} "
+            f"world_position={world_position} glb_position={position} "
+            f"rotation_deg={rotation_deg[:3]}",
+            flush=True,
+        )
+
+    def _apply_filament_profile(self, views: list[Any]) -> list[Any]:
+        if self._profile_head_transform is None or len(views) < 2:
+            return views
+        eye_matrices = [_xr_view_pose_to_model_mat4(view.pose) for view in views[:2]]
+        if self._profile_initial_head is None:
+            initial_head = eye_matrices[0].copy()
+            initial_head[:3, 3] = (eye_matrices[0][:3, 3] + eye_matrices[1][:3, 3]) * 0.5
+            self._profile_initial_head = initial_head
+            print("Filament profile tracking anchor captured.", flush=True)
+
+        tracking_delta = self._profile_head_transform @ np.linalg.inv(self._profile_initial_head)
+        adjusted = []
+        for view, eye_matrix in zip(views, eye_matrices):
+            adjusted_pose = mat4_to_xr_posef(tracking_delta @ eye_matrix)
+            adjusted.append(SimpleNamespace(pose=adjusted_pose, fov=view.fov))
+        return adjusted
+
     def _render_projection_layer(self, views: list[Any]) -> Any | None:
         if len(views) < len(self.swapchains):
             return None
+        views = self._apply_filament_profile(views)
         xr = self.xr
         projection_views: list[Any] = []
         for eye_index, eye in enumerate(self.swapchains):
@@ -534,6 +605,16 @@ class OpenXrVulkanPresenter:
     def _ensure_initialized(self) -> None:
         if not self._initialized:
             raise RuntimeError("OpenXrVulkanPresenter is not initialized")
+
+
+def _xr_view_pose_to_model_mat4(pose: Any) -> np.ndarray:
+    matrix = _xr_quat_to_mat4(pose.orientation).astype(np.float32)
+    matrix[:3, 3] = (
+        float(pose.position.x),
+        float(pose.position.y),
+        float(pose.position.z),
+    )
+    return matrix
 
 
 def _update_filament_camera(bridge: Any, view: Any) -> None:
