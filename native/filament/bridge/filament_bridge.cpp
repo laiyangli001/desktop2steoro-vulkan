@@ -855,7 +855,7 @@ int filament_preview_create_star_glim_material(FilamentPreview* preview) {
             .blending(filament::BlendingMode::ADD)
             .doubleSided(true)
             .depthWrite(false)
-            .depthCulling(false)
+            .depthCulling(true)
             .targetApi(filamat::MaterialBuilder::TargetApi::ALL)
             .platform(filamat::MaterialBuilder::Platform::ALL);
     filamat::Package package = builder.build(preview->engine->getJobSystem());
