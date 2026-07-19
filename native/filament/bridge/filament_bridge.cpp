@@ -831,11 +831,12 @@ int filament_preview_create_star_glim_material(FilamentPreview* preview) {
             float mask = texture(materialParams_mask, uv).r;
             float luminance = dot(stars, float3(0.2126, 0.7152, 0.0722));
             float phase = fract(sin(dot(floor(uv * 4096.0),
-                    float2(12.9898, 78.233)) + materialParams_seed) * 43758.5453);
+                    float2(12.9898, 78.233)) + materialParams_star_seed) * 43758.5453);
             float twinkle = 0.65 + 0.35 * sin(
-                    materialParams_time * materialParams_speed + phase * 6.2831853);
+                    materialParams_star_time * materialParams_star_speed + phase * 6.2831853);
             float visible = smoothstep(0.015, 0.12, luminance) * mask;
-            material.baseColor = float4(stars * materialParams_intensity * twinkle * visible, visible);
+            material.baseColor = float4(
+                    stars * materialParams_star_intensity * twinkle * visible, visible);
         }
     )FILAMENT";
 
@@ -845,10 +846,10 @@ int filament_preview_create_star_glim_material(FilamentPreview* preview) {
             .material(shader.c_str())
             .parameter("stars", filamat::MaterialBuilder::SamplerType::SAMPLER_2D)
             .parameter("mask", filamat::MaterialBuilder::SamplerType::SAMPLER_2D)
-            .parameter("intensity", filamat::MaterialBuilder::UniformType::FLOAT)
-            .parameter("speed", filamat::MaterialBuilder::UniformType::FLOAT)
-            .parameter("seed", filamat::MaterialBuilder::UniformType::FLOAT)
-            .parameter("time", filamat::MaterialBuilder::UniformType::FLOAT)
+            .parameter("star_intensity", filamat::MaterialBuilder::UniformType::FLOAT)
+            .parameter("star_speed", filamat::MaterialBuilder::UniformType::FLOAT)
+            .parameter("star_seed", filamat::MaterialBuilder::UniformType::FLOAT)
+            .parameter("star_time", filamat::MaterialBuilder::UniformType::FLOAT)
             .shading(filament::Shading::UNLIT)
             .materialDomain(filament::MaterialDomain::SURFACE)
             .blending(filament::BlendingMode::ADD)
@@ -924,10 +925,13 @@ int filament_preview_create_star_glim_material(FilamentPreview* preview) {
                     preview->star_glim_indices.data(),
                     preview->star_glim_indices.size() * sizeof(uint16_t), nullptr));
 
-    preview->star_glim_material_instance->setParameter("intensity", preview->star_glim_intensity);
-    preview->star_glim_material_instance->setParameter("speed", preview->star_glim_speed);
-    preview->star_glim_material_instance->setParameter("seed", preview->star_glim_seed);
-    preview->star_glim_material_instance->setParameter("time", 0.0f);
+    preview->star_glim_material_instance->setParameter(
+            "star_intensity", preview->star_glim_intensity);
+    preview->star_glim_material_instance->setParameter(
+            "star_speed", preview->star_glim_speed);
+    preview->star_glim_material_instance->setParameter(
+            "star_seed", preview->star_glim_seed);
+    preview->star_glim_material_instance->setParameter("star_time", 0.0f);
 
     preview->star_glim_entity = utils::EntityManager::get().create();
     const auto result = filament::RenderableManager::Builder(1)
@@ -1008,11 +1012,11 @@ int filament_preview_set_star_glim_parameters(
     preview->star_glim_seed = seed;
     if (preview->star_glim_material_instance) {
         preview->star_glim_material_instance->setParameter(
-                "intensity", preview->star_glim_intensity);
+                "star_intensity", preview->star_glim_intensity);
         preview->star_glim_material_instance->setParameter(
-                "speed", preview->star_glim_speed);
+                "star_speed", preview->star_glim_speed);
         preview->star_glim_material_instance->setParameter(
-                "seed", preview->star_glim_seed);
+                "star_seed", preview->star_glim_seed);
     }
     return 1;
 }
@@ -1022,7 +1026,7 @@ int filament_preview_set_star_glim_time(FilamentPreview* preview, double time_se
         return 0;
     }
     preview->star_glim_material_instance->setParameter(
-            "time", static_cast<float>(std::max(0.0, time_seconds)));
+            "star_time", static_cast<float>(std::max(0.0, time_seconds)));
     return 1;
 }
 
