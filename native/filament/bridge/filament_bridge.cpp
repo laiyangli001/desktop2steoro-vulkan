@@ -831,12 +831,12 @@ int filament_preview_create_star_glim_material(FilamentPreview* preview) {
             float mask = texture(materialParams_mask, uv).r;
             float luminance = dot(stars, float3(0.2126, 0.7152, 0.0722));
             float phase = fract(sin(dot(floor(uv * 4096.0),
-                    float2(12.9898, 78.233)) + materialParams_starSeed) * 43758.5453);
+                    float2(12.9898, 78.233)) + materialParams.starSeed) * 43758.5453);
             float twinkle = 0.65 + 0.35 * sin(
-                    materialParams_starTime * materialParams_starSpeed + phase * 6.2831853);
+                    materialParams.starTime * materialParams.starSpeed + phase * 6.2831853);
             float visible = smoothstep(0.015, 0.12, luminance) * mask;
             material.baseColor = float4(
-                    stars * materialParams_starIntensity * twinkle * visible, visible);
+                    stars * materialParams.starIntensity * twinkle * visible, visible);
         }
     )FILAMENT";
 
