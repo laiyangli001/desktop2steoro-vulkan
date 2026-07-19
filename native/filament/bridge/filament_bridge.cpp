@@ -814,10 +814,13 @@ int filament_preview_create_star_glim_material(FilamentPreview* preview) {
     const filament::math::float3 min = center - half_extent;
     const filament::math::float3 max = center + half_extent;
 
-    const char* shader = R"FILAMENT(
+    const std::string shader = std::string(R"FILAMENT(
         void material(inout MaterialInputs material) {
             prepareMaterial(material);
-            float3 direction = normalize(getWorldPosition() - materialParams_center);
+            float3 direction = normalize(getWorldPosition() - float3()")FILAMENT")
+            + std::to_string(center.x) + ", "
+            + std::to_string(center.y) + ", "
+            + std::to_string(center.z) + R"FILAMENT());
             float2 uv = float2(
                     atan(direction.z, direction.x) * 0.1591549431 + 0.5,
                     asin(clamp(direction.y, -1.0, 1.0)) * 0.3183098862 + 0.5);
@@ -831,19 +834,18 @@ int filament_preview_create_star_glim_material(FilamentPreview* preview) {
             float visible = smoothstep(0.015, 0.12, luminance) * mask;
             material.baseColor = float4(stars * materialParams_intensity * twinkle * visible, visible);
         }
-    )FILAMENT";
+    )FILAMENT");
 
     filamat::MaterialBuilder::init();
     filamat::MaterialBuilder builder;
     builder.name("D2S StarGlim")
-            .material(shader)
+            .material(shader.c_str())
             .parameter("stars", filamat::MaterialBuilder::SamplerType::SAMPLER_2D)
             .parameter("mask", filamat::MaterialBuilder::SamplerType::SAMPLER_2D)
             .parameter("intensity", filamat::MaterialBuilder::UniformType::FLOAT)
             .parameter("speed", filamat::MaterialBuilder::UniformType::FLOAT)
             .parameter("seed", filamat::MaterialBuilder::UniformType::FLOAT)
             .parameter("time", filamat::MaterialBuilder::UniformType::FLOAT)
-            .parameter("center", filamat::MaterialBuilder::UniformType::FLOAT3)
             .shading(filament::Shading::UNLIT)
             .materialDomain(filament::MaterialDomain::SURFACE)
             .blending(filament::BlendingMode::ADD)
@@ -919,7 +921,6 @@ int filament_preview_create_star_glim_material(FilamentPreview* preview) {
                     preview->star_glim_indices.data(),
                     preview->star_glim_indices.size() * sizeof(uint16_t), nullptr));
 
-    preview->star_glim_material_instance->setParameter("center", center);
     preview->star_glim_material_instance->setParameter("intensity", preview->star_glim_intensity);
     preview->star_glim_material_instance->setParameter("speed", preview->star_glim_speed);
     preview->star_glim_material_instance->setParameter("seed", preview->star_glim_seed);
