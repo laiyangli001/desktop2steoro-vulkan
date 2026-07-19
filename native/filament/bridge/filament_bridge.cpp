@@ -869,13 +869,13 @@ int filament_preview_set_star_glim(
         return 0;
     }
 
-    // Fixed geometry matching the Artemis SkyBox bounds. It remains in the room.
-    const float min_x = -924.519f;
-    const float max_x = 875.481f;
-    const float min_y = -843.085f;
-    const float max_y = 956.915f;
-    const float min_z = -1862.746f;
-    const float max_z = -62.746f;
+    // Fixed geometry slightly inside the Artemis SkyBox to avoid depth fighting.
+    const float min_x = -906.519f;
+    const float max_x = 857.481f;
+    const float min_y = -825.085f;
+    const float max_y = 938.915f;
+    const float min_z = -1844.746f;
+    const float max_z = -80.746f;
     const StarGlimVertex vertices[] = {
         {{min_x, min_y, min_z}, {0, 0}}, {{max_x, min_y, min_z}, {1, 0}},
         {{max_x, max_y, min_z}, {1, 1}}, {{min_x, max_y, min_z}, {0, 1}},
