@@ -8,7 +8,9 @@
 
 #include <backend/platforms/VulkanPlatform.h>
 #include <filament/Camera.h>
+#include <filament/ColorGrading.h>
 #include <filament/Engine.h>
+#include <filament/LightManager.h>
 #include <filament/Renderer.h>
 #include <filament/Scene.h>
 #include <filament/SwapChain.h>
@@ -192,6 +194,8 @@ struct FilamentPreview {
     filament::gltfio::AssetLoader* asset_loader = nullptr;
     filament::gltfio::FilamentAsset* asset = nullptr;
     filament::SwapChain* swapchain = nullptr;
+    utils::Entity fill_light;
+    filament::ColorGrading* color_grading = nullptr;
     std::vector<uint8_t> glb_bytes;
     std::string last_error;
 };
@@ -518,6 +522,20 @@ FilamentPreview* filament_preview_create(void* native_window, uint32_t width, ui
     preview->view->setScene(preview->scene);
     preview->view->setCamera(preview->camera);
     preview->view->setViewport(filament::Viewport{0, 0, width, height});
+    preview->color_grading = filament::ColorGrading::Builder()
+            .exposure(1.0f)
+            .build(*preview->engine);
+    if (preview->color_grading) {
+        preview->view->setColorGrading(preview->color_grading);
+    }
+    preview->fill_light = utils::EntityManager::get().create();
+    filament::LightManager::Builder(filament::LightManager::Type::DIRECTIONAL)
+            .color(1.0f, 0.88f, 0.78f)
+            .intensity(100000.0f)
+            .direction({-0.35f, -1.0f, -0.55f})
+            .castShadows(false)
+            .build(*preview->engine, preview->fill_light);
+    preview->scene->addEntity(preview->fill_light);
     filament::gltfio::AssetConfiguration config{preview->engine, preview->materials};
     preview->asset_loader = filament::gltfio::AssetLoader::create(config);
     if (!preview->asset_loader) {
@@ -529,6 +547,15 @@ FilamentPreview* filament_preview_create(void* native_window, uint32_t width, ui
 void filament_preview_destroy(FilamentPreview* preview) {
     if (!preview) return;
     destroy_preview_asset(preview);
+    if (preview->scene && !preview->fill_light.isNull()) {
+        preview->scene->remove(preview->fill_light);
+    }
+    if (preview->color_grading && preview->engine) {
+        preview->engine->destroy(preview->color_grading);
+    }
+    if (!preview->fill_light.isNull() && preview->engine) {
+        preview->engine->destroy(preview->fill_light);
+    }
     if (preview->swapchain && preview->engine) preview->engine->destroy(preview->swapchain);
     if (preview->view && preview->engine) preview->engine->destroy(preview->view);
     if (preview->camera && preview->engine) preview->engine->destroy(preview->camera->getEntity());
