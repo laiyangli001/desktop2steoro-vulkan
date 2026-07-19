@@ -17,6 +17,9 @@ def make_vulkan_version(major: int, minor: int, patch: int = 0) -> int:
     return (int(major) << 22) | (int(minor) << 12) | int(patch)
 
 
+MIN_VULKAN_API_VERSION = make_vulkan_version(1, 2, 0)
+
+
 def unpack_vulkan_version(version: int) -> tuple[int, int, int]:
     value = int(version)
     return value >> 22, (value >> 12) & 0x3FF, value & 0xFFF
@@ -35,6 +38,7 @@ class VulkanDeviceInfo:
     device_id: int
     device_type: int
     queue_family_index: int
+    timeline_semaphore_enabled: bool = False
 
     @property
     def api_version_text(self) -> str:
@@ -45,7 +49,7 @@ class VulkanDeviceInfo:
 class VulkanContextConfig:
     application_name: str = "Desktop2Stereo Vulkan"
     engine_name: str = "D2S"
-    api_version: int = make_vulkan_version(1, 2, 0)
+    api_version: int = make_vulkan_version(1, 4, 0)
     enable_validation: bool = False
     required_instance_extensions: tuple[str, ...] = ()
     required_device_extensions: tuple[str, ...] = ()
@@ -105,13 +109,15 @@ class VulkanContext:
                 )
             layers = (validation_layer,)
 
+        loader_api_version = _loader_api_version(vk)
+        instance_api_version = min(int(cfg.api_version), loader_api_version)
         app_info = vk.VkApplicationInfo(
             sType=vk.VK_STRUCTURE_TYPE_APPLICATION_INFO,
             pApplicationName=cfg.application_name,
             applicationVersion=1,
             pEngineName=cfg.engine_name,
             engineVersion=1,
-            apiVersion=int(cfg.api_version),
+            apiVersion=instance_api_version,
         )
         create_info = vk.VkInstanceCreateInfo(
             sType=vk.VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
@@ -143,7 +149,12 @@ class VulkanContext:
                 required_device_extensions,
             )
             queue = vk.vkGetDeviceQueue(device, queue_family_index, 0)
-            info = _device_info(vk, physical_device, queue_family_index)
+            info = _device_info(
+                vk,
+                physical_device,
+                queue_family_index,
+                timeline_semaphore_enabled=True,
+            )
             return cls(
                 vk=vk,
                 instance=instance,
@@ -172,6 +183,7 @@ class VulkanContext:
         queue_family_index: int,
         owns_instance: bool = True,
         owns_device: bool = True,
+        timeline_semaphore_enabled: bool = False,
     ) -> "VulkanContext":
         vk = _import_vulkan()
         queue = vk.vkGetDeviceQueue(device, int(queue_family_index), 0)
@@ -182,7 +194,12 @@ class VulkanContext:
             device=device,
             queue=queue,
             queue_family_index=int(queue_family_index),
-            device_info=_device_info(vk, physical_device, int(queue_family_index)),
+            device_info=_device_info(
+                vk,
+                physical_device,
+                int(queue_family_index),
+                timeline_semaphore_enabled=timeline_semaphore_enabled,
+            ),
             owns_instance=owns_instance,
             owns_device=owns_device,
         )
@@ -456,6 +473,8 @@ def _device_info(
     vk: Any,
     physical_device: Any,
     queue_family_index: int,
+    *,
+    timeline_semaphore_enabled: bool = False,
 ) -> VulkanDeviceInfo:
     properties = vk.vkGetPhysicalDeviceProperties(physical_device)
     return VulkanDeviceInfo(
@@ -466,7 +485,35 @@ def _device_info(
         device_id=int(properties.deviceID),
         device_type=int(properties.deviceType),
         queue_family_index=int(queue_family_index),
+        timeline_semaphore_enabled=bool(timeline_semaphore_enabled),
     )
+
+
+def _loader_api_version(vk: Any) -> int:
+    enumerate_version = getattr(vk, "vkEnumerateInstanceVersion", None)
+    if enumerate_version is None:
+        return make_vulkan_version(1, 0, 0)
+    return int(enumerate_version())
+
+
+def _require_timeline_semaphore_features(vk: Any, physical_device: Any) -> Any:
+    feature_type = getattr(vk, "VkPhysicalDeviceTimelineSemaphoreFeatures", None)
+    features2_type = getattr(vk, "VkPhysicalDeviceFeatures2", None)
+    get_features2 = getattr(vk, "vkGetPhysicalDeviceFeatures2", None)
+    if feature_type is None or features2_type is None or get_features2 is None:
+        raise VulkanCapabilityError(
+            "Vulkan binding does not expose physical-device feature2 queries"
+        )
+
+    supported = feature_type()
+    features2 = features2_type(pNext=supported)
+    get_features2(physical_device, features2)
+    if not bool(supported.timelineSemaphore):
+        raise VulkanCapabilityError(
+            "Vulkan device does not support timelineSemaphore"
+        )
+
+    return feature_type(timelineSemaphore=vk.VK_TRUE)
 
 
 def _create_device(
@@ -475,6 +522,12 @@ def _create_device(
     queue_family_index: int,
     required_extensions: Iterable[str],
 ) -> Any:
+    properties = vk.vkGetPhysicalDeviceProperties(physical_device)
+    if int(properties.apiVersion) < MIN_VULKAN_API_VERSION:
+        raise VulkanCapabilityError(
+            "Vulkan device API version is below the required Vulkan 1.2"
+        )
+
     extension_names = tuple(required_extensions)
     queue_info = vk.VkDeviceQueueCreateInfo(
         sType=vk.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
@@ -482,8 +535,10 @@ def _create_device(
         queueCount=1,
         pQueuePriorities=[1.0],
     )
+    timeline_features = _require_timeline_semaphore_features(vk, physical_device)
     device_info = vk.VkDeviceCreateInfo(
         sType=vk.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+        pNext=timeline_features,
         queueCreateInfoCount=1,
         pQueueCreateInfos=[queue_info],
         enabledExtensionCount=len(extension_names),

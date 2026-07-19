@@ -51,7 +51,7 @@
 | 核心语言 | Python；版本按平台锁定文件确定 |
 | Python运行方式 | 源码直接执行，正式入口保持为 `python src/main.py` |
 | 包管理 | 固定版本清单；依赖必须可校验 SHA-256 |
-| 图形 API | Vulkan 1.3 主路径；OpenGL 4.3+ Fallback，macOS 为 OpenGL 4.1 受限模式 |
+| 图形 API | 默认请求 Vulkan 1.4，按 OpenXR Runtime 协商，最低 Vulkan 1.2；OpenGL 4.3+ Fallback，macOS 为 OpenGL 4.1 受限模式 |
 | XR API | OpenXR 1.1；主路径使用 `XR_KHR_vulkan_enable2`，Fallback 使用 Runtime 支持的 OpenGL Graphics Binding |
 | 场景引擎 | Filament Vulkan Backend 为主；OpenGL 使用隔离的兼容 Scene Renderer |
 | Shader | GLSL/HLSL 离线编译为 SPIR-V |
@@ -453,6 +453,14 @@ class VulkanContext:
 
 `VulkanRequirements` 由 OpenXR、Filament、Compute Graph 和推理互操作能力合并生成。缺失必需扩展时在创建 Device 前失败。
 
+Vulkan 版本和设备 Feature 规则：
+
+- OpenXR Vulkan 初始化默认请求 Vulkan 1.4；实际版本必须限制在 `xrGetVulkanGraphicsRequirements2KHR` 返回的最小/最大范围内，主路径最低保证 Vulkan 1.2。
+- Vulkan 1.4 只是默认请求上限，不要求所有 Runtime、驱动或 GPU 都实际创建 1.4 Device；Runtime 协商到 1.2 或 1.3 时，只要能力探测通过即可继续。
+- 创建设备前必须使用 `vkGetPhysicalDeviceFeatures2` 查询 `timelineSemaphore`。
+- 当 Timeline Semaphore 可用时，必须将 `VkPhysicalDeviceTimelineSemaphoreFeatures` 追加到 `VkDeviceCreateInfo.pNext`，并将 `timelineSemaphore` 设置为 `VK_TRUE`。请求 Vulkan 版本不会自动启用该 Feature。
+- Timeline Semaphore 不支持或启用失败时，Vulkan OpenXR 路径必须在创建正式 Device/Session 前失败并给出原因；由启动器按策略受控重启进入 OpenGL Fallback。
+
 ### 7.2 资源分配
 
 - 所有长期图像通过统一 `GpuAllocator` 创建。
@@ -492,6 +500,8 @@ implicit queue ownership assumptions
 ```
 
 只有初始化失败清理、Session 销毁和进程关闭可执行受控全局等待。
+
+Timeline 值必须由统一的 `FrameContext` 同步协议管理。NVIDIA、AMD、Intel 和 MoltenVK 路径均不得假设该 Feature 默认开启；能力探测、Device 创建 pNext 链和启动诊断必须记录实际支持与启用状态。
 
 ---
 
@@ -1186,3 +1196,9 @@ Vulkan 工程迁移只有同时满足以下条件才算完成：
 11. Capture、Inference、Vulkan、OpenXR和Output均由Python源码实现，唯一自有原生组件为Filament DLL Bridge。
 
 本文自Python Vulkan Runtime开发开始生效。后续工程实现、代码审查和发布验收均以本文和`docs/01`为唯一目标架构依据。
+
+## 25. 全量符合性追踪
+
+本文与 `docs/01` 的所有要求统一由 [`docs/requirements-matrix.md`](requirements-matrix.md) 追踪。矩阵按架构、捕捉、推理、Vulkan、Compute Graph、Filament、OpenXR、输出、配置、GUI、错误恢复、诊断、性能、测试、平台、CI 和安全领域登记要求，且每条要求必须关联代码映射和测试/实机验收记录。
+
+日常开发使用 `src/tools/check_compliance.py` 检查矩阵结构；发布候选版本使用 `--strict`，只允许 `verified` 或 `accepted` 条目，并额外要求 pytest、三平台 Bridge CI 和专用 GPU/OpenXR 实机验收通过。

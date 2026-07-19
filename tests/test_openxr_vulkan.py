@@ -34,12 +34,12 @@ def test_vulkan_version_round_trip() -> None:
 
 def test_openxr_version_range_clamps_requested_vulkan_version() -> None:
     requirements = SimpleNamespace(
-        min_api_version_supported=xr.Version(1, 1, 0),
+        min_api_version_supported=xr.Version(1, 2, 0),
         max_api_version_supported=xr.Version(1, 3, 0),
     )
     assert _select_vulkan_api_version(
         requirements, make_vulkan_version(1, 0, 0)
-    ) == make_vulkan_version(1, 1, 0)
+    ) == make_vulkan_version(1, 2, 0)
     assert _select_vulkan_api_version(
         requirements, make_vulkan_version(1, 2, 0)
     ) == make_vulkan_version(1, 2, 0)
@@ -55,6 +55,15 @@ def test_invalid_openxr_version_range_is_rejected() -> None:
     )
     with pytest.raises(OpenXrVulkanUnavailableError):
         _select_vulkan_api_version(requirements, make_vulkan_version(1, 2, 0))
+
+
+def test_openxr_runtime_below_vulkan_12_is_rejected() -> None:
+    requirements = SimpleNamespace(
+        min_api_version_supported=xr.Version(1, 0, 0),
+        max_api_version_supported=xr.Version(1, 1, 0),
+    )
+    with pytest.raises(OpenXrVulkanUnavailableError, match="Vulkan 1.2"):
+        _select_vulkan_api_version(requirements, make_vulkan_version(1, 4, 0))
 
 
 def test_swapchain_format_prefers_srgb() -> None:
@@ -93,6 +102,12 @@ def test_filament_bridge_binds_each_openxr_eye(monkeypatch) -> None:
 
         def create_swapchain(self, images, **kwargs):
             calls.append(("swapchain", (list(images), kwargs["format"])))
+
+        def set_scene_exposure(self, _value):
+            pass
+
+        def set_skybox_brightness(self, _value):
+            pass
 
         def close(self):
             calls.append(("close", None))

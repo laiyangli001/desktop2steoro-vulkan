@@ -15,7 +15,14 @@ from typing import Any
 
 import numpy as np
 
-from viewer.vulkan_context import VulkanContext, find_graphics_queue_family, make_vulkan_version
+from viewer.vulkan_context import (
+    MIN_VULKAN_API_VERSION,
+    VulkanContext,
+    VulkanCapabilityError,
+    _require_timeline_semaphore_features,
+    find_graphics_queue_family,
+    make_vulkan_version,
+)
 
 from .xr_math import _xr_quat_to_mat4, euler_to_mat4, mat4_to_xr_posef
 
@@ -29,7 +36,7 @@ class OpenXrVulkanConfig:
     application_name: str = "Desktop2Stereo Vulkan"
     render_scale: float = 1.0
     clear_color: tuple[float, float, float, float] = (0.02, 0.04, 0.08, 1.0)
-    requested_vulkan_version: int = make_vulkan_version(1, 2, 0)
+    requested_vulkan_version: int = make_vulkan_version(1, 4, 0)
     filament_bridge_path: str | None = None
     filament_glb_path: str | None = None
     filament_profile_path: str | None = None
@@ -346,6 +353,12 @@ class OpenXrVulkanPresenter:
             vk, "VkPhysicalDevice", xr_physical_device
         )
         queue_family_index = find_graphics_queue_family(vk, vk_physical_device)
+        try:
+            timeline_features = _require_timeline_semaphore_features(
+                vk, vk_physical_device
+            )
+        except VulkanCapabilityError as exc:
+            raise OpenXrVulkanUnavailableError(str(exc)) from exc
         queue_info = vk.VkDeviceQueueCreateInfo(
             sType=vk.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
             queueFamilyIndex=queue_family_index,
@@ -354,6 +367,7 @@ class OpenXrVulkanPresenter:
         )
         device_create_info = vk.VkDeviceCreateInfo(
             sType=vk.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+            pNext=timeline_features,
             queueCreateInfoCount=1,
             pQueueCreateInfos=[queue_info],
         )
@@ -378,6 +392,7 @@ class OpenXrVulkanPresenter:
             queue_family_index=queue_family_index,
             owns_instance=True,
             owns_device=True,
+            timeline_semaphore_enabled=True,
         )
         self._provisional_vk_device = None
         self._provisional_vk_instance = None
@@ -730,7 +745,16 @@ def _select_vulkan_api_version(requirements: Any, requested: int) -> int:
         raise OpenXrVulkanUnavailableError(
             "OpenXR runtime returned an invalid Vulkan API version range"
         )
-    return max(minimum, min(int(requested), maximum))
+    if maximum < MIN_VULKAN_API_VERSION:
+        raise OpenXrVulkanUnavailableError(
+            "OpenXR runtime does not support the required Vulkan 1.2 minimum"
+        )
+    selected = max(minimum, min(int(requested), maximum))
+    if selected < MIN_VULKAN_API_VERSION:
+        raise OpenXrVulkanUnavailableError(
+            "Negotiated Vulkan API version is below the required Vulkan 1.2 minimum"
+        )
+    return selected
 
 
 def _select_swapchain_format(vk: Any, available_formats: list[int]) -> int:

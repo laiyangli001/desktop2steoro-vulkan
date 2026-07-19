@@ -1,0 +1,31 @@
+name: Requirements Compliance
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  matrix:
+    name: Requirements matrix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install matrix test dependency
+        run: python -m pip install --disable-pip-version-check pytest
+
+      - name: Validate requirements traceability
+        run: python src/tools/check_compliance.py
+
+      - name: Test requirements traceability
+        env:
+          PYTHONPATH: src
+        run: python -m pytest -q tests/test_requirements_matrix.py
