@@ -766,12 +766,41 @@ int filament_preview_create_star_glim_material(FilamentPreview* preview) {
     auto& renderables = preview->engine->getRenderableManager();
     utils::Entity source_entity;
     filament::RenderableManager::Instance source_instance;
-    for (size_t index = 0; index < preview->asset->getRenderableEntityCount(); ++index) {
-        const utils::Entity entity = preview->asset->getRenderableEntities()[index];
-        if (is_skybox_name(preview->asset->getName(entity))) {
-            source_entity = entity;
-            source_instance = renderables.getInstance(entity);
-            break;
+    const utils::Entity named_skybox = preview->asset->getFirstEntityByName(
+            "Model_Artemis__SkyBox");
+    if (!named_skybox.isNull()) {
+        const auto named_instance = renderables.getInstance(named_skybox);
+        if (named_instance.isValid()) {
+            source_entity = named_skybox;
+            source_instance = named_instance;
+        }
+    }
+    if (source_entity.isNull()) {
+        for (size_t index = 0; index < preview->asset->getEntityCount(); ++index) {
+            const utils::Entity entity = preview->asset->getEntities()[index];
+            if (!is_skybox_name(preview->asset->getName(entity))) continue;
+            const auto instance = renderables.getInstance(entity);
+            if (instance.isValid()) {
+                source_entity = entity;
+                source_instance = instance;
+                break;
+            }
+        }
+    }
+    if (source_entity.isNull()) {
+        float largest_volume = -1.0f;
+        for (size_t index = 0; index < preview->asset->getEntityCount(); ++index) {
+            const utils::Entity entity = preview->asset->getEntities()[index];
+            const auto instance = renderables.getInstance(entity);
+            if (!instance.isValid()) continue;
+            const auto box = renderables.getAxisAlignedBoundingBox(instance);
+            const auto extent = box.halfExtent;
+            const float volume = extent.x * extent.y * extent.z;
+            if (volume > largest_volume) {
+                largest_volume = volume;
+                source_entity = entity;
+                source_instance = instance;
+            }
         }
     }
     if (source_entity.isNull() || !source_instance.isValid()) {
