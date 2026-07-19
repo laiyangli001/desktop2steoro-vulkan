@@ -228,7 +228,7 @@ def main():
     preview = FilamentDesktopPreview(native_window, 1280, 720)
     preview.load_glb(glb_path.read_bytes(), max_texture_dimension=args.max_texture_size)
     preview_exposure = float(
-        args.exposure if args.exposure is not None else profile.get("preview_exposure", 1.0)
+        args.exposure if args.exposure is not None else profile.get("preview_exposure", 2.0)
     )
     fill_light_color = _vec3(profile.get("preview_fill_light_color"), [1.0, 0.88, 0.78])
     fill_light_direction = _vec3(profile.get("preview_fill_light_direction"), [-0.35, -1.0, -0.55])
