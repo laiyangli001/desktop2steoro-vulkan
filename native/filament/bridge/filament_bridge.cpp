@@ -817,7 +817,7 @@ int filament_preview_create_star_glim_material(FilamentPreview* preview) {
     const std::string shader = std::string(R"FILAMENT(
         void material(inout MaterialInputs material) {
             prepareMaterial(material);
-            float3 direction = normalize(getWorldPosition() - float3()")FILAMENT")
+            float3 direction = normalize(getWorldPosition() - float3(")FILAMENT")
             + std::to_string(center.x) + ", "
             + std::to_string(center.y) + ", "
             + std::to_string(center.z) + R"FILAMENT());
