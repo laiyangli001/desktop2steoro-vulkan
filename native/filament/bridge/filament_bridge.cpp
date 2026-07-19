@@ -834,7 +834,7 @@ int filament_preview_create_star_glim_material(FilamentPreview* preview) {
             float visible = smoothstep(0.015, 0.12, luminance) * mask;
             material.baseColor = float4(stars * materialParams_intensity * twinkle * visible, visible);
         }
-    )FILAMENT");
+    )FILAMENT";
 
     filamat::MaterialBuilder::init();
     filamat::MaterialBuilder builder;
