@@ -200,6 +200,8 @@ def main():
         default=0,
         help="Maximum embedded texture edge for desktop preview; 0 keeps source resolution",
     )
+    parser.add_argument("--exposure", type=float, default=None, help="Filament exposure in EV")
+    parser.add_argument("--fill-light-intensity", type=float, default=None, help="Filament directional fill light intensity")
     parser.add_argument("--center-view", action="store_true", help="Start camera at the transformed model bounds center")
     args = parser.parse_args()
 
@@ -225,6 +227,18 @@ def main():
     native_window = _native_window_handle(window)
     preview = FilamentDesktopPreview(native_window, 1280, 720)
     preview.load_glb(glb_path.read_bytes(), max_texture_dimension=args.max_texture_size)
+    preview_exposure = float(
+        args.exposure if args.exposure is not None else profile.get("preview_exposure", 1.0)
+    )
+    fill_light_color = _vec3(profile.get("preview_fill_light_color"), [1.0, 0.88, 0.78])
+    fill_light_direction = _vec3(profile.get("preview_fill_light_direction"), [-0.35, -1.0, -0.55])
+    fill_light_intensity = float(
+        args.fill_light_intensity
+        if args.fill_light_intensity is not None
+        else profile.get("preview_fill_light_intensity", 100000.0)
+    )
+    preview.set_exposure(preview_exposure)
+    preview.set_fill_light(fill_light_color, fill_light_intensity, fill_light_direction)
 
     # Profile positions are stored in world coordinates; Filament renders the raw GLB scene.
     view_pos = _pose_position_in_scene(profile, view_pose)
@@ -243,6 +257,7 @@ def main():
     print(f"Room: {args.room}")
     print(f"Profile: {profile_path}")
     print(f"Preview projection: clip={projection_near:.3f}/{projection_far:.1f}")
+    print(f"Preview color: exposure={preview_exposure:.2f}EV fill={fill_light_intensity:.0f}")
     print(f"Preview navigation: move_speed={speed:.2f}m/s size_speed={size_speed:.2f}m/s")
     print(f"Preview fine mode: hold Ctrl for {PREVIEW_FINE_MOVE_SPEED_MPS:.2f}m/s movement/size adjustment")
     print("Controls:")

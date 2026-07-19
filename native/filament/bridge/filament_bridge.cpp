@@ -628,6 +628,49 @@ int filament_preview_set_viewport(FilamentPreview* preview, uint32_t width, uint
     return 1;
 }
 
+int filament_preview_set_exposure(FilamentPreview* preview, float exposure_ev) {
+    if (!preview || !preview->engine || !preview->view || !std::isfinite(exposure_ev)) {
+        return 0;
+    }
+    if (preview->color_grading) {
+        preview->engine->destroy(preview->color_grading);
+        preview->color_grading = nullptr;
+    }
+    preview->color_grading = filament::ColorGrading::Builder()
+            .exposure(exposure_ev)
+            .build(*preview->engine);
+    if (!preview->color_grading) return 0;
+    preview->view->setColorGrading(preview->color_grading);
+    return 1;
+}
+
+int filament_preview_set_fill_light(
+        FilamentPreview* preview,
+        float red, float green, float blue,
+        float intensity,
+        float direction_x, float direction_y, float direction_z) {
+    if (!preview || !preview->engine || !preview->scene ||
+            !std::isfinite(red) || !std::isfinite(green) || !std::isfinite(blue) ||
+            !std::isfinite(intensity) || intensity < 0.0f ||
+            !std::isfinite(direction_x) || !std::isfinite(direction_y) ||
+            !std::isfinite(direction_z)) {
+        return 0;
+    }
+    if (!preview->fill_light.isNull()) {
+        preview->scene->remove(preview->fill_light);
+        preview->engine->destroy(preview->fill_light);
+    }
+    preview->fill_light = utils::EntityManager::get().create();
+    filament::LightManager::Builder(filament::LightManager::Type::DIRECTIONAL)
+            .color(filament::LinearColor{red, green, blue})
+            .intensity(intensity)
+            .direction({direction_x, direction_y, direction_z})
+            .castShadows(false)
+            .build(*preview->engine, preview->fill_light);
+    preview->scene->addEntity(preview->fill_light);
+    return 1;
+}
+
 int filament_preview_render(FilamentPreview* preview) {
     if (!preview || !preview->renderer || !preview->swapchain || !preview->view) return 0;
     if (!preview->renderer->beginFrame(preview->swapchain)) return 1;

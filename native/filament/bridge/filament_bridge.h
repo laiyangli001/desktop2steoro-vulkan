@@ -85,6 +85,13 @@ FILAMENT_BRIDGE_API int filament_preview_set_projection(
         double near_plane, double far_plane);
 FILAMENT_BRIDGE_API int filament_preview_set_viewport(
         FilamentPreview* preview, uint32_t width, uint32_t height);
+FILAMENT_BRIDGE_API int filament_preview_set_exposure(
+        FilamentPreview* preview, float exposure_ev);
+FILAMENT_BRIDGE_API int filament_preview_set_fill_light(
+        FilamentPreview* preview,
+        float red, float green, float blue,
+        float intensity,
+        float direction_x, float direction_y, float direction_z);
 FILAMENT_BRIDGE_API int filament_preview_render(FilamentPreview* preview);
 FILAMENT_BRIDGE_API const char* filament_preview_last_error(
         const FilamentPreview* preview);

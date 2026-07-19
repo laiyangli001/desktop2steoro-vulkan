@@ -182,6 +182,23 @@ class FilamentDesktopPreview:
             "set_viewport",
         )
 
+    def set_exposure(self, exposure_ev: float) -> None:
+        self._check(
+            self._library.filament_preview_set_exposure(
+                self._handle, float(exposure_ev)
+            ),
+            "set_exposure",
+        )
+
+    def set_fill_light(self, color, intensity: float, direction) -> None:
+        self._check(
+            self._library.filament_preview_set_fill_light(
+                self._handle,
+                *(float(value) for value in (*color, intensity, *direction)),
+            ),
+            "set_fill_light",
+        )
+
     def render(self) -> None:
         self._check(self._library.filament_preview_render(self._handle), "render")
 
@@ -215,6 +232,14 @@ class FilamentDesktopPreview:
             ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32
         ]
         library.filament_preview_set_viewport.restype = ctypes.c_int
+        library.filament_preview_set_exposure.argtypes = [
+            ctypes.c_void_p, ctypes.c_float
+        ]
+        library.filament_preview_set_exposure.restype = ctypes.c_int
+        library.filament_preview_set_fill_light.argtypes = [
+            ctypes.c_void_p, *([ctypes.c_float] * 7)
+        ]
+        library.filament_preview_set_fill_light.restype = ctypes.c_int
         library.filament_preview_render.argtypes = [ctypes.c_void_p]
         library.filament_preview_render.restype = ctypes.c_int
         library.filament_preview_last_error.argtypes = [ctypes.c_void_p]
