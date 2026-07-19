@@ -786,7 +786,11 @@ int filament_preview_set_star_glim(
     const char* shader = R"FILAMENT(
         void material(inout MaterialInputs material) {
             prepareMaterial(material);
-            float2 panoUv = getUV0();
+            const float3 skyCenter = float3(-24.519, 56.915, -962.746);
+            float3 direction = normalize(getWorldPosition() - skyCenter);
+            float2 panoUv = float2(
+                    atan(direction.z, direction.x) * 0.1591549431 + 0.5,
+                    asin(clamp(direction.y, -1.0, 1.0)) * 0.3183098862 + 0.5);
             float2 drift = float2(materialParams.speed * materialParams.time, 0.0);
             float2 sampleUv = fract(panoUv + drift);
             float3 textureStars = texture(materialParams_stars, sampleUv).rgb;
@@ -795,7 +799,10 @@ int filament_preview_set_star_glim(
             float2 cell = floor(cellUv);
             float2 local = fract(cellUv) - 0.5;
             float phase = fract(sin(dot(cell, float2(12.9898, 78.233))) * 43758.5453);
-            float pulse = 0.5 + 0.5 * sin(materialParams.time * materialParams.shineSpeed + phase * 6.2831853);
+            float localSpeed = mix(0.45, 1.8, fract(phase * 7.13));
+            float pulse = 0.5 + 0.5 * sin(
+                    materialParams.time * materialParams.shineSpeed * localSpeed
+                    + phase * 6.2831853);
             float threshold = clamp(materialParams.cellValue + (1.0 - materialParams.cellSoft), 0.0, 1.0);
             float starRadius = mix(0.055, 0.16, fract(phase * 19.17));
             float diamond = 1.0 - smoothstep(0.0, starRadius, abs(local.x) + abs(local.y));
@@ -806,13 +813,15 @@ int filament_preview_set_star_glim(
             float starShape = max(diamond, max(horizontalRay, verticalRay) * 0.9);
             float proceduralStar = starShape * step(0.94, phase);
             float textureStar = max(max(textureStars.r, textureStars.g), textureStars.b) * 4.0;
-            float starAmount = max(textureStar * starShape, proceduralStar);
             float twinkle = smoothstep(threshold, 1.0, pulse) * materialParams.strength;
-            float3 starColor = max(textureStars * 4.0 * starShape,
-                    float3(1.0, 0.88, 0.68) * proceduralStar);
             float skyOnly = smoothstep(0.0, 0.08, panoUv.y);
-            material.baseColor = float4(starColor * mask * materialParams.intensity * twinkle,
-                    mask * starAmount * twinkle * skyOnly);
+            float3 backgroundColor = textureStars * 4.0 * mask * materialParams.intensity;
+            float backgroundAlpha = textureStar * mask * skyOnly;
+            float3 twinkleColor = float3(1.0, 0.88, 0.68)
+                    * proceduralStar * twinkle * mask * materialParams.intensity;
+            float twinkleAlpha = proceduralStar * twinkle * mask * skyOnly;
+            material.baseColor = float4(backgroundColor + twinkleColor,
+                    backgroundAlpha + twinkleAlpha);
         }
     )FILAMENT";
     filamat::MaterialBuilder::init();
@@ -860,17 +869,31 @@ int filament_preview_set_star_glim(
         return 0;
     }
 
-    // Fixed Artemis front-sky plane. It must remain in the room, independent of camera motion.
-    const float half_width = 700.0f;
-    const float bottom = 0.0f;
-    const float top = 500.0f;
-    const float plane_z = -850.0f;
+    // Fixed geometry matching the Artemis SkyBox bounds. It remains in the room.
+    const float min_x = -924.519f;
+    const float max_x = 875.481f;
+    const float min_y = -843.085f;
+    const float max_y = 956.915f;
+    const float min_z = -1862.746f;
+    const float max_z = -62.746f;
     const StarGlimVertex vertices[] = {
-        {{-half_width, bottom, plane_z}, {0, 0}}, {{half_width, bottom, plane_z}, {1, 0}},
-        {{half_width, top, plane_z}, {1, 1}}, {{-half_width, top, plane_z}, {0, 1}},
+        {{min_x, min_y, min_z}, {0, 0}}, {{max_x, min_y, min_z}, {1, 0}},
+        {{max_x, max_y, min_z}, {1, 1}}, {{min_x, max_y, min_z}, {0, 1}},
+        {{max_x, min_y, max_z}, {0, 0}}, {{min_x, min_y, max_z}, {1, 0}},
+        {{min_x, max_y, max_z}, {1, 1}}, {{max_x, max_y, max_z}, {0, 1}},
+        {{min_x, min_y, max_z}, {0, 0}}, {{min_x, min_y, min_z}, {1, 0}},
+        {{min_x, max_y, min_z}, {1, 1}}, {{min_x, max_y, max_z}, {0, 1}},
+        {{max_x, min_y, min_z}, {0, 0}}, {{max_x, min_y, max_z}, {1, 0}},
+        {{max_x, max_y, max_z}, {1, 1}}, {{max_x, max_y, min_z}, {0, 1}},
+        {{min_x, max_y, min_z}, {0, 0}}, {{max_x, max_y, min_z}, {1, 0}},
+        {{max_x, max_y, max_z}, {1, 1}}, {{min_x, max_y, max_z}, {0, 1}},
+        {{min_x, min_y, max_z}, {0, 0}}, {{max_x, min_y, max_z}, {1, 0}},
+        {{max_x, min_y, min_z}, {1, 1}}, {{min_x, min_y, min_z}, {0, 1}},
     };
     const uint16_t indices[] = {
-        0, 1, 2, 0, 2, 3,
+        0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7,
+        8, 9, 10, 8, 10, 11, 12, 13, 14, 12, 14, 15,
+        16, 17, 18, 16, 18, 19, 20, 21, 22, 20, 22, 23,
     };
     preview->star_glim_vertices.assign(std::begin(vertices), std::end(vertices));
     preview->star_glim_indices.assign(std::begin(indices), std::end(indices));
@@ -919,7 +942,7 @@ int filament_preview_set_star_glim(
     preview->star_glim_material_instance->setParameter("strength", strength);
     preview->star_glim_entity = utils::EntityManager::get().create();
     filament::RenderableManager::Builder(1)
-            .boundingBox({{-half_width, bottom, plane_z}, {half_width, top, plane_z}})
+            .boundingBox({{min_x, min_y, min_z}, {max_x, max_y, max_z}})
             .material(0, preview->star_glim_material_instance)
             .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES,
                     preview->star_glim_vertex_buffer, preview->star_glim_index_buffer,
