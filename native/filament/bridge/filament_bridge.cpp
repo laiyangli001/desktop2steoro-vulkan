@@ -817,26 +817,18 @@ int filament_preview_create_star_glim_material(FilamentPreview* preview) {
     std::string shader = R"FILAMENT(
         void material(inout MaterialInputs material) {
             prepareMaterial(material);
-            float3 direction = normalize(getWorldPosition() - float3(
-)FILAMENT";
-    shader += std::to_string(center.x) + ", "
-            + std::to_string(center.y) + ", "
-            + std::to_string(center.z);
-    shader += R"FILAMENT(
-));
-            float2 uv = float2(
-                    atan(direction.z, direction.x) * 0.1591549431 + 0.5,
-                    asin(clamp(direction.y, -1.0, 1.0)) * 0.3183098862 + 0.5);
+            float2 uv = getUV0();
             float3 stars = texture(materialParams_stars, uv).rgb;
             float mask = texture(materialParams_mask, uv).r;
-            float luminance = dot(stars, float3(0.2126, 0.7152, 0.0722));
             float phase = fract(sin(dot(floor(uv * 4096.0),
                     float2(12.9898, 78.233)) + materialParams.starSeed) * 43758.5453);
             float twinkle = 0.65 + 0.35 * sin(
                     materialParams.starTime * materialParams.starSpeed + phase * 6.2831853);
-            float visible = smoothstep(0.015, 0.12, luminance) * mask;
+            float coverage = clamp(
+                    dot(stars, float3(0.2126, 0.7152, 0.0722)) * mask,
+                    0.0, 1.0);
             material.baseColor = float4(
-                    stars * materialParams.starIntensity * twinkle * visible, visible);
+                    stars * materialParams.starIntensity * twinkle, coverage);
         }
     )FILAMENT";
 
@@ -852,8 +844,9 @@ int filament_preview_create_star_glim_material(FilamentPreview* preview) {
             .parameter("starTime", filamat::MaterialBuilder::UniformType::FLOAT)
             .shading(filament::Shading::UNLIT)
             .materialDomain(filament::MaterialDomain::SURFACE)
-            .blending(filament::BlendingMode::ADD)
-            .doubleSided(true)
+            .blending(filament::BlendingMode::MASKED)
+            .culling(filament::backend::CullingMode::FRONT)
+            .maskThreshold(0.001f)
             .depthWrite(false)
             .depthCulling(true)
             .targetApi(filamat::MaterialBuilder::TargetApi::ALL)
@@ -940,6 +933,7 @@ int filament_preview_create_star_glim_material(FilamentPreview* preview) {
             .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES,
                     preview->star_glim_vertex_buffer, preview->star_glim_index_buffer,
                     0, static_cast<uint32_t>(preview->star_glim_indices.size()))
+            .priority(7)
             .culling(false)
             .castShadows(false)
             .receiveShadows(false)

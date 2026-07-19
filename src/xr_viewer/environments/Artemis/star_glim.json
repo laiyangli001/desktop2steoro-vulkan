@@ -7,6 +7,6 @@
     "stars_texture": "star_glim_stars.png",
     "mask_texture": "star_glim_mask.png",
     "intensity": 10.0,
-    "speed": 0.0,
+    "speed": 0.1,
     "seed": 0.0
 }
