@@ -19,6 +19,8 @@
 - 将桌面预览默认曝光调整为`2.0 EV`；命令行显式`--exposure`和profile中的`preview_exposure`仍可覆盖默认值。
 - 将天空盒与座位主体亮度解耦：Filament补光仅使用独立光照通道照亮非天空盒实体，天空盒材质通过独立的`skybox_brightness`乘数调节。
 - 新增`--skybox-brightness`和profile字段`preview_skybox_brightness`；预览窗口使用`,`/`.`独立降低或提高天空盒亮度，`[`/`]`继续只调节座位主体曝光。
+- 完成单View独立亮度方案：删除桌面预览全局ColorGrading，按GLB加载时保存的原始`baseColorFactor`分别缩放座位主体和天空盒材质。
+- OpenXR Filament Bridge新增同一套`scene_exposure`与`skybox_brightness` ABI；每眼仍只提交一个View，不增加双View渲染开销。
 
 ### 验证结果
 
@@ -32,11 +34,11 @@
 
 - 需要用户确认Filament桌面窗口中的房间画面、profile座位高度和场景完整性。
 - 尚未进行桌面预览与头显Projection Layer的最终视觉一致性对比。
-- 反向曝光补偿方案已删除；全局ColorGrading仍会影响同一View中的天空盒，后续改用单View材质/渲染层方案实现真正独立亮度。
+- 单View材质亮度方案等待三平台Bridge构建及桌面/头显画面实测确认。
 
 ### 下一项内容
 
-下一项：完成三平台Bridge构建并实测天空盒与座位主体的独立亮度调节，确认后再同步到头显场景。
+下一项：完成三平台Bridge构建，先验证桌面预览独立亮度，再进行头显双眼场景实测。
 
 ## 2026-07-18
 

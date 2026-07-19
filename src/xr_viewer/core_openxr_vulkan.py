@@ -33,6 +33,8 @@ class OpenXrVulkanConfig:
     filament_bridge_path: str | None = None
     filament_glb_path: str | None = None
     filament_profile_path: str | None = None
+    filament_scene_exposure_ev: float = 0.0
+    filament_skybox_brightness: float = 1.0
 
 
 @dataclass(slots=True)
@@ -485,6 +487,8 @@ class OpenXrVulkanPresenter:
                     glb_path = self.config.filament_glb_path
                     if glb_path:
                         bridge.load_glb(Path(glb_path).read_bytes())
+                    bridge.set_scene_exposure(self.config.filament_scene_exposure_ev)
+                    bridge.set_skybox_brightness(self.config.filament_skybox_brightness)
                     self.filament_bridges.append(bridge)
                 except Exception:
                     bridge.close()

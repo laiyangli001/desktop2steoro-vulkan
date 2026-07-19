@@ -24,6 +24,8 @@ def _parser() -> argparse.ArgumentParser:
         help="Run for this many seconds after the OpenXR session becomes READY.",
     )
     parser.add_argument("--render-scale", type=float, default=1.0)
+    parser.add_argument("--filament-scene-exposure", type=float, default=0.0)
+    parser.add_argument("--filament-skybox-brightness", type=float, default=1.0)
     parser.add_argument("--session-timeout", type=float, default=30.0)
     parser.add_argument(
         "--filament-bridge",
@@ -73,6 +75,8 @@ def main() -> int:
             filament_profile_path=(
                 str(args.filament_profile) if args.filament_profile else None
             ),
+            filament_scene_exposure_ev=args.filament_scene_exposure,
+            filament_skybox_brightness=args.filament_skybox_brightness,
         )
     )
     try:

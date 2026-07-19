@@ -191,6 +191,24 @@ class FilamentVulkanBridge:
             "load_glb",
         )
 
+    def set_scene_exposure(self, exposure_ev: float) -> None:
+        self._ensure_loaded()
+        self._check_result(
+            self._library.filament_bridge_set_scene_exposure(
+                self._handle, float(exposure_ev)
+            ),
+            "set_scene_exposure",
+        )
+
+    def set_skybox_brightness(self, brightness: float) -> None:
+        self._ensure_loaded()
+        self._check_result(
+            self._library.filament_bridge_set_skybox_brightness(
+                self._handle, float(brightness)
+            ),
+            "set_skybox_brightness",
+        )
+
     def apply_animations(self, time_seconds: float) -> None:
         self._ensure_loaded()
         self._check_result(
@@ -259,6 +277,14 @@ class FilamentVulkanBridge:
             ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32
         ]
         library.filament_bridge_load_glb.restype = ctypes.c_int
+        library.filament_bridge_set_scene_exposure.argtypes = [
+            ctypes.c_void_p, ctypes.c_float
+        ]
+        library.filament_bridge_set_scene_exposure.restype = ctypes.c_int
+        library.filament_bridge_set_skybox_brightness.argtypes = [
+            ctypes.c_void_p, ctypes.c_float
+        ]
+        library.filament_bridge_set_skybox_brightness.restype = ctypes.c_int
         library.filament_bridge_apply_animations.argtypes = [
             ctypes.c_void_p, ctypes.c_double
         ]

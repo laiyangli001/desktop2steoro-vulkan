@@ -9,7 +9,6 @@
 
 #include <backend/platforms/VulkanPlatform.h>
 #include <filament/Camera.h>
-#include <filament/ColorGrading.h>
 #include <filament/Engine.h>
 #include <filament/LightManager.h>
 #include <filament/MaterialInstance.h>
@@ -168,6 +167,18 @@ private:
 
 }  // namespace
 
+struct MaterialBrightnessEntry {
+    filament::MaterialInstance* material = nullptr;
+    filament::math::float4 base_color_factor{};
+};
+
+struct MaterialBrightnessState {
+    std::vector<MaterialBrightnessEntry> scene_materials;
+    std::vector<MaterialBrightnessEntry> skybox_materials;
+    float scene_exposure_ev = 0.0f;
+    float skybox_brightness = 1.0f;
+};
+
 struct FilamentBridge {
     filament::Engine* engine = nullptr;
     filament::Renderer* renderer = nullptr;
@@ -182,6 +193,7 @@ struct FilamentBridge {
     OpenXrVulkanPlatform::ExternalSwapChain* external_swapchain = nullptr;
     OpenXrVulkanPlatform* platform = nullptr;
     filament::backend::VulkanPlatform::VulkanSharedContext shared_context{};
+    MaterialBrightnessState brightness;
     std::vector<uint8_t> glb_bytes;
     std::string last_error;
     bool frame_active = false;
@@ -199,9 +211,7 @@ struct FilamentPreview {
     filament::gltfio::FilamentAsset* asset = nullptr;
     filament::SwapChain* swapchain = nullptr;
     utils::Entity fill_light;
-    filament::ColorGrading* color_grading = nullptr;
-    std::vector<utils::Entity> skybox_entities;
-    float skybox_brightness = 1.0f;
+    MaterialBrightnessState brightness{ {}, {}, 2.0f, 1.0f };
     std::vector<uint8_t> glb_bytes;
     std::string last_error;
 };
@@ -223,6 +233,8 @@ void destroy_asset(FilamentBridge* bridge) {
         bridge->asset_loader->destroyAsset(bridge->asset);
     }
     bridge->asset = nullptr;
+    bridge->brightness.scene_materials.clear();
+    bridge->brightness.skybox_materials.clear();
     bridge->glb_bytes.clear();
 }
 
@@ -241,7 +253,8 @@ void destroy_preview_asset(FilamentPreview* preview) {
         preview->asset_loader->destroyAsset(preview->asset);
     }
     preview->asset = nullptr;
-    preview->skybox_entities.clear();
+    preview->brightness.scene_materials.clear();
+    preview->brightness.skybox_materials.clear();
     preview->glb_bytes.clear();
 }
 
@@ -254,43 +267,56 @@ bool is_skybox_name(const char* name) {
     return value.find("skybox") != std::string::npos;
 }
 
-void apply_skybox_brightness(FilamentPreview* preview) {
-    if (!preview || !preview->engine) return;
-    auto& renderables = preview->engine->getRenderableManager();
-    const filament::math::float4 factor{
-            preview->skybox_brightness,
-            preview->skybox_brightness,
-            preview->skybox_brightness,
-            1.0f};
-    for (utils::Entity entity : preview->skybox_entities) {
-        auto instance = renderables.getInstance(entity);
-        if (!instance.isValid()) continue;
-        const size_t primitive_count = renderables.getPrimitiveCount(instance);
-        for (size_t primitive = 0; primitive < primitive_count; ++primitive) {
-            auto* material = renderables.getMaterialInstanceAt(instance, primitive);
-            if (material) material->setParameter("baseColorFactor", factor);
-        }
+template<typename BridgeType>
+void apply_material_brightness(BridgeType* bridge) {
+    if (!bridge || !bridge->engine) return;
+    const float scene_factor = std::exp2(bridge->brightness.scene_exposure_ev);
+    for (const auto& entry : bridge->brightness.scene_materials) {
+        if (!entry.material) continue;
+        const auto& base = entry.base_color_factor;
+        entry.material->setParameter("baseColorFactor", filament::math::float4{
+                base.x * scene_factor, base.y * scene_factor,
+                base.z * scene_factor, base.w});
+    }
+    const float skybox_factor = bridge->brightness.skybox_brightness;
+    for (const auto& entry : bridge->brightness.skybox_materials) {
+        if (!entry.material) continue;
+        const auto& base = entry.base_color_factor;
+        entry.material->setParameter("baseColorFactor", filament::math::float4{
+                base.x * skybox_factor, base.y * skybox_factor,
+                base.z * skybox_factor, base.w});
     }
 }
 
-void configure_preview_light_channels(FilamentPreview* preview) {
-    if (!preview || !preview->engine || !preview->asset) return;
-    auto& renderables = preview->engine->getRenderableManager();
-    preview->skybox_entities.clear();
-    const auto* entities = preview->asset->getRenderableEntities();
-    for (size_t index = 0; index < preview->asset->getRenderableEntityCount(); ++index) {
+template<typename BridgeType>
+void collect_material_brightness(BridgeType* bridge, bool enable_fill_channel) {
+    if (!bridge || !bridge->engine || !bridge->asset) return;
+    auto& renderables = bridge->engine->getRenderableManager();
+    bridge->brightness.scene_materials.clear();
+    bridge->brightness.skybox_materials.clear();
+    const auto* entities = bridge->asset->getRenderableEntities();
+    for (size_t index = 0; index < bridge->asset->getRenderableEntityCount(); ++index) {
         const utils::Entity entity = entities[index];
         auto instance = renderables.getInstance(entity);
         if (!instance.isValid()) continue;
-        if (is_skybox_name(preview->asset->getName(entity))) {
+        const bool skybox = is_skybox_name(bridge->asset->getName(entity));
+        if (skybox) {
             renderables.setLightChannel(instance, 0, false);
             renderables.setLightChannel(instance, 1, false);
-            preview->skybox_entities.push_back(entity);
-        } else {
+        } else if (enable_fill_channel) {
             renderables.setLightChannel(instance, 1, true);
         }
+        auto& target = skybox
+                ? bridge->brightness.skybox_materials
+                : bridge->brightness.scene_materials;
+        for (size_t primitive = 0; primitive < renderables.getPrimitiveCount(instance); ++primitive) {
+            auto* material = renderables.getMaterialInstanceAt(instance, primitive);
+            if (!material || !material->getMaterial()->hasParameter("baseColorFactor")) continue;
+            target.push_back({material, material->getParameter<filament::math::float4>(
+                    "baseColorFactor")});
+        }
     }
-    apply_skybox_brightness(preview);
+    apply_material_brightness(bridge);
 }
 
 }  // namespace
@@ -505,6 +531,7 @@ int filament_bridge_load_glb(FilamentBridge* bridge, const uint8_t* bytes, uint3
     }
     bridge->scene->addEntities(
             bridge->asset->getEntities(), bridge->asset->getEntityCount());
+    collect_material_brightness(bridge, false);
     bridge->asset->releaseSourceData();
     bridge->engine->flushAndWait();
     bridge->glb_bytes.clear();
@@ -577,12 +604,6 @@ FilamentPreview* filament_preview_create(void* native_window, uint32_t width, ui
     preview->view->setScene(preview->scene);
     preview->view->setCamera(preview->camera);
     preview->view->setViewport(filament::Viewport{0, 0, width, height});
-    preview->color_grading = filament::ColorGrading::Builder()
-            .exposure(1.0f)
-            .build(*preview->engine);
-    if (preview->color_grading) {
-        preview->view->setColorGrading(preview->color_grading);
-    }
     preview->fill_light = utils::EntityManager::get().create();
     filament::LightManager::Builder(filament::LightManager::Type::DIRECTIONAL)
             .color(filament::LinearColor{1.0f, 0.88f, 0.78f})
@@ -606,9 +627,6 @@ void filament_preview_destroy(FilamentPreview* preview) {
     destroy_preview_asset(preview);
     if (preview->scene && !preview->fill_light.isNull()) {
         preview->scene->remove(preview->fill_light);
-    }
-    if (preview->color_grading && preview->engine) {
-        preview->engine->destroy(preview->color_grading);
     }
     if (!preview->fill_light.isNull() && preview->engine) {
         preview->engine->destroy(preview->fill_light);
@@ -649,7 +667,7 @@ int filament_preview_load_glb(FilamentPreview* preview, const uint8_t* bytes, ui
     }
     preview->scene->addEntities(
             preview->asset->getEntities(), preview->asset->getEntityCount());
-    configure_preview_light_channels(preview);
+    collect_material_brightness(preview, true);
     preview->asset->releaseSourceData();
     preview->engine->flushAndWait();
     preview->glb_bytes.clear();
@@ -686,19 +704,12 @@ int filament_preview_set_viewport(FilamentPreview* preview, uint32_t width, uint
     return 1;
 }
 
-int filament_preview_set_exposure(FilamentPreview* preview, float exposure_ev) {
-    if (!preview || !preview->engine || !preview->view || !std::isfinite(exposure_ev)) {
+int filament_preview_set_scene_exposure(FilamentPreview* preview, float exposure_ev) {
+    if (!preview || !preview->engine || !std::isfinite(exposure_ev)) {
         return 0;
     }
-    if (preview->color_grading) {
-        preview->engine->destroy(preview->color_grading);
-        preview->color_grading = nullptr;
-    }
-    preview->color_grading = filament::ColorGrading::Builder()
-            .exposure(exposure_ev)
-            .build(*preview->engine);
-    if (!preview->color_grading) return 0;
-    preview->view->setColorGrading(preview->color_grading);
+    preview->brightness.scene_exposure_ev = std::clamp(exposure_ev, -8.0f, 8.0f);
+    apply_material_brightness(preview);
     return 1;
 }
 
@@ -733,8 +744,22 @@ int filament_preview_set_fill_light(
 
 int filament_preview_set_skybox_brightness(FilamentPreview* preview, float brightness) {
     if (!preview || !std::isfinite(brightness) || brightness < 0.0f) return 0;
-    preview->skybox_brightness = std::min(brightness, 16.0f);
-    apply_skybox_brightness(preview);
+    preview->brightness.skybox_brightness = std::min(brightness, 16.0f);
+    apply_material_brightness(preview);
+    return 1;
+}
+
+int filament_bridge_set_scene_exposure(FilamentBridge* bridge, float exposure_ev) {
+    if (!bridge || !std::isfinite(exposure_ev)) return 0;
+    bridge->brightness.scene_exposure_ev = std::clamp(exposure_ev, -8.0f, 8.0f);
+    apply_material_brightness(bridge);
+    return 1;
+}
+
+int filament_bridge_set_skybox_brightness(FilamentBridge* bridge, float brightness) {
+    if (!bridge || !std::isfinite(brightness) || brightness < 0.0f) return 0;
+    bridge->brightness.skybox_brightness = std::min(brightness, 16.0f);
+    apply_material_brightness(bridge);
     return 1;
 }
 

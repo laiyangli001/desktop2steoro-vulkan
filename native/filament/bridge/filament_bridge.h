@@ -60,6 +60,10 @@ FILAMENT_BRIDGE_API int filament_bridge_end_frame(FilamentBridge* bridge);
 
 FILAMENT_BRIDGE_API int filament_bridge_load_glb(
         FilamentBridge* bridge, const uint8_t* bytes, uint32_t byte_count);
+FILAMENT_BRIDGE_API int filament_bridge_set_scene_exposure(
+        FilamentBridge* bridge, float exposure_ev);
+FILAMENT_BRIDGE_API int filament_bridge_set_skybox_brightness(
+        FilamentBridge* bridge, float brightness);
 FILAMENT_BRIDGE_API int filament_bridge_apply_animations(
         FilamentBridge* bridge, double time_seconds);
 FILAMENT_BRIDGE_API uint32_t filament_bridge_animation_count(
@@ -85,7 +89,7 @@ FILAMENT_BRIDGE_API int filament_preview_set_projection(
         double near_plane, double far_plane);
 FILAMENT_BRIDGE_API int filament_preview_set_viewport(
         FilamentPreview* preview, uint32_t width, uint32_t height);
-FILAMENT_BRIDGE_API int filament_preview_set_exposure(
+FILAMENT_BRIDGE_API int filament_preview_set_scene_exposure(
         FilamentPreview* preview, float exposure_ev);
 FILAMENT_BRIDGE_API int filament_preview_set_fill_light(
         FilamentPreview* preview,
