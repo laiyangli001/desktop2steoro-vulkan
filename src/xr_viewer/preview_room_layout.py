@@ -156,6 +156,28 @@ def _mat_from_trs(pos, rot_rad, scale=(1.0, 1.0, 1.0)):
     return tm @ ry @ rx @ rz @ sm
 
 
+def _profile_model_matrix(profile):
+    model_pos = _vec3(profile.get("model_position"), [0.0, 0.0, 0.0])
+    model_rot = _rot_deg(
+        profile.get("model_rotation_deg", profile.get("model_rotation")),
+        [0.0, 0.0, 0.0],
+    )
+    model_scale = _vec3(profile.get("model_scale"), [1.0, 1.0, 1.0])
+    return _mat_from_trs(model_pos, model_rot, model_scale)
+
+
+def _pose_position_in_scene(profile, view):
+    world_position = np.asarray(_pose_position(view, [0.0, 1.2, 0.0]), dtype="f4")
+    scene_position = np.linalg.inv(_profile_model_matrix(profile)) @ np.append(world_position, 1.0)
+    return scene_position[:3].astype("f4").tolist()
+
+
+def _scene_position_in_profile(profile, position):
+    scene_position = np.asarray(position, dtype="f4")
+    world_position = _profile_model_matrix(profile) @ np.append(scene_position, 1.0)
+    return world_position[:3].astype("f4").tolist()
+
+
 def _profile_projection_planes(profile):
     try:
         near = max(0.01, float(profile.get("xr_projection_near", 0.03)))
@@ -197,7 +219,8 @@ def main():
     preview = FilamentDesktopPreview(native_window, 1280, 720)
     preview.load_glb(glb_path.read_bytes())
 
-    view_pos = _pose_position(view_pose, [0.0, 1.2, 0.0])
+    # Profile positions are stored in world coordinates; Filament renders the raw GLB scene.
+    view_pos = _pose_position_in_scene(profile, view_pose)
     if args.center_view:
         print("--center-view is ignored by the Filament preview; use VIEW controls to adjust the profile seat.")
     view_rot_deg = _pose_rotation_deg(view_pose, [0.0, 0.0, 0.0])
@@ -267,7 +290,6 @@ def main():
 
         pos = _vec3(screen.get("position"), [0.0, 1.2, -2.0])
         rot = _vec3(screen.get("rotation_deg"), [0.0, 0.0, 0.0])
-        view_pos = _pose_position(view_pose, view_pos)
         view_rot_deg = _pose_rotation_deg(view_pose, [math.degrees(v) for v in view_rot])
         changed_screen = False
         changed_view = False
@@ -353,7 +375,7 @@ def main():
             screen["position"] = [round(v, 4) for v in pos]
             screen["rotation_deg"] = [round(v, 3) for v in rot]
         if changed_view:
-            _set_pose_position(view_pose, view_pos)
+            _set_pose_position(view_pose, _scene_position_in_profile(profile, view_pos))
             _set_pose_rotation_deg(view_pose, view_rot_deg)
             view_rot = [math.radians(v) for v in view_rot_deg]
 
@@ -367,7 +389,7 @@ def main():
             if not view_pose:
                 view_pose = profile.setdefault("view_pose", {})
             screen = profile.setdefault("screen", {})
-            view_pos = _pose_position(view_pose, [0.0, 1.2, 0.0])
+            view_pos = _pose_position_in_scene(profile, view_pose)
             view_rot_deg = _pose_rotation_deg(view_pose, [0.0, 0.0, 0.0])
             view_rot = [math.radians(v) for v in view_rot_deg]
             speed, size_speed = 1.0, 0.8
