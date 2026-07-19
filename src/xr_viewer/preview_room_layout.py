@@ -191,6 +191,30 @@ def _profile_projection_planes(profile):
     return near, far
 
 
+def _load_star_glim_spec(glb_path: Path):
+    sidecar_path = glb_path.parent / "star_glim.json"
+    try:
+        spec = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(spec, dict) or spec.get("schema_version") != 1 or spec.get("effect") != "star_glim":
+        return None
+    stars_name = spec.get("stars_texture")
+    mask_name = spec.get("mask_texture")
+    if not isinstance(stars_name, str) or not isinstance(mask_name, str):
+        return None
+    stars_path = (glb_path.parent / stars_name).resolve()
+    mask_path = (glb_path.parent / mask_name).resolve()
+    try:
+        stars_path.relative_to(glb_path.parent.resolve())
+        mask_path.relative_to(glb_path.parent.resolve())
+    except ValueError:
+        return None
+    if not stars_path.is_file() or not mask_path.is_file():
+        return None
+    return spec, stars_path, mask_path
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("room", nargs="?", default="bedroom")
@@ -228,6 +252,11 @@ def main():
     native_window = _native_window_handle(window)
     preview = FilamentDesktopPreview(native_window, 1280, 720)
     preview.load_glb(glb_path.read_bytes(), max_texture_dimension=args.max_texture_size)
+    star_glim = _load_star_glim_spec(glb_path)
+    if star_glim is not None:
+        star_spec, stars_path, mask_path = star_glim
+        preview.set_star_glim(stars_path.read_bytes(), mask_path.read_bytes(), star_spec)
+        print(f"Preview star glim: enabled ({stars_path.name}, {mask_path.name})")
     preview_exposure = float(
         args.exposure if args.exposure is not None else profile.get("preview_exposure", 2.0)
     )
@@ -266,6 +295,7 @@ def main():
     print(f"Room: {args.room}")
     print(f"Profile: {profile_path}")
     print(f"Preview projection: clip={projection_near:.3f}/{projection_far:.1f}")
+    print("Preview animations: all embedded GLB animations enabled")
     print(f"Preview color: exposure={preview_exposure:.2f}EV skybox={skybox_brightness:.2f} fill={fill_light_intensity:.0f}")
     print(f"Preview navigation: move_speed={speed:.2f}m/s size_speed={size_speed:.2f}m/s")
     print(f"Preview fine mode: hold Ctrl for {PREVIEW_FINE_MOVE_SPEED_MPS:.2f}m/s movement/size adjustment")
@@ -309,6 +339,7 @@ def main():
         return key_down(glfw.KEY_LEFT_CONTROL) or key_down(glfw.KEY_RIGHT_CONTROL)
 
     last_time = glfw.get_time()
+    animation_start_time = last_time
     next_frame_time = last_time
     while not glfw.window_should_close(window):
         now = glfw.get_time()
@@ -445,6 +476,7 @@ def main():
             view_pos = _pose_position_in_scene(profile, view_pose)
             view_rot_deg = _pose_rotation_deg(view_pose, [0.0, 0.0, 0.0])
             view_rot = [math.radians(v) for v in view_rot_deg]
+            animation_start_time = glfw.get_time()
             speed, size_speed = 1.0, 0.8
             skybox_brightness = float(profile.get("preview_skybox_brightness", 1.0))
             preview.set_skybox_brightness(skybox_brightness)
@@ -477,6 +509,9 @@ def main():
         center = np.asarray(view_pos, dtype="f4") + forward
         preview.set_camera(view_pos, center.tolist(), up.tolist())
         preview.set_projection(80.0, aspect, projection_near, projection_far)
+        preview.apply_animations(max(0.0, now - animation_start_time))
+        if star_glim is not None:
+            preview.set_star_glim_time(max(0.0, now - animation_start_time))
         preview.render()
         next_frame_time += 1.0 / 60.0
         delay = next_frame_time - glfw.get_time()

@@ -659,6 +659,40 @@ OpenXR swapchain 的接入必须通过经过验证的 Filament external render t
 
 OpenGL Fallback 直接渲染到 OpenGL OpenXR swapchain 或 OpenGL window framebuffer，不经过 Vulkan、D3D11 或 WGL 跨 API 桥接。Windows/Linux 目标 OpenGL 4.3 及以上；macOS OpenGL 4.1 仅提供基本网格、材质、虚拟屏幕和 UI，不启用依赖 Compute Shader 的效果。
 
+### 11.2.1 Bridge 接口边界与完整性清单
+
+Bridge 采用窄 C ABI，按产品功能补充接口，不做 Filament 全量 API 的 Python 化。C++ 内部管理 Engine、Renderer、Scene、View、Camera、AssetLoader、ResourceLoader、Animator、Material 和 Texture 等对象；Python 通过 `ctypes` 使用不透明 handle、标量、矩阵、资源字节和结构化状态。
+
+Bridge 接口必须覆盖以下功能域：
+
+1. ABI/Filament 版本、平台能力、错误码和最近错误。
+2. Vulkan Bridge 与 Preview 的创建、初始化、销毁和资源释放。
+3. Python/OpenXR Vulkan 对象借用、swapchain image 注册、acquired image 绑定、帧开始/结束和 swapchain 重建。
+4. GLB 加载、纹理/PBR/透明材质资源准备、场景切换、卸载和 last-good scene 保留。
+5. 场景对象的可见性、变换、虚拟屏幕、手柄和场景根节点状态更新。
+6. 预览相机、左右眼相机、look-at、视图矩阵、投影/frustum、near/far 和 viewport。
+7. Preview window、Vulkan Render Target、OpenXR Projection Layer 目标的渲染提交。
+8. 动画枚举、名称/时长、选择、播放、暂停、循环和由 Python 驱动的动画时间应用。
+9. 场景主体亮度/曝光、天空盒亮度、方向光、填充光及其颜色和方向的独立控制。
+10. 材质参数、亮度、对比度、饱和度、Gamma、色温和色调控制。
+11. Glow、星光闪烁、平均色、墙面反射及其他后处理/特效的资源设置、启停、参数更新和时间推进。
+12. Preview resize、surface/window 变化、渲染目标尺寸变化和资源重建。
+13. 加载、上传、渲染、同步和 GPU 资源统计，以及 capability report 所需的诊断数据。
+
+每个功能域必须完成以下闭环才算实现：
+
+```text
+功能需求确认
+    -> filament_bridge.h C ABI 声明
+    -> filament_bridge.cpp 实现
+    -> Python ctypes wrapper
+    -> Windows/Linux/macOS CI 编译
+    -> 单元/集成/头显或预览运行验证
+    -> 接口清单标记完成
+```
+
+接口清单以本节为功能基线，另在实现任务中记录“已实现、待实现、暂不需要、验证证据”。新增能力不得只修改 C++ 而遗漏 Python wrapper、错误处理、CI 或测试；也不得为了所谓完整性导出 Filament 未使用的模板、内部类型、Entity 管理器或逐资源底层 API。
+
 ### 11.3 资产加载
 
 - GLB 文件 IO 和解析准备在 Asset Thread 完成。
@@ -986,6 +1020,30 @@ format/lint
 
 真实 GPU/OpenXR 测试由专用硬件 runner 执行，不用普通 CI 成功替代实机验收。
 
+### 20.1.1 Filament Bridge 三平台构建策略
+
+Filament Bridge 的正式构建由 GitHub Actions 负责。三平台必须使用对应平台 runner 编译和链接 Filament 1.74 及其运行库，构建结果通过 Actions Artifact 或 GitHub Release 交付给 Python 运行时。
+
+```text
+native/filament/bridge source change
+    -> Windows runner -> filament_bridge.dll
+    -> Linux runner   -> libfilament_bridge.so
+    -> macOS runner   -> libfilament_bridge.dylib
+    -> ABI/link/runtime checks
+    -> upload artifact or release asset
+    -> download into src/xr_viewer/native/<platform>/
+```
+
+必须遵守以下规则：
+
+- Bridge 源码、C ABI、Filament 版本或 CMake/平台构建配置变更时，CI 必须执行三平台构建矩阵；只修改 Python、GUI、配置或资源时不重新编译 Bridge。
+- CI 产物必须记录平台、架构、Filament 版本、Git commit、构建类型和 SHA-256，并随产物提供依赖清单。
+- 发布包使用 CI 产物，不把本地 `build/`、临时 SDK 解压目录或未验证的本地 DLL/SO/DYLIB 作为正式交付物。
+- 本地开发默认下载与当前平台匹配的 CI 产物。只有在 CI 故障、调试原生崩溃或验证未提交的 Bridge 修改时，才允许本地编译。
+- 本地编译结果只能用于诊断和开发验证；合并和发布前仍必须通过三平台 CI，且本地编译不得替代 Linux/macOS 平台验证。
+- Python 通过 `ctypes` 加载 `src/xr_viewer/native/` 下对应平台的 Bridge。加载前检查文件存在性、架构、依赖库可解析性和 ABI 版本；检查失败必须在 capability report 中明确报告。
+- Bridge 二进制与 Filament 运行库必须作为同一版本构建包管理，禁止混用不同 Filament 版本的库文件。
+
 ### 20.2 构建产物
 
 发布包至少包含：
@@ -1004,6 +1062,17 @@ licenses
 ```
 
 不得包含旧OpenGL/D3D11 viewer DLL、Panda3D runtime或仅供开发的build directory。发布包只允许包含新版Filament DLL Bridge这一项自有原生组件；启用Fallback时包含Python `viewer.opengl_renderer`和`xr_viewer.core_openxr_opengl`模块及其明确依赖。
+
+推荐的运行时目录：
+
+```text
+src/xr_viewer/native/
+├── windows/filament_bridge.dll
+├── linux/libfilament_bridge.so
+└── macos/libfilament_bridge.dylib
+```
+
+上述目录中的文件来自对应 GitHub Actions 构建产物或 Release 资产。源码修改后先提交并等待 CI 生成新产物，再更新本地运行目录；不要求每次 Python 代码修改都重新编译 Filament。
 
 ### 20.3 启动探测
 

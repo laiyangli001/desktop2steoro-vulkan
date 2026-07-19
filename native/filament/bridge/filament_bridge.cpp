@@ -5,19 +5,26 @@
 #include <cmath>
 #include <memory>
 #include <string>
+#include <iterator>
 #include <vector>
 
 #include <backend/platforms/VulkanPlatform.h>
 #include <filament/Camera.h>
 #include <filament/Engine.h>
+#include <filament/IndexBuffer.h>
 #include <filament/LightManager.h>
+#include <filament/Material.h>
 #include <filament/MaterialInstance.h>
 #include <filament/RenderableManager.h>
 #include <filament/Renderer.h>
 #include <filament/Scene.h>
 #include <filament/SwapChain.h>
+#include <filament/Texture.h>
+#include <filament/TextureSampler.h>
+#include <filament/VertexBuffer.h>
 #include <filament/View.h>
 #include <filament/Viewport.h>
+#include <filamat/MaterialBuilder.h>
 #include <gltfio/Animator.h>
 #include <gltfio/AssetLoader.h>
 #include <gltfio/FilamentAsset.h>
@@ -179,6 +186,11 @@ struct MaterialBrightnessState {
     float skybox_brightness = 1.0f;
 };
 
+struct StarGlimVertex {
+    float position[3];
+    float uv[2];
+};
+
 struct FilamentBridge {
     filament::Engine* engine = nullptr;
     filament::Renderer* renderer = nullptr;
@@ -211,6 +223,15 @@ struct FilamentPreview {
     filament::gltfio::FilamentAsset* asset = nullptr;
     filament::SwapChain* swapchain = nullptr;
     utils::Entity fill_light;
+    utils::Entity star_glim_entity;
+    filament::VertexBuffer* star_glim_vertex_buffer = nullptr;
+    filament::IndexBuffer* star_glim_index_buffer = nullptr;
+    filament::Material* star_glim_material = nullptr;
+    filament::MaterialInstance* star_glim_material_instance = nullptr;
+    filament::Texture* star_glim_stars = nullptr;
+    filament::Texture* star_glim_mask = nullptr;
+    std::vector<StarGlimVertex> star_glim_vertices;
+    std::vector<uint16_t> star_glim_indices;
     MaterialBrightnessState brightness{ {}, {}, 2.0f, 1.0f };
     std::vector<uint8_t> glb_bytes;
     std::string last_error;
@@ -256,6 +277,43 @@ void destroy_preview_asset(FilamentPreview* preview) {
     preview->brightness.scene_materials.clear();
     preview->brightness.skybox_materials.clear();
     preview->glb_bytes.clear();
+}
+
+void destroy_star_glim(FilamentPreview* preview) {
+    if (!preview || !preview->engine) return;
+    if (preview->scene && !preview->star_glim_entity.isNull()) {
+        preview->scene->remove(preview->star_glim_entity);
+    }
+    if (!preview->star_glim_entity.isNull()) {
+        preview->engine->destroy(preview->star_glim_entity);
+        preview->star_glim_entity = {};
+    }
+    if (preview->star_glim_material_instance) {
+        preview->engine->destroy(preview->star_glim_material_instance);
+        preview->star_glim_material_instance = nullptr;
+    }
+    if (preview->star_glim_material) {
+        preview->engine->destroy(preview->star_glim_material);
+        preview->star_glim_material = nullptr;
+    }
+    if (preview->star_glim_vertex_buffer) {
+        preview->engine->destroy(preview->star_glim_vertex_buffer);
+        preview->star_glim_vertex_buffer = nullptr;
+    }
+    if (preview->star_glim_index_buffer) {
+        preview->engine->destroy(preview->star_glim_index_buffer);
+        preview->star_glim_index_buffer = nullptr;
+    }
+    if (preview->star_glim_stars) {
+        preview->engine->destroy(preview->star_glim_stars);
+        preview->star_glim_stars = nullptr;
+    }
+    if (preview->star_glim_mask) {
+        preview->engine->destroy(preview->star_glim_mask);
+        preview->star_glim_mask = nullptr;
+    }
+    preview->star_glim_vertices.clear();
+    preview->star_glim_indices.clear();
 }
 
 bool is_skybox_name(const char* name) {
@@ -625,6 +683,7 @@ FilamentPreview* filament_preview_create(void* native_window, uint32_t width, ui
 void filament_preview_destroy(FilamentPreview* preview) {
     if (!preview) return;
     destroy_preview_asset(preview);
+    destroy_star_glim(preview);
     if (preview->scene && !preview->fill_light.isNull()) {
         preview->scene->remove(preview->fill_light);
     }
@@ -671,6 +730,195 @@ int filament_preview_load_glb(FilamentPreview* preview, const uint8_t* bytes, ui
     preview->asset->releaseSourceData();
     preview->engine->flushAndWait();
     preview->glb_bytes.clear();
+    return 1;
+}
+
+int filament_preview_apply_animations(FilamentPreview* preview, double time_seconds) {
+    if (!preview || !preview->asset || !std::isfinite(time_seconds)) return 0;
+    auto* animator = preview->asset->getInstance()->getAnimator();
+    if (!animator) return 1;
+    const size_t count = animator->getAnimationCount();
+    for (size_t index = 0; index < count; ++index) {
+        const float duration = animator->getAnimationDuration(index);
+        const float time = duration > 0.0f
+                ? std::fmod(static_cast<float>(time_seconds), duration)
+                : 0.0f;
+        animator->applyAnimation(index, std::max(0.0f, time));
+    }
+    animator->updateBoneMatrices();
+    return 1;
+}
+
+int filament_preview_set_star_glim(
+        FilamentPreview* preview,
+        const uint8_t* stars_bytes, uint32_t stars_byte_count,
+        const uint8_t* mask_bytes, uint32_t mask_byte_count,
+        float intensity, float speed, float shine_speed,
+        float cell_density, float cell_offset, float cell_soft,
+        float cell_value, float strength) {
+    if (!preview || !preview->engine || !preview->scene ||
+            !preview->texture_provider || !stars_bytes || !stars_byte_count ||
+            !mask_bytes || !mask_byte_count) {
+        return 0;
+    }
+    const float values[] = {intensity, speed, shine_speed, cell_density,
+            cell_offset, cell_soft, cell_value, strength};
+    for (float value : values) {
+        if (!std::isfinite(value)) return 0;
+    }
+
+    destroy_star_glim(preview);
+    preview->star_glim_stars = preview->texture_provider->pushTexture(
+            stars_bytes, stars_byte_count, "image/png",
+            filament::gltfio::TextureProvider::TextureFlags::sRGB);
+    preview->star_glim_mask = preview->texture_provider->pushTexture(
+            mask_bytes, mask_byte_count, "image/png",
+            filament::gltfio::TextureProvider::TextureFlags::NONE);
+    if (!preview->star_glim_stars || !preview->star_glim_mask) {
+        destroy_star_glim(preview);
+        set_preview_error(preview, "Filament could not decode StarGlim textures");
+        return 0;
+    }
+    preview->texture_provider->waitForCompletion();
+    preview->texture_provider->updateQueue();
+    while (preview->texture_provider->popTexture()) {}
+
+    const char* shader = R"FILAMENT(
+        void material(inout MaterialInputs material) {
+            prepareMaterial(material);
+            float2 uv = getUV0();
+            float2 drift = float2(materialParams.speed * materialParams.time, 0.0);
+            float3 stars = texture(materialParams.stars, uv + drift).rgb;
+            float mask = texture(materialParams.mask, uv + drift).r;
+            float2 cell = floor((uv + drift) * materialParams.cellDensity + materialParams.cellOffset);
+            float phase = fract(sin(dot(cell, float2(12.9898, 78.233))) * 43758.5453);
+            float pulse = 0.5 + 0.5 * sin(materialParams.time * materialParams.shineSpeed + phase * 6.2831853);
+            float threshold = clamp(materialParams.cellValue + (1.0 - materialParams.cellSoft), 0.0, 1.0);
+            float twinkle = smoothstep(threshold, 1.0, pulse) * materialParams.strength;
+            material.baseColor = float4(stars * mask * materialParams.intensity * twinkle, mask * twinkle);
+        }
+    )FILAMENT";
+    filamat::MaterialBuilder::init();
+    filamat::MaterialBuilder builder;
+    builder.name("D2S StarGlim")
+            .material(shader)
+            .parameter("stars", filamat::MaterialBuilder::SamplerType::SAMPLER_2D)
+            .parameter("mask", filamat::MaterialBuilder::SamplerType::SAMPLER_2D)
+            .parameter("time", filamat::MaterialBuilder::UniformType::FLOAT)
+            .parameter("intensity", filamat::MaterialBuilder::UniformType::FLOAT)
+            .parameter("speed", filamat::MaterialBuilder::UniformType::FLOAT)
+            .parameter("shineSpeed", filamat::MaterialBuilder::UniformType::FLOAT)
+            .parameter("cellDensity", filamat::MaterialBuilder::UniformType::FLOAT)
+            .parameter("cellOffset", filamat::MaterialBuilder::UniformType::FLOAT)
+            .parameter("cellSoft", filamat::MaterialBuilder::UniformType::FLOAT)
+            .parameter("cellValue", filamat::MaterialBuilder::UniformType::FLOAT)
+            .parameter("strength", filamat::MaterialBuilder::UniformType::FLOAT)
+            .shading(filament::Shading::UNLIT)
+            .materialDomain(filament::MaterialDomain::SURFACE)
+            .blending(filament::BlendingMode::ADD)
+            .doubleSided(true)
+            .depthWrite(false)
+            .depthCulling(false)
+            .targetApi(filamat::MaterialBuilder::TargetApi::ALL)
+            .platform(filamat::MaterialBuilder::Platform::ALL);
+    filamat::Package package = builder.build();
+    if (!package.isValid()) {
+        destroy_star_glim(preview);
+        set_preview_error(preview, "Filament could not build StarGlim material");
+        return 0;
+    }
+    preview->star_glim_material = filament::Material::Builder()
+            .package(package.getData(), package.getSize())
+            .build(*preview->engine);
+    if (!preview->star_glim_material) {
+        destroy_star_glim(preview);
+        set_preview_error(preview, "Filament could not create StarGlim material");
+        return 0;
+    }
+    preview->star_glim_material_instance = preview->star_glim_material->createInstance();
+    if (!preview->star_glim_material_instance) {
+        destroy_star_glim(preview);
+        set_preview_error(preview, "Filament could not create StarGlim material instance");
+        return 0;
+    }
+
+    const float s = 1000.0f;
+    const StarGlimVertex vertices[] = {
+        {{-s, -s, -s}, {0, 0}}, {{s, -s, -s}, {1, 0}}, {{s, s, -s}, {1, 1}}, {{-s, s, -s}, {0, 1}},
+        {{s, -s, s}, {0, 0}}, {{-s, -s, s}, {1, 0}}, {{-s, s, s}, {1, 1}}, {{s, s, s}, {0, 1}},
+        {{-s, -s, s}, {0, 0}}, {{-s, -s, -s}, {1, 0}}, {{-s, s, -s}, {1, 1}}, {{-s, s, s}, {0, 1}},
+        {{s, -s, -s}, {0, 0}}, {{s, -s, s}, {1, 0}}, {{s, s, s}, {1, 1}}, {{s, s, -s}, {0, 1}},
+        {{-s, s, -s}, {0, 0}}, {{s, s, -s}, {1, 0}}, {{s, s, s}, {1, 1}}, {{-s, s, s}, {0, 1}},
+        {{-s, -s, s}, {0, 0}}, {{s, -s, s}, {1, 0}}, {{s, -s, -s}, {1, 1}}, {{-s, -s, -s}, {0, 1}},
+    };
+    const uint16_t indices[] = {
+        0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7,
+        8, 9, 10, 8, 10, 11, 12, 13, 14, 12, 14, 15,
+        16, 17, 18, 16, 18, 19, 20, 21, 22, 20, 22, 23,
+    };
+    preview->star_glim_vertices.assign(std::begin(vertices), std::end(vertices));
+    preview->star_glim_indices.assign(std::begin(indices), std::end(indices));
+    preview->star_glim_vertex_buffer = filament::VertexBuffer::Builder()
+            .vertexCount(static_cast<uint32_t>(preview->star_glim_vertices.size()))
+            .bufferCount(1)
+            .attribute(filament::VertexAttribute::POSITION, 0,
+                    filament::VertexBuffer::AttributeType::FLOAT3,
+                    sizeof(StarGlimVertex), 0)
+            .attribute(filament::VertexAttribute::UV0, 0,
+                    filament::VertexBuffer::AttributeType::FLOAT2,
+                    sizeof(StarGlimVertex), sizeof(float) * 3)
+            .build(*preview->engine);
+    preview->star_glim_index_buffer = filament::IndexBuffer::Builder()
+            .indexCount(static_cast<uint32_t>(preview->star_glim_indices.size()))
+            .bufferType(filament::IndexBuffer::IndexType::USHORT)
+            .build(*preview->engine);
+    if (!preview->star_glim_vertex_buffer || !preview->star_glim_index_buffer) {
+        destroy_star_glim(preview);
+        set_preview_error(preview, "Filament could not create StarGlim geometry");
+        return 0;
+    }
+    preview->star_glim_vertex_buffer->setBufferAt(*preview->engine, 0,
+            filament::VertexBuffer::BufferDescriptor(
+                    preview->star_glim_vertices.data(),
+                    preview->star_glim_vertices.size() * sizeof(StarGlimVertex), nullptr));
+    preview->star_glim_index_buffer->setBuffer(*preview->engine,
+            filament::IndexBuffer::BufferDescriptor(
+                    preview->star_glim_indices.data(),
+                    preview->star_glim_indices.size() * sizeof(uint16_t), nullptr));
+    filament::TextureSampler sampler(
+            filament::TextureSampler::MinFilter::LINEAR_MIPMAP_LINEAR,
+            filament::TextureSampler::MagFilter::LINEAR);
+    preview->star_glim_material_instance->setParameter(
+            "stars", preview->star_glim_stars, sampler);
+    preview->star_glim_material_instance->setParameter(
+            "mask", preview->star_glim_mask, sampler);
+    preview->star_glim_material_instance->setParameter("time", 0.0f);
+    preview->star_glim_material_instance->setParameter("intensity", intensity);
+    preview->star_glim_material_instance->setParameter("speed", speed);
+    preview->star_glim_material_instance->setParameter("shineSpeed", shine_speed);
+    preview->star_glim_material_instance->setParameter("cellDensity", cell_density);
+    preview->star_glim_material_instance->setParameter("cellOffset", cell_offset);
+    preview->star_glim_material_instance->setParameter("cellSoft", cell_soft);
+    preview->star_glim_material_instance->setParameter("cellValue", cell_value);
+    preview->star_glim_material_instance->setParameter("strength", strength);
+    preview->star_glim_entity = utils::EntityManager::get().create();
+    filament::RenderableManager::Builder(1)
+            .boundingBox({{-s, -s, -s}, {s, s, s}})
+            .material(0, preview->star_glim_material_instance)
+            .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES,
+                    preview->star_glim_vertex_buffer, preview->star_glim_index_buffer,
+                    0, static_cast<uint32_t>(preview->star_glim_indices.size()))
+            .culling(false)
+            .castShadows(false)
+            .receiveShadows(false)
+            .build(*preview->engine, preview->star_glim_entity);
+    preview->scene->addEntity(preview->star_glim_entity);
+    return 1;
+}
+
+int filament_preview_set_star_glim_time(FilamentPreview* preview, double time_seconds) {
+    if (!preview || !preview->star_glim_material_instance || !std::isfinite(time_seconds)) return 0;
+    preview->star_glim_material_instance->setParameter("time", static_cast<float>(time_seconds));
     return 1;
 }
 

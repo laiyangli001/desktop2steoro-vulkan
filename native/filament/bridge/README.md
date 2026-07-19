@@ -26,6 +26,12 @@ current eye's OpenXR VkImages, calls `filament_bridge_set_acquired_image`, then
 brackets Filament rendering with `filament_bridge_begin_frame` and
 `filament_bridge_end_frame`.
 
+The desktop preview ABI also exposes `filament_preview_apply_animations`.
+The room layout preview calls it once per frame, so embedded glTF animations
+such as Artemis satellite and spaceship orbits are evaluated by Filament.
+It also exposes the StarGlim sidecar inputs and time update; the preview binds
+the sidecar stars/mask PNGs to a Vulkan Filament additive overlay material.
+
 GitHub Actions builds the Windows x86_64, Linux x86_64, and macOS arm64 release libraries from
 the matching official SDK archives, validates their SHA-256 digests, and uploads
 the resulting library as a workflow artifact.
