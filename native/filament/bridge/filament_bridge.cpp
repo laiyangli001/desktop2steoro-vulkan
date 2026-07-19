@@ -787,15 +787,15 @@ int filament_preview_set_star_glim(
         void material(inout MaterialInputs material) {
             prepareMaterial(material);
             float2 uv = getUV0();
-            float2 drift = float2(materialParams.speed * materialParams.time, 0.0);
-            float3 stars = texture(materialParams.stars, uv + drift).rgb;
-            float mask = texture(materialParams.mask, uv + drift).r;
-            float2 cell = floor((uv + drift) * materialParams.cellDensity + materialParams.cellOffset);
+            float2 drift = float2(materialParams_speed * materialParams_time, 0.0);
+            float3 stars = texture(materialParams_stars, uv + drift).rgb;
+            float mask = texture(materialParams_mask, uv + drift).r;
+            float2 cell = floor((uv + drift) * materialParams_cellDensity + materialParams_cellOffset);
             float phase = fract(sin(dot(cell, float2(12.9898, 78.233))) * 43758.5453);
-            float pulse = 0.5 + 0.5 * sin(materialParams.time * materialParams.shineSpeed + phase * 6.2831853);
-            float threshold = clamp(materialParams.cellValue + (1.0 - materialParams.cellSoft), 0.0, 1.0);
-            float twinkle = smoothstep(threshold, 1.0, pulse) * materialParams.strength;
-            material.baseColor = float4(stars * mask * materialParams.intensity * twinkle, mask * twinkle);
+            float pulse = 0.5 + 0.5 * sin(materialParams_time * materialParams_shineSpeed + phase * 6.2831853);
+            float threshold = clamp(materialParams_cellValue + (1.0 - materialParams_cellSoft), 0.0, 1.0);
+            float twinkle = smoothstep(threshold, 1.0, pulse) * materialParams_strength;
+            material.baseColor = float4(stars * mask * materialParams_intensity * twinkle, mask * twinkle);
         }
     )FILAMENT";
     filamat::MaterialBuilder::init();
