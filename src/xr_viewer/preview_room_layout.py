@@ -249,6 +249,7 @@ def main():
     speed, size_speed = 1.0, 0.8
     rot_speed = 45.0
     saved_flash = 0.0
+    exposure_key_cooldown = 0.0
     edit_target = "SCREEN"
     tab_was_down = False
     mouse_look = False
@@ -263,6 +264,7 @@ def main():
     print("Controls:")
     print("  Tab: switch edit target SCREEN/VIEW")
     print("  SCREEN: Arrow=screen X/Y, PageUp/PageDown=screen Z, +/-=width")
+    print("  GLOBAL: [ / ]=Filament exposure down/up")
     print("  SCREEN: 1=27in monitor, 2=65in TV, 3=100in projector, 4=cinema")
     print("  VIEW:   A/D=seat X, Up/Down or Space/LeftShift=seat Y, W/S=seat Z")
     print("  Mouse:  hold right button and drag to rotate VIEW yaw/pitch")
@@ -305,6 +307,16 @@ def main():
         dt = max(0.001, min(0.05, now - last_time))
         last_time = now
         glfw.poll_events()
+        exposure_key_cooldown = max(0.0, exposure_key_cooldown - dt)
+        if exposure_key_cooldown <= 0.0:
+            if key_down(glfw.KEY_LEFT_BRACKET):
+                preview_exposure = max(-8.0, preview_exposure - 0.25)
+                preview.set_exposure(preview_exposure)
+                exposure_key_cooldown = 0.12
+            elif key_down(glfw.KEY_RIGHT_BRACKET):
+                preview_exposure = min(8.0, preview_exposure + 0.25)
+                preview.set_exposure(preview_exposure)
+                exposure_key_cooldown = 0.12
 
         tab_down = glfw.get_key(window, glfw.KEY_TAB) == glfw.PRESS
         if tab_down and not tab_was_down:
@@ -421,7 +433,7 @@ def main():
 
         title = (
             f"{args.room} | {edit_target} | {screen.get('name', 'Screen')} | "
-            f"view={view_pos} {view_rot_deg} | "
+            f"exposure={preview_exposure:.2f}EV | view={view_pos} {view_rot_deg} | "
             f"pos={screen.get('position')} rot={screen.get('rotation_deg')} "
             f"w={float(screen.get('width', 2.4)):.3f}m"
         )
