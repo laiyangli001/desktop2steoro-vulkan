@@ -791,8 +791,7 @@ int filament_preview_set_star_glim(
             float2 panoUv = float2(
                     atan(direction.z, direction.x) * 0.1591549431 + 0.5,
                     asin(clamp(direction.y, -1.0, 1.0)) * 0.3183098862 + 0.5);
-            float2 drift = float2(materialParams.speed * materialParams.time, 0.0);
-            float2 sampleUv = fract(panoUv + drift);
+            float2 sampleUv = panoUv;
             float3 textureStars = texture(materialParams_stars, sampleUv).rgb;
             float mask = texture(materialParams_mask, panoUv).r;
             float2 cellUv = panoUv * materialParams.cellDensity + materialParams.cellOffset;
@@ -811,17 +810,18 @@ int filament_preview_set_star_glim(
             float verticalRay = (1.0 - smoothstep(0.0, 0.018, abs(local.x)))
                     * (1.0 - smoothstep(0.0, starRadius * 2.8, abs(local.y)));
             float starShape = max(diamond, max(horizontalRay, verticalRay) * 0.9);
-            float proceduralStar = starShape * step(0.94, phase);
+            float proceduralStar = starShape * step(0.92, phase);
             float textureStar = max(max(textureStars.r, textureStars.g), textureStars.b) * 4.0;
             float twinkle = smoothstep(threshold, 1.0, pulse) * materialParams.strength;
             float skyOnly = smoothstep(0.0, 0.08, panoUv.y);
-            float3 backgroundColor = textureStars * 4.0 * mask * materialParams.intensity;
-            float backgroundAlpha = textureStar * mask * skyOnly;
+            float3 textureBackgroundColor = textureStars * 8.0 * mask * materialParams.intensity;
+            float textureBackgroundAlpha = textureStar * mask * skyOnly;
             float3 twinkleColor = float3(1.0, 0.88, 0.68)
                     * proceduralStar * twinkle * mask * materialParams.intensity;
             float twinkleAlpha = proceduralStar * twinkle * mask * skyOnly;
-            material.baseColor = float4(backgroundColor + twinkleColor,
-                    backgroundAlpha + twinkleAlpha);
+            material.baseColor = float4(
+                    textureBackgroundColor + twinkleColor,
+                    textureBackgroundAlpha + twinkleAlpha);
         }
     )FILAMENT";
     filamat::MaterialBuilder::init();

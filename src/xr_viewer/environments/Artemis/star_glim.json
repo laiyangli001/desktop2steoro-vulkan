@@ -4,7 +4,7 @@
     "node_name_patterns": [
         "*SkyBox*"
     ],
-    "stars_texture": "star_glim_stars.png",
+    "stars_texture": "starsCeiling.png",
     "mask_texture": "star_glim_mask.png",
     "intensity": 10.0,
     "speed": 0.0010000000474974514,
