@@ -173,24 +173,28 @@ class FilamentDesktopPreview:
             "apply_animations",
         )
 
-    def set_star_glim(self, stars_data: bytes, mask_data: bytes, values: dict) -> None:
+    def create_star_glim_material(self) -> None:
+        self._check(
+            self._library.filament_preview_create_star_glim_material(self._handle),
+            "create_star_glim_material",
+        )
+
+    def set_star_glim_textures(self, stars_data: bytes, mask_data: bytes) -> None:
         stars = ctypes.create_string_buffer(bytes(stars_data))
         mask = ctypes.create_string_buffer(bytes(mask_data))
-        params = [
-            float(values.get("intensity", 10.0)),
-            float(values.get("speed", 0.001)),
-            float(values.get("shine_speed", 0.5)),
-            float(values.get("cell_density", 300.0)),
-            float(values.get("cell_offset", 10.0)),
-            float(values.get("cell_soft", 0.071)),
-            float(values.get("cell_value", 0.0)),
-            float(values.get("strength", 1.0)),
-        ]
         self._check(
-            self._library.filament_preview_set_star_glim(
-                self._handle, stars, len(stars_data), mask, len(mask_data), *params
+            self._library.filament_preview_set_star_glim_textures(
+                self._handle, stars, len(stars_data), mask, len(mask_data)
             ),
-            "set_star_glim",
+            "set_star_glim_textures",
+        )
+
+    def set_star_glim_parameters(self, intensity: float, speed: float, seed: float) -> None:
+        self._check(
+            self._library.filament_preview_set_star_glim_parameters(
+                self._handle, float(intensity), float(speed), float(seed)
+            ),
+            "set_star_glim_parameters",
         )
 
     def set_star_glim_time(self, time_seconds: float) -> None:
@@ -267,11 +271,17 @@ class FilamentDesktopPreview:
             ctypes.c_void_p, ctypes.c_double
         ]
         library.filament_preview_apply_animations.restype = ctypes.c_int
-        library.filament_preview_set_star_glim.argtypes = [
+        library.filament_preview_create_star_glim_material.argtypes = [ctypes.c_void_p]
+        library.filament_preview_create_star_glim_material.restype = ctypes.c_int
+        library.filament_preview_set_star_glim_textures.argtypes = [
             ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32,
-            ctypes.c_void_p, ctypes.c_uint32, *([ctypes.c_float] * 8)
+            ctypes.c_void_p, ctypes.c_uint32
         ]
-        library.filament_preview_set_star_glim.restype = ctypes.c_int
+        library.filament_preview_set_star_glim_textures.restype = ctypes.c_int
+        library.filament_preview_set_star_glim_parameters.argtypes = [
+            ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_float
+        ]
+        library.filament_preview_set_star_glim_parameters.restype = ctypes.c_int
         library.filament_preview_set_star_glim_time.argtypes = [
             ctypes.c_void_p, ctypes.c_double
         ]

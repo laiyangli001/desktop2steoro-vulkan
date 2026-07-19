@@ -80,13 +80,15 @@ FILAMENT_BRIDGE_API int filament_preview_load_glb(
         FilamentPreview* preview, const uint8_t* bytes, uint32_t byte_count);
 FILAMENT_BRIDGE_API int filament_preview_apply_animations(
         FilamentPreview* preview, double time_seconds);
-FILAMENT_BRIDGE_API int filament_preview_set_star_glim(
+FILAMENT_BRIDGE_API int filament_preview_create_star_glim_material(
+        FilamentPreview* preview);
+FILAMENT_BRIDGE_API int filament_preview_set_star_glim_textures(
         FilamentPreview* preview,
         const uint8_t* stars_bytes, uint32_t stars_byte_count,
-        const uint8_t* mask_bytes, uint32_t mask_byte_count,
-        float intensity, float speed, float shine_speed,
-        float cell_density, float cell_offset, float cell_soft,
-        float cell_value, float strength);
+        const uint8_t* mask_bytes, uint32_t mask_byte_count);
+FILAMENT_BRIDGE_API int filament_preview_set_star_glim_parameters(
+        FilamentPreview* preview,
+        float intensity, float speed, float seed);
 FILAMENT_BRIDGE_API int filament_preview_set_star_glim_time(
         FilamentPreview* preview, double time_seconds);
 FILAMENT_BRIDGE_API int filament_preview_set_camera(

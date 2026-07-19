@@ -255,7 +255,13 @@ def main():
     star_glim = _load_star_glim_spec(glb_path)
     if star_glim is not None:
         star_spec, stars_path, mask_path = star_glim
-        preview.set_star_glim(stars_path.read_bytes(), mask_path.read_bytes(), star_spec)
+        preview.create_star_glim_material()
+        preview.set_star_glim_textures(stars_path.read_bytes(), mask_path.read_bytes())
+        preview.set_star_glim_parameters(
+            float(star_spec.get("intensity", 10.0)),
+            float(star_spec.get("speed", 0.0)),
+            float(star_spec.get("seed", 0.0)),
+        )
         print(f"Preview star glim: enabled ({stars_path.name}, {mask_path.name})")
     preview_exposure = float(
         args.exposure if args.exposure is not None else profile.get("preview_exposure", 2.0)
@@ -509,9 +515,10 @@ def main():
         center = np.asarray(view_pos, dtype="f4") + forward
         preview.set_camera(view_pos, center.tolist(), up.tolist())
         preview.set_projection(80.0, aspect, projection_near, projection_far)
-        preview.apply_animations(max(0.0, now - animation_start_time))
+        animation_time = max(0.0, now - animation_start_time)
+        preview.apply_animations(animation_time)
         if star_glim is not None:
-            preview.set_star_glim_time(max(0.0, now - animation_start_time))
+            preview.set_star_glim_time(animation_time)
         preview.render()
         next_frame_time += 1.0 / 60.0
         delay = next_frame_time - glfw.get_time()
