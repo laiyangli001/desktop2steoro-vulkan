@@ -21,7 +21,6 @@
 #include <filament/SwapChain.h>
 #include <filament/Texture.h>
 #include <filament/TextureSampler.h>
-#include <filament/TransformManager.h>
 #include <filament/VertexBuffer.h>
 #include <filament/View.h>
 #include <filament/Viewport.h>
@@ -34,7 +33,6 @@
 #include <gltfio/TextureProvider.h>
 #include <math/vec3.h>
 #include <math/vec4.h>
-#include <math/mat4.h>
 #include <utils/EntityManager.h>
 
 namespace {
@@ -316,50 +314,6 @@ void destroy_star_glim(FilamentPreview* preview) {
     }
     preview->star_glim_vertices.clear();
     preview->star_glim_indices.clear();
-}
-
-void update_star_glim_transform(
-        FilamentPreview* preview,
-        float eye_x, float eye_y, float eye_z,
-        float center_x, float center_y, float center_z,
-        float up_x, float up_y, float up_z) {
-    if (!preview || !preview->engine || preview->star_glim_entity.isNull()) return;
-
-    const float fx = center_x - eye_x;
-    const float fy = center_y - eye_y;
-    const float fz = center_z - eye_z;
-    const float forward_length = std::sqrt(fx * fx + fy * fy + fz * fz);
-    if (forward_length <= 1e-6f) return;
-    const float forward_x = fx / forward_length;
-    const float forward_y = fy / forward_length;
-    const float forward_z = fz / forward_length;
-
-    // Build a camera-facing basis so the front sky remains in front while navigating.
-    float right_x = up_y * forward_z - up_z * forward_y;
-    float right_y = up_z * forward_x - up_x * forward_z;
-    float right_z = up_x * forward_y - up_y * forward_x;
-    const float right_length = std::sqrt(right_x * right_x + right_y * right_y + right_z * right_z);
-    if (right_length <= 1e-6f) return;
-    right_x /= right_length;
-    right_y /= right_length;
-    right_z /= right_length;
-
-    const float corrected_up_x = forward_y * right_z - forward_z * right_y;
-    const float corrected_up_y = forward_z * right_x - forward_x * right_z;
-    const float corrected_up_z = forward_x * right_y - forward_y * right_x;
-    const float distance = 35.0f;
-    const filament::math::float3 origin{
-            eye_x + forward_x * distance,
-            eye_y + forward_y * distance,
-            eye_z + forward_z * distance};
-    const filament::math::mat4f transform(
-            filament::math::float4{right_x, right_y, right_z, 0.0f},
-            filament::math::float4{corrected_up_x, corrected_up_y, corrected_up_z, 0.0f},
-            filament::math::float4{forward_x, forward_y, forward_z, 0.0f},
-            filament::math::float4{origin.x, origin.y, origin.z, 1.0f});
-    auto& transforms = preview->engine->getTransformManager();
-    const auto instance = transforms.getInstance(preview->star_glim_entity);
-    if (instance) transforms.setTransform(instance, transform);
 }
 
 bool is_skybox_name(const char* name) {
@@ -844,12 +798,17 @@ int filament_preview_set_star_glim(
             float pulse = 0.5 + 0.5 * sin(materialParams.time * materialParams.shineSpeed + phase * 6.2831853);
             float threshold = clamp(materialParams.cellValue + (1.0 - materialParams.cellSoft), 0.0, 1.0);
             float starRadius = mix(0.055, 0.16, fract(phase * 19.17));
-            float starShape = 1.0 - smoothstep(0.0, starRadius, length(local));
+            float diamond = 1.0 - smoothstep(0.0, starRadius, abs(local.x) + abs(local.y));
+            float horizontalRay = (1.0 - smoothstep(0.0, 0.018, abs(local.y)))
+                    * (1.0 - smoothstep(0.0, starRadius * 2.8, abs(local.x)));
+            float verticalRay = (1.0 - smoothstep(0.0, 0.018, abs(local.x)))
+                    * (1.0 - smoothstep(0.0, starRadius * 2.8, abs(local.y)));
+            float starShape = max(diamond, max(horizontalRay, verticalRay) * 0.9);
             float proceduralStar = starShape * step(0.94, phase);
             float textureStar = max(max(textureStars.r, textureStars.g), textureStars.b) * 4.0;
-            float starAmount = max(textureStar, proceduralStar);
+            float starAmount = max(textureStar * starShape, proceduralStar);
             float twinkle = smoothstep(threshold, 1.0, pulse) * materialParams.strength;
-            float3 starColor = max(textureStars * 4.0,
+            float3 starColor = max(textureStars * 4.0 * starShape,
                     float3(1.0, 0.88, 0.68) * proceduralStar);
             float skyOnly = smoothstep(0.0, 0.08, panoUv.y);
             material.baseColor = float4(starColor * mask * materialParams.intensity * twinkle,
@@ -901,13 +860,14 @@ int filament_preview_set_star_glim(
         return 0;
     }
 
-    // This is a camera-facing front sky, not an enclosing cube behind the room.
-    const float half_width = 180.0f;
-    const float bottom = 12.0f;
-    const float top = 192.0f;
+    // Fixed Artemis front-sky plane. It must remain in the room, independent of camera motion.
+    const float half_width = 700.0f;
+    const float bottom = 0.0f;
+    const float top = 500.0f;
+    const float plane_z = -850.0f;
     const StarGlimVertex vertices[] = {
-        {{-half_width, bottom, 0}, {0, 0}}, {{half_width, bottom, 0}, {1, 0}},
-        {{half_width, top, 0}, {1, 1}}, {{-half_width, top, 0}, {0, 1}},
+        {{-half_width, bottom, plane_z}, {0, 0}}, {{half_width, bottom, plane_z}, {1, 0}},
+        {{half_width, top, plane_z}, {1, 1}}, {{-half_width, top, plane_z}, {0, 1}},
     };
     const uint16_t indices[] = {
         0, 1, 2, 0, 2, 3,
@@ -959,7 +919,7 @@ int filament_preview_set_star_glim(
     preview->star_glim_material_instance->setParameter("strength", strength);
     preview->star_glim_entity = utils::EntityManager::get().create();
     filament::RenderableManager::Builder(1)
-            .boundingBox({{-half_width, bottom, 0}, {half_width, top, 0}})
+            .boundingBox({{-half_width, bottom, plane_z}, {half_width, top, plane_z}})
             .material(0, preview->star_glim_material_instance)
             .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES,
                     preview->star_glim_vertex_buffer, preview->star_glim_index_buffer,
@@ -988,9 +948,6 @@ int filament_preview_set_camera(
             filament::math::float3{eye_x, eye_y, eye_z},
             filament::math::float3{center_x, center_y, center_z},
             filament::math::float3{up_x, up_y, up_z});
-    update_star_glim_transform(
-            preview, eye_x, eye_y, eye_z, center_x, center_y, center_z,
-            up_x, up_y, up_z);
     return 1;
 }
 
