@@ -1,10 +1,114 @@
 from __future__ import annotations
 
 import ctypes
+import io
+import json
+import struct
 import sys
 from pathlib import Path
 
 from .filament_vulkan_bridge import FilamentBridgeError
+
+
+def prepare_glb_for_preview(data: bytes, max_texture_dimension: int = 4096) -> tuple[bytes, int]:
+    """Downsample oversized embedded PNG/JPEG textures without changing the source GLB."""
+    if max_texture_dimension <= 0:
+        return bytes(data), 0
+    if len(data) < 20 or data[:4] != b"glTF":
+        raise FilamentBridgeError("preview asset is not a GLB")
+
+    version, declared_length = struct.unpack_from("<II", data, 4)
+    if version != 2 or declared_length > len(data):
+        raise FilamentBridgeError("preview GLB header is invalid")
+    offset = 12
+    json_chunk = None
+    bin_chunk = None
+    while offset + 8 <= len(data):
+        chunk_length, chunk_type = struct.unpack_from("<II", data, offset)
+        offset += 8
+        chunk = data[offset:offset + chunk_length]
+        if chunk_type == 0x4E4F534A:
+            json_chunk = chunk
+        elif chunk_type == 0x004E4942:
+            bin_chunk = chunk
+        offset += chunk_length
+    if json_chunk is None or bin_chunk is None:
+        raise FilamentBridgeError("preview GLB is missing JSON or BIN chunk")
+
+    document = json.loads(json_chunk.rstrip(b" \t\r\n\x00").decode("utf-8"))
+    views = document.get("bufferViews", [])
+    images = document.get("images", [])
+    replacements = {}
+    from PIL import Image
+
+    for image in images:
+        view_index = image.get("bufferView")
+        mime_type = str(image.get("mimeType", ""))
+        if not isinstance(view_index, int) or mime_type not in {"image/png", "image/jpeg"}:
+            continue
+        if view_index < 0 or view_index >= len(views):
+            continue
+        view = views[view_index]
+        start = int(view.get("byteOffset", 0))
+        length = int(view.get("byteLength", 0))
+        encoded = bin_chunk[start:start + length]
+        try:
+            with Image.open(io.BytesIO(encoded)) as source:
+                width, height = source.size
+                if max(width, height) <= max_texture_dimension:
+                    continue
+                scale = max_texture_dimension / max(width, height)
+                resized = source.resize(
+                    (max(1, round(width * scale)), max(1, round(height * scale))),
+                    Image.Resampling.LANCZOS,
+                )
+                output = io.BytesIO()
+                if mime_type == "image/png":
+                    resized.save(output, format="PNG", optimize=True)
+                else:
+                    resized.convert("RGB").save(output, format="JPEG", quality=92, optimize=True)
+                replacements[view_index] = output.getvalue()
+        except Exception as exc:
+            raise FilamentBridgeError(f"preview texture preprocessing failed: {exc}") from exc
+
+    if not replacements:
+        return bytes(data), 0
+
+    ordered_views = sorted(
+        ((int(view.get("byteOffset", 0)), index, view) for index, view in enumerate(views)),
+        key=lambda item: item[0],
+    )
+    rebuilt = bytearray()
+    previous_end = 0
+    for start, view_index, view in ordered_views:
+        length = int(view.get("byteLength", 0))
+        end = start + length
+        if start < previous_end or end > len(bin_chunk):
+            return bytes(data), 0
+        rebuilt.extend(bin_chunk[previous_end:start])
+        while len(rebuilt) % 4:
+            rebuilt.append(0)
+        view["byteOffset"] = len(rebuilt)
+        payload = replacements.get(view_index, bin_chunk[start:end])
+        view["byteLength"] = len(payload)
+        rebuilt.extend(payload)
+        while len(rebuilt) % 4:
+            rebuilt.append(0)
+        previous_end = end
+    rebuilt.extend(bin_chunk[previous_end:])
+    while len(rebuilt) % 4:
+        rebuilt.append(0)
+    document.setdefault("buffers", [{}])[0]["byteLength"] = len(rebuilt)
+
+    encoded_json = json.dumps(document, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    encoded_json += b" " * ((4 - len(encoded_json) % 4) % 4)
+    total_length = 12 + 8 + len(encoded_json) + 8 + len(rebuilt)
+    output = bytearray(struct.pack("<4sII", b"glTF", 2, total_length))
+    output.extend(struct.pack("<II", len(encoded_json), 0x4E4F534A))
+    output.extend(encoded_json)
+    output.extend(struct.pack("<II", len(rebuilt), 0x004E4942))
+    output.extend(rebuilt)
+    return bytes(output), len(replacements)
 
 
 class FilamentDesktopPreview:
@@ -37,7 +141,14 @@ class FilamentDesktopPreview:
             raise FilamentBridgeError(f"unsupported platform: {sys.platform}") from exc
         return Path(__file__).resolve().parent / "native" / name
 
-    def load_glb(self, data: bytes) -> None:
+    def load_glb(self, data: bytes, max_texture_dimension: int = 4096) -> None:
+        data, resized_count = prepare_glb_for_preview(data, max_texture_dimension)
+        if resized_count:
+            print(
+                f"[FilamentPreview] resized {resized_count} oversized textures "
+                f"to <= {max_texture_dimension}px",
+                flush=True,
+            )
         payload = ctypes.create_string_buffer(bytes(data))
         self._check(
             self._library.filament_preview_load_glb(

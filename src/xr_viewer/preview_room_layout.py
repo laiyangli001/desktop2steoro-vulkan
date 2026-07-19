@@ -9,6 +9,7 @@ import math
 import os
 import sys
 import warnings
+import time
 from pathlib import Path
 
 import glfw
@@ -193,6 +194,12 @@ def _profile_projection_planes(profile):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("room", nargs="?", default="bedroom")
+    parser.add_argument(
+        "--max-texture-size",
+        type=int,
+        default=0,
+        help="Maximum embedded texture edge for desktop preview; 0 keeps source resolution",
+    )
     parser.add_argument("--center-view", action="store_true", help="Start camera at the transformed model bounds center")
     args = parser.parse_args()
 
@@ -217,7 +224,7 @@ def main():
         raise RuntimeError("GLFW window creation failed")
     native_window = _native_window_handle(window)
     preview = FilamentDesktopPreview(native_window, 1280, 720)
-    preview.load_glb(glb_path.read_bytes())
+    preview.load_glb(glb_path.read_bytes(), max_texture_dimension=args.max_texture_size)
 
     # Profile positions are stored in world coordinates; Filament renders the raw GLB scene.
     view_pos = _pose_position_in_scene(profile, view_pose)
@@ -277,6 +284,7 @@ def main():
         return key_down(glfw.KEY_LEFT_CONTROL) or key_down(glfw.KEY_RIGHT_CONTROL)
 
     last_time = glfw.get_time()
+    next_frame_time = last_time
     while not glfw.window_should_close(window):
         now = glfw.get_time()
         dt = max(0.001, min(0.05, now - last_time))
@@ -423,6 +431,12 @@ def main():
         preview.set_camera(view_pos, center.tolist(), up.tolist())
         preview.set_projection(80.0, aspect, projection_near, projection_far)
         preview.render()
+        next_frame_time += 1.0 / 60.0
+        delay = next_frame_time - glfw.get_time()
+        if delay > 0.0:
+            time.sleep(min(delay, 0.02))
+        else:
+            next_frame_time = glfw.get_time()
 
     preview.close()
     glfw.terminate()

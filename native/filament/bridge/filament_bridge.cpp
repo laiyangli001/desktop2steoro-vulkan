@@ -447,6 +447,8 @@ int filament_bridge_load_glb(FilamentBridge* bridge, const uint8_t* bytes, uint3
     bridge->scene->addEntities(
             bridge->asset->getEntities(), bridge->asset->getEntityCount());
     bridge->asset->releaseSourceData();
+    bridge->engine->flushAndWait();
+    bridge->glb_bytes.clear();
     return 1;
 }
 
@@ -564,6 +566,8 @@ int filament_preview_load_glb(FilamentPreview* preview, const uint8_t* bytes, ui
     preview->scene->addEntities(
             preview->asset->getEntities(), preview->asset->getEntityCount());
     preview->asset->releaseSourceData();
+    preview->engine->flushAndWait();
+    preview->glb_bytes.clear();
     return 1;
 }
 
