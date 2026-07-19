@@ -813,6 +813,7 @@ int filament_preview_set_star_glim(
             .parameter("cellSoft", filamat::MaterialBuilder::UniformType::FLOAT)
             .parameter("cellValue", filamat::MaterialBuilder::UniformType::FLOAT)
             .parameter("strength", filamat::MaterialBuilder::UniformType::FLOAT)
+            .require(filament::VertexAttribute::UV0)
             .shading(filament::Shading::UNLIT)
             .materialDomain(filament::MaterialDomain::SURFACE)
             .blending(filament::BlendingMode::ADD)
@@ -863,10 +864,10 @@ int filament_preview_set_star_glim(
             .bufferCount(1)
             .attribute(filament::VertexAttribute::POSITION, 0,
                     filament::VertexBuffer::AttributeType::FLOAT3,
-                    sizeof(StarGlimVertex), 0)
+                    0, sizeof(StarGlimVertex))
             .attribute(filament::VertexAttribute::UV0, 0,
                     filament::VertexBuffer::AttributeType::FLOAT2,
-                    sizeof(StarGlimVertex), sizeof(float) * 3)
+                    sizeof(float) * 3, sizeof(StarGlimVertex))
             .build(*preview->engine);
     preview->star_glim_index_buffer = filament::IndexBuffer::Builder()
             .indexCount(static_cast<uint32_t>(preview->star_glim_indices.size()))
