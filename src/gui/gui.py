@@ -14,7 +14,7 @@ from .flet_runtime import ensure_vendored_flet_view
 ensure_vendored_flet_view()
 
 import flet as ft
-from utils import VERSION, OS_NAME, read_yaml
+from utils import VERSION, OS_NAME, bootstrap_settings
 from .builders import GUIBuilderMixin
 from .handlers import GUIHandlerMixin
 from .config_mgr import GUIConfigMixin
@@ -102,7 +102,7 @@ class Desktop2StereoGUI(
         self._config = DEFAULTS.copy()
         if os.path.exists(os.path.join(BASE_DIR, "settings.yaml")):
             try:
-                cfg = read_yaml(os.path.join(BASE_DIR, "settings.yaml"))
+                cfg = bootstrap_settings(os.path.join(BASE_DIR, "settings.yaml"), os_name=OS_NAME)
                 if cfg:
                     self._config.update(cfg)
                     self._yaml_loaded = True

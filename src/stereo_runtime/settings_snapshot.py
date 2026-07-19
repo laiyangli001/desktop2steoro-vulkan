@@ -51,6 +51,12 @@ _HOT_RELOAD_FIELDS = frozenset(
         "screen_edge_mask_suppression",
         "cross_eyed",
         "anaglyph_method",
+        "color_brightness",
+        "color_contrast",
+        "color_saturation",
+        "color_gamma",
+        "color_temperature",
+        "color_tint",
         "fused",
     }
 )
@@ -103,6 +109,12 @@ _CONFIG_UPDATE_FIELDS = frozenset(
         "screen_edge_mask_suppression",
         "cross_eyed",
         "anaglyph_method",
+        "color_brightness",
+        "color_contrast",
+        "color_saturation",
+        "color_gamma",
+        "color_temperature",
+        "color_tint",
         "fused",
         "debug_output",
         "depth_backend",
@@ -163,6 +175,12 @@ class RuntimeSettingsSnapshot:
     screen_edge_mask_suppression: int | None = None
     cross_eyed: bool | None = None
     anaglyph_method: str | None = None
+    color_brightness: float | None = None
+    color_contrast: float | None = None
+    color_saturation: float | None = None
+    color_gamma: float | None = None
+    color_temperature: float | None = None
+    color_tint: float | None = None
     fused: bool | None = None
     depth_backend: str | None = None
     model_id: str | None = None

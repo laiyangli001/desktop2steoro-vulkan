@@ -407,6 +407,7 @@ class GUIProcessMixin:
                 "-X",
                 "faulthandler",
                 os.path.join(BASE_DIR, "main.py"),
+                "--runtime",
             ]
             child_env = os.environ.copy()
             child_env["DESKTOP2STEREO_LOCALE"] = self.locale

@@ -343,6 +343,36 @@ def _merge_openxr_rgba_pack_backend(left_backend: str, right_backend: str) -> st
 def _record_cuda_event(events: dict[str, Any], name: str, frame: torch.Tensor | None) -> None:
     if not isinstance(frame, torch.Tensor) or not frame.is_cuda:
         return
+
+
+def _apply_color_adjustment(rgb_frame: torch.Tensor, config: StereoRuntimeConfig) -> torch.Tensor:
+    """Apply display color controls after depth inference and before output fan-out."""
+    brightness = float(getattr(config, "color_brightness", 1.0))
+    contrast = float(getattr(config, "color_contrast", 1.0))
+    saturation = float(getattr(config, "color_saturation", 1.0))
+    gamma = float(getattr(config, "color_gamma", 1.0))
+    temperature = float(getattr(config, "color_temperature", 0.0))
+    tint = float(getattr(config, "color_tint", 0.0))
+    if (brightness == 1.0 and contrast == 1.0 and saturation == 1.0 and gamma == 1.0
+            and temperature == 0.0 and tint == 0.0):
+        return rgb_frame
+
+    rgb = rgb_frame if rgb_frame.ndim == 4 else rgb_frame.unsqueeze(0)
+    rgb = rgb.float().clone()
+    rgb = rgb * max(brightness, 0.0)
+    temperature_factor = max(-1.0, min(1.0, temperature / 100.0))
+    tint_factor = max(-1.0, min(1.0, tint / 100.0))
+    rgb[:, 0:1] *= 1.0 + 0.12 * temperature_factor
+    rgb[:, 2:3] *= 1.0 - 0.12 * temperature_factor
+    rgb[:, 1:2] *= 1.0 - 0.08 * tint_factor
+    rgb[:, 0:1] *= 1.0 + 0.08 * tint_factor
+    luminance = rgb[:, 0:1] * 0.2126 + rgb[:, 1:2] * 0.7152 + rgb[:, 2:3] * 0.0722
+    rgb = luminance + (rgb - luminance) * saturation
+    rgb = (rgb - 0.5) * contrast + 0.5
+    if gamma != 1.0:
+        rgb = rgb.clamp(0.0, 1.0).pow(1.0 / max(gamma, 0.01))
+    rgb = rgb.clamp(0.0, 1.0)
+    return rgb if rgb_frame.ndim == 4 else rgb[0]
     try:
         event = torch.cuda.Event(blocking=False, enable_timing=True)
         event.record(torch.cuda.current_stream(frame.device))
@@ -961,16 +991,17 @@ class StereoRuntime:
         profile = self._predict_depth_profile(rgb_frame)
         depth_total_ms = (time.perf_counter() - depth_start) * 1000.0
         depth = profile.depth
+        output_rgb = _apply_color_adjustment(rgb_frame, self.config)
         cuda_events.update(getattr(profile, "cuda_timing_events", None) or {})
         _record_cuda_event(cuda_events, "depth", rgb_frame)
         stereo_config, convergence_debug = _dynamic_convergence_config_for_depth(self, depth, self.stereo_config)
 
         synth_start = time.perf_counter()
-        fused_sbs, fused_skip = (None, "skip_sbs_output") if skip_sbs_output else self._try_fast_plus_fused_sbs(rgb_frame, depth, stereo_config)
+        fused_sbs, fused_skip = (None, "skip_sbs_output") if skip_sbs_output else self._try_fast_plus_fused_sbs(output_rgb, depth, stereo_config)
         if fused_sbs is not None:
             stereo = StereoResult(
-                left_eye=rgb_frame,
-                right_eye=rgb_frame,
+                left_eye=output_rgb,
+                right_eye=output_rgb,
                 sbs=fused_sbs,
                 debug_info={
                     "backend": stereo_config.backend,
@@ -986,7 +1017,7 @@ class StereoRuntime:
             if skip_sbs_output:
                 stereo_config_for_frame = replace(stereo_config, output_format="mono")
             stereo = synthesize_stereo(
-                rgb_frame,
+                output_rgb,
                 depth,
                 stereo_config_for_frame,
                 temporal_state=self.temporal_state,
@@ -1141,6 +1172,7 @@ class StereoRuntime:
         profile = self._predict_depth_profile(rgb_frame)
         depth_total_ms = (time.perf_counter() - depth_start) * 1000.0
         depth = profile.depth
+        output_rgb = _apply_color_adjustment(rgb_frame, self.config)
         output_mode = str(getattr(openxr_config, "output_mode", "auto") or "auto")
         if output_mode == "rgb_depth":
             prewarp_eyes = False
@@ -1182,7 +1214,7 @@ class StereoRuntime:
         raw_depth = depth
         if prewarp_eyes:
             render_start = time.perf_counter()
-            openxr = render_openxr_stereo(rgb_frame, depth, openxr_config_for_frame)
+            openxr = render_openxr_stereo(output_rgb, depth, openxr_config_for_frame)
             openxr_render_ms = (time.perf_counter() - render_start) * 1000.0
             _record_cuda_event(cuda_events, "openxr_render", rgb_frame)
 
@@ -1207,8 +1239,8 @@ class StereoRuntime:
             depth = self._prepare_openxr_rgb_depth(depth)
             _record_cuda_event(cuda_events, "openxr_depth_prepare", rgb_frame)
             self._maybe_dump_openxr_rgb_depth(source_rgb=source_rgb, raw_depth=raw_depth, prepared_depth=depth)
-            left_eye = rgb_frame
-            right_eye = rgb_frame
+            left_eye = output_rgb
+            right_eye = output_rgb
             output_format = "openxr_rgb_depth"
             render_backend = {"backend": "openxr_viewer_shader_dibr"}
         total_ms = (time.perf_counter() - total_start) * 1000.0

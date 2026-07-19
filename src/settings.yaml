@@ -1,23 +1,546 @@
-schema_version: 1
-graphics:
-  backend: auto
-  open_gl_fallback: true
-capture:
-  tool: WindowsCaptureCUDA
-  mode: Monitor
-  monitor_index: 1
-inference:
-  backend: auto
-  model: Distill-Any-Depth-Base
-stereo:
-  render_scale: 4K
-  depth_strength: 0.15
-  convergence: 0.5
-openxr:
-  enabled: true
-  graphics_binding: vulkan
-scene:
-  environment: Default
-output:
-  mode: openxr
-
+Capture Mode: Monitor
+Monitor Index: 2
+Window Title: ''
+Show FPS: false
+Model List:
+  Depth-Anything-V2-Small:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  Depth-Anything-V2-Base:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  Depth-Anything-V2-Large:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  InfiniDepth-Small:
+    resolutions:
+    - 192
+    - 240
+    - 304
+    - 336
+    - 384
+    - 448
+    - 512
+  InfiniDepth-SmallPlus:
+    resolutions:
+    - 192
+    - 240
+    - 304
+    - 336
+    - 384
+    - 448
+    - 512
+  InfiniDepth-Base:
+    resolutions:
+    - 192
+    - 240
+    - 304
+    - 336
+    - 384
+    - 448
+    - 512
+  InfiniDepth-Large:
+    resolutions:
+    - 192
+    - 240
+    - 304
+    - 336
+    - 384
+    - 448
+    - 512
+  Video-Depth-Anything-Small:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  Video-Depth-Anything-Base:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  Video-Depth-Anything-Large:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  DA3-SMALL:
+    resolutions:
+    - 182
+    - 224
+    - 280
+    - 322
+    - 378
+    - 434
+    - 504
+  DA3-BASE:
+    resolutions:
+    - 182
+    - 224
+    - 280
+    - 322
+    - 378
+    - 434
+    - 504
+  DA3-LARGE:
+    resolutions:
+    - 182
+    - 224
+    - 280
+    - 322
+    - 378
+    - 434
+    - 504
+  DA3-GIANT:
+    resolutions:
+    - 182
+    - 224
+    - 280
+    - 322
+    - 378
+    - 434
+    - 504
+  DA3METRIC-LARGE:
+    resolutions:
+    - 182
+    - 224
+    - 280
+    - 322
+    - 378
+    - 434
+    - 504
+  DA3NESTED-GIANT-LARGE:
+    resolutions:
+    - 182
+    - 224
+    - 280
+    - 322
+    - 378
+    - 434
+    - 504
+  DA3MONO-LARGE:
+    resolutions:
+    - 182
+    - 224
+    - 280
+    - 322
+    - 378
+    - 434
+    - 504
+  Depth-Anything-V2-Metric-Outdoor-Small:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  Depth-Anything-V2-Metric-Outdoor-Base:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  Depth-Anything-V2-Metric-Outdoor-Large:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  Depth-Anything-V2-Metric-Indoor-Small:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  Depth-Anything-V2-Metric-Indoor-Base:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  Depth-Anything-V2-Metric-Indoor-Large:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  Metric-Video-Depth-Anything-Small:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  Metric-Video-Depth-Anything-Base:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  Metric-Video-Depth-Anything-Large:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything-small:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything-base:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything-large:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything-indoor-large:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-anything-outdoor-large:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  Distill-Any-Depth-Small:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  Distill-Any-Depth-Base:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  Distill-Any-Depth-Large:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  dpt-dinov2-small-kitti:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  dpt-dinov2-base-kitti:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  dpt-dinov2-large-kitti:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  dpt-dinov2-giant-kitti:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  dpt-dinov2-small-nyu:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  dpt-dinov2-base-nyu:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  dpt-dinov2-large-nyu:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  dpt-dinov2-giant-nyu:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  depth-ai:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  dpt-hybrid-midas:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  dpt-beit-base-384:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  dpt-beit-large-512:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  dpt-large:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  dpt-large-redesign:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  zoedepth-nyu-kitti:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  zoedepth-nyu:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  zoedepth-kitti:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  DepthPro-Large:
+    resolutions:
+    - 1536
+Depth Model: Depth-Anything-V2-Base
+Depth Strength: 0.25
+Depth Quick: Standard
+Depth Resolution: 518
+Anti-aliasing: 1
+Depth Antialias Strength: 1.0
+Depth Pop: 0.0
+Foreground Pop: 1.15
+Midground Pop: 1.05
+Background Pop: 1.05
+Depth Separation Preset: standard
+Convergence: 0.0
+Dynamic Convergence: false
+Dynamic Convergence Strength: 0.0
+Stereo Preset: cinema
+Stereo Quality: quality_4k
+Parallax Budget Preset: standard
+Temporal: true
+Temporal Strength: 0.25
+Auto Scene Reset: true
+Scene Reset Threshold: 0.22
+Edge Dilation: 1
+Mask Feather Radius: 1
+Hole Fill Mode: balanced
+Hole Fill Radius: 1
+Hole Fill Strength: 0.6
+Edge Threshold: 0.04
+Cross Eyed: false
+Anaglyph Method: red_cyan
+Color Brightness: 1.0
+Color Contrast: 1.0
+Color Saturation: 1.0
+Color Gamma: 1.0
+Color Temperature: 0.0
+Color Tint: 0.0
+Display Mode: Half-SBS
+FP16: true
+torch.compile: true
+TensorRT: true
+Recompile TensorRT: false
+CoreML: null
+Recompile CoreML: false
+MIGraphX: null
+Recompile MIGraphX: false
+Recompile OpenVINO: false
+Computing Device: 0
+Language: CN
+Run Mode: Local Viewer
+XR Headset Model: Pico 4 / 4 Ultra
+XR Preview Window: false
+VSync: false
+Target FPS: 0
+Processing Resolution: Auto
+Render Size Policy: scaled
+Render Scale: 4K / 100%
+Render Fixed Width: 1920
+Render Fixed Height: 1080
+Render Max Pixels: 8294400
+Render Min Dimension: 480
+Render Align: 1
+Upscaler: 'Off'
+Upscaler Sharpness: 0.0
+Stream Protocol: HLS
+Streamer Port: 1122
+Stream Quality: 100
+Stream Key: live
+Stereo Mix: null
+CRF: 20
+Audio Delay: -0.15
+Controller Model: PICO
+Environment Model: Default
+Lossless Scaling Support: false
+Capture Tool: WindowsCaptureCUDA
+Fill 16:9: true
+Fix Viewer Aspect: false
+Stereo Output: 1
+Show Log Panel: true
+OpenVINO: null
+Synthetic View: quality_4k

@@ -485,6 +485,8 @@ class GUIHandlerMixin:
 
     def _sync_device_advanced_visibility(self, mode):
         advanced = bool(getattr(self, "advanced_device_cb", None) and self.advanced_device_cb.value)
+        for row in getattr(self, "_advanced_device_rows", []):
+            row.visible = advanced
         show_timing = advanced and mode in ["Local Viewer", "3D Monitor", "OpenXR Link"]
         show_enhance = False
         self.row6b.visible = show_timing
@@ -657,6 +659,12 @@ class GUIHandlerMixin:
         self.hole_fill_mode_dd.options = self._hole_fill_mode_options()
         self.hole_fill_mode_dd.value = self._hole_fill_mode_to_display(hole_fill_mode_key)
         self.anaglyph_label.value = t["Anaglyph:"]
+        self.color_brightness_label.value = t["Color Brightness:"]
+        self.color_contrast_label.value = t["Color Contrast:"]
+        self.color_saturation_label.value = t["Color Saturation:"]
+        self.color_gamma_label.value = t["Color Gamma:"]
+        self.color_temperature_label.value = t["Color Temperature:"]
+        self.color_tint_label.value = t["Color Tint:"]
         self.cross_eyed_cb.label = t["Cross Eyed"]
         self.advanced_stereo_cb.label = t["Advanced Stereo"]
         self.acceleration_label.value = t["Inference Acceleration:"]
@@ -1042,12 +1050,20 @@ class GUIHandlerMixin:
         self.hole_fill_mode_dd.value = self._hole_fill_mode_to_display(values["hole_fill_mode"])
         self.edge_threshold_dd.value = f"{values['edge_threshold']:.2f}"
         self.cross_eyed_cb.value = bool(values.get("cross_eyed", False))
+        self.color_brightness_dd.value = f"{values.get('color_brightness', 1.0):.1f}"
+        self.color_contrast_dd.value = f"{values.get('color_contrast', 1.0):.1f}"
+        self.color_saturation_dd.value = f"{values.get('color_saturation', 1.0):.1f}"
+        self.color_gamma_dd.value = f"{values.get('color_gamma', 1.0):.1f}"
+        self.color_temperature_dd.value = str(int(values.get('color_temperature', 0.0)))
+        self.color_tint_dd.value = str(int(values.get('color_tint', 0.0)))
         for ctrl in (
             self.stereo_quality_dd, self.parallax_budget_dd, self.depth_strength_dd, self.depth_quick_dd,
             self.convergence_dd, self.dynamic_convergence_strength_dd, self.temporal_strength_dd,
             self.scene_reset_dd, self.depth_pop_dd, self.depth_separation_dd, self.foreground_pop_dd,
             self.midground_pop_dd, self.background_pop_dd, self.antialiasing_dd, self.edge_dilation_dd,
             self.mask_feather_dd, self.edge_threshold_dd, self.hole_fill_mode_dd, self.cross_eyed_cb,
+            self.color_brightness_dd, self.color_contrast_dd, self.color_saturation_dd, self.color_gamma_dd,
+            self.color_temperature_dd, self.color_tint_dd,
         ):
             self._safe_update(ctrl)
         return True

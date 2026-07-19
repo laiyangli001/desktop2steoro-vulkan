@@ -223,6 +223,8 @@ class GUIBuilderMixin:
             self.stereo_output_label, self.controller_label, self.lang_label,
             self.stream_url_label, self.stream_port_label,
             self.stream_proto_label, self.audio_label, self.crf_label,
+            self.color_brightness_label, self.color_saturation_label,
+            self.color_temperature_label,
         ]
         right_labels = [
             self.temporal_strength_label,
@@ -230,7 +232,8 @@ class GUIBuilderMixin:
             self.render_scale_label, self.render_max_pixels_label, self.render_align_label,
             self.display_mode_label, self.xr_headset_label, self.environment_label,
             self.theme_label, self.stream_quality_label, self.stream_key_label,
-            self.audio_delay_label,
+            self.audio_delay_label, self.color_contrast_label,
+            self.color_gamma_label, self.color_tint_label,
         ]
 
         def _est(t):
@@ -406,6 +409,43 @@ class GUIBuilderMixin:
         stereo_row4 = ft.Row([self.anaglyph_label, self.anaglyph_dd,
             ft.Container(width=S(40)), self.cross_eyed_cb, ft.Container(width=S(20)), self.fp16_cb], spacing=1)
 
+        self.color_brightness_label = ft.Text("Color Brightness:", size=FONT_SIZE, width=S(130))
+        self.color_brightness_dd = CompactDropdown(
+            options=[f"{i / 10:.1f}" for i in range(2, 21)], value="1.0", width=S(130),
+            on_select=self.on_stereo_hot_param_change)
+        self.color_contrast_label = ft.Text("Color Contrast:", size=FONT_SIZE, width=S(130))
+        self.color_contrast_dd = CompactDropdown(
+            options=[f"{i / 10:.1f}" for i in range(5, 21)], value="1.0", width=S(130),
+            on_select=self.on_stereo_hot_param_change)
+        color_row1 = ft.Row([
+            self.color_brightness_label, self.color_brightness_dd,
+            ft.Container(width=S(40)), self.color_contrast_label, self.color_contrast_dd,
+        ], spacing=1)
+        self.color_saturation_label = ft.Text("Color Saturation:", size=FONT_SIZE, width=S(130))
+        self.color_saturation_dd = CompactDropdown(
+            options=[f"{i / 10:.1f}" for i in range(0, 21)], value="1.0", width=S(130),
+            on_select=self.on_stereo_hot_param_change)
+        self.color_gamma_label = ft.Text("Color Gamma:", size=FONT_SIZE, width=S(130))
+        self.color_gamma_dd = CompactDropdown(
+            options=[f"{i / 10:.1f}" for i in range(5, 21)], value="1.0", width=S(130),
+            on_select=self.on_stereo_hot_param_change)
+        color_row2 = ft.Row([
+            self.color_saturation_label, self.color_saturation_dd,
+            ft.Container(width=S(40)), self.color_gamma_label, self.color_gamma_dd,
+        ], spacing=1)
+        self.color_temperature_label = ft.Text("Color Temperature:", size=FONT_SIZE, width=S(130))
+        self.color_temperature_dd = CompactDropdown(
+            options=[str(i) for i in range(-100, 101, 10)], value="0", width=S(130),
+            on_select=self.on_stereo_hot_param_change)
+        self.color_tint_label = ft.Text("Color Tint:", size=FONT_SIZE, width=S(130))
+        self.color_tint_dd = CompactDropdown(
+            options=[str(i) for i in range(-100, 101, 10)], value="0", width=S(130),
+            on_select=self.on_stereo_hot_param_change)
+        color_row3 = ft.Row([
+            self.color_temperature_label, self.color_temperature_dd,
+            ft.Container(width=S(40)), self.color_tint_label, self.color_tint_dd,
+        ], spacing=1)
+
         self._advanced_stereo_rows = [convergence_depth_row, depth_strength_row, row2b, stereo_row1, stereo_row3, stereo_row3b, stereo_row3c, stereo_row4]
 
         # Acceleration group
@@ -496,6 +536,9 @@ class GUIBuilderMixin:
         self.upscaler_sharpness_dd = CompactDropdown(options=["0.00"], value="0.00", width=S(1))
         self.upscaler_sharpness_dd.visible = False
         self.row6c = ft.Row([], spacing=1, visible=False)
+        self._advanced_device_rows = [color_row1, color_row2, color_row3]
+        for row in self._advanced_device_rows:
+            row.visible = self.advanced_device_cb.value
         if OS_NAME == "Linux":
             self.capture_tool_label.visible = False
             self.capture_tool_dd.visible = False
@@ -603,7 +646,7 @@ class GUIBuilderMixin:
                              ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE)),
             border_radius=6, padding=ft.Padding(S(16), S(10), S(16), S(10)))
         device_group = ft.Container(
-            ft.Column([row5, row6, self.row6b, self.row6d, self.row6e, self.row6f,
+            ft.Column([row5, row6, color_row1, color_row2, color_row3, self.row6b, self.row6d, self.row6e, self.row6f,
                        self.row7a, self.row7b, row8, self.row6c, self.row9], spacing=S(8)),
             margin=ft.Margin(0, 0, 0, S(8)),
             border=ft.Border(ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE),

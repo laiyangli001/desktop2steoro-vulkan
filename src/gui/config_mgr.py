@@ -107,6 +107,12 @@ class GUIConfigMixin:
         self.edge_threshold_dd.value = f'{self._parse_float(cfg.get("Edge Threshold", DEFAULTS["Edge Threshold"]), DEFAULTS["Edge Threshold"]):.2f}'
         self.cross_eyed_cb.value = cfg.get("Cross Eyed", DEFAULTS["Cross Eyed"])
         self.anaglyph_dd.value = cfg.get("Anaglyph Method", DEFAULTS["Anaglyph Method"])
+        self.color_brightness_dd.value = f'{self._parse_float(cfg.get("Color Brightness", DEFAULTS["Color Brightness"]), DEFAULTS["Color Brightness"]):.1f}'
+        self.color_contrast_dd.value = f'{self._parse_float(cfg.get("Color Contrast", DEFAULTS["Color Contrast"]), DEFAULTS["Color Contrast"]):.1f}'
+        self.color_saturation_dd.value = f'{self._parse_float(cfg.get("Color Saturation", DEFAULTS["Color Saturation"]), DEFAULTS["Color Saturation"]):.1f}'
+        self.color_gamma_dd.value = f'{self._parse_float(cfg.get("Color Gamma", DEFAULTS["Color Gamma"]), DEFAULTS["Color Gamma"]):.1f}'
+        self.color_temperature_dd.value = str(int(self._parse_float(cfg.get("Color Temperature", DEFAULTS["Color Temperature"]), DEFAULTS["Color Temperature"])))
+        self.color_tint_dd.value = str(int(self._parse_float(cfg.get("Color Tint", DEFAULTS["Color Tint"]), DEFAULTS["Color Tint"])))
         self.advanced_stereo_cb.value = False
         self._sync_advanced_stereo_visibility()
         self._sync_device_advanced_visibility(cfg.get("Run Mode", DEFAULTS.get("Run Mode", "Local Viewer")))
@@ -245,6 +251,12 @@ class GUIConfigMixin:
             "Edge Threshold": self._parse_float(self.edge_threshold_dd.value, DEFAULTS["Edge Threshold"]),
             "Cross Eyed": self.cross_eyed_cb.value,
             "Anaglyph Method": self.anaglyph_dd.value,
+            "Color Brightness": self._parse_float(self.color_brightness_dd.value, DEFAULTS["Color Brightness"]),
+            "Color Contrast": self._parse_float(self.color_contrast_dd.value, DEFAULTS["Color Contrast"]),
+            "Color Saturation": self._parse_float(self.color_saturation_dd.value, DEFAULTS["Color Saturation"]),
+            "Color Gamma": self._parse_float(self.color_gamma_dd.value, DEFAULTS["Color Gamma"]),
+            "Color Temperature": self._parse_float(self.color_temperature_dd.value, DEFAULTS["Color Temperature"]),
+            "Color Tint": self._parse_float(self.color_tint_dd.value, DEFAULTS["Color Tint"]),
             "Depth Pop": depth_pop,
             "Foreground Pop": self._parse_float(self.foreground_pop_dd.value, DEFAULTS["Foreground Pop"]),
             "Midground Pop": self._parse_float(self.midground_pop_dd.value, DEFAULTS["Midground Pop"]),
@@ -363,6 +375,12 @@ class GUIConfigMixin:
             "Hole Fill Strength": float(preset_values.get("hole_fill_strength", DEFAULTS["Hole Fill Strength"])),
             "Edge Threshold": self._parse_float(self.edge_threshold_dd.value, DEFAULTS["Edge Threshold"]),
             "Anaglyph Method": self.anaglyph_dd.value,
+            "Color Brightness": self._parse_float(self.color_brightness_dd.value, DEFAULTS["Color Brightness"]),
+            "Color Contrast": self._parse_float(self.color_contrast_dd.value, DEFAULTS["Color Contrast"]),
+            "Color Saturation": self._parse_float(self.color_saturation_dd.value, DEFAULTS["Color Saturation"]),
+            "Color Gamma": self._parse_float(self.color_gamma_dd.value, DEFAULTS["Color Gamma"]),
+            "Color Temperature": self._parse_float(self.color_temperature_dd.value, DEFAULTS["Color Temperature"]),
+            "Color Tint": self._parse_float(self.color_tint_dd.value, DEFAULTS["Color Tint"]),
             "Cross Eyed": bool(self.cross_eyed_cb.value),
         })
         ok, err = save_yaml(path, cfg)

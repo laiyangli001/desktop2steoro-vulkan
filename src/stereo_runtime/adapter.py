@@ -80,6 +80,12 @@ class StereoRuntimeConfig:
     screen_edge_mask_suppression: int = 0
     cross_eyed: bool = False
     anaglyph_method: str = "red_cyan"
+    color_brightness: float = 1.0
+    color_contrast: float = 1.0
+    color_saturation: float = 1.0
+    color_gamma: float = 1.0
+    color_temperature: float = 0.0
+    color_tint: float = 0.0
     debug_output: bool = False
     fused: bool = True
 
@@ -252,6 +258,12 @@ def runtime_config_from_d2s_settings(
         screen_edge_mask_suppression=int(settings.get("Screen Edge Mask Suppression", 0)),
         cross_eyed=_to_bool(settings.get("Cross Eyed", False)),
         anaglyph_method=str(settings.get("Anaglyph Method", "red_cyan")),
+        color_brightness=float(settings.get("Color Brightness", 1.0)),
+        color_contrast=float(settings.get("Color Contrast", 1.0)),
+        color_saturation=float(settings.get("Color Saturation", 1.0)),
+        color_gamma=float(settings.get("Color Gamma", 1.0)),
+        color_temperature=float(settings.get("Color Temperature", 0.0)),
+        color_tint=float(settings.get("Color Tint", 0.0)),
         debug_output=_to_bool(settings.get("Debug Stereo Output", False)),
         profile_sync=_to_bool(settings.get("Depth Profile Sync", settings.get("Profile Sync", False))),
     )
