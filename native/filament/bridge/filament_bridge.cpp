@@ -312,7 +312,7 @@ void collect_material_brightness(BridgeType* bridge, bool enable_fill_channel) {
         for (size_t primitive = 0; primitive < renderables.getPrimitiveCount(instance); ++primitive) {
             auto* material = renderables.getMaterialInstanceAt(instance, primitive);
             if (!material || !material->getMaterial()->hasParameter("baseColorFactor")) continue;
-            target.push_back({material, material->getParameter<filament::math::float4>(
+            target.push_back({material, material->template getParameter<filament::math::float4>(
                     "baseColorFactor")});
         }
     }
