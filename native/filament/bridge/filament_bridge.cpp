@@ -821,7 +821,7 @@ int filament_preview_set_star_glim(
             .depthCulling(false)
             .targetApi(filamat::MaterialBuilder::TargetApi::ALL)
             .platform(filamat::MaterialBuilder::Platform::ALL);
-    filamat::Package package = builder.build();
+    filamat::Package package = builder.build(preview->engine->getJobSystem());
     if (!package.isValid()) {
         destroy_star_glim(preview);
         set_preview_error(preview, "Filament could not build StarGlim material");
