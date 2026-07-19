@@ -814,13 +814,16 @@ int filament_preview_create_star_glim_material(FilamentPreview* preview) {
     const filament::math::float3 min = center - half_extent;
     const filament::math::float3 max = center + half_extent;
 
-    const std::string shader = std::string(R"FILAMENT(
+    std::string shader = R"FILAMENT(
         void material(inout MaterialInputs material) {
             prepareMaterial(material);
-            float3 direction = normalize(getWorldPosition() - float3(")FILAMENT")
-            + std::to_string(center.x) + ", "
+            float3 direction = normalize(getWorldPosition() - float3(
+)FILAMENT";
+    shader += std::to_string(center.x) + ", "
             + std::to_string(center.y) + ", "
-            + std::to_string(center.z) + R"FILAMENT());
+            + std::to_string(center.z);
+    shader += R"FILAMENT(
+));
             float2 uv = float2(
                     atan(direction.z, direction.x) * 0.1591549431 + 0.5,
                     asin(clamp(direction.y, -1.0, 1.0)) * 0.3183098862 + 0.5);
