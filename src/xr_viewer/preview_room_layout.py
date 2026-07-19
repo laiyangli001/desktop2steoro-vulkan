@@ -201,6 +201,7 @@ def main():
         help="Maximum embedded texture edge for desktop preview; 0 keeps source resolution",
     )
     parser.add_argument("--exposure", type=float, default=None, help="Filament exposure in EV")
+    parser.add_argument("--skybox-brightness", type=float, default=None, help="Skybox brightness multiplier")
     parser.add_argument("--fill-light-intensity", type=float, default=None, help="Filament directional fill light intensity")
     parser.add_argument("--center-view", action="store_true", help="Start camera at the transformed model bounds center")
     args = parser.parse_args()
@@ -230,6 +231,11 @@ def main():
     preview_exposure = float(
         args.exposure if args.exposure is not None else profile.get("preview_exposure", 2.0)
     )
+    skybox_brightness = float(
+        args.skybox_brightness
+        if args.skybox_brightness is not None
+        else profile.get("preview_skybox_brightness", 1.0)
+    )
     fill_light_color = _vec3(profile.get("preview_fill_light_color"), [1.0, 0.88, 0.78])
     fill_light_direction = _vec3(profile.get("preview_fill_light_direction"), [-0.35, -1.0, -0.55])
     fill_light_intensity = float(
@@ -239,6 +245,7 @@ def main():
     )
     preview.set_exposure(preview_exposure)
     preview.set_fill_light(fill_light_color, fill_light_intensity, fill_light_direction)
+    preview.set_skybox_brightness(skybox_brightness)
 
     # Profile positions are stored in world coordinates; Filament renders the raw GLB scene.
     view_pos = _pose_position_in_scene(profile, view_pose)
@@ -250,6 +257,7 @@ def main():
     rot_speed = 45.0
     saved_flash = 0.0
     exposure_key_cooldown = 0.0
+    skybox_key_cooldown = 0.0
     edit_target = "SCREEN"
     tab_was_down = False
     mouse_look = False
@@ -258,13 +266,13 @@ def main():
     print(f"Room: {args.room}")
     print(f"Profile: {profile_path}")
     print(f"Preview projection: clip={projection_near:.3f}/{projection_far:.1f}")
-    print(f"Preview color: exposure={preview_exposure:.2f}EV fill={fill_light_intensity:.0f}")
+    print(f"Preview color: exposure={preview_exposure:.2f}EV skybox={skybox_brightness:.2f} fill={fill_light_intensity:.0f}")
     print(f"Preview navigation: move_speed={speed:.2f}m/s size_speed={size_speed:.2f}m/s")
     print(f"Preview fine mode: hold Ctrl for {PREVIEW_FINE_MOVE_SPEED_MPS:.2f}m/s movement/size adjustment")
     print("Controls:")
     print("  Tab: switch edit target SCREEN/VIEW")
     print("  SCREEN: Arrow=screen X/Y, PageUp/PageDown=screen Z, +/-=width")
-    print("  GLOBAL: [ / ]=Filament exposure down/up")
+    print("  GLOBAL: [ / ]=seat exposure down/up, , / .=skybox brightness down/up")
     print("  SCREEN: 1=27in monitor, 2=65in TV, 3=100in projector, 4=cinema")
     print("  VIEW:   A/D=seat X, Up/Down or Space/LeftShift=seat Y, W/S=seat Z")
     print("  Mouse:  hold right button and drag to rotate VIEW yaw/pitch")
@@ -308,6 +316,7 @@ def main():
         last_time = now
         glfw.poll_events()
         exposure_key_cooldown = max(0.0, exposure_key_cooldown - dt)
+        skybox_key_cooldown = max(0.0, skybox_key_cooldown - dt)
         if exposure_key_cooldown <= 0.0:
             if key_down(glfw.KEY_LEFT_BRACKET):
                 preview_exposure = max(-8.0, preview_exposure - 0.25)
@@ -317,6 +326,15 @@ def main():
                 preview_exposure = min(8.0, preview_exposure + 0.25)
                 preview.set_exposure(preview_exposure)
                 exposure_key_cooldown = 0.12
+        if skybox_key_cooldown <= 0.0:
+            if key_down(glfw.KEY_COMMA):
+                skybox_brightness = max(0.0, skybox_brightness - 0.05)
+                preview.set_skybox_brightness(skybox_brightness)
+                skybox_key_cooldown = 0.12
+            elif key_down(glfw.KEY_PERIOD):
+                skybox_brightness = min(16.0, skybox_brightness + 0.05)
+                preview.set_skybox_brightness(skybox_brightness)
+                skybox_key_cooldown = 0.12
 
         tab_down = glfw.get_key(window, glfw.KEY_TAB) == glfw.PRESS
         if tab_down and not tab_was_down:
@@ -428,12 +446,14 @@ def main():
             view_rot_deg = _pose_rotation_deg(view_pose, [0.0, 0.0, 0.0])
             view_rot = [math.radians(v) for v in view_rot_deg]
             speed, size_speed = 1.0, 0.8
+            skybox_brightness = float(profile.get("preview_skybox_brightness", 1.0))
+            preview.set_skybox_brightness(skybox_brightness)
         if glfw.get_key(window, glfw.KEY_ESCAPE) == glfw.PRESS:
             glfw.set_window_should_close(window, True)
 
         title = (
             f"{args.room} | {edit_target} | {screen.get('name', 'Screen')} | "
-            f"exposure={preview_exposure:.2f}EV | view={view_pos} {view_rot_deg} | "
+            f"exposure={preview_exposure:.2f}EV skybox={skybox_brightness:.2f} | view={view_pos} {view_rot_deg} | "
             f"pos={screen.get('position')} rot={screen.get('rotation_deg')} "
             f"w={float(screen.get('width', 2.4)):.3f}m"
         )

@@ -17,6 +17,8 @@
 - 固化桌面预览Bridge调参ABI：新增曝光和方向补光的C ABI，Python通过profile或`--exposure`、`--fill-light-intensity`调整颜色，不再为亮度和灯光参数修改反复编译Filament Bridge。
 - 修复Filament预览发黑：GLB纹理继续交给Filament按glTF sRGB/线性规则处理，View增加曝光色彩分级，并提供线性颜色方向补光；三平台Bridge构建通过。
 - 将桌面预览默认曝光调整为`2.0 EV`；命令行显式`--exposure`和profile中的`preview_exposure`仍可覆盖默认值。
+- 将天空盒与座位主体亮度解耦：Filament补光仅使用独立光照通道照亮非天空盒实体，天空盒材质通过独立的`skybox_brightness`乘数调节。
+- 新增`--skybox-brightness`和profile字段`preview_skybox_brightness`；预览窗口使用`,`/`.`独立降低或提高天空盒亮度，`[`/`]`继续只调节座位主体曝光。
 
 ### 验证结果
 
@@ -30,10 +32,11 @@
 
 - 需要用户确认Filament桌面窗口中的房间画面、profile座位高度和场景完整性。
 - 尚未进行桌面预览与头显Projection Layer的最终视觉一致性对比。
+- 天空盒独立亮度功能等待三平台Bridge构建及桌面画面实测确认。
 
 ### 下一项内容
 
-下一项：根据用户观察结果调整Filament Camera初始姿态和GLB坐标映射；确认桌面预览后再进行头显场景实测。
+下一项：完成三平台Bridge构建并实测天空盒与座位主体的独立亮度调节，确认后再同步到头显场景。
 
 ## 2026-07-18
 

@@ -92,6 +92,8 @@ FILAMENT_BRIDGE_API int filament_preview_set_fill_light(
         float red, float green, float blue,
         float intensity,
         float direction_x, float direction_y, float direction_z);
+FILAMENT_BRIDGE_API int filament_preview_set_skybox_brightness(
+        FilamentPreview* preview, float brightness);
 FILAMENT_BRIDGE_API int filament_preview_render(FilamentPreview* preview);
 FILAMENT_BRIDGE_API const char* filament_preview_last_error(
         const FilamentPreview* preview);

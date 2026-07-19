@@ -199,6 +199,14 @@ class FilamentDesktopPreview:
             "set_fill_light",
         )
 
+    def set_skybox_brightness(self, brightness: float) -> None:
+        self._check(
+            self._library.filament_preview_set_skybox_brightness(
+                self._handle, float(brightness)
+            ),
+            "set_skybox_brightness",
+        )
+
     def render(self) -> None:
         self._check(self._library.filament_preview_render(self._handle), "render")
 
@@ -240,6 +248,10 @@ class FilamentDesktopPreview:
             ctypes.c_void_p, *([ctypes.c_float] * 7)
         ]
         library.filament_preview_set_fill_light.restype = ctypes.c_int
+        library.filament_preview_set_skybox_brightness.argtypes = [
+            ctypes.c_void_p, ctypes.c_float
+        ]
+        library.filament_preview_set_skybox_brightness.restype = ctypes.c_int
         library.filament_preview_render.argtypes = [ctypes.c_void_p]
         library.filament_preview_render.restype = ctypes.c_int
         library.filament_preview_last_error.argtypes = [ctypes.c_void_p]

@@ -1,6 +1,7 @@
 #include "filament_bridge.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <memory>
 #include <string>
@@ -11,6 +12,8 @@
 #include <filament/ColorGrading.h>
 #include <filament/Engine.h>
 #include <filament/LightManager.h>
+#include <filament/MaterialInstance.h>
+#include <filament/RenderableManager.h>
 #include <filament/Renderer.h>
 #include <filament/Scene.h>
 #include <filament/SwapChain.h>
@@ -23,6 +26,7 @@
 #include <gltfio/ResourceLoader.h>
 #include <gltfio/TextureProvider.h>
 #include <math/vec3.h>
+#include <math/vec4.h>
 #include <utils/EntityManager.h>
 
 namespace {
@@ -196,6 +200,8 @@ struct FilamentPreview {
     filament::SwapChain* swapchain = nullptr;
     utils::Entity fill_light;
     filament::ColorGrading* color_grading = nullptr;
+    std::vector<utils::Entity> skybox_entities;
+    float skybox_brightness = 1.0f;
     std::vector<uint8_t> glb_bytes;
     std::string last_error;
 };
@@ -235,7 +241,56 @@ void destroy_preview_asset(FilamentPreview* preview) {
         preview->asset_loader->destroyAsset(preview->asset);
     }
     preview->asset = nullptr;
+    preview->skybox_entities.clear();
     preview->glb_bytes.clear();
+}
+
+bool is_skybox_name(const char* name) {
+    if (!name) return false;
+    std::string value(name);
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return value.find("skybox") != std::string::npos;
+}
+
+void apply_skybox_brightness(FilamentPreview* preview) {
+    if (!preview || !preview->engine) return;
+    auto& renderables = preview->engine->getRenderableManager();
+    const filament::math::float4 factor{
+            preview->skybox_brightness,
+            preview->skybox_brightness,
+            preview->skybox_brightness,
+            1.0f};
+    for (utils::Entity entity : preview->skybox_entities) {
+        auto instance = renderables.getInstance(entity);
+        if (!instance.isValid()) continue;
+        const size_t primitive_count = renderables.getPrimitiveCount(instance);
+        for (size_t primitive = 0; primitive < primitive_count; ++primitive) {
+            auto* material = renderables.getMaterialInstanceAt(instance, primitive);
+            if (material) material->setParameter("baseColorFactor", factor);
+        }
+    }
+}
+
+void configure_preview_light_channels(FilamentPreview* preview) {
+    if (!preview || !preview->engine || !preview->asset) return;
+    auto& renderables = preview->engine->getRenderableManager();
+    preview->skybox_entities.clear();
+    const auto* entities = preview->asset->getRenderableEntities();
+    for (size_t index = 0; index < preview->asset->getRenderableEntityCount(); ++index) {
+        const utils::Entity entity = entities[index];
+        auto instance = renderables.getInstance(entity);
+        if (!instance.isValid()) continue;
+        if (is_skybox_name(preview->asset->getName(entity))) {
+            renderables.setLightChannel(instance, 0, false);
+            renderables.setLightChannel(instance, 1, false);
+            preview->skybox_entities.push_back(entity);
+        } else {
+            renderables.setLightChannel(instance, 1, true);
+        }
+    }
+    apply_skybox_brightness(preview);
 }
 
 }  // namespace
@@ -533,6 +588,8 @@ FilamentPreview* filament_preview_create(void* native_window, uint32_t width, ui
             .color(filament::LinearColor{1.0f, 0.88f, 0.78f})
             .intensity(100000.0f)
             .direction({-0.35f, -1.0f, -0.55f})
+            .lightChannel(0, false)
+            .lightChannel(1, true)
             .castShadows(false)
             .build(*preview->engine, preview->fill_light);
     preview->scene->addEntity(preview->fill_light);
@@ -592,6 +649,7 @@ int filament_preview_load_glb(FilamentPreview* preview, const uint8_t* bytes, ui
     }
     preview->scene->addEntities(
             preview->asset->getEntities(), preview->asset->getEntityCount());
+    configure_preview_light_channels(preview);
     preview->asset->releaseSourceData();
     preview->engine->flushAndWait();
     preview->glb_bytes.clear();
@@ -665,9 +723,18 @@ int filament_preview_set_fill_light(
             .color(filament::LinearColor{red, green, blue})
             .intensity(intensity)
             .direction({direction_x, direction_y, direction_z})
+            .lightChannel(0, false)
+            .lightChannel(1, true)
             .castShadows(false)
             .build(*preview->engine, preview->fill_light);
     preview->scene->addEntity(preview->fill_light);
+    return 1;
+}
+
+int filament_preview_set_skybox_brightness(FilamentPreview* preview, float brightness) {
+    if (!preview || !std::isfinite(brightness) || brightness < 0.0f) return 0;
+    preview->skybox_brightness = std::min(brightness, 16.0f);
+    apply_skybox_brightness(preview);
     return 1;
 }
 
