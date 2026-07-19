@@ -780,9 +780,10 @@ int filament_preview_create_star_glim_material(FilamentPreview* preview) {
     }
 
     const auto box = renderables.getAxisAlignedBoundingBox(source_instance);
-    const filament::math::float3 center = (box.min + box.max) * 0.5f;
-    const filament::math::float3 min = center + (box.min - center) * 0.995f;
-    const filament::math::float3 max = center + (box.max - center) * 0.995f;
+    const filament::math::float3 center = box.center;
+    const filament::math::float3 half_extent = box.halfExtent * 0.995f;
+    const filament::math::float3 min = center - half_extent;
+    const filament::math::float3 max = center + half_extent;
 
     const char* shader = R"FILAMENT(
         void material(inout MaterialInputs material) {
@@ -906,7 +907,7 @@ int filament_preview_create_star_glim_material(FilamentPreview* preview) {
             .castShadows(false)
             .receiveShadows(false)
             .build(*preview->engine, preview->star_glim_entity);
-    if (result != filament::RenderableManager::Result::Success) {
+    if (result != filament::RenderableManager::Builder::Success) {
         destroy_skybox_star_layer(preview);
         set_preview_error(preview, "Filament could not create StarGlim renderable");
         return 0;
@@ -914,7 +915,8 @@ int filament_preview_create_star_glim_material(FilamentPreview* preview) {
 
     auto& transforms = preview->engine->getTransformManager();
     const auto source_transform = transforms.getInstance(source_entity);
-    const auto overlay_transform = transforms.create(preview->star_glim_entity);
+    transforms.create(preview->star_glim_entity);
+    const auto overlay_transform = transforms.getInstance(preview->star_glim_entity);
     transforms.setTransform(overlay_transform, transforms.getWorldTransform(source_transform));
     preview->star_glim_source_entity = source_entity;
     preview->scene->addEntity(preview->star_glim_entity);
