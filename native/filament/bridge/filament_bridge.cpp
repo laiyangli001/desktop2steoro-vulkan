@@ -786,16 +786,30 @@ int filament_preview_set_star_glim(
     const char* shader = R"FILAMENT(
         void material(inout MaterialInputs material) {
             prepareMaterial(material);
-            float2 uv = getUV0();
+            float3 direction = normalize(getWorldPosition());
+            float2 panoUv = float2(
+                    atan(direction.z, direction.x) * 0.1591549431 + 0.5,
+                    asin(clamp(direction.y, -1.0, 1.0)) * 0.3183098862 + 0.5);
             float2 drift = float2(materialParams.speed * materialParams.time, 0.0);
-            float3 stars = texture(materialParams_stars, uv + drift).rgb;
-            float mask = texture(materialParams_mask, uv + drift).r;
-            float2 cell = floor((uv + drift) * materialParams.cellDensity + materialParams.cellOffset);
+            float2 sampleUv = fract(panoUv + drift);
+            float3 textureStars = texture(materialParams_stars, sampleUv).rgb;
+            float mask = texture(materialParams_mask, panoUv).r;
+            float2 cellUv = panoUv * materialParams.cellDensity + materialParams.cellOffset;
+            float2 cell = floor(cellUv);
+            float2 local = fract(cellUv) - 0.5;
             float phase = fract(sin(dot(cell, float2(12.9898, 78.233))) * 43758.5453);
             float pulse = 0.5 + 0.5 * sin(materialParams.time * materialParams.shineSpeed + phase * 6.2831853);
             float threshold = clamp(materialParams.cellValue + (1.0 - materialParams.cellSoft), 0.0, 1.0);
+            float starRadius = mix(0.055, 0.16, fract(phase * 19.17));
+            float starShape = 1.0 - smoothstep(0.0, starRadius, length(local));
+            float proceduralStar = starShape * step(0.94, phase);
+            float textureStar = max(max(textureStars.r, textureStars.g), textureStars.b) * 4.0;
+            float starAmount = max(textureStar, proceduralStar);
             float twinkle = smoothstep(threshold, 1.0, pulse) * materialParams.strength;
-            material.baseColor = float4(stars * mask * materialParams.intensity * twinkle, mask * twinkle);
+            float3 starColor = max(textureStars * 4.0,
+                    float3(1.0, 0.88, 0.68) * proceduralStar);
+            material.baseColor = float4(starColor * mask * materialParams.intensity * twinkle,
+                    mask * starAmount * twinkle);
         }
     )FILAMENT";
     filamat::MaterialBuilder::init();
