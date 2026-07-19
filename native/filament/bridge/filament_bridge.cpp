@@ -530,7 +530,7 @@ FilamentPreview* filament_preview_create(void* native_window, uint32_t width, ui
     }
     preview->fill_light = utils::EntityManager::get().create();
     filament::LightManager::Builder(filament::LightManager::Type::DIRECTIONAL)
-            .color(1.0f, 0.88f, 0.78f)
+            .color(filament::LinearColor{1.0f, 0.88f, 0.78f})
             .intensity(100000.0f)
             .direction({-0.35f, -1.0f, -0.55f})
             .castShadows(false)
