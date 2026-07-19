@@ -794,34 +794,11 @@ int filament_preview_set_star_glim(
             float2 sampleUv = panoUv;
             float3 textureStars = texture(materialParams_stars, sampleUv).rgb;
             float mask = texture(materialParams_mask, panoUv).r;
-            float2 cellUv = panoUv * materialParams.cellDensity + materialParams.cellOffset;
-            float2 cell = floor(cellUv);
-            float2 local = fract(cellUv) - 0.5;
-            float phase = fract(sin(dot(cell, float2(12.9898, 78.233))) * 43758.5453);
-            float localSpeed = mix(0.45, 1.8, fract(phase * 7.13));
-            float pulse = 0.5 + 0.5 * sin(
-                    materialParams.time * materialParams.shineSpeed * localSpeed
-                    + phase * 6.2831853);
-            float threshold = clamp(materialParams.cellValue + (1.0 - materialParams.cellSoft), 0.0, 1.0);
-            float starRadius = mix(0.055, 0.16, fract(phase * 19.17));
-            float diamond = 1.0 - smoothstep(0.0, starRadius, abs(local.x) + abs(local.y));
-            float horizontalRay = (1.0 - smoothstep(0.0, 0.018, abs(local.y)))
-                    * (1.0 - smoothstep(0.0, starRadius * 2.8, abs(local.x)));
-            float verticalRay = (1.0 - smoothstep(0.0, 0.018, abs(local.x)))
-                    * (1.0 - smoothstep(0.0, starRadius * 2.8, abs(local.y)));
-            float starShape = max(diamond, max(horizontalRay, verticalRay) * 0.9);
-            float proceduralStar = starShape * step(0.92, phase);
-            float textureStar = max(max(textureStars.r, textureStars.g), textureStars.b) * 4.0;
-            float twinkle = smoothstep(threshold, 1.0, pulse) * materialParams.strength;
             float skyOnly = smoothstep(0.0, 0.08, panoUv.y);
             float3 textureBackgroundColor = textureStars * 8.0 * mask * materialParams.intensity;
-            float textureBackgroundAlpha = textureStar * mask * skyOnly;
-            float3 twinkleColor = float3(1.0, 0.88, 0.68)
-                    * proceduralStar * twinkle * mask * materialParams.intensity;
-            float twinkleAlpha = proceduralStar * twinkle * mask * skyOnly;
-            material.baseColor = float4(
-                    textureBackgroundColor + twinkleColor,
-                    textureBackgroundAlpha + twinkleAlpha);
+            float textureBackgroundAlpha = max(max(textureStars.r, textureStars.g), textureStars.b)
+                    * 8.0 * mask * skyOnly;
+            material.baseColor = float4(textureBackgroundColor, textureBackgroundAlpha);
         }
     )FILAMENT";
     filamat::MaterialBuilder::init();
@@ -830,15 +807,7 @@ int filament_preview_set_star_glim(
             .material(shader)
             .parameter("stars", filamat::MaterialBuilder::SamplerType::SAMPLER_2D)
             .parameter("mask", filamat::MaterialBuilder::SamplerType::SAMPLER_2D)
-            .parameter("time", filamat::MaterialBuilder::UniformType::FLOAT)
             .parameter("intensity", filamat::MaterialBuilder::UniformType::FLOAT)
-            .parameter("speed", filamat::MaterialBuilder::UniformType::FLOAT)
-            .parameter("shineSpeed", filamat::MaterialBuilder::UniformType::FLOAT)
-            .parameter("cellDensity", filamat::MaterialBuilder::UniformType::FLOAT)
-            .parameter("cellOffset", filamat::MaterialBuilder::UniformType::FLOAT)
-            .parameter("cellSoft", filamat::MaterialBuilder::UniformType::FLOAT)
-            .parameter("cellValue", filamat::MaterialBuilder::UniformType::FLOAT)
-            .parameter("strength", filamat::MaterialBuilder::UniformType::FLOAT)
             .require(filament::VertexAttribute::UV0)
             .shading(filament::Shading::UNLIT)
             .materialDomain(filament::MaterialDomain::SURFACE)
@@ -931,15 +900,7 @@ int filament_preview_set_star_glim(
             "stars", preview->star_glim_stars, sampler);
     preview->star_glim_material_instance->setParameter(
             "mask", preview->star_glim_mask, sampler);
-    preview->star_glim_material_instance->setParameter("time", 0.0f);
     preview->star_glim_material_instance->setParameter("intensity", intensity);
-    preview->star_glim_material_instance->setParameter("speed", speed);
-    preview->star_glim_material_instance->setParameter("shineSpeed", shine_speed);
-    preview->star_glim_material_instance->setParameter("cellDensity", cell_density);
-    preview->star_glim_material_instance->setParameter("cellOffset", cell_offset);
-    preview->star_glim_material_instance->setParameter("cellSoft", cell_soft);
-    preview->star_glim_material_instance->setParameter("cellValue", cell_value);
-    preview->star_glim_material_instance->setParameter("strength", strength);
     preview->star_glim_entity = utils::EntityManager::get().create();
     filament::RenderableManager::Builder(1)
             .boundingBox({{min_x, min_y, min_z}, {max_x, max_y, max_z}})
@@ -956,9 +917,7 @@ int filament_preview_set_star_glim(
 }
 
 int filament_preview_set_star_glim_time(FilamentPreview* preview, double time_seconds) {
-    if (!preview || !preview->star_glim_material_instance || !std::isfinite(time_seconds)) return 0;
-    preview->star_glim_material_instance->setParameter("time", static_cast<float>(time_seconds));
-    return 1;
+    return preview && preview->star_glim_material_instance && std::isfinite(time_seconds);
 }
 
 int filament_preview_set_camera(
