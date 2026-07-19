@@ -202,7 +202,6 @@ struct FilamentPreview {
     filament::ColorGrading* color_grading = nullptr;
     std::vector<utils::Entity> skybox_entities;
     float skybox_brightness = 1.0f;
-    float exposure_ev = 2.0f;
     std::vector<uint8_t> glb_bytes;
     std::string last_error;
 };
@@ -258,14 +257,10 @@ bool is_skybox_name(const char* name) {
 void apply_skybox_brightness(FilamentPreview* preview) {
     if (!preview || !preview->engine) return;
     auto& renderables = preview->engine->getRenderableManager();
-    // ColorGrading is applied to the whole View. Counteract its exposure for
-    // the skybox so the scene exposure remains independent from this layer.
-    const float compensated_brightness = preview->skybox_brightness * std::exp2(
-            std::clamp(2.0f - preview->exposure_ev, -16.0f, 16.0f));
     const filament::math::float4 factor{
-            compensated_brightness,
-            compensated_brightness,
-            compensated_brightness,
+            preview->skybox_brightness,
+            preview->skybox_brightness,
+            preview->skybox_brightness,
             1.0f};
     for (utils::Entity entity : preview->skybox_entities) {
         auto instance = renderables.getInstance(entity);
@@ -695,7 +690,6 @@ int filament_preview_set_exposure(FilamentPreview* preview, float exposure_ev) {
     if (!preview || !preview->engine || !preview->view || !std::isfinite(exposure_ev)) {
         return 0;
     }
-    preview->exposure_ev = exposure_ev;
     if (preview->color_grading) {
         preview->engine->destroy(preview->color_grading);
         preview->color_grading = nullptr;
@@ -705,7 +699,6 @@ int filament_preview_set_exposure(FilamentPreview* preview, float exposure_ev) {
             .build(*preview->engine);
     if (!preview->color_grading) return 0;
     preview->view->setColorGrading(preview->color_grading);
-    apply_skybox_brightness(preview);
     return 1;
 }
 
