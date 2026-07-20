@@ -33,16 +33,16 @@
 | INFER-002 | 推理 | 推理结果不得进入 CPU 像素往返，允许外部内存或一次 GPU copy。 | 01§6.4; 02§9.6 | `src/` | 互操作测试; capability report | planned |
 | INFER-003 | 推理 | 单帧推理失败丢帧并计数，连续失败后重建 Adapter。 | 02§9.6; 02§17.2 | `src/` | `tests/test_runtime.py`; 故障注入 | planned |
 | VK-001 | Vulkan | 默认请求 Vulkan 1.4，最低接受 Vulkan 1.2，并按 Loader/Runtime/Device 能力协商。 | 01§4.2; 01§5.1; 02§7.1 | `src/viewer/vulkan_context.py`; `src/xr_viewer/core_openxr_vulkan.py` | `tests/test_openxr_vulkan.py`; `src/tools/probe.py` | verified |
-| VK-002 | Vulkan | Instance、Device、扩展和 Feature 统一由 Vulkan Context 创建和验证。 | 01§5.1; 02§7.1 | `src/viewer/vulkan_context.py` | `tests/test_openxr_vulkan.py` | in_progress |
+| VK-002 | Vulkan | Instance、Device、扩展和 Feature 统一由 Vulkan Context 创建和验证。 | 01§5.1; 02§7.1 | `src/viewer/vulkan_context.py` | `tests/test_openxr_vulkan.py` | implemented |
 | VK-003 | Vulkan | 必须查询并显式启用 Timeline Semaphore，不得仅依据 API 版本假设启用。 | 01§5.1; 01§10.1; 02§7.6 | `src/viewer/vulkan_context.py`; `src/xr_viewer/core_openxr_vulkan.py` | `tests/test_openxr_vulkan.py` | verified |
 | VK-004 | Vulkan | 使用 `pNext` Feature 链，`sType` 和链的生命周期必须正确。 | 01§5.1; 02§7.1 | `src/viewer/vulkan_context.py`; `src/xr_viewer/core_openxr_vulkan.py` | `tests/test_openxr_vulkan.py` | in_progress |
-| VK-005 | Vulkan | 队列、Frame Context、Descriptor、Pipeline 和图像状态必须有界且可追踪。 | 01§5.2-5.5; 02§7.2-7.5 | `src/viewer/vulkan_context.py` | GPU validation; 长稳测试 | planned |
-| VK-006 | Vulkan | 必须执行 Layout、Access、Queue Ownership 和提交顺序验证。 | 01§5.2; 01§10; 02§7.6 | `src/viewer/vulkan_context.py` | Validation Layer GPU 测试 | planned |
+| VK-005 | Vulkan | 队列、Frame Context、Descriptor、Pipeline 和图像状态必须有界且可追踪。 | 01§5.2-5.5; 02§7.2-7.5 | `src/viewer/vulkan_context.py`; `src/viewer/vulkan_descriptors.py`; `src/viewer/vulkan_compute_pipeline.py` | `tests/test_openxr_vulkan.py`; GPU validation; 长稳测试 | in_progress |
+| VK-006 | Vulkan | 必须执行 Layout、Access、Queue Ownership 和提交顺序验证。 | 01§5.2; 01§10; 02§7.6 | `src/viewer/vulkan_context.py`; `src/viewer/vulkan_descriptors.py` | `tests/test_openxr_vulkan.py`; Validation Layer GPU 测试 | in_progress |
 | VK-007 | Vulkan | Compute、Graphics 和 XR 输出不得发生未登记的 CPU 图像回读。 | 01§6; 01§8.4; 02§14 | `src/` | 静态检查; GPU profiling | planned |
 | VK-008 | Vulkan | 资源分配、释放、Resize、Device Lost 和异常清理必须可诊断。 | 02§7.2; 02§17 | `src/viewer/`; `src/app_runtime/` | 故障注入; 长稳测试 | planned |
-| GRAPH-001 | 计算图 | 按规格顺序执行预处理、深度后处理、视差、变形、修补和时域稳定。 | 01§6; 02§10 | `src/` | shader golden tests | planned |
-| GRAPH-002 | 计算图 | Glow、平均色、墙面反射等异步光效使用独立有界资源。 | 01§7; 02§12 | `src/` | GPU timing; 功能验收 | planned |
-| GRAPH-003 | 计算图 | latest-frame 覆盖旧帧，负载升高时延迟不持续累积。 | 01§10.2; 02§5.3 | `src/` | `tests/test_runtime.py`; 压力测试 | in_progress |
+| GRAPH-001 | 计算图 | 按规格顺序执行预处理、深度后处理、视差、变形、修补和时域稳定。 | 01§6; 02§10 | `src/stereo_runtime/vulkan_graph.py`; `src/viewer/vulkan_compute_pipeline.py`; `shaders/` | shader golden tests | in_progress |
+| GRAPH-002 | 计算图 | Glow、平均色、墙面反射等异步光效使用独立有界资源。 | 01§7; 02§12 | `src/stereo_runtime/vulkan_graph.py`; `shaders/` | GPU timing; 功能验收 | in_progress |
+| GRAPH-003 | 计算图 | latest-frame 覆盖旧帧，负载升高时延迟不持续累积。 | 01§10.2; 02§5.3 | `src/stereo_runtime/vulkan_graph.py` | `tests/test_migration_scaffold.py`; 压力测试 | in_progress |
 | FILAMENT-001 | Filament | 场景使用 Filament Vulkan 后端，Bridge 只暴露窄 C ABI。 | 01§3.1; 01§15.2; 02§11 | `src/xr_viewer/filament_preview_bridge.py`; `src/xr_viewer/native/` | `tests/test_filament_vulkan_bridge.py`; CI | implemented |
 | FILAMENT-002 | Filament | GLB、材质、动画、相机、虚拟屏幕和手柄均由 Python 生命周期管理。 | 01§15.2; 02§11.1-11.5 | `src/xr_viewer/` | GLB/动画实机验收 | in_progress |
 | FILAMENT-003 | Filament | Bridge 二进制只由三平台 CI 生成并记录 ABI、Filament 版本和 SHA。 | 01§15.1; 02§20.1.1 | `.github/workflows/`; `src/xr_viewer/native/` | Actions artifact 检查 | in_progress |

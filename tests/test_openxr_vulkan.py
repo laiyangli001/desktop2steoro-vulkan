@@ -7,12 +7,16 @@ import pytest
 import xr
 
 from viewer.vulkan_context import (
+    ImageState,
+    ImageStateTracker,
+    QueueFamilySelection,
     VulkanCapabilityError,
     VulkanContext,
     VulkanUnavailableError,
     format_vulkan_version,
     make_vulkan_version,
     unpack_vulkan_version,
+    _find_queue_families,
 )
 from xr_viewer.core_openxr_vulkan import (
     OpenXrVulkanConfig,
@@ -30,6 +34,69 @@ def test_vulkan_version_round_trip() -> None:
     packed = make_vulkan_version(1, 3, 275)
     assert unpack_vulkan_version(packed) == (1, 3, 275)
     assert format_vulkan_version(packed) == "1.3.275"
+
+
+def test_queue_family_selection_prefers_dedicated_compute_and_transfer() -> None:
+    vk = SimpleNamespace(
+        VK_QUEUE_GRAPHICS_BIT=0x1,
+        VK_QUEUE_COMPUTE_BIT=0x2,
+        VK_QUEUE_TRANSFER_BIT=0x4,
+        vkGetPhysicalDeviceQueueFamilyProperties=lambda _device: [
+            SimpleNamespace(queueCount=1, queueFlags=0x1 | 0x2),
+            SimpleNamespace(queueCount=1, queueFlags=0x2),
+            SimpleNamespace(queueCount=1, queueFlags=0x4),
+        ],
+    )
+    assert _find_queue_families(vk, object()) == QueueFamilySelection(0, 1, 2)
+
+
+def test_queue_family_selection_falls_back_to_graphics() -> None:
+    vk = SimpleNamespace(
+        VK_QUEUE_GRAPHICS_BIT=0x1,
+        VK_QUEUE_COMPUTE_BIT=0x2,
+        VK_QUEUE_TRANSFER_BIT=0x4,
+        vkGetPhysicalDeviceQueueFamilyProperties=lambda _device: [
+            SimpleNamespace(queueCount=1, queueFlags=0x1 | 0x2 | 0x4),
+        ],
+    )
+    assert _find_queue_families(vk, object()) == QueueFamilySelection(0, 0, 0)
+
+
+def test_image_state_tracker_returns_explicit_undefined_state() -> None:
+    tracker = ImageStateTracker(default_queue_family_index=3)
+    state = tracker.get(17, undefined_layout=9)
+    assert state == ImageState(9, 0, 0, 3)
+
+
+def test_image_state_tracker_updates_and_clears_state() -> None:
+    tracker = ImageStateTracker(default_queue_family_index=3)
+    state = ImageState(4, 8, 16, 2)
+    tracker.update(17, state)
+    assert tracker.get(17, undefined_layout=9) == state
+    tracker.clear()
+    assert tracker.get(17, undefined_layout=9).layout == 9
+
+
+def test_image_state_tracker_rejects_wrong_queue_owner() -> None:
+    tracker = ImageStateTracker(default_queue_family_index=3)
+    tracker.update(17, ImageState(4, 8, 16, 2))
+    with pytest.raises(VulkanCapabilityError, match="owned by queue family 2"):
+        tracker.require_owner(17, 3)
+
+
+def test_image_state_tracker_owns_pending_queue_transfer_until_acquire() -> None:
+    tracker = ImageStateTracker(default_queue_family_index=0)
+    tracker.update(17, ImageState(4, 8, 16, 0))
+    transfer = tracker.begin_ownership_transfer(
+        17,
+        source_queue_family_index=0,
+        destination_queue_family_index=2,
+        undefined_layout=9,
+    )
+    with pytest.raises(VulkanCapabilityError, match="pending queue ownership"):
+        tracker.require_owner(17, 2)
+    tracker.complete_ownership_transfer(transfer)
+    assert tracker.require_owner(17, 2).queue_family_index == 2
 
 
 def test_openxr_version_range_clamps_requested_vulkan_version() -> None:

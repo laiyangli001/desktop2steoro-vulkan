@@ -35,6 +35,8 @@ def _probe_vulkan_device() -> dict[str, object]:
                 "device": device.name,
                 "api_version": device.api_version_text,
                 "graphics_queue_family": device.queue_family_index,
+                "compute_queue_family": device.compute_queue_family_index,
+                "transfer_queue_family": device.transfer_queue_family_index,
                 "timeline_semaphore_enabled": device.timeline_semaphore_enabled,
             }
     except Exception as exc:

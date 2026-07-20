@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from threading import RLock
 from typing import Any, Callable, Iterable
 
@@ -38,7 +38,10 @@ class VulkanDeviceInfo:
     device_id: int
     device_type: int
     queue_family_index: int
+    compute_queue_family_index: int = -1
+    transfer_queue_family_index: int = -1
     timeline_semaphore_enabled: bool = False
+    synchronization2_enabled: bool = False
 
     @property
     def api_version_text(self) -> str:
@@ -53,6 +56,129 @@ class VulkanContextConfig:
     enable_validation: bool = False
     required_instance_extensions: tuple[str, ...] = ()
     required_device_extensions: tuple[str, ...] = ()
+    # Keep in-flight command resources bounded and configurable for validation.
+    frame_context_count: int = 3
+
+
+@dataclass(frozen=True, slots=True)
+class QueueFamilySelection:
+    graphics: int
+    compute: int
+    transfer: int
+
+
+@dataclass(slots=True)
+class VulkanFrameContext:
+    command_pool: Any
+    command_buffer: Any
+    fence: Any
+    timeline_value: int = 0
+    queue_resources: dict[str, "VulkanQueueFrameResources"] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class VulkanQueueFrameResources:
+    command_pool: Any
+    command_buffer: Any
+    fence: Any
+    timeline_value: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class ImageState:
+    layout: int
+    access_mask: int
+    stage_mask: int
+    queue_family_index: int
+
+
+@dataclass(frozen=True, slots=True)
+class QueueOwnershipTransfer:
+    image_key: int
+    source_queue_family_index: int
+    destination_queue_family_index: int
+    state: ImageState
+
+
+class ImageStateTracker:
+    """Tracks the last declared image state for explicit barrier construction."""
+
+    def __init__(self, *, default_queue_family_index: int) -> None:
+        self.default_queue_family_index = int(default_queue_family_index)
+        self._states: dict[int, ImageState] = {}
+        self._pending_transfers: dict[int, QueueOwnershipTransfer] = {}
+
+    def get(self, image_key: int, *, undefined_layout: int) -> ImageState:
+        return self._states.get(
+            int(image_key),
+            ImageState(
+                layout=int(undefined_layout),
+                access_mask=0,
+                stage_mask=0,
+                queue_family_index=self.default_queue_family_index,
+            ),
+        )
+
+    def update(self, image_key: int, state: ImageState) -> None:
+        self._states[int(image_key)] = state
+
+    def require_owner(self, image_key: int, queue_family_index: int) -> ImageState:
+        if int(image_key) in self._pending_transfers:
+            raise VulkanCapabilityError(
+                f"Image {int(image_key)} has a pending queue ownership transfer"
+            )
+        state = self._states.get(int(image_key))
+        if state is not None and state.queue_family_index not in (
+            int(queue_family_index),
+        ):
+            raise VulkanCapabilityError(
+                f"Image {int(image_key)} is owned by queue family "
+                f"{state.queue_family_index}, not {int(queue_family_index)}"
+            )
+        return state
+
+    def begin_ownership_transfer(
+        self,
+        image_key: int,
+        *,
+        source_queue_family_index: int,
+        destination_queue_family_index: int,
+        undefined_layout: int,
+    ) -> QueueOwnershipTransfer:
+        key = int(image_key)
+        if key in self._pending_transfers:
+            raise VulkanCapabilityError(f"Image {key} already has a pending ownership transfer")
+        state = self.get(key, undefined_layout=undefined_layout)
+        if state.queue_family_index != int(source_queue_family_index):
+            raise VulkanCapabilityError(
+                f"Image {key} is owned by queue family {state.queue_family_index}, "
+                f"not {int(source_queue_family_index)}"
+            )
+        transfer = QueueOwnershipTransfer(
+            image_key=key,
+            source_queue_family_index=int(source_queue_family_index),
+            destination_queue_family_index=int(destination_queue_family_index),
+            state=state,
+        )
+        self._pending_transfers[key] = transfer
+        return transfer
+
+    def complete_ownership_transfer(self, transfer: QueueOwnershipTransfer) -> None:
+        current = self._pending_transfers.get(int(transfer.image_key))
+        if current != transfer:
+            raise VulkanCapabilityError("queue ownership transfer does not match tracker state")
+        state = transfer.state
+        self._states[int(transfer.image_key)] = ImageState(
+            layout=state.layout,
+            access_mask=state.access_mask,
+            stage_mask=state.stage_mask,
+            queue_family_index=transfer.destination_queue_family_index,
+        )
+        del self._pending_transfers[int(transfer.image_key)]
+
+    def clear(self) -> None:
+        self._states.clear()
+        self._pending_transfers.clear()
 
 
 class VulkanContext:
@@ -68,6 +194,11 @@ class VulkanContext:
         device_info: VulkanDeviceInfo,
         owns_instance: bool,
         owns_device: bool,
+        compute_queue: Any | None = None,
+        transfer_queue: Any | None = None,
+        compute_queue_family_index: int | None = None,
+        transfer_queue_family_index: int | None = None,
+        frame_context_count: int = 3,
     ) -> None:
         self.vk = vk
         self.instance = instance
@@ -75,16 +206,62 @@ class VulkanContext:
         self.device = device
         self.queue = queue
         self.queue_family_index = int(queue_family_index)
+        self.graphics_queue = queue
+        self.compute_queue = compute_queue if compute_queue is not None else queue
+        self.transfer_queue = transfer_queue if transfer_queue is not None else queue
+        self.compute_queue_family_index = int(
+            compute_queue_family_index
+            if compute_queue_family_index is not None
+            else queue_family_index
+        )
+        self.transfer_queue_family_index = int(
+            transfer_queue_family_index
+            if transfer_queue_family_index is not None
+            else queue_family_index
+        )
         self.device_info = device_info
+        if int(frame_context_count) < 1:
+            raise ValueError("frame_context_count must be at least one")
+        self.frame_context_count = int(frame_context_count)
         self._owns_instance = bool(owns_instance)
         self._owns_device = bool(owns_device)
         self._command_pool = None
         self._command_buffer = None
         self._fence = None
-        self._known_image_layouts: dict[int, int] = {}
+        self._frame_contexts: list[VulkanFrameContext] = []
+        self._frame_index = 0
+        self._timeline_semaphore = None
+        self._timeline_value = 0
+        self._image_states = ImageStateTracker(
+            default_queue_family_index=self.queue_family_index
+        )
         self._lock = RLock()
         self._closed = False
         self._create_command_resources()
+        if self.device_info.timeline_semaphore_enabled:
+            self._timeline_semaphore = _create_timeline_semaphore(vk, self.device)
+
+    def get_queue(self, role: str = "graphics") -> Any:
+        queues = {
+            "graphics": self.graphics_queue,
+            "compute": self.compute_queue,
+            "transfer": self.transfer_queue,
+        }
+        try:
+            return queues[str(role).lower()]
+        except KeyError as exc:
+            raise ValueError(f"unknown Vulkan queue role: {role}") from exc
+
+    def queue_family(self, role: str = "graphics") -> int:
+        families = {
+            "graphics": self.queue_family_index,
+            "compute": self.compute_queue_family_index,
+            "transfer": self.transfer_queue_family_index,
+        }
+        try:
+            return families[str(role).lower()]
+        except KeyError as exc:
+            raise ValueError(f"unknown Vulkan queue role: {role}") from exc
 
     @classmethod
     def create(cls, config: VulkanContextConfig | None = None) -> "VulkanContext":
@@ -132,7 +309,7 @@ class VulkanContext:
         device = None
         try:
             instance = vk.vkCreateInstance(create_info, None)
-            physical_device, queue_family_index = _select_physical_device(vk, instance)
+            physical_device, queue_families = _select_physical_device(vk, instance)
             available_device_extensions = _enumerate_names(
                 vk.vkEnumerateDeviceExtensionProperties(physical_device, None),
                 "extensionName",
@@ -142,18 +319,21 @@ class VulkanContext:
                 cfg.required_device_extensions,
                 available_device_extensions,
             )
-            device = _create_device(
+            device, synchronization2_enabled = _create_device(
                 vk,
                 physical_device,
-                queue_family_index,
+                queue_families,
                 required_device_extensions,
             )
-            queue = vk.vkGetDeviceQueue(device, queue_family_index, 0)
+            queue = vk.vkGetDeviceQueue(device, queue_families.graphics, 0)
+            compute_queue = vk.vkGetDeviceQueue(device, queue_families.compute, 0)
+            transfer_queue = vk.vkGetDeviceQueue(device, queue_families.transfer, 0)
             info = _device_info(
                 vk,
                 physical_device,
-                queue_family_index,
+                queue_families,
                 timeline_semaphore_enabled=True,
+                synchronization2_enabled=synchronization2_enabled,
             )
             return cls(
                 vk=vk,
@@ -161,10 +341,15 @@ class VulkanContext:
                 physical_device=physical_device,
                 device=device,
                 queue=queue,
-                queue_family_index=queue_family_index,
+                queue_family_index=queue_families.graphics,
                 device_info=info,
                 owns_instance=True,
                 owns_device=True,
+                compute_queue=compute_queue,
+                transfer_queue=transfer_queue,
+                compute_queue_family_index=queue_families.compute,
+                transfer_queue_family_index=queue_families.transfer,
+                frame_context_count=cfg.frame_context_count,
             )
         except Exception:
             if device is not None:
@@ -197,11 +382,18 @@ class VulkanContext:
             device_info=_device_info(
                 vk,
                 physical_device,
-                int(queue_family_index),
+                QueueFamilySelection(
+                    graphics=int(queue_family_index),
+                    compute=int(queue_family_index),
+                    transfer=int(queue_family_index),
+                ),
                 timeline_semaphore_enabled=timeline_semaphore_enabled,
+                synchronization2_enabled=False,
             ),
             owns_instance=owns_instance,
             owns_device=owns_device,
+            compute_queue_family_index=int(queue_family_index),
+            transfer_queue_family_index=int(queue_family_index),
         )
 
     @property
@@ -219,6 +411,17 @@ class VulkanContext:
             raise ValueError("VkImage address must be non-zero")
         return self.vk.ffi.cast("VkImage", int(address))
 
+    def register_image_state(self, image: Any, state: ImageState) -> None:
+        self._ensure_open()
+        self._image_states.update(_cffi_handle_address(self.vk, image), state)
+
+    def image_state(self, image: Any) -> ImageState:
+        self._ensure_open()
+        return self._image_states.get(
+            _cffi_handle_address(self.vk, image),
+            undefined_layout=self.vk.VK_IMAGE_LAYOUT_UNDEFINED,
+        )
+
     def clear_color_image(
         self,
         image: Any,
@@ -228,22 +431,16 @@ class VulkanContext:
             raise ValueError("clear color must contain four components")
         vk = self.vk
         image_key = _cffi_handle_address(vk, image)
-        old_layout = self._known_image_layouts.get(
+        old_state = self._image_states.get(
             image_key,
-            vk.VK_IMAGE_LAYOUT_UNDEFINED,
+            undefined_layout=vk.VK_IMAGE_LAYOUT_UNDEFINED,
         )
+        self._image_states.require_owner(image_key, self.queue_family_index)
+        old_layout = old_state.layout
 
         def record(command_buffer: Any) -> None:
-            source_access = (
-                0
-                if old_layout == vk.VK_IMAGE_LAYOUT_UNDEFINED
-                else vk.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
-            )
-            source_stage = (
-                vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
-                if old_layout == vk.VK_IMAGE_LAYOUT_UNDEFINED
-                else vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
-            )
+            source_access = old_state.access_mask
+            source_stage = old_state.stage_mask or vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
             to_transfer = vk.VkImageMemoryBarrier(
                 sType=vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
                 srcAccessMask=source_access,
@@ -300,35 +497,62 @@ class VulkanContext:
             )
 
         self.submit(record)
-        self._known_image_layouts[image_key] = vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+        self._image_states.update(
+            image_key,
+            ImageState(
+                layout=vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                access_mask=vk.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                stage_mask=vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                queue_family_index=self.queue_family_index,
+            ),
+        )
 
     def submit(self, record: Callable[[Any], None]) -> None:
+        self.submit_on("graphics", record)
+
+    def submit_on(
+        self,
+        role: str,
+        record: Callable[[Any], None],
+        *,
+        wait_for_timeline: int | None = None,
+    ) -> int:
         with self._lock:
             self._ensure_open()
             vk = self.vk
-            vk.vkResetFences(self.device, 1, [self._fence])
-            vk.vkResetCommandBuffer(self._command_buffer, 0)
+            frame = self._frame_contexts[self._frame_index]
+            queue_resources = frame.queue_resources[str(role).lower()]
+            # Reuse is bounded by the frame fence instead of allocating per submit.
+            vk.vkWaitForFences(
+                self.device, 1, [queue_resources.fence], vk.VK_TRUE, 10_000_000_000
+            )
+            vk.vkResetFences(self.device, 1, [queue_resources.fence])
+            vk.vkResetCommandBuffer(queue_resources.command_buffer, 0)
             begin_info = vk.VkCommandBufferBeginInfo(
                 sType=vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
                 flags=vk.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
             )
-            vk.vkBeginCommandBuffer(self._command_buffer, begin_info)
+            vk.vkBeginCommandBuffer(queue_resources.command_buffer, begin_info)
             try:
-                record(self._command_buffer)
-                vk.vkEndCommandBuffer(self._command_buffer)
+                record(queue_resources.command_buffer)
+                vk.vkEndCommandBuffer(queue_resources.command_buffer)
             except Exception:
                 try:
-                    vk.vkEndCommandBuffer(self._command_buffer)
+                    vk.vkEndCommandBuffer(queue_resources.command_buffer)
                 except Exception:
                     pass
                 raise
-            submit_info = vk.VkSubmitInfo(
-                sType=vk.VK_STRUCTURE_TYPE_SUBMIT_INFO,
-                commandBufferCount=1,
-                pCommandBuffers=[self._command_buffer],
+            self._timeline_value += 1
+            queue_resources.timeline_value = self._timeline_value
+            self._submit_frame(
+                queue=self.get_queue(role),
+                command_buffer=queue_resources.command_buffer,
+                fence=queue_resources.fence,
+                timeline_value=queue_resources.timeline_value,
+                wait_timeline_value=wait_for_timeline,
             )
-            vk.vkQueueSubmit(self.queue, 1, [submit_info], self._fence)
-            vk.vkWaitForFences(self.device, 1, [self._fence], vk.VK_TRUE, 10_000_000_000)
+            self._frame_index = (self._frame_index + 1) % self.frame_context_count
+            return queue_resources.timeline_value
 
     def wait_idle(self) -> None:
         with self._lock:
@@ -345,18 +569,22 @@ class VulkanContext:
                     vk.vkDeviceWaitIdle(self.device)
             finally:
                 if self.device is not None:
-                    if self._fence is not None:
-                        vk.vkDestroyFence(self.device, self._fence, None)
-                    if self._command_pool is not None:
-                        vk.vkDestroyCommandPool(self.device, self._command_pool, None)
+                    if self._timeline_semaphore is not None:
+                        vk.vkDestroySemaphore(self.device, self._timeline_semaphore, None)
+                    for frame in self._frame_contexts:
+                        for resources in frame.queue_resources.values():
+                            vk.vkDestroyFence(self.device, resources.fence, None)
+                            vk.vkDestroyCommandPool(self.device, resources.command_pool, None)
                     if self._owns_device:
                         vk.vkDestroyDevice(self.device, None)
                 if self.instance is not None and self._owns_instance:
                     vk.vkDestroyInstance(self.instance, None)
-                self._known_image_layouts.clear()
+                self._image_states.clear()
                 self._command_buffer = None
                 self._command_pool = None
                 self._fence = None
+                self._timeline_semaphore = None
+                self._frame_contexts.clear()
                 self.queue = None
                 self.device = None
                 self.physical_device = None
@@ -372,26 +600,127 @@ class VulkanContext:
 
     def _create_command_resources(self) -> None:
         vk = self.vk
-        pool_info = vk.VkCommandPoolCreateInfo(
-            sType=vk.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
-            flags=vk.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
-            queueFamilyIndex=self.queue_family_index,
-        )
-        self._command_pool = vk.vkCreateCommandPool(self.device, pool_info, None)
-        allocation_info = vk.VkCommandBufferAllocateInfo(
-            sType=vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-            commandPool=self._command_pool,
-            level=vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-            commandBufferCount=1,
-        )
-        self._command_buffer = vk.vkAllocateCommandBuffers(
-            self.device,
-            allocation_info,
-        )[0]
         fence_info = vk.VkFenceCreateInfo(
             sType=vk.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+            flags=vk.VK_FENCE_CREATE_SIGNALED_BIT,
         )
-        self._fence = vk.vkCreateFence(self.device, fence_info, None)
+        for _ in range(self.frame_context_count):
+            resources: dict[str, VulkanQueueFrameResources] = {}
+            for role in ("graphics", "compute", "transfer"):
+                pool_info = vk.VkCommandPoolCreateInfo(
+                    sType=vk.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+                    flags=vk.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+                    queueFamilyIndex=self.queue_family(role),
+                )
+                command_pool = vk.vkCreateCommandPool(self.device, pool_info, None)
+                allocation_info = vk.VkCommandBufferAllocateInfo(
+                    sType=vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+                    commandPool=command_pool,
+                    level=vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+                    commandBufferCount=1,
+                )
+                command_buffer = vk.vkAllocateCommandBuffers(self.device, allocation_info)[0]
+                resources[role] = VulkanQueueFrameResources(
+                    command_pool,
+                    command_buffer,
+                    vk.vkCreateFence(self.device, fence_info, None),
+                )
+            graphics = resources["graphics"]
+            self._frame_contexts.append(
+                VulkanFrameContext(
+                    graphics.command_pool,
+                    graphics.command_buffer,
+                    graphics.fence,
+                    queue_resources=resources,
+                )
+            )
+        self._command_pool = self._frame_contexts[0].command_pool
+        self._command_buffer = self._frame_contexts[0].command_buffer
+        self._fence = self._frame_contexts[0].fence
+
+    def _submit_frame(
+        self,
+        *,
+        queue: Any,
+        command_buffer: Any,
+        fence: Any,
+        timeline_value: int,
+        wait_timeline_value: int | None = None,
+    ) -> None:
+        vk = self.vk
+        if wait_timeline_value is not None and self._timeline_semaphore is None:
+            raise VulkanCapabilityError(
+                "timeline wait requested but the Vulkan context has no timeline semaphore"
+            )
+        if self._timeline_semaphore is not None and _supports_submit2(
+            vk,
+            self.device_info.api_version,
+            self.device_info.synchronization2_enabled,
+        ):
+            command_info = vk.VkCommandBufferSubmitInfo(
+                sType=vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
+                commandBuffer=command_buffer,
+                deviceMask=1,
+            )
+            signal_info = vk.VkSemaphoreSubmitInfo(
+                sType=vk.VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                semaphore=self._timeline_semaphore,
+                value=timeline_value,
+                stageMask=_pipeline_stage_2_all_commands(vk),
+                deviceIndex=0,
+            )
+            wait_infos = []
+            if wait_timeline_value is not None:
+                wait_infos.append(
+                    vk.VkSemaphoreSubmitInfo(
+                        sType=vk.VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                        semaphore=self._timeline_semaphore,
+                        value=int(wait_timeline_value),
+                        stageMask=_pipeline_stage_2_all_commands(vk),
+                        deviceIndex=0,
+                    )
+                )
+            submit_info = vk.VkSubmitInfo2(
+                sType=vk.VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
+                waitSemaphoreInfoCount=len(wait_infos),
+                pWaitSemaphoreInfos=wait_infos or None,
+                commandBufferInfoCount=1,
+                pCommandBufferInfos=[command_info],
+                signalSemaphoreInfoCount=1,
+                pSignalSemaphoreInfos=[signal_info],
+            )
+            vk.vkQueueSubmit2(queue, 1, [submit_info], fence)
+            return
+
+        timeline_info = None
+        if self._timeline_semaphore is not None:
+            timeline_info = vk.VkTimelineSemaphoreSubmitInfo(
+                sType=vk.VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
+                waitSemaphoreValueCount=1 if wait_timeline_value is not None else 0,
+                pWaitSemaphoreValues=[int(wait_timeline_value)]
+                if wait_timeline_value is not None
+                else None,
+                signalSemaphoreValueCount=1,
+                pSignalSemaphoreValues=[timeline_value],
+            )
+        submit_info = vk.VkSubmitInfo(
+            sType=vk.VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            pNext=timeline_info,
+            commandBufferCount=1,
+            pCommandBuffers=[command_buffer],
+            waitSemaphoreCount=1 if wait_timeline_value is not None else 0,
+            pWaitSemaphores=[self._timeline_semaphore]
+            if wait_timeline_value is not None
+            else None,
+            pWaitDstStageMask=[vk.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT]
+            if wait_timeline_value is not None
+            else None,
+            signalSemaphoreCount=1 if self._timeline_semaphore is not None else 0,
+            pSignalSemaphores=[self._timeline_semaphore]
+            if self._timeline_semaphore is not None
+            else None,
+        )
+        vk.vkQueueSubmit(queue, 1, [submit_info], fence)
 
     def _ensure_open(self) -> None:
         if self._closed:
@@ -406,6 +735,45 @@ def _import_vulkan() -> Any:
             "Python Vulkan bindings or the Vulkan loader are unavailable"
         ) from exc
     return vk
+
+
+def _create_timeline_semaphore(vk: Any, device: Any) -> Any:
+    semaphore_type = vk.VkSemaphoreTypeCreateInfo(
+        sType=vk.VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
+        semaphoreType=vk.VK_SEMAPHORE_TYPE_TIMELINE,
+        initialValue=0,
+    )
+    create_info = vk.VkSemaphoreCreateInfo(
+        sType=vk.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+        pNext=semaphore_type,
+    )
+    return vk.vkCreateSemaphore(device, create_info, None)
+
+
+def _supports_submit2(
+    vk: Any, api_version: int, synchronization2_enabled: bool
+) -> bool:
+    if int(api_version) < make_vulkan_version(1, 3, 0) or not synchronization2_enabled:
+        return False
+    return all(
+        hasattr(vk, name)
+        for name in (
+            "vkQueueSubmit2",
+            "VkCommandBufferSubmitInfo",
+            "VkSemaphoreSubmitInfo",
+            "VkSubmitInfo2",
+            "VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO",
+            "VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO",
+            "VK_STRUCTURE_TYPE_SUBMIT_INFO_2",
+        )
+    )
+
+
+def _pipeline_stage_2_all_commands(vk: Any) -> int:
+    value = getattr(vk, "VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT", None)
+    if value is None:
+        value = getattr(vk, "VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR")
+    return int(value)
 
 
 def _enumerate_names(properties: Iterable[Any], field: str) -> set[str]:
@@ -430,14 +798,14 @@ def _require_names(
     return requested
 
 
-def _select_physical_device(vk: Any, instance: Any) -> tuple[Any, int]:
+def _select_physical_device(vk: Any, instance: Any) -> tuple[Any, QueueFamilySelection]:
     devices = vk.vkEnumeratePhysicalDevices(instance)
     if not devices:
         raise VulkanCapabilityError("No Vulkan physical device is available")
-    candidates: list[tuple[int, Any, int]] = []
+    candidates: list[tuple[int, Any, QueueFamilySelection]] = []
     for physical_device in devices:
-        queue_family_index = _find_graphics_queue_family(vk, physical_device)
-        if queue_family_index is None:
+        queue_families = _find_queue_families(vk, physical_device)
+        if queue_families is None:
             continue
         properties = vk.vkGetPhysicalDeviceProperties(physical_device)
         score = {
@@ -446,11 +814,11 @@ def _select_physical_device(vk: Any, instance: Any) -> tuple[Any, int]:
             vk.VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU: 100,
             vk.VK_PHYSICAL_DEVICE_TYPE_CPU: 10,
         }.get(int(properties.deviceType), 0)
-        candidates.append((score, physical_device, queue_family_index))
+        candidates.append((score, physical_device, queue_families))
     if not candidates:
         raise VulkanCapabilityError("No Vulkan device exposes a graphics queue")
-    _, physical_device, queue_family_index = max(candidates, key=lambda item: item[0])
-    return physical_device, queue_family_index
+    _, physical_device, queue_families = max(candidates, key=lambda item: item[0])
+    return physical_device, queue_families
 
 
 def find_graphics_queue_family(vk: Any, physical_device: Any) -> int:
@@ -469,12 +837,52 @@ def _find_graphics_queue_family(vk: Any, physical_device: Any) -> int | None:
     return None
 
 
+def _find_queue_families(vk: Any, physical_device: Any) -> QueueFamilySelection | None:
+    families = list(vk.vkGetPhysicalDeviceQueueFamilyProperties(physical_device))
+    graphics = next(
+        (
+            index
+            for index, properties in enumerate(families)
+            if properties.queueCount and properties.queueFlags & vk.VK_QUEUE_GRAPHICS_BIT
+        ),
+        None,
+    )
+    if graphics is None:
+        return None
+
+    compute = next(
+        (
+            index
+            for index, properties in enumerate(families)
+            if properties.queueCount
+            and properties.queueFlags & vk.VK_QUEUE_COMPUTE_BIT
+            and not properties.queueFlags & vk.VK_QUEUE_GRAPHICS_BIT
+        ),
+        graphics,
+    )
+    transfer_bit = getattr(vk, "VK_QUEUE_TRANSFER_BIT", 0)
+    transfer = next(
+        (
+            index
+            for index, properties in enumerate(families)
+            if properties.queueCount
+            and transfer_bit
+            and properties.queueFlags & transfer_bit
+            and not properties.queueFlags & vk.VK_QUEUE_GRAPHICS_BIT
+            and not properties.queueFlags & vk.VK_QUEUE_COMPUTE_BIT
+        ),
+        compute,
+    )
+    return QueueFamilySelection(graphics, compute, transfer)
+
+
 def _device_info(
     vk: Any,
     physical_device: Any,
-    queue_family_index: int,
+    queue_families: QueueFamilySelection,
     *,
     timeline_semaphore_enabled: bool = False,
+    synchronization2_enabled: bool = False,
 ) -> VulkanDeviceInfo:
     properties = vk.vkGetPhysicalDeviceProperties(physical_device)
     return VulkanDeviceInfo(
@@ -484,8 +892,11 @@ def _device_info(
         vendor_id=int(properties.vendorID),
         device_id=int(properties.deviceID),
         device_type=int(properties.deviceType),
-        queue_family_index=int(queue_family_index),
+        queue_family_index=int(queue_families.graphics),
+        compute_queue_family_index=int(queue_families.compute),
+        transfer_queue_family_index=int(queue_families.transfer),
         timeline_semaphore_enabled=bool(timeline_semaphore_enabled),
+        synchronization2_enabled=bool(synchronization2_enabled),
     )
 
 
@@ -496,7 +907,9 @@ def _loader_api_version(vk: Any) -> int:
     return int(enumerate_version())
 
 
-def _require_timeline_semaphore_features(vk: Any, physical_device: Any) -> Any:
+def _require_timeline_semaphore_features(
+    vk: Any, physical_device: Any
+) -> tuple[Any, bool]:
     feature_type = getattr(vk, "VkPhysicalDeviceTimelineSemaphoreFeatures", None)
     features2_type = getattr(vk, "VkPhysicalDeviceFeatures2", None)
     get_features2 = getattr(vk, "vkGetPhysicalDeviceFeatures2", None)
@@ -505,7 +918,9 @@ def _require_timeline_semaphore_features(vk: Any, physical_device: Any) -> Any:
             "Vulkan binding does not expose physical-device feature2 queries"
         )
 
-    supported = feature_type()
+    synchronization_type = getattr(vk, "VkPhysicalDeviceSynchronization2Features", None)
+    synchronization_supported = synchronization_type() if synchronization_type else None
+    supported = feature_type(pNext=synchronization_supported)
     features2 = features2_type(pNext=supported)
     get_features2(physical_device, features2)
     if not bool(supported.timelineSemaphore):
@@ -513,15 +928,26 @@ def _require_timeline_semaphore_features(vk: Any, physical_device: Any) -> Any:
             "Vulkan device does not support timelineSemaphore"
         )
 
-    return feature_type(timelineSemaphore=vk.VK_TRUE)
+    synchronization2_enabled = bool(
+        synchronization_supported is not None
+        and getattr(synchronization_supported, "synchronization2", vk.VK_FALSE)
+    )
+    enabled_timeline = feature_type(timelineSemaphore=vk.VK_TRUE)
+    if synchronization2_enabled:
+        enabled_sync = synchronization_type(
+            synchronization2=vk.VK_TRUE,
+            pNext=enabled_timeline,
+        )
+        return enabled_sync, True
+    return enabled_timeline, False
 
 
 def _create_device(
     vk: Any,
     physical_device: Any,
-    queue_family_index: int,
+    queue_families: QueueFamilySelection,
     required_extensions: Iterable[str],
-) -> Any:
+) -> tuple[Any, bool]:
     properties = vk.vkGetPhysicalDeviceProperties(physical_device)
     if int(properties.apiVersion) < MIN_VULKAN_API_VERSION:
         raise VulkanCapabilityError(
@@ -529,22 +955,32 @@ def _create_device(
         )
 
     extension_names = tuple(required_extensions)
-    queue_info = vk.VkDeviceQueueCreateInfo(
-        sType=vk.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-        queueFamilyIndex=int(queue_family_index),
-        queueCount=1,
-        pQueuePriorities=[1.0],
+    queue_infos = [
+        vk.VkDeviceQueueCreateInfo(
+            sType=vk.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+            queueFamilyIndex=int(queue_family_index),
+            queueCount=1,
+            pQueuePriorities=[1.0],
+        )
+        for queue_family_index in dict.fromkeys(
+            (queue_families.graphics, queue_families.compute, queue_families.transfer)
+        )
+    ]
+    timeline_features, synchronization2_enabled = _require_timeline_semaphore_features(
+        vk, physical_device
     )
-    timeline_features = _require_timeline_semaphore_features(vk, physical_device)
     device_info = vk.VkDeviceCreateInfo(
         sType=vk.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
         pNext=timeline_features,
-        queueCreateInfoCount=1,
-        pQueueCreateInfos=[queue_info],
+        queueCreateInfoCount=len(queue_infos),
+        pQueueCreateInfos=queue_infos,
         enabledExtensionCount=len(extension_names),
         ppEnabledExtensionNames=list(extension_names) or None,
     )
-    return vk.vkCreateDevice(physical_device, device_info, None)
+    return (
+        vk.vkCreateDevice(physical_device, device_info, None),
+        synchronization2_enabled,
+    )
 
 
 def _color_subresource_range(vk: Any) -> Any:
