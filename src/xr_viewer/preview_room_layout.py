@@ -228,6 +228,15 @@ def main():
     native_window = _native_window_handle(window)
     preview = FilamentDesktopPreview(native_window, 1280, 720)
     preview.load_glb(glb_path.read_bytes(), max_texture_dimension=args.max_texture_size)
+    screen_pos = _scene_position_in_profile(profile, screen.get("position"))
+    screen_width = float(screen.get("width", 2.4))
+    screen_height = float(screen.get("height", screen_width * 9.0 / 16.0))
+    preview.set_screen(
+        screen_pos,
+        screen_width,
+        screen_height,
+        _vec3(screen.get("rotation_deg"), [0.0, 0.0, 0.0]),
+    )
     preview_exposure = float(
         args.exposure if args.exposure is not None else profile.get("preview_exposure", 2.0)
     )
@@ -429,6 +438,14 @@ def main():
         if changed_screen:
             screen["position"] = [round(v, 4) for v in pos]
             screen["rotation_deg"] = [round(v, 3) for v in rot]
+            screen_width = float(screen.get("width", 2.4))
+            screen_height = float(screen.get("height", screen_width * 9.0 / 16.0))
+            preview.set_screen(
+                _scene_position_in_profile(profile, pos),
+                screen_width,
+                screen_height,
+                rot,
+            )
         if changed_view:
             _set_pose_position(view_pose, _scene_position_in_profile(profile, view_pos))
             _set_pose_rotation_deg(view_pose, view_rot_deg)
@@ -451,6 +468,14 @@ def main():
             speed, size_speed = 1.0, 0.8
             skybox_brightness = float(profile.get("preview_skybox_brightness", 1.0))
             preview.set_skybox_brightness(skybox_brightness)
+            screen_width = float(screen.get("width", 2.4))
+            screen_height = float(screen.get("height", screen_width * 9.0 / 16.0))
+            preview.set_screen(
+                _scene_position_in_profile(profile, screen.get("position")),
+                screen_width,
+                screen_height,
+                _vec3(screen.get("rotation_deg"), [0.0, 0.0, 0.0]),
+            )
         if glfw.get_key(window, glfw.KEY_ESCAPE) == glfw.PRESS:
             glfw.set_window_should_close(window, True)
 

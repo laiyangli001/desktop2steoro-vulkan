@@ -44,6 +44,11 @@ using VkImage = ::VkImage;
 
 constexpr uint32_t kInvalidImageIndex = UINT32_MAX;
 
+struct PreviewScreenVertex {
+    filament::math::float3 position;
+    filament::math::float2 uv;
+};
+
 class OpenXrVulkanPlatform final : public VulkanPlatform {
 public:
     struct ExternalSwapChain final : Platform::SwapChain {
@@ -220,6 +225,13 @@ struct FilamentPreview {
     filament::gltfio::FilamentAsset* asset = nullptr;
     filament::SwapChain* swapchain = nullptr;
     utils::Entity fill_light;
+    utils::Entity screen_entity;
+    filament::VertexBuffer* screen_vertex_buffer = nullptr;
+    filament::IndexBuffer* screen_index_buffer = nullptr;
+    filament::Material* screen_material = nullptr;
+    filament::MaterialInstance* screen_material_instance = nullptr;
+    std::vector<PreviewScreenVertex> screen_vertices;
+    std::vector<uint16_t> screen_indices;
     MaterialBrightnessState brightness{ {}, {}, 2.0f, 1.0f };
     std::vector<uint8_t> glb_bytes;
     std::string last_error;
@@ -265,6 +277,154 @@ void destroy_preview_asset(FilamentPreview* preview) {
     preview->brightness.scene_materials.clear();
     preview->brightness.skybox_materials.clear();
     preview->glb_bytes.clear();
+}
+
+void destroy_preview_screen(FilamentPreview* preview) {
+    if (!preview || !preview->engine) return;
+    if (preview->scene && !preview->screen_entity.isNull()) {
+        preview->scene->remove(preview->screen_entity);
+    }
+    if (!preview->screen_entity.isNull()) {
+        preview->engine->destroy(preview->screen_entity);
+        preview->screen_entity = {};
+    }
+    if (preview->screen_vertex_buffer) {
+        preview->engine->destroy(preview->screen_vertex_buffer);
+        preview->screen_vertex_buffer = nullptr;
+    }
+    if (preview->screen_index_buffer) {
+        preview->engine->destroy(preview->screen_index_buffer);
+        preview->screen_index_buffer = nullptr;
+    }
+    if (preview->screen_material_instance) {
+        preview->engine->destroy(preview->screen_material_instance);
+        preview->screen_material_instance = nullptr;
+    }
+    if (preview->screen_material) {
+        preview->engine->destroy(preview->screen_material);
+        preview->screen_material = nullptr;
+    }
+    preview->screen_vertices.clear();
+    preview->screen_indices.clear();
+}
+
+int update_preview_screen(
+        FilamentPreview* preview,
+        float position_x, float position_y, float position_z,
+        float width, float height,
+        float rotation_x_degrees, float rotation_y_degrees, float rotation_z_degrees) {
+    if (!preview || !preview->engine || !preview->screen_vertex_buffer ||
+            !std::isfinite(position_x) || !std::isfinite(position_y) ||
+            !std::isfinite(position_z) || !std::isfinite(width) ||
+            !std::isfinite(height) || width <= 0.0f || height <= 0.0f ||
+            !std::isfinite(rotation_x_degrees) || !std::isfinite(rotation_y_degrees) ||
+            !std::isfinite(rotation_z_degrees)) return 0;
+    constexpr float kPi = 3.14159265358979323846f;
+    const float yaw = rotation_x_degrees * kPi / 180.0f;
+    const float pitch = rotation_y_degrees * kPi / 180.0f;
+    const float roll = rotation_z_degrees * kPi / 180.0f;
+    const float cy = std::cos(yaw), sy = std::sin(yaw);
+    const float cp = std::cos(pitch), sp = std::sin(pitch);
+    const float cr = std::cos(roll), sr = std::sin(roll);
+    const filament::math::float3 right{
+            cy * cr + sy * sp * sr, sr * cp, -sy * cr + cy * sp * sr};
+    const filament::math::float3 up{
+            -cy * sr + sy * sp * cr, cr * cp, sr * sy + cy * sp * cr};
+    const filament::math::float3 center{position_x, position_y, position_z};
+    const filament::math::float3 half_right = right * (width * 0.5f);
+    const filament::math::float3 half_up = up * (height * 0.5f);
+    preview->screen_vertices = {
+            {center - half_right - half_up, {0.0f, 0.0f}},
+            {center + half_right - half_up, {1.0f, 0.0f}},
+            {center - half_right + half_up, {0.0f, 1.0f}},
+            {center + half_right + half_up, {1.0f, 1.0f}},
+    };
+    preview->screen_vertex_buffer->setBufferAt(*preview->engine, 0,
+            filament::VertexBuffer::BufferDescriptor(
+                    preview->screen_vertices.data(),
+                    preview->screen_vertices.size() * sizeof(PreviewScreenVertex), nullptr));
+    return 1;
+}
+
+int create_preview_screen(FilamentPreview* preview) {
+    if (!preview || !preview->engine || !preview->scene) return 0;
+    const char* shader = R"FILAMENT(
+        void material(inout MaterialInputs material) {
+            prepareMaterial(material);
+            material.baseColor = float4(0.1, 0.45, 1.0, 0.72);
+        }
+    )FILAMENT";
+    filamat::MaterialBuilder::init();
+    filamat::MaterialBuilder builder;
+    builder.name("D2S Preview Screen")
+            .material(shader)
+            .shading(filament::Shading::UNLIT)
+            .materialDomain(filament::MaterialDomain::SURFACE)
+            .blending(filament::BlendingMode::TRANSLUCENT)
+            .culling(filament::backend::CullingMode::NONE)
+            .depthWrite(false)
+            .depthCulling(true)
+            .targetApi(filamat::MaterialBuilder::TargetApi::ALL)
+            .platform(filamat::MaterialBuilder::Platform::ALL);
+    const filamat::Package package = builder.build(preview->engine->getJobSystem());
+    if (!package.isValid()) {
+        set_preview_error(preview, "Filament could not build preview screen material");
+        return 0;
+    }
+    preview->screen_material = filament::Material::Builder()
+            .package(package.getData(), package.getSize())
+            .build(*preview->engine);
+    if (!preview->screen_material) {
+        set_preview_error(preview, "Filament could not create preview screen material");
+        return 0;
+    }
+    preview->screen_material_instance = preview->screen_material->createInstance();
+    if (!preview->screen_material_instance) {
+        set_preview_error(preview, "Filament could not create preview screen material instance");
+        return 0;
+    }
+    preview->screen_vertices.resize(4);
+    preview->screen_indices = {0, 1, 2, 1, 3, 2};
+    preview->screen_vertex_buffer = filament::VertexBuffer::Builder()
+            .vertexCount(4)
+            .bufferCount(1)
+            .attribute(filament::VertexAttribute::POSITION, 0,
+                    filament::VertexBuffer::AttributeType::FLOAT3,
+                    0, sizeof(PreviewScreenVertex))
+            .attribute(filament::VertexAttribute::UV0, 0,
+                    filament::VertexBuffer::AttributeType::FLOAT2,
+                    sizeof(float) * 3, sizeof(PreviewScreenVertex))
+            .build(*preview->engine);
+    preview->screen_index_buffer = filament::IndexBuffer::Builder()
+            .indexCount(static_cast<uint32_t>(preview->screen_indices.size()))
+            .bufferType(filament::IndexBuffer::IndexType::USHORT)
+            .build(*preview->engine);
+    if (!preview->screen_vertex_buffer || !preview->screen_index_buffer) {
+        set_preview_error(preview, "Filament could not create preview screen geometry");
+        return 0;
+    }
+    preview->screen_index_buffer->setBuffer(*preview->engine,
+            filament::IndexBuffer::BufferDescriptor(
+                    preview->screen_indices.data(),
+                    preview->screen_indices.size() * sizeof(uint16_t), nullptr));
+    preview->screen_entity = utils::EntityManager::get().create();
+    const auto result = filament::RenderableManager::Builder(1)
+            .boundingBox({{-20000.0f, -20000.0f, -20000.0f}, {20000.0f, 20000.0f, 20000.0f}})
+            .material(0, preview->screen_material_instance)
+            .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES,
+                    preview->screen_vertex_buffer, preview->screen_index_buffer,
+                    0, static_cast<uint32_t>(preview->screen_indices.size()))
+            .priority(7)
+            .culling(false)
+            .castShadows(false)
+            .receiveShadows(false)
+            .build(*preview->engine, preview->screen_entity);
+    if (result != filament::RenderableManager::Builder::Success) {
+        set_preview_error(preview, "Filament could not create preview screen renderable");
+        return 0;
+    }
+    preview->scene->addEntity(preview->screen_entity);
+    return 1;
 }
 
 bool is_skybox_name(const char* name) {
@@ -637,6 +797,7 @@ FilamentPreview* filament_preview_create(void* native_window, uint32_t width, ui
 void filament_preview_destroy(FilamentPreview* preview) {
     if (!preview) return;
     destroy_preview_asset(preview);
+    destroy_preview_screen(preview);
     if (preview->scene && !preview->fill_light.isNull()) {
         preview->scene->remove(preview->fill_light);
     }
@@ -680,6 +841,10 @@ int filament_preview_load_glb(FilamentPreview* preview, const uint8_t* bytes, ui
     preview->scene->addEntities(
             preview->asset->getEntities(), preview->asset->getEntityCount());
     collect_material_brightness(preview, true);
+    if (!preview->screen_material_instance && !create_preview_screen(preview)) {
+        destroy_preview_asset(preview);
+        return 0;
+    }
     preview->asset->releaseSourceData();
     preview->engine->flushAndWait();
     preview->glb_bytes.clear();
@@ -775,6 +940,15 @@ int filament_preview_set_skybox_brightness(FilamentPreview* preview, float brigh
     preview->brightness.skybox_brightness = std::min(brightness, 16.0f);
     apply_material_brightness(preview);
     return 1;
+}
+
+int filament_preview_set_screen(
+        FilamentPreview* preview,
+        float position_x, float position_y, float position_z,
+        float width, float height,
+        float rotation_x_degrees, float rotation_y_degrees, float rotation_z_degrees) {
+    return update_preview_screen(preview, position_x, position_y, position_z,
+            width, height, rotation_x_degrees, rotation_y_degrees, rotation_z_degrees);
 }
 
 int filament_bridge_set_scene_exposure(FilamentBridge* bridge, float exposure_ev) {

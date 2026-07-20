@@ -100,6 +100,11 @@ FILAMENT_BRIDGE_API int filament_preview_set_fill_light(
         float direction_x, float direction_y, float direction_z);
 FILAMENT_BRIDGE_API int filament_preview_set_skybox_brightness(
         FilamentPreview* preview, float brightness);
+FILAMENT_BRIDGE_API int filament_preview_set_screen(
+        FilamentPreview* preview,
+        float position_x, float position_y, float position_z,
+        float width, float height,
+        float rotation_x_degrees, float rotation_y_degrees, float rotation_z_degrees);
 FILAMENT_BRIDGE_API int filament_preview_render(FilamentPreview* preview);
 FILAMENT_BRIDGE_API const char* filament_preview_last_error(
         const FilamentPreview* preview);
