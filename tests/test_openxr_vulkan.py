@@ -216,6 +216,12 @@ def test_presenter_validates_configuration() -> None:
         OpenXrVulkanPresenter(OpenXrVulkanConfig(render_scale=0))
 
 
+def test_presenter_uses_controller_action_mixin_initializer() -> None:
+    presenter = OpenXrVulkanPresenter()
+    assert hasattr(presenter, "_init_controller_actions")
+    assert not hasattr(presenter, "_initialize_controller_actions")
+
+
 def test_presenter_run_until_owns_shutdown_close() -> None:
     presenter = OpenXrVulkanPresenter()
     shutdown = threading.Event()

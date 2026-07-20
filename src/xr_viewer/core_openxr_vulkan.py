@@ -213,7 +213,7 @@ class OpenXrVulkanPresenter(
             self._xr_instance = self.instance
             self._xr_session = self.session
             self._xr_space = self.reference_space
-            self._initialize_controller_actions()
+            self._init_controller_actions()
             self._load_filament_profile()
             self._initialize_filament_bridges()
             self._initialized = True
