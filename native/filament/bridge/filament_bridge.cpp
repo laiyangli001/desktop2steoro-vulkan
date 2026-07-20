@@ -363,7 +363,9 @@ int create_preview_screen(FilamentPreview* preview) {
             .blending(filament::BlendingMode::TRANSPARENT)
             .culling(filament::backend::CullingMode::NONE)
             .depthWrite(false)
-            .depthCulling(true)
+            // The preview screen is a virtual display layer; do not let the
+            // environment depth buffer hide it.
+            .depthCulling(false)
             .targetApi(filamat::MaterialBuilder::TargetApi::ALL)
             .platform(filamat::MaterialBuilder::Platform::ALL);
     const filamat::Package package = builder.build(preview->engine->getJobSystem());
