@@ -903,7 +903,12 @@ int filament_bridge_create_swapchain(
         set_error(bridge, "Invalid OpenXR Vulkan swapchain image list");
         return 0;
     }
-    bridge->swapchain = bridge->engine->createSwapChain(external);
+    uint64_t swapchain_flags = 0;
+    if (static_cast<VkFormat>(format) == VK_FORMAT_R8G8B8A8_SRGB ||
+            static_cast<VkFormat>(format) == VK_FORMAT_B8G8R8A8_SRGB) {
+        swapchain_flags = filament::SwapChain::CONFIG_SRGB_COLORSPACE;
+    }
+    bridge->swapchain = bridge->engine->createSwapChain(external, swapchain_flags);
     if (!bridge->swapchain) {
         bridge->platform->destroy(external);
         set_error(bridge, "Filament Vulkan SwapChain creation failed");

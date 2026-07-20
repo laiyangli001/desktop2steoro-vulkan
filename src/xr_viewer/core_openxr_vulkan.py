@@ -160,6 +160,7 @@ class OpenXrVulkanPresenter(
         self._grip_mat_l = None
         self._grip_mat_r = None
         self._frame_now = 0.0
+        self._filament_animation_origin: float | None = None
         self._LASER_MOVE_THRESH = 0.005
         self._initialized = False
         self._pending_output: VulkanStereoOutputFrame | None = None
@@ -404,6 +405,7 @@ class OpenXrVulkanPresenter(
         self._graphics_binding = None
         self._initialized = False
         self._pending_output = None
+        self._filament_animation_origin = None
 
     def __enter__(self) -> "OpenXrVulkanPresenter":
         self.initialize()
@@ -692,10 +694,24 @@ class OpenXrVulkanPresenter(
                     ):
                         bridge.load_controller(0, self._controller_brand.left_glb.read_bytes())
                         bridge.load_controller(1, self._controller_brand.right_glb.read_bytes())
+                        if eye is self.swapchains[0]:
+                            print(
+                                "Filament controllers loaded: "
+                                f"brand={self._controller_brand.name} "
+                                f"abi={bridge.controller_abi_available}",
+                                flush=True,
+                            )
                     if self._filament_screen is not None:
                         position, width, height, rotation = self._filament_screen
                         bridge.create_screen()
                         bridge.set_screen(position, width, height, rotation)
+                        if eye is self.swapchains[0]:
+                            print(
+                                "Filament screen loaded: "
+                                f"position={position} size={width:.3f}x{height:.3f} "
+                                f"rotation={rotation}",
+                                flush=True,
+                            )
                     bridge.set_scene_exposure(self._filament_scene_exposure)
                     bridge.set_skybox_brightness(self._filament_skybox_brightness)
                     bridge.set_fill_light(
@@ -726,10 +742,13 @@ class OpenXrVulkanPresenter(
         rotation = euler_to_mat4(
             math.radians(self._controller_brand.rotation_deg), 0.0, 0.0
         ).astype(np.float32)
-        for hand, grip_matrix in enumerate((self._grip_mat_l, self._grip_mat_r)):
-            if grip_matrix is None:
+        for hand, (grip_matrix, aim_matrix) in enumerate(
+            zip((self._grip_mat_l, self._grip_mat_r), (self._aim_mat_l, self._aim_mat_r))
+        ):
+            pose_matrix = grip_matrix if grip_matrix is not None else aim_matrix
+            if pose_matrix is None:
                 continue
-            model_matrix = grip_matrix @ rotation @ offset
+            model_matrix = pose_matrix @ rotation @ offset
             bridge.set_controller_pose(hand, model_matrix)
             values = self._controller_input(hand)
             button_mask = 0
@@ -878,6 +897,9 @@ class OpenXrVulkanPresenter(
         render_views = self._apply_filament_profile(views)
         xr = self.xr
         output_frame = self._pending_output
+        if self._filament_animation_origin is None:
+            self._filament_animation_origin = self._frame_now
+        animation_time = max(0.0, self._frame_now - self._filament_animation_origin)
         for eye_index, eye in enumerate(self.swapchains):
             with _acquired_swapchain_image(xr, eye) as image_index:
                 if eye_index < len(self.filament_bridges):
@@ -889,6 +911,8 @@ class OpenXrVulkanPresenter(
                         far_plane=self._profile_far_plane,
                     )
                     self._update_filament_controllers(bridge)
+                    if hasattr(bridge, "apply_animations"):
+                        bridge.apply_animations(animation_time)
                     bridge.set_acquired_image(image_index)
                     bridge.begin_frame()
                     bridge.end_frame()
