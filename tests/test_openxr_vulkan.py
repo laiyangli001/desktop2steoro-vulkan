@@ -6,6 +6,7 @@ import threading
 from types import SimpleNamespace
 
 import pytest
+import vulkan as vk
 import xr
 
 from viewer.vulkan_context import (
@@ -459,7 +460,11 @@ def test_projection_layer_builder_owns_only_layer_assembly() -> None:
 def test_standalone_vulkan_context_smoke() -> None:
     try:
         context = VulkanContext.create()
-    except (VulkanUnavailableError, VulkanCapabilityError) as exc:
+    except (
+        VulkanUnavailableError,
+        VulkanCapabilityError,
+        vk.VkErrorIncompatibleDriver,
+    ) as exc:
         pytest.skip(str(exc))
     try:
         assert context.device_info.name
