@@ -44,6 +44,27 @@
 - 迁移脚手架和 OpenXR Vulkan 定向测试共 `31 passed`，覆盖多 Pass barrier 计划和资源依赖声明。
 - `vulkan_compute_smoke.py` 通过 `py_compile`，并在 NVIDIA Vulkan 环境中通过双 storage-image GPU smoke：`vulkan_compute_smoke: PASS timeline=1 state=ready`、`storage_image_dispatch: PASS`。
 - 本地 4 个 Compute Shader 均通过 `glslc` 和 `spirv-val`；全量测试 `418 passed, 4 warnings`。
+- GitHub Actions run `29743777308` 的 `Requirements matrix` 和 `Compile Vulkan shaders` 两个 Job 均通过，Shader 编译已纳入可复现 CI 验证。
+- 新增 `VulkanImageCopyPass`，将双 storage-image dispatch 从 smoke 内联代码提升为可复用运行时 Pass；Pass 固定 `8x8` workgroup、有限 Descriptor 资源，并在提交前验证图像为 `GENERAL` 布局且归属 Compute Queue。
+- `tests/test_migration_scaffold.py` 新增图像 Pass 的 workgroup、Descriptor 绑定和布局前置条件测试；定向测试 `14 passed`。
+- 新增 `tests/test_vulkan_runtime.py` 验证运行时会话的尺寸校验、提交转发和资源关闭所有权；Vulkan 运行时定向测试共 `17 passed`。
+- `VulkanImageCopyPass` 纳入 `stereo_runtime` 公共懒加载导出，后续运行时装配不需要依赖内部模块路径。
+- 新增 `app_runtime.VulkanRuntimeSession`，统一持有 Vulkan Context 与图像 Pass；支持外部 Context 注入、内部 Context 生命周期和 ready timeline 透传，暂不接管 Capture/Inference。
+- `vulkan_compute_smoke.py` 改为通过 `VulkanRuntimeSession.submit_image_pair()` 执行双 storage-image GPU Dispatch，完成从 app_runtime 到 Compute Graph 的实机链路验证。
+- `VulkanRuntimeSession.close()` 现在先执行 `wait_idle()`，再销毁 Compute Pass 和自有 Context，避免 GPU 仍在使用 Pipeline 时发生资源释放竞态；测试锁定关闭顺序。
+- `VulkanImageCopyPass` 提交前新增 Context 身份校验，拒绝来自其他 Vulkan Device/Instance 的 storage image；迁移脚手架新增跨 Context 回归测试。
+- `compliance.yml` 新增 Vulkan runtime scaffold CI，自动执行迁移脚手架和 `VulkanRuntimeSession` 定向测试。
+- 全量回归测试 `423 passed, 4 warnings`；全部 Compute Shader 重新编译并通过 `spirv-val` 校验。
+- `VulkanRuntimeSession.resize()` 新增有界 Resize 流程：新尺寸 Pass 创建成功且 GPU idle 后才替换旧 Pass；Resize 失败时保留原运行资源。
+- Resize 和生命周期定向测试共 `18 passed`。
+- 新增 `VulkanDeviceLostError` 和 Session 健康状态；识别 Device Lost 后记录原始错误并拒绝后续提交，要求上层重建 Session。
+- Device Lost、Resize 和运行时生命周期定向测试共 `19 passed`。
+- 需求矩阵将 `VK-008` 更新为 `in_progress`，映射 `VulkanRuntimeSession` 和运行时生命周期测试；仍待专用硬件长稳与真实 Device Lost 注入验收。
+- `GRAPH-003` 新增 1000 帧 latest-frame 压力测试，确认连续入队后只提交最后一帧，不累积旧帧延迟；Graph/Runtime 定向测试共 `20 passed`。
+- GPU smoke 将 storage image 布局转换产生的最大 timeline 作为 `ready_timeline` 传入运行时图像 Pass，完成上游 GPU 完成点到 Compute submit 的实机验证。
+- 需求矩阵将 `GRAPH-003` 更新为 `implemented`；latest-frame 覆盖、timeline 透传和实机 Compute 等待链路均已有代码与验证记录，仍需长期压力验收后才能升级为 `verified`。
+- `VulkanImageCopyPass` 新增 source/output 图像别名保护，禁止同一 `VkImage` 同时作为只读输入和写入输出；Graph/Runtime 定向测试共 `21 passed`。
+- 新增 Resize 失败回滚测试，确认新 Pipeline 创建失败时保留旧 Pass、旧尺寸和旧运行资源；Graph/Runtime 定向测试共 `22 passed`。
 
 - `py -m py_compile src/viewer/vulkan_context.py src/app_runtime/probe.py` 通过。
 - 使用项目环境 `src/python3/python.exe -m pytest -q tests/test_openxr_vulkan.py`，18 项通过。

@@ -76,6 +76,7 @@ _LAZY_EXPORTS = {
     "resolve_parallax_budget": ("parallax", "resolve_parallax_budget"),
     "stereo_config_for_auto_mode": ("presets", "stereo_config_for_auto_mode"),
     "stereo_config_for_preset": ("presets", "stereo_config_for_preset"),
+    "VulkanImageCopyPass": ("vulkan_image_pass", "VulkanImageCopyPass"),
 }
 
 
@@ -133,6 +134,7 @@ __all__ = [
     "StereoRuntime",
     "StereoRuntimeConfig",
     "StereoRuntimeResult",
+    "VulkanImageCopyPass",
     "artifact_paths_for_model",
     "auto_detection_required",
     "auto_mode_scores",

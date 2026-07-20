@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from app_runtime.probe import build_capability_report
+from stereo_runtime import VulkanImageCopyPass as PublicVulkanImageCopyPass
 from stereo_runtime.vulkan_graph import (
     VulkanComputeGraph,
     VulkanComputePass,
@@ -17,6 +18,7 @@ from viewer.vulkan_compute_pipeline import (
     read_spirv_words,
 )
 from viewer.vulkan_descriptors import DescriptorBinding, DescriptorBudget
+from stereo_runtime.vulkan_image_pass import VulkanImageCopyPass
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -84,6 +86,25 @@ def test_vulkan_compute_graph_submits_latest_frame_to_compute_queue():
     assert graph.flush() == 12
     assert calls[0][1] == 2
     assert calls[-1] == "compute"
+
+
+def test_vulkan_compute_graph_overload_keeps_only_latest_frame():
+    submitted = []
+
+    class FakeContext:
+        def submit_on(self, role, record):
+            record("command-buffer")
+            return 1
+
+    def record_pass(_command_buffer, submission):
+        submitted.append(submission.frame_id)
+
+    graph = VulkanComputeGraph(FakeContext(), record_pass)
+    for frame_id in range(1000):
+        graph.enqueue(VulkanStereoSubmission(frame_id, object(), object(), 1))
+
+    assert graph.flush() == 1
+    assert submitted == [999]
 
 
 def test_vulkan_compute_graph_from_pipeline_records_dispatch():
@@ -182,6 +203,117 @@ def test_vulkan_compute_graph_close_rejects_new_work():
     graph.close()
     with pytest.raises(RuntimeError, match="not ready"):
         graph.enqueue(VulkanStereoSubmission(1, object(), object(), 1))
+
+
+def test_vulkan_image_copy_pass_binds_images_and_uses_ceiled_workgroups():
+    assert PublicVulkanImageCopyPass is VulkanImageCopyPass
+
+    class FakeVk:
+        VK_IMAGE_LAYOUT_GENERAL = 7
+
+    class FakeContext:
+        vk = FakeVk()
+        compute_queue_family_index = 3
+
+        @staticmethod
+        def image_state(_image):
+            return type("State", (), {"layout": 7, "queue_family_index": 3})()
+
+    class FakeGraph:
+        def submit(self, submission):
+            self.submission = submission
+            return 18
+
+    class FakeArena:
+        def __init__(self):
+            self.updates = []
+
+        def update_storage_image(self, descriptor_set, binding, image):
+            self.updates.append((descriptor_set, binding, image))
+
+    image_pass = object.__new__(VulkanImageCopyPass)
+    image_pass.context = FakeContext()
+    image_pass.width = 17
+    image_pass.height = 9
+    image_pass.graph = FakeGraph()
+    image_pass.descriptor_arena = FakeArena()
+    image_pass.descriptor_set = "set-0"
+    source = type(
+        "Image", (), {"context": image_pass.context, "width": 17, "height": 9, "image": "source"}
+    )()
+    output = type(
+        "Image", (), {"context": image_pass.context, "width": 17, "height": 9, "image": "output"}
+    )()
+
+    assert image_pass.group_counts == (3, 2, 1)
+    assert image_pass.submit(source, output, frame_id=4, config_version=2) == 18
+    assert [item[1] for item in image_pass.descriptor_arena.updates] == [0, 1]
+    assert image_pass.graph.submission.rgb_handle == "source"
+    assert image_pass.graph.submission.depth_handle == "output"
+
+
+def test_vulkan_image_copy_pass_rejects_non_general_images():
+    class FakeVk:
+        VK_IMAGE_LAYOUT_GENERAL = 7
+
+    class FakeContext:
+        vk = FakeVk()
+        compute_queue_family_index = 3
+
+        @staticmethod
+        def image_state(_image):
+            return type("State", (), {"layout": 1, "queue_family_index": 3})()
+
+    image_pass = object.__new__(VulkanImageCopyPass)
+    image_pass.context = FakeContext()
+    image_pass.width = 1
+    image_pass.height = 1
+    image_pass.graph = object()
+    image_pass.descriptor_arena = object()
+    image_pass.descriptor_set = "set-0"
+    image = type(
+        "Image", (), {"context": image_pass.context, "width": 1, "height": 1, "image": "image-a"}
+    )()
+    output = type(
+        "Image", (), {"context": image_pass.context, "width": 1, "height": 1, "image": "image-b"}
+    )()
+
+    with pytest.raises(RuntimeError, match="GENERAL layout"):
+        image_pass.submit(image, output, frame_id=1, config_version=1)
+
+
+def test_vulkan_image_copy_pass_rejects_cross_context_images():
+    image_pass = object.__new__(VulkanImageCopyPass)
+    image_pass.context = object()
+    image_pass.width = 1
+    image_pass.height = 1
+    image_pass.graph = object()
+    image_pass.descriptor_arena = object()
+    image_pass.descriptor_set = "set-0"
+    image = type(
+        "Image", (), {"context": object(), "width": 1, "height": 1, "image": "image-a"}
+    )()
+    output = type(
+        "Image", (), {"context": object(), "width": 1, "height": 1, "image": "image-b"}
+    )()
+
+    with pytest.raises(RuntimeError, match="different Vulkan context"):
+        image_pass.submit(image, output, frame_id=1, config_version=1)
+
+
+def test_vulkan_image_copy_pass_rejects_source_output_alias():
+    context = object()
+    image_pass = object.__new__(VulkanImageCopyPass)
+    image_pass.context = context
+    image_pass.width = 1
+    image_pass.height = 1
+    image_pass.graph = object()
+    image_pass.descriptor_arena = object()
+    image_pass.descriptor_set = "set-0"
+    image = type("Image", (), {"context": context, "width": 1, "height": 1, "image": object()})()
+
+    with pytest.raises(RuntimeError, match="must be distinct"):
+        image_pass.submit(image, image, frame_id=1, config_version=1)
 
 
 def test_spirv_loader_validates_magic_and_word_alignment(tmp_path):

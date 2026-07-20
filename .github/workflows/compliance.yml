@@ -51,3 +51,8 @@ jobs:
         env:
           PYTHONPATH: src
         run: python -m pytest -q tests/test_requirements_matrix.py
+
+      - name: Test Vulkan runtime scaffold
+        env:
+          PYTHONPATH: src
+        run: python -m pytest -q tests/test_migration_scaffold.py tests/test_vulkan_runtime.py
