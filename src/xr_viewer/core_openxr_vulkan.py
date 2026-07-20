@@ -8,7 +8,8 @@ import math
 import os
 import sys
 import time
-from dataclasses import dataclass
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -23,6 +24,8 @@ from viewer.vulkan_context import (
     find_graphics_queue_family,
     make_vulkan_version,
 )
+from viewer.vulkan_resources import VulkanExportableImage, VulkanImageResource
+from app_runtime.output_contract import VulkanStereoOutputFrame
 
 from .xr_math import _xr_quat_to_mat4, euler_to_mat4, mat4_to_xr_posef
 
@@ -50,6 +53,41 @@ class _EyeSwapchain:
     images: list[Any]
     width: int
     height: int
+    resources: list[VulkanImageResource] = field(default_factory=list)
+
+
+class OpenXrCompositionBuilder:
+    """Builds projection layers without owning OpenXR frame lifecycle."""
+
+    def __init__(self, xr: Any, reference_space: Any) -> None:
+        self.xr = xr
+        self.reference_space = reference_space
+
+    def projection_layer(
+        self, views: list[Any], swapchains: list[_EyeSwapchain]
+    ) -> Any:
+        if len(views) < len(swapchains):
+            raise ValueError("projection layer requires one view per eye swapchain")
+        projection_views = []
+        for eye_index, eye in enumerate(swapchains):
+            projection_views.append(
+                self.xr.CompositionLayerProjectionView(
+                    pose=views[eye_index].pose,
+                    fov=views[eye_index].fov,
+                    sub_image=self.xr.SwapchainSubImage(
+                        swapchain=eye.handle,
+                        image_rect=self.xr.Rect2Di(
+                            offset=self.xr.Offset2Di(x=0, y=0),
+                            extent=self.xr.Extent2Di(width=eye.width, height=eye.height),
+                        ),
+                        image_array_index=0,
+                    ),
+                )
+            )
+        return self.xr.CompositionLayerProjection(
+            space=self.reference_space,
+            views=projection_views,
+        )
 
 
 class OpenXrVulkanPresenter:
@@ -90,6 +128,7 @@ class OpenXrVulkanPresenter:
         self._profile_near_plane = 0.05
         self._profile_far_plane = 1000.0
         self._initialized = False
+        self._pending_output: VulkanStereoOutputFrame | None = None
 
     @property
     def initialized(self) -> bool:
@@ -229,6 +268,18 @@ class OpenXrVulkanPresenter:
                 break
         return self.frame_count
 
+    def run_until(self, shutdown_event: Any) -> int:
+        """Run the XR frame loop until the application shutdown event is set."""
+
+        self.initialize()
+        try:
+            while not shutdown_event.is_set() and not self.exit_requested:
+                if not self.run_frame():
+                    break
+            return self.frame_count
+        finally:
+            self.close()
+
     def close(self) -> None:
         xr = self.xr
         if self.vulkan is not None:
@@ -246,6 +297,12 @@ class OpenXrVulkanPresenter:
 
         if xr is not None:
             for eye in reversed(self.swapchains):
+                for resource in reversed(eye.resources):
+                    try:
+                        if self.vulkan is not None:
+                            self.vulkan.unregister_external_image(resource)
+                    except Exception:
+                        pass
                 try:
                     xr.destroy_swapchain(eye.handle)
                 except Exception:
@@ -301,6 +358,7 @@ class OpenXrVulkanPresenter:
         self.swapchain_format = None
         self._graphics_binding = None
         self._initialized = False
+        self._pending_output = None
 
     def __enter__(self) -> "OpenXrVulkanPresenter":
         self.initialize()
@@ -354,7 +412,7 @@ class OpenXrVulkanPresenter:
         )
         queue_family_index = find_graphics_queue_family(vk, vk_physical_device)
         try:
-            timeline_features = _require_timeline_semaphore_features(
+            timeline_features, synchronization2_enabled = _require_timeline_semaphore_features(
                 vk, vk_physical_device
             )
         except VulkanCapabilityError as exc:
@@ -365,11 +423,32 @@ class OpenXrVulkanPresenter:
             queueCount=1,
             pQueuePriorities=[1.0],
         )
+        runtime_extensions = tuple(
+            name
+            for name in str(xr.get_vulkan_device_extensions_khr(self.instance, self.system_id)).split()
+            if name
+        )
+        external_extensions = VulkanExportableImage.required_device_extensions()
+        available_extensions = {
+            _decode_name(item.extensionName)
+            for item in vk.vkEnumerateDeviceExtensionProperties(vk_physical_device, None)
+        }
+        missing_extensions = [
+            name for name in external_extensions if name not in available_extensions
+        ]
+        if missing_extensions:
+            raise OpenXrVulkanUnavailableError(
+                "Vulkan external-memory extensions are unavailable: "
+                + ", ".join(missing_extensions)
+            )
+        device_extensions = tuple(dict.fromkeys((*runtime_extensions, *external_extensions)))
         device_create_info = vk.VkDeviceCreateInfo(
             sType=vk.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
             pNext=timeline_features,
             queueCreateInfoCount=1,
             pQueueCreateInfos=[queue_info],
+            enabledExtensionCount=len(device_extensions),
+            ppEnabledExtensionNames=list(device_extensions),
         )
         xr_device, vulkan_result = xr.create_vulkan_device_khr(
             self.instance,
@@ -393,6 +472,7 @@ class OpenXrVulkanPresenter:
             owns_instance=True,
             owns_device=True,
             timeline_semaphore_enabled=True,
+            synchronization2_enabled=synchronization2_enabled,
         )
         self._provisional_vk_device = None
         self._provisional_vk_instance = None
@@ -470,8 +550,59 @@ class OpenXrVulkanPresenter:
                     "OpenXR runtime returned an empty Vulkan swapchain"
                 )
             self.swapchains.append(
-                _EyeSwapchain(handle=handle, images=images, width=width, height=height)
+                _EyeSwapchain(
+                    handle=handle,
+                    images=images,
+                    width=width,
+                    height=height,
+                    resources=self._register_swapchain_images(images, width, height),
+                )
             )
+
+    def _register_swapchain_images(
+        self, images: list[Any], width: int, height: int
+    ) -> list[VulkanImageResource]:
+        resources: list[VulkanImageResource] = []
+        try:
+            for index, item in enumerate(images):
+                image = self.vulkan.image_handle_from_address(
+                    _ctypes_handle_address(item.image)
+                )
+                resource = VulkanImageResource(
+                    context=self.vulkan,
+                    image=image,
+                    view=None,
+                    width=width,
+                    height=height,
+                    format=int(self.swapchain_format),
+                    layout=self.vulkan.vk.VK_IMAGE_LAYOUT_UNDEFINED,
+                    access_mask=0,
+                    stage_mask=0,
+                    queue_family_index=self.vulkan.queue_family_index,
+                    external=True,
+                    label=f"openxr-swapchain-{index}",
+                )
+                self.vulkan.register_external_image(resource)
+                resources.append(resource)
+        except Exception:
+            for resource in reversed(resources):
+                try:
+                    self.vulkan.unregister_external_image(resource)
+                except Exception:
+                    pass
+            raise
+        return resources
+
+    def submit_output(self, frame: VulkanStereoOutputFrame) -> None:
+        """Queue the newest Vulkan left/right frame for the next XR frame."""
+
+        if not isinstance(frame.left_eye, VulkanImageResource) or not isinstance(
+            frame.right_eye, VulkanImageResource
+        ):
+            raise TypeError("OpenXR Vulkan output requires VulkanImageResource eyes")
+        if frame.left_eye.context is not self.vulkan or frame.right_eye.context is not self.vulkan:
+            raise ValueError("OpenXR output images belong to a different Vulkan context")
+        self._pending_output = frame
 
     def _initialize_filament_bridges(self) -> None:
         bridge_path = self.config.filament_bridge_path or os.environ.get(
@@ -599,16 +730,9 @@ class OpenXrVulkanPresenter:
             return None
         views = self._apply_filament_profile(views)
         xr = self.xr
-        projection_views: list[Any] = []
+        output_frame = self._pending_output
         for eye_index, eye in enumerate(self.swapchains):
-            image_index = xr.acquire_swapchain_image(eye.handle)
-            image_ready = False
-            try:
-                xr.wait_swapchain_image(
-                    eye.handle,
-                    xr.SwapchainImageWaitInfo(timeout=xr.INFINITE_DURATION),
-                )
-                image_ready = True
+            with _acquired_swapchain_image(xr, eye) as image_index:
                 if eye_index < len(self.filament_bridges):
                     bridge = self.filament_bridges[eye_index]
                     _update_filament_camera(
@@ -621,35 +745,44 @@ class OpenXrVulkanPresenter:
                     bridge.begin_frame()
                     bridge.end_frame()
                 else:
-                    image_address = _ctypes_handle_address(eye.images[image_index].image)
-                    image = self.vulkan.image_handle_from_address(image_address)
-                    self.vulkan.clear_color_image(image, self.config.clear_color)
-            finally:
-                if image_ready:
-                    xr.release_swapchain_image(eye.handle)
-
-            projection_views.append(
-                xr.CompositionLayerProjectionView(
-                    pose=views[eye_index].pose,
-                    fov=views[eye_index].fov,
-                    sub_image=xr.SwapchainSubImage(
-                        swapchain=eye.handle,
-                        image_rect=xr.Rect2Di(
-                            offset=xr.Offset2Di(x=0, y=0),
-                            extent=xr.Extent2Di(width=eye.width, height=eye.height),
-                        ),
-                        image_array_index=0,
-                    ),
-                )
-            )
-        return xr.CompositionLayerProjection(
-            space=self.reference_space,
-            views=projection_views,
+                    if output_frame is not None:
+                        source = (
+                            output_frame.left_eye
+                            if eye_index == 0
+                            else output_frame.right_eye
+                        )
+                        self.vulkan.copy_image(
+                            source,
+                            eye.resources[image_index],
+                            wait_for_timeline=output_frame.ready_timeline,
+                        )
+                    else:
+                        image_address = _ctypes_handle_address(eye.images[image_index].image)
+                        image = self.vulkan.image_handle_from_address(image_address)
+                        self.vulkan.clear_color_image(image, self.config.clear_color)
+        self._pending_output = None
+        return OpenXrCompositionBuilder(xr, self.reference_space).projection_layer(
+            views, self.swapchains
         )
 
     def _ensure_initialized(self) -> None:
         if not self._initialized:
             raise RuntimeError("OpenXrVulkanPresenter is not initialized")
+
+
+@contextmanager
+def _acquired_swapchain_image(xr: Any, eye: _EyeSwapchain):
+    """Guarantee release after every successful acquire, including wait errors."""
+
+    image_index = xr.acquire_swapchain_image(eye.handle)
+    try:
+        xr.wait_swapchain_image(
+            eye.handle,
+            xr.SwapchainImageWaitInfo(timeout=xr.INFINITE_DURATION),
+        )
+        yield image_index
+    finally:
+        xr.release_swapchain_image(eye.handle)
 
 
 def _xr_view_pose_to_model_mat4(pose: Any) -> np.ndarray:

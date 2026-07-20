@@ -22,25 +22,25 @@
 
 | ID | 领域 | 必须遵循的要求 | 规范来源 | 代码映射 | 测试/验收 | 状态 |
 |----|------|----------------|----------|----------|-----------|------|
-| ARCH-001 | 架构 | Python 是正式运行时，`src/` 是发布边界。 | 01§3.4; 02§2.1 | `src/` | `tests/test_migration_scaffold.py` | implemented |
+| ARCH-001 | 架构 | Python 是正式运行时，`src/` 是发布边界。 | 01§3.4; 02§2.1 | `src/app_runtime/runtime_entry.py`; `src/` | `tests/test_migration_scaffold.py`; runtime startup smoke | in_progress |
 | ARCH-002 | 架构 | Vulkan 是主路径，OpenGL 只作为隔离 Fallback，运行中不得热切换。 | 01§1; 01§3.2; 02§2.4 | `src/viewer/`; `src/xr_viewer/` | `tests/test_migration_scaffold.py`; 实机验收 | in_progress |
 | ARCH-003 | 架构 | 新代码不得恢复 D3D11、WGL/CUDA-GL、旧 Viewer 或 CPU 实时像素链路。 | 01§1.2; 01§15; 02§24 | `src/` | `tests/test_no_legacy_depth_imports.py`; 静态检查 | in_progress |
-| ARCH-004 | 架构 | GPU 资源具有唯一所有者，模块之间只传递定义明确的句柄/契约。 | 01§3.5; 02§3.1 | `src/viewer/`; `src/xr_viewer/` | 资源生命周期测试 | planned |
+| ARCH-004 | 架构 | GPU 资源具有唯一所有者，模块之间只传递定义明确的句柄/契约。 | 01§3.5; 02§3.1 | `src/viewer/vulkan_resources.py`; `src/viewer/` | `tests/test_vulkan_resources.py`; 资源生命周期测试 | in_progress |
 | CAPTURE-001 | 捕捉 | Capture Adapter 输出 GPU 资源、尺寸、格式和单调时间戳。 | 01§6.1; 02§8 | `src/` | `tests/test_capture_metadata.py`; `tests/test_capture_public_api.py` | implemented |
 | CAPTURE-002 | 捕捉 | 保留并验证 Windows CUDA/ROCm 等有效 Python 捕捉实现，不在迁移中强制改写为 C++。 | 01§1.2; 02§8.2 | `src/` | `tests/test_capture_factory.py`; `tests/test_capture_runners.py` | in_progress |
 | CAPTURE-003 | 捕捉 | 捕捉停止、源切换和异常必须有界，不阻塞渲染线程。 | 02§5; 02§8.1 | `src/` | `tests/test_capture_session.py`; 长稳测试 | in_progress |
 | INFER-001 | 推理 | NVIDIA、AMD、Apple Provider 通过统一 Inference Adapter 接入。 | 01§1.1; 02§9 | `src/` | `tests/test_depth_onnx_provider.py`; `tests/test_provider_layout.py` | in_progress |
-| INFER-002 | 推理 | 推理结果不得进入 CPU 像素往返，允许外部内存或一次 GPU copy。 | 01§6.4; 02§9.6 | `src/` | 互操作测试; capability report | planned |
-| INFER-003 | 推理 | 单帧推理失败丢帧并计数，连续失败后重建 Adapter。 | 02§9.6; 02§17.2 | `src/` | `tests/test_runtime.py`; 故障注入 | planned |
+| INFER-002 | 推理 | 推理结果不得进入 CPU 像素往返，允许外部内存或一次 GPU copy。 | 01§6.4; 02§9.6 | `src/viewer/vulkan_resources.py`; `src/viewer/vulkan_interop.py`; `src/viewer/cuda_vulkan_interop.py`; `src/app_runtime/runtime_output.py`; `src/app_runtime/vulkan_runtime.py`; `src/stereo_runtime/vulkan_image_pass.py` | `tests/test_vulkan_resources.py`; `tests/test_vulkan_interop.py`; `tests/test_cuda_vulkan_interop.py`; `tests/test_runtime_output.py`; `tests/test_vulkan_runtime.py`; 真实 CUDA/ROCm 互操作测试; capability report | in_progress |
+| INFER-003 | 推理 | 单帧推理失败丢帧并计数，连续失败后重建 Adapter。 | 02§9.6; 02§17.2 | `src/stereo_runtime/pipeline.py` | `tests/test_pipeline.py`; 故障注入 | in_progress |
 | VK-001 | Vulkan | 默认请求 Vulkan 1.4，最低接受 Vulkan 1.2，并按 Loader/Runtime/Device 能力协商。 | 01§4.2; 01§5.1; 02§7.1 | `src/viewer/vulkan_context.py`; `src/xr_viewer/core_openxr_vulkan.py` | `tests/test_openxr_vulkan.py`; `src/tools/probe.py` | verified |
 | VK-002 | Vulkan | Instance、Device、扩展和 Feature 统一由 Vulkan Context 创建和验证。 | 01§5.1; 02§7.1 | `src/viewer/vulkan_context.py` | `tests/test_openxr_vulkan.py` | implemented |
 | VK-003 | Vulkan | 必须查询并显式启用 Timeline Semaphore，不得仅依据 API 版本假设启用。 | 01§5.1; 01§10.1; 02§7.6 | `src/viewer/vulkan_context.py`; `src/xr_viewer/core_openxr_vulkan.py` | `tests/test_openxr_vulkan.py` | verified |
 | VK-004 | Vulkan | 使用 `pNext` Feature 链，`sType` 和链的生命周期必须正确。 | 01§5.1; 02§7.1 | `src/viewer/vulkan_context.py`; `src/xr_viewer/core_openxr_vulkan.py` | `tests/test_openxr_vulkan.py` | in_progress |
 | VK-005 | Vulkan | 队列、Frame Context、Descriptor、Pipeline 和图像状态必须有界且可追踪。 | 01§5.2-5.5; 02§7.2-7.5 | `src/viewer/vulkan_context.py`; `src/viewer/vulkan_descriptors.py`; `src/viewer/vulkan_compute_pipeline.py` | `tests/test_openxr_vulkan.py`; `tests/test_migration_scaffold.py`; GPU validation; 长稳测试 | in_progress |
 | VK-006 | Vulkan | 必须执行 Layout、Access、Queue Ownership 和提交顺序验证。 | 01§5.2; 01§10; 02§7.6 | `src/viewer/vulkan_context.py`; `src/viewer/vulkan_descriptors.py` | `tests/test_openxr_vulkan.py`; Validation Layer GPU 测试 | in_progress |
-| VK-007 | Vulkan | Compute、Graphics 和 XR 输出不得发生未登记的 CPU 图像回读。 | 01§6; 01§8.4; 02§14 | `src/` | 静态检查; GPU profiling | planned |
+| VK-007 | Vulkan | Compute、Graphics 和 XR 输出不得发生未登记的 CPU 图像回读。 | 01§6; 01§8.4; 02§14 | `src/viewer/vulkan_context.py`; `src/viewer/cuda_vulkan_interop.py`; `src/app_runtime/runtime_output.py`; `src/xr_viewer/core_openxr_vulkan.py`; `src/tools/vulkan_transfer_smoke.py` | `tests/test_cuda_vulkan_interop.py`; `src/tools/vulkan_transfer_smoke.py`; 静态检查; GPU profiling | in_progress |
 | VK-008 | Vulkan | 资源分配、释放、Resize、Device Lost 和异常清理必须可诊断。 | 02§7.2; 02§17 | `src/viewer/`; `src/app_runtime/vulkan_runtime.py` | `tests/test_vulkan_runtime.py`; 故障注入; 长稳测试 | in_progress |
-| GRAPH-001 | 计算图 | 按规格顺序执行预处理、深度后处理、视差、变形、修补和时域稳定；每个 Pass 必须声明 workgroup 与资源读写。 | 01§6; 02§10 | `src/stereo_runtime/vulkan_graph.py`; `src/stereo_runtime/vulkan_image_pass.py`; `src/viewer/vulkan_compute_pipeline.py`; `shaders/d2s_copy_image.comp` | `tests/test_migration_scaffold.py`; shader golden tests; GPU image smoke | in_progress |
+| GRAPH-001 | 计算图 | 按规格顺序执行预处理、深度后处理、视差、变形、修补和时域稳定；每个 Pass 必须声明 workgroup 与资源读写。 | 01§6; 02§10 | `src/stereo_runtime/vulkan_graph.py`; `src/stereo_runtime/vulkan_image_pass.py`; `src/viewer/vulkan_compute_pipeline.py`; `shaders/manifest.json`; `src/tools/validate_shader_manifest.py` | `tests/test_migration_scaffold.py`; `tests/test_shader_manifest.py`; shader golden tests; GPU image smoke | in_progress |
 | GRAPH-002 | 计算图 | Glow、平均色、墙面反射等异步光效使用独立有界资源。 | 01§7; 02§12 | `src/stereo_runtime/vulkan_graph.py`; `shaders/` | GPU timing; 功能验收 | in_progress |
 | GRAPH-003 | 计算图 | latest-frame 覆盖旧帧，负载升高时延迟不持续累积；上游 GPU 完成点必须通过 timeline 传入 Compute submit。 | 01§10.2; 02§5.3; 02§7.6 | `src/stereo_runtime/vulkan_graph.py`; `src/viewer/vulkan_context.py` | `tests/test_migration_scaffold.py`; `src/tools/vulkan_compute_smoke.py`; 压力测试 | implemented |
 | FILAMENT-001 | Filament | 场景使用 Filament Vulkan 后端，Bridge 只暴露窄 C ABI。 | 01§3.1; 01§15.2; 02§11 | `src/xr_viewer/filament_preview_bridge.py`; `src/xr_viewer/native/` | `tests/test_filament_vulkan_bridge.py`; CI | implemented |
@@ -49,10 +49,10 @@
 | SCENE-001 | 场景 | 相机、near/far、每眼投影、坐标系和场景尺寸遵循 profile。 | 01§3.1; 01§8; 02§11.5 | `src/xr_viewer/` | 头显实测 | in_progress |
 | SCENE-002 | 场景 | 场景加载失败保留 last-good scene，资源释放和 Resize 不得悬空。 | 02§11.3; 02§17.2 | `src/xr_viewer/` | 故障注入; 长稳测试 | planned |
 | OPENXR-001 | OpenXR | OpenXR Vulkan Session 使用 Runtime 提供的 Vulkan Instance/Device 要求。 | 01§8.1; 02§13.2 | `src/xr_viewer/core_openxr_vulkan.py` | `tests/test_openxr_vulkan.py` | verified |
-| OPENXR-002 | OpenXR | Frame Loop 必须遵循 poll/wait/begin/acquire/render/release/end 顺序。 | 01§8.2; 02§13.3 | `src/xr_viewer/` | OpenXR lifecycle test; 头显实测 | in_progress |
-| OPENXR-003 | OpenXR | Projection Layer、Quad Layer 和 `xrEndFrame` 由单一 Composition Builder 管理。 | 01§8.3; 02§13.5 | `src/xr_viewer/` | Layer 验收 | in_progress |
-| OPENXR-004 | OpenXR | Swapchain acquire/wait/release 必须成对，重建前等待引用资源。 | 01§8.2; 02§13.4 | `src/xr_viewer/` | lifecycle test; Session loss 实测 | planned |
-| OUTPUT-001 | 输出 | Preview、OpenXR、Headless/Encoder 使用统一 Left/Right/SBS 输出契约。 | 01§8.4; 02§14 | `src/` | 输出集成测试 | planned |
+| OPENXR-002 | OpenXR | Frame Loop 必须遵循 poll/wait/begin/acquire/render/release/end 顺序。 | 01§8.2; 02§13.3 | `src/xr_viewer/core_openxr_vulkan.py`; `src/app_runtime/runtime_entry.py` | `tests/test_openxr_vulkan.py`; OpenXR lifecycle test; 头显实测 | in_progress |
+| OPENXR-003 | OpenXR | Projection Layer、Quad Layer 和 `xrEndFrame` 由单一 Composition Builder 管理。 | 01§8.3; 02§13.5 | `src/xr_viewer/core_openxr_vulkan.py` | `tests/test_openxr_vulkan.py`; Layer 验收 | in_progress |
+| OPENXR-004 | OpenXR | Swapchain acquire/wait/release 必须成对，重建前等待引用资源。 | 01§8.2; 02§13.4 | `src/xr_viewer/core_openxr_vulkan.py` | `tests/test_openxr_vulkan.py`; lifecycle test; Session loss 实测 | in_progress |
+| OUTPUT-001 | 输出 | Preview、OpenXR、Headless/Encoder 使用统一 Left/Right/SBS 输出契约。 | 01§8.4; 02§14 | `src/app_runtime/output_contract.py`; `src/app_runtime/runtime_output.py`; `src/viewer/cuda_vulkan_interop.py`; `src/xr_viewer/core_openxr_vulkan.py` | `tests/test_output_contract.py`; `tests/test_runtime_output.py`; `tests/test_cuda_vulkan_interop.py`; `src/tools/vulkan_transfer_smoke.py`; 输出集成测试 | in_progress |
 | CFG-001 | 配置 | 运行时使用带 schema version 的规范化配置，核心不解析旧字段 alias。 | 01§9; 02§15 | `src/` | `tests/test_settings_snapshot.py`; schema test | in_progress |
 | CFG-002 | 配置 | 参数热更新按 Uniform、Temporal Reset、Graph Rebuild、Session Rebuild、Restart 分类。 | 01§9; 02§15.2 | `src/` | `tests/test_runtime.py`; 配置测试 | planned |
 | GUI-001 | GUI | GUI 只负责配置、启动停止、状态和日志，不拥有 Vulkan/OpenXR/Filament 资源。 | 02§16 | `src/gui/` | GUI 启动/控制测试 | in_progress |

@@ -10,12 +10,7 @@ from stereo_runtime.vulkan_graph import (
     VulkanStereoSubmission,
 )
 from viewer.vulkan_compute_pipeline import VulkanComputePipeline
-from viewer.vulkan_descriptors import (
-    DescriptorBinding,
-    DescriptorBudget,
-    VulkanDescriptorArena,
-    VulkanStorageImage,
-)
+from viewer.vulkan_descriptors import DescriptorBinding, DescriptorBudget, VulkanDescriptorArena
 
 
 class VulkanImageCopyPass:
@@ -86,8 +81,8 @@ class VulkanImageCopyPass:
 
     def submit(
         self,
-        source_image: VulkanStorageImage,
-        output_image: VulkanStorageImage,
+        source_image: Any,
+        output_image: Any,
         *,
         frame_id: int,
         config_version: int,

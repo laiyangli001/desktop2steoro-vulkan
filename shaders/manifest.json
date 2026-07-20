@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "shaders": [
+    {
+      "name": "d2s_copy_image",
+      "source": "d2s_copy_image.comp",
+      "spirv": "d2s_copy_image.spv",
+      "stage": "compute",
+      "entry": "main",
+      "workgroup": [8, 8, 1],
+      "descriptor_bindings": [
+        {"set": 0, "binding": 0, "kind": "storage_image", "access": "read_only", "format": "rgba8"},
+        {"set": 0, "binding": 1, "kind": "storage_image", "access": "write_only", "format": "rgba8"}
+      ],
+      "push_constants_size": 0,
+      "precision": "fp32"
+    },
+    {
+      "name": "d2s_noop",
+      "source": "d2s_noop.comp",
+      "spirv": "d2s_noop.spv",
+      "stage": "compute",
+      "entry": "main",
+      "workgroup": [1, 1, 1],
+      "descriptor_bindings": [],
+      "push_constants_size": 0,
+      "precision": "fp32"
+    },
+    {
+      "name": "d2s_storage_image",
+      "source": "d2s_storage_image.comp",
+      "spirv": "d2s_storage_image.spv",
+      "stage": "compute",
+      "entry": "main",
+      "workgroup": [1, 1, 1],
+      "descriptor_bindings": [
+        {"set": 0, "binding": 0, "kind": "storage_image", "access": "read_write", "format": "rgba8"}
+      ],
+      "push_constants_size": 0,
+      "precision": "fp32"
+    },
+    {
+      "name": "d2s_storage_increment",
+      "source": "d2s_storage_increment.comp",
+      "spirv": "d2s_storage_increment.spv",
+      "stage": "compute",
+      "entry": "main",
+      "workgroup": [1, 1, 1],
+      "descriptor_bindings": [
+        {"set": 0, "binding": 0, "kind": "storage_buffer", "access": "read_write", "format": null}
+      ],
+      "push_constants_size": 0,
+      "precision": "fp32"
+    }
+  ]
+}

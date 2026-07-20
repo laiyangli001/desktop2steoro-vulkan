@@ -545,6 +545,42 @@ class RuntimePipelineLoop:
         self._last_runtime_motion_sample = None
         self._last_algorithm_output_time = 0.0
         self._prepared = False
+        self._consecutive_runtime_errors = 0
+
+    def _rebuild_after_consecutive_failures(self) -> None:
+        threshold_text = os.environ.get("D2S_RUNTIME_REBUILD_AFTER_ERRORS", "3")
+        try:
+            threshold = max(1, int(threshold_text))
+        except (TypeError, ValueError):
+            threshold = 3
+        if self._consecutive_runtime_errors < threshold:
+            return
+        rebuild = getattr(self.context.stereo_runtime, "_rebuild_depth_provider", None)
+        if not callable(rebuild):
+            self.context.source_stat_inc("runtime_rebuild_unavailable")
+            self._consecutive_runtime_errors = 0
+            return
+        try:
+            rebuild()
+            reset_temporal = getattr(self.context.stereo_runtime, "reset_temporal", None)
+            if callable(reset_temporal):
+                reset_temporal()
+            self.context.source_stat_inc("runtime_adapter_rebuilds")
+            print(
+                "[RuntimePipeline] depth provider rebuilt after consecutive failures",
+                flush=True,
+            )
+        except Exception as rebuild_error:
+            self.context.source_stat_inc(
+                "runtime_rebuild_errors",
+                last_error=f"{type(rebuild_error).__name__}: {rebuild_error}",
+            )
+            print(
+                f"[RuntimePipeline] Provider rebuild failed: {type(rebuild_error).__name__}: {rebuild_error}",
+                flush=True,
+            )
+        finally:
+            self._consecutive_runtime_errors = 0
 
     def prepare(self) -> None:
         if self._prepared:
@@ -864,6 +900,7 @@ class RuntimePipelineLoop:
                 self._publish_runtime_item(
                     (runtime_result, capture_start_time, process_latency, runtime_latency, None)
                 )
+                self._consecutive_runtime_errors = 0
                 ctx.breakdown_add_time("rt_loop", time.perf_counter() - loop_start_time)
 
             except queue.Empty:
@@ -872,11 +909,15 @@ class RuntimePipelineLoop:
             except (RuntimeSettingsPipelineRebuildRequired, RuntimeSettingsRestartRequired):
                 raise
             except Exception as exc:
+                self._consecutive_runtime_errors += 1
                 fatal_error = _is_fatal_runtime_preparation_error(exc)
                 ctx.source_stat_inc(
                     "runtime_errors",
                     last_error=f"process_runtime_loop {type(exc).__name__}: {exc}",
                 )
+                ctx.source_stat_inc("runtime_inference_failures")
+                ctx.breakdown_inc("runtime_inference_failures")
+                self._rebuild_after_consecutive_failures()
                 if fatal_error:
                     ctx.source_stat_inc("runtime_fatal_errors")
                     print(f"[process_runtime_loop] Fatal: {type(exc).__name__}: {exc}", flush=True)

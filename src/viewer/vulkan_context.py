@@ -377,6 +377,7 @@ class VulkanContext:
         owns_instance: bool = True,
         owns_device: bool = True,
         timeline_semaphore_enabled: bool = False,
+        synchronization2_enabled: bool = False,
     ) -> "VulkanContext":
         vk = _import_vulkan()
         queue = vk.vkGetDeviceQueue(device, int(queue_family_index), 0)
@@ -396,7 +397,7 @@ class VulkanContext:
                     transfer=int(queue_family_index),
                 ),
                 timeline_semaphore_enabled=timeline_semaphore_enabled,
-                synchronization2_enabled=False,
+                synchronization2_enabled=synchronization2_enabled,
             ),
             owns_instance=owns_instance,
             owns_device=owns_device,
@@ -427,6 +428,25 @@ class VulkanContext:
     def register_image_state(self, image: Any, state: ImageState) -> None:
         self._ensure_open()
         self._image_states.update(_cffi_handle_address(self.vk, image), state)
+
+    def register_external_image(self, resource: Any) -> None:
+        if getattr(resource, "context", None) is not self:
+            raise VulkanCapabilityError(
+                "external image belongs to a different Vulkan context"
+            )
+        from viewer.vulkan_resources import VulkanExternalImageRegistry
+
+        registry = getattr(self, "_external_image_registry", None)
+        if registry is None:
+            registry = VulkanExternalImageRegistry(self)
+            self._external_image_registry = registry
+        registry.register(resource)
+
+    def unregister_external_image(self, resource: Any) -> None:
+        registry = getattr(self, "_external_image_registry", None)
+        if registry is None:
+            raise VulkanCapabilityError("external image registry is not initialized")
+        registry.unregister(resource)
 
     def unregister_image_state(self, image: Any) -> None:
         self._ensure_open()
@@ -524,6 +544,219 @@ class VulkanContext:
             ),
         )
 
+    def prepare_external_image_for_cuda(self, resource: Any) -> int:
+        """Establish a persistent GENERAL layout before CUDA writes external memory."""
+
+        self._ensure_open()
+        if getattr(resource, "context", self) is not self:
+            raise VulkanCapabilityError("external image belongs to a different context")
+        image_key = _cffi_handle_address(self.vk, resource.image)
+        state = self._image_states.get(
+            image_key, undefined_layout=self.vk.VK_IMAGE_LAYOUT_UNDEFINED
+        )
+        self._image_states.require_owner(image_key, self.queue_family_index)
+        if state.layout == self.vk.VK_IMAGE_LAYOUT_GENERAL:
+            return self._timeline_value
+        if state.layout != self.vk.VK_IMAGE_LAYOUT_UNDEFINED:
+            raise VulkanCapabilityError(
+                "CUDA external image must be UNDEFINED or GENERAL during slot registration"
+            )
+        vk = self.vk
+
+        def record(command_buffer: Any) -> None:
+            barrier = vk.VkImageMemoryBarrier(
+                sType=vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                srcAccessMask=0,
+                dstAccessMask=vk.VK_ACCESS_MEMORY_WRITE_BIT,
+                oldLayout=vk.VK_IMAGE_LAYOUT_UNDEFINED,
+                newLayout=vk.VK_IMAGE_LAYOUT_GENERAL,
+                srcQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+                dstQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+                image=resource.image,
+                subresourceRange=_color_subresource_range(vk),
+            )
+            vk.vkCmdPipelineBarrier(
+                command_buffer,
+                vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                vk.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                0,
+                0,
+                None,
+                0,
+                None,
+                1,
+                [barrier],
+            )
+
+        timeline_value = self.submit_on("graphics", record)
+        self._image_states.update(
+            image_key,
+            ImageState(
+                layout=vk.VK_IMAGE_LAYOUT_GENERAL,
+                access_mask=vk.VK_ACCESS_MEMORY_WRITE_BIT,
+                stage_mask=vk.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                queue_family_index=self.queue_family_index,
+            ),
+        )
+        # This is slot initialization only. Runtime frames synchronize through
+        # the CUDA stream and never call vkDeviceWaitIdle.
+        self.wait_idle()
+        return timeline_value
+    def copy_image(
+        self,
+        source: Any,
+        destination: Any,
+        *,
+        wait_for_timeline: int | None = None,
+    ) -> int:
+        """Copy two registered Vulkan images without a CPU pixel round trip."""
+
+        self._ensure_open()
+        for resource in (source, destination):
+            if getattr(resource, "context", self) is not self:
+                raise VulkanCapabilityError("Vulkan image belongs to a different context")
+        if source.image is destination.image:
+            raise VulkanCapabilityError("source and destination Vulkan images must differ")
+        if int(source.width) != int(destination.width) or int(source.height) != int(destination.height):
+            raise ValueError("Vulkan image copy dimensions must match")
+        if int(source.format) != int(destination.format):
+            raise ValueError("Vulkan image copy formats must match")
+
+        vk = self.vk
+        source_key = _cffi_handle_address(vk, source.image)
+        destination_key = _cffi_handle_address(vk, destination.image)
+        source_state = self._image_states.get(
+            source_key, undefined_layout=vk.VK_IMAGE_LAYOUT_UNDEFINED
+        )
+        destination_state = self._image_states.get(
+            destination_key, undefined_layout=vk.VK_IMAGE_LAYOUT_UNDEFINED
+        )
+        self._image_states.require_owner(source_key, self.queue_family_index)
+        self._image_states.require_owner(destination_key, self.queue_family_index)
+        if source_state.layout == vk.VK_IMAGE_LAYOUT_UNDEFINED:
+            raise VulkanCapabilityError("source image must have a defined layout before copy")
+
+        source_stage = source_state.stage_mask or vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
+        destination_stage = destination_state.stage_mask or vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
+        final_destination_layout = vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+
+        def record(command_buffer: Any) -> None:
+            to_transfer = [
+                vk.VkImageMemoryBarrier(
+                    sType=vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                    srcAccessMask=source_state.access_mask,
+                    dstAccessMask=vk.VK_ACCESS_TRANSFER_READ_BIT,
+                    oldLayout=source_state.layout,
+                    newLayout=vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    srcQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+                    dstQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+                    image=source.image,
+                    subresourceRange=_color_subresource_range(vk),
+                ),
+                vk.VkImageMemoryBarrier(
+                    sType=vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                    srcAccessMask=destination_state.access_mask,
+                    dstAccessMask=vk.VK_ACCESS_TRANSFER_WRITE_BIT,
+                    oldLayout=destination_state.layout,
+                    newLayout=vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    srcQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+                    dstQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+                    image=destination.image,
+                    subresourceRange=_color_subresource_range(vk),
+                ),
+            ]
+            vk.vkCmdPipelineBarrier(
+                command_buffer,
+                source_stage | destination_stage,
+                vk.VK_PIPELINE_STAGE_TRANSFER_BIT,
+                0,
+                0,
+                None,
+                0,
+                None,
+                len(to_transfer),
+                to_transfer,
+            )
+            subresource = vk.VkImageSubresourceLayers(
+                aspectMask=vk.VK_IMAGE_ASPECT_COLOR_BIT,
+                mipLevel=0,
+                baseArrayLayer=0,
+                layerCount=1,
+            )
+            vk.vkCmdCopyImage(
+                command_buffer,
+                source.image,
+                vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                destination.image,
+                vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                1,
+                [
+                    vk.VkImageCopy(
+                        srcSubresource=subresource,
+                        srcOffset=vk.VkOffset3D(x=0, y=0, z=0),
+                        dstSubresource=subresource,
+                        dstOffset=vk.VkOffset3D(x=0, y=0, z=0),
+                        extent=vk.VkExtent3D(
+                            width=int(source.width), height=int(source.height), depth=1
+                        ),
+                    )
+                ],
+            )
+            to_runtime = [
+                vk.VkImageMemoryBarrier(
+                    sType=vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                    srcAccessMask=vk.VK_ACCESS_TRANSFER_READ_BIT,
+                    dstAccessMask=source_state.access_mask,
+                    oldLayout=vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    newLayout=source_state.layout,
+                    srcQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+                    dstQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+                    image=source.image,
+                    subresourceRange=_color_subresource_range(vk),
+                ),
+                vk.VkImageMemoryBarrier(
+                sType=vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                srcAccessMask=vk.VK_ACCESS_TRANSFER_WRITE_BIT,
+                dstAccessMask=vk.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                oldLayout=vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                newLayout=final_destination_layout,
+                srcQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+                dstQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+                image=destination.image,
+                subresourceRange=_color_subresource_range(vk),
+                ),
+            ]
+            vk.vkCmdPipelineBarrier(
+                command_buffer,
+                vk.VK_PIPELINE_STAGE_TRANSFER_BIT,
+                vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | destination_stage,
+                0,
+                0,
+                None,
+                0,
+                None,
+                len(to_runtime),
+                to_runtime,
+            )
+
+        timeline_value = self.submit_on(
+            "graphics", record, wait_for_timeline=wait_for_timeline
+        )
+        self._image_states.update(
+            destination_key,
+            ImageState(
+                layout=final_destination_layout,
+                access_mask=vk.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                stage_mask=vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                queue_family_index=self.queue_family_index,
+            ),
+        )
+        self._image_states.update(
+            source_key,
+            source_state,
+        )
+        return timeline_value
+
     def submit(self, record: Callable[[Any], None]) -> None:
         self.submit_on("graphics", record)
 
@@ -592,6 +825,12 @@ class VulkanContext:
             try:
                 if self.device is not None:
                     vk.vkDeviceWaitIdle(self.device)
+                registry = getattr(self, "_external_image_registry", None)
+                if registry is not None:
+                    try:
+                        registry.close()
+                    except Exception:
+                        registry.discard()
             finally:
                 if self.device is not None:
                     if self._timeline_semaphore is not None:
@@ -605,6 +844,7 @@ class VulkanContext:
                 if self.instance is not None and self._owns_instance:
                     vk.vkDestroyInstance(self.instance, None)
                 self._image_states.clear()
+                self._external_image_registry = None
                 self._command_buffer = None
                 self._command_pool = None
                 self._fence = None

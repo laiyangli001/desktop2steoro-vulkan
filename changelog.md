@@ -4,7 +4,35 @@
 
 ## 2026-07-20
 
+- Added a bounded runtime output consumer that converts only registered Vulkan eye resources into the unified output contract and reports Torch/CPU results as waiting for a vendor interop importer; no implicit CPU image readback is allowed.
+- Extended the compliance workflow to run Vulkan resource, interop, output, runtime-output, pipeline, CUDA interop, and OpenXR lifecycle tests.
+- Added exportable Vulkan image slots with Win32 HANDLE/FD export through the raw Vulkan loader entry point; resource ownership remains explicit and bounded.
+- Added the Python-only NVIDIA CUDA Runtime importer: one-time external-memory import per slot and asynchronous CUDA-to-Vulkan RGBA copy, followed by stream synchronization before Vulkan copy.
+- OpenXR Vulkan device creation now merges the Runtime-required device extensions with the platform external-memory extensions before xrCreateVulkanDeviceKHR.
+- Runtime output now lazily creates two CUDA/Vulkan eye slots and submits the resulting Vulkan resources through the existing OpenXR projection path.
+### 未决事项
+
+- NVIDIA CUDA external-memory + 单次 GPU copy 已实现并通过 RTX 实机验证；ROCm/HIP、Apple Metal/IOSurface 和 CUDA/Vulkan external semaphore 仍待补齐。
+- OpenXR 交换链到双眼推理图像的真实头显提交尚未实测；当前机器头显不可用，不能把清屏或单元测试视为头显验收。
+- 完整预处理、深度后处理、视差、变形、修补和时域稳定 Compute Pass 尚未全部接入 Vulkan Graph。
+
+### 下一项内容
+
+- 使用已实现的 NVIDIA CUDA external-memory 单次 GPU copy 路径进行 OpenXR Projection Layer 头显实测；随后补 CUDA/Vulkan external semaphore 和 AMD ROCm/HIP 适配器。
+
 ### 已实现
+
+- 新增 `shaders/manifest.json`，为每个 Compute Shader 固化入口、workgroup、descriptor binding、push constant 大小、精度和 SPIR-V 文件映射。
+- 新增 `src/tools/validate_shader_manifest.py` 与 `tests/test_shader_manifest.py`，校验 Shader 源码声明、manifest 和已提交 SPIR-V 文件一致；GitHub Actions Shader Job 现在会执行该校验。
+- 新增 `src/viewer/vulkan_interop.py`，建立 Capture/Inference 到 Vulkan 的非 CPU 回读资源边界：能力报告、外部图像导入请求、有限 in-flight 生命周期和 OpenXR/厂商适配器注册入口已统一；CUDA/ROCm/DMABUF 的平台句柄导入仍必须由各自适配器实现，当前不会伪造零拷贝状态。
+- `VulkanImageCopyPass` 和 `VulkanRuntimeSession` 现在接受外部导入的 `VulkanImageResource`；新增 `submit_external_image_pair()`，厂商适配器可将资源直接送入 Compute Graph，并透传上游 timeline 完成值。
+- OpenXR Projection Layer 组装集中到 `OpenXrCompositionBuilder`；swapchain image 在 acquire 成功后无论 wait 或渲染是否失败都会 release，避免 wait 异常留下悬挂 acquired image。
+- 新增 `VulkanStereoOutputFrame` 和 `LatestFrameOutputRouter`，统一 Preview、OpenXR、Headless/Encoder 的左右眼、SBS、格式和 GPU ready timeline 输出契约，并限制每个输出路由只保留最新帧。
+- 新增 `src/tools/vulkan_transfer_smoke.py`，验证两个 Vulkan storage image 在无 CPU 回读条件下通过 `vkCmdCopyImage` 和 layout barrier 完成 GPU copy，目标图像进入 `COLOR_ATTACHMENT_OPTIMAL`。
+- Vulkan Context 关闭时现在先清理外部 image registry；即使 pending 状态导致正常注销失败，也会丢弃非拥有型句柄引用，不把已销毁 Device 的资源留在 Context 对象中。
+- 迁入并接通 Python runtime context/callbacks，新增 `run_processing_runtime()`；GUI 调用的 `--runtime` 现在会启动 CaptureSessionLoop 和 RuntimePipelineLoop，不再返回“runtime is not assembled yet”。
+- OpenXR 模式现在由 `run_processing_runtime()` 启动并管理 `OpenXrVulkanPresenter.run_until()` 线程；Presenter 的关闭顺序纳入运行时 shutdown，不再依赖独立 smoke 入口才能建立 Vulkan Session。
+- RuntimePipelineLoop 现在对单帧推理异常执行丢帧并计数，连续达到 `D2S_RUNTIME_REBUILD_AFTER_ERRORS`（默认 3）后重建 Depth Provider、清除时域状态并记录重建失败。
 
 - Compute Graph 的 `VulkanStereoSubmission` 新增可选 `ready_timeline`，上游 GPU 任务完成值现在会通过 `VulkanContext.submit_on("compute", wait_for_timeline=...)` 进入 Compute Queue；没有依赖值的旧调用保持兼容。
 - Vulkan Context 新增 `last_submitted_timeline_value`，提交时校验队列角色并检查 FrameContext fence 超时，避免未知队列或无限等待被静默吞掉。
@@ -38,6 +66,9 @@
 
 ### 验证结果
 
+- `src/main.py --runtime --runtime-seconds 2` 在 `D2S_RUNTIME_DIAG_STAGE=raw` 下成功启动并关闭 Capture/Runtime 线程；Vulkan transfer smoke 和 CUDA-to-Vulkan image copy smoke 通过；定向互操作测试 `25 passed, 2 warnings`；全量回归 `446 passed, 6 warnings`。
+- `check_compliance.py` 通过 45 条需求，Shader manifest 校验通过，GitHub Actions workflow YAML 本地解析通过。
+- NVIDIA Vulkan 实机 `vulkan_compute_smoke.py` 通过：`vulkan_compute_smoke: PASS timeline=1 state=ready`、`storage_image_dispatch: PASS`。
 - `src/python3/python.exe -m py_compile` 覆盖本轮修改的 Vulkan Graph、Context、Descriptor 和测试文件通过。
 - 全量测试 `417 passed, 4 warnings`；同时移除 `src/xr_viewer/gltf/materials.py` 的 UTF-8 BOM，使既有 legacy-depth 静态检查恢复可执行。警告均为 `mss.mss` 弃用提示。
 - Vulkan 定向测试与迁移脚手架测试共 `30 passed`，覆盖上游 ready timeline 透传和图像状态注销。
@@ -65,6 +96,14 @@
 - 需求矩阵将 `GRAPH-003` 更新为 `implemented`；latest-frame 覆盖、timeline 透传和实机 Compute 等待链路均已有代码与验证记录，仍需长期压力验收后才能升级为 `verified`。
 - `VulkanImageCopyPass` 新增 source/output 图像别名保护，禁止同一 `VkImage` 同时作为只读输入和写入输出；Graph/Runtime 定向测试共 `21 passed`。
 - 新增 Resize 失败回滚测试，确认新 Pipeline 创建失败时保留旧 Pass、旧尺寸和旧运行资源；Graph/Runtime 定向测试共 `22 passed`。
+- 修复 OpenXR Vulkan Device 创建路径错误使用 `_require_timeline_semaphore_features()` 返回值的问题；现在正确解包 `pNext` Feature 链，并把 `synchronization2_enabled` 传入 adopted Context。
+- OpenXR、Graph 和 Runtime 定向测试共 `41 passed`。
+- OpenXR Feature 链修复后的全量回归测试 `428 passed, 4 warnings`，`VK-004` 继续保留专用设备创建集成验收状态。
+- 新增 `pNext` Feature 链单元测试，验证 Synchronization2 链头、Timeline Semaphore `pNext` 节点和启用标志；OpenXR 定向测试 `20 passed`。
+- 修复 `VulkanContext.adopt()` 未接收 `synchronization2_enabled` 参数的问题，避免 OpenXR 真实启动时因 Feature 状态透传触发 `TypeError`；adopt Context 现在记录该能力。
+- 新增 `VulkanImageResource` 和 `VulkanExternalImageRegistry`，定义非拥有式外部图像句柄、尺寸、格式、状态和队列归属契约；Vulkan 只登记状态，不销毁 Capture/Inference 资源。
+- 将 `ARCH-004` 和 `INFER-002` 更新为 `in_progress`；外部资源契约定向测试与 OpenXR/Graph/Runtime 测试共 `44 passed`，真实 CUDA/ROCm/DMABUF 导入仍待平台适配器。
+- 外部资源契约接入后的全量回归测试 `431 passed, 4 warnings`。
 
 - `py -m py_compile src/viewer/vulkan_context.py src/app_runtime/probe.py` 通过。
 - 使用项目环境 `src/python3/python.exe -m pytest -q tests/test_openxr_vulkan.py`，18 项通过。

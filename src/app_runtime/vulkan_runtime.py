@@ -5,6 +5,7 @@ from pathlib import Path
 from stereo_runtime.vulkan_image_pass import VulkanImageCopyPass
 from viewer.vulkan_context import VulkanCapabilityError, VulkanContext
 from viewer.vulkan_descriptors import VulkanStorageImage
+from viewer.vulkan_resources import VulkanImageResource
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,8 +61,8 @@ class VulkanRuntimeSession:
 
     def submit_image_pair(
         self,
-        source_image: VulkanStorageImage,
-        output_image: VulkanStorageImage,
+        source_image: VulkanStorageImage | VulkanImageResource,
+        output_image: VulkanStorageImage | VulkanImageResource,
         *,
         frame_id: int,
         config_version: int,
@@ -86,6 +87,30 @@ class VulkanRuntimeSession:
                     "Vulkan device was lost; recreate the runtime session"
                 ) from exc
             raise
+
+    def submit_external_image_pair(
+        self,
+        source_image: VulkanImageResource,
+        output_image: VulkanImageResource,
+        *,
+        frame_id: int,
+        config_version: int,
+        ready_timeline: int | None = None,
+    ) -> int | None:
+        """Submit producer-owned images without a CPU readback or handle copy."""
+
+        for image in (source_image, output_image):
+            if image.context is not self.context:
+                raise ValueError("external image belongs to a different Vulkan context")
+            if not image.external:
+                raise ValueError("submit_external_image_pair requires external images")
+        return self.submit_image_pair(
+            source_image,
+            output_image,
+            frame_id=frame_id,
+            config_version=config_version,
+            ready_timeline=ready_timeline,
+        )
 
     @property
     def device_lost(self) -> bool:

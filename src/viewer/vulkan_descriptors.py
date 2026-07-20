@@ -155,7 +155,7 @@ class VulkanDescriptorArena:
                     pImageInfo=[
                         self.vk.VkDescriptorImageInfo(
                             sampler=None,
-                            imageView=image.view,
+                            imageView=image.require_view(),
                             imageLayout=self.vk.VK_IMAGE_LAYOUT_GENERAL,
                         )
                     ],
@@ -334,6 +334,11 @@ class VulkanStorageImage:
             ),
             None,
         )
+
+    def require_view(self) -> Any:
+        if self.view is None:
+            raise VulkanDescriptorError("storage image view is unavailable")
+        return self.view
 
     def transition_to_general(self) -> int:
         vk = self.vk

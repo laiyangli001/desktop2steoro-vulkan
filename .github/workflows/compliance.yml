@@ -31,6 +31,9 @@ jobs:
             spirv-val "$output"
           done
 
+      - name: Validate shader manifest
+        run: python src/tools/validate_shader_manifest.py
+
   matrix:
     name: Requirements matrix
     runs-on: ubuntu-latest
@@ -55,4 +58,15 @@ jobs:
       - name: Test Vulkan runtime scaffold
         env:
           PYTHONPATH: src
-        run: python -m pytest -q tests/test_migration_scaffold.py tests/test_vulkan_runtime.py
+        run: >-
+          python -m pytest -q
+          tests/test_migration_scaffold.py
+          tests/test_vulkan_runtime.py
+          tests/test_shader_manifest.py
+          tests/test_vulkan_interop.py
+          tests/test_cuda_vulkan_interop.py
+          tests/test_vulkan_resources.py
+          tests/test_output_contract.py
+          tests/test_runtime_output.py
+          tests/test_pipeline.py
+          tests/test_openxr_vulkan.py

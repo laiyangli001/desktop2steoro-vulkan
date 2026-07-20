@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from types import SimpleNamespace
 
 import app_runtime.vulkan_runtime as runtime_module
 from app_runtime.vulkan_runtime import (
@@ -59,6 +60,40 @@ def test_vulkan_runtime_session_delegates_image_submission(monkeypatch):
     )
     assert calls[-2:] == [("wait_idle",), ("pass_close",)]
     assert all(call[0] != "context_close" for call in calls)
+
+
+def test_vulkan_runtime_session_submits_external_image_pair(monkeypatch):
+    calls = []
+
+    class FakePass:
+        def __init__(self, context, **kwargs):
+            pass
+
+        def submit(self, source, output, **kwargs):
+            calls.append((source, output, kwargs))
+            return 9
+
+        def close(self):
+            pass
+
+    class FakeContext:
+        def wait_idle(self):
+            pass
+
+    monkeypatch.setattr(runtime_module, "VulkanImageCopyPass", FakePass)
+    context = FakeContext()
+    session = VulkanRuntimeSession(context, VulkanRuntimeConfig(8, 4))
+    source = SimpleNamespace(context=context, external=True)
+    output = SimpleNamespace(context=context, external=True)
+
+    assert session.submit_external_image_pair(
+        source,
+        output,
+        frame_id=3,
+        config_version=4,
+        ready_timeline=7,
+    ) == 9
+    assert calls[0][2]["ready_timeline"] == 7
 
 
 def test_vulkan_runtime_session_resize_replaces_pass_after_idle(monkeypatch):
@@ -141,3 +176,25 @@ def test_vulkan_runtime_session_marks_device_lost_and_rejects_future_submit(monk
     assert session.last_error == "VK_ERROR_DEVICE_LOST"
     with pytest.raises(VulkanDeviceLostError, match="recreate"):
         session.submit_image_pair("source", "output", frame_id=2, config_version=1)
+
+
+def test_vulkan_runtime_session_preserves_non_device_errors(monkeypatch):
+    class FakePass:
+        def __init__(self, context, **kwargs):
+            pass
+
+        def submit(self, *args, **kwargs):
+            raise RuntimeError("descriptor budget exhausted")
+
+        def close(self):
+            pass
+
+    class FakeContext:
+        def wait_idle(self):
+            pass
+
+    monkeypatch.setattr(runtime_module, "VulkanImageCopyPass", FakePass)
+    session = VulkanRuntimeSession(FakeContext(), VulkanRuntimeConfig(1, 1))
+    with pytest.raises(RuntimeError, match="descriptor budget"):
+        session.submit_image_pair("source", "output", frame_id=1, config_version=1)
+    assert session.device_lost is False

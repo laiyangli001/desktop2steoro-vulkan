@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -13,12 +14,14 @@ from viewer.vulkan_context import (
     VulkanCapabilityError,
     VulkanContext,
     VulkanUnavailableError,
+    _require_timeline_semaphore_features,
     format_vulkan_version,
     make_vulkan_version,
     unpack_vulkan_version,
     _find_queue_families,
 )
 from xr_viewer.core_openxr_vulkan import (
+    OpenXrCompositionBuilder,
     OpenXrVulkanConfig,
     OpenXrVulkanPresenter,
     OpenXrVulkanUnavailableError,
@@ -34,6 +37,32 @@ def test_vulkan_version_round_trip() -> None:
     packed = make_vulkan_version(1, 3, 275)
     assert unpack_vulkan_version(packed) == (1, 3, 275)
     assert format_vulkan_version(packed) == "1.3.275"
+
+
+def test_timeline_feature_chain_returns_feature_node_and_sync_flag():
+    class FeatureNode:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class FakeVulkan:
+        VK_TRUE = 1
+        VK_FALSE = 0
+        VkPhysicalDeviceTimelineSemaphoreFeatures = FeatureNode
+        VkPhysicalDeviceSynchronization2Features = FeatureNode
+        VkPhysicalDeviceFeatures2 = FeatureNode
+
+        @staticmethod
+        def vkGetPhysicalDeviceFeatures2(_physical_device, features2):
+            features2.pNext.timelineSemaphore = 1
+            features2.pNext.pNext.synchronization2 = 1
+
+    feature_chain, synchronization2_enabled = _require_timeline_semaphore_features(
+        FakeVulkan(), object()
+    )
+
+    assert feature_chain.synchronization2 == 1
+    assert feature_chain.pNext.timelineSemaphore == 1
+    assert synchronization2_enabled is True
 
 
 def test_queue_family_selection_prefers_dedicated_compute_and_transfer() -> None:
@@ -164,6 +193,19 @@ def test_presenter_validates_configuration() -> None:
         OpenXrVulkanPresenter(OpenXrVulkanConfig(render_scale=0))
 
 
+def test_presenter_run_until_owns_shutdown_close() -> None:
+    presenter = OpenXrVulkanPresenter()
+    shutdown = threading.Event()
+    calls = []
+
+    presenter.initialize = lambda: calls.append("initialize")
+    presenter.run_frame = lambda: (calls.append("frame"), shutdown.set(), True)[2]
+    presenter.close = lambda: calls.append("close")
+
+    assert presenter.run_until(shutdown) == 0
+    assert calls == ["initialize", "frame", "close"]
+
+
 def test_filament_bridge_binds_each_openxr_eye(monkeypatch) -> None:
     calls: list[tuple[str, object]] = []
 
@@ -251,7 +293,7 @@ def test_filament_camera_receives_openxr_pose_and_fov() -> None:
     assert calls[1][1][2]["far_plane"] == 1000.0
 
 
-def test_swapchain_image_is_not_released_when_wait_fails() -> None:
+def test_swapchain_image_is_released_when_wait_fails() -> None:
     calls: list[str] = []
 
     class FakeXr:
@@ -287,7 +329,7 @@ def test_swapchain_image_is_not_released_when_wait_fails() -> None:
     ]
     with pytest.raises(RuntimeError, match="wait failed"):
         presenter._render_projection_layer([object()])
-    assert calls == ["acquire", "wait"]
+    assert calls == ["acquire", "wait", "release"]
 
 
 def test_swapchain_image_is_released_after_wait_when_render_fails() -> None:
@@ -336,6 +378,34 @@ def test_swapchain_image_is_released_after_wait_when_render_fails() -> None:
     with pytest.raises(RuntimeError, match="clear failed"):
         presenter._render_projection_layer([object()])
     assert calls == ["acquire", "wait", "release"]
+
+
+def test_projection_layer_builder_owns_only_layer_assembly() -> None:
+    class FakeXr:
+        CompositionLayerProjectionView = staticmethod(lambda **kwargs: kwargs)
+        SwapchainSubImage = staticmethod(lambda **kwargs: kwargs)
+        Rect2Di = staticmethod(lambda **kwargs: kwargs)
+        Offset2Di = staticmethod(lambda **kwargs: kwargs)
+        Extent2Di = staticmethod(lambda **kwargs: kwargs)
+        CompositionLayerProjection = staticmethod(lambda **kwargs: kwargs)
+
+    views = [
+        SimpleNamespace(pose="left-pose", fov="left-fov"),
+        SimpleNamespace(pose="right-pose", fov="right-fov"),
+    ]
+    swapchains = [
+        _EyeSwapchain("left-chain", [], 10, 20),
+        _EyeSwapchain("right-chain", [], 30, 40),
+    ]
+    layer = OpenXrCompositionBuilder(FakeXr, "local-space").projection_layer(
+        views, swapchains
+    )
+    assert layer["space"] == "local-space"
+    assert [view["pose"] for view in layer["views"]] == ["left-pose", "right-pose"]
+    assert layer["views"][1]["sub_image"]["image_rect"]["extent"] == {
+        "width": 30,
+        "height": 40,
+    }
 
 
 def test_standalone_vulkan_context_smoke() -> None:
