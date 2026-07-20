@@ -351,13 +351,19 @@ int create_preview_screen(FilamentPreview* preview) {
     const char* shader = R"FILAMENT(
         void material(inout MaterialInputs material) {
             prepareMaterial(material);
-            material.baseColor = float4(0.1, 0.45, 1.0, 0.72);
+            float2 uv = getUV0();
+            float2 grid_uv = abs(fract(uv * float2(16.0, 9.0)) - 0.5);
+            float line = step(0.47, max(grid_uv.x, grid_uv.y));
+            float3 base = float3(0.1, 0.45, 1.0);
+            float3 grid = mix(base, float3(0.72, 0.88, 1.0), line * 0.35);
+            material.baseColor = float4(grid, 0.72);
         }
     )FILAMENT";
     filamat::MaterialBuilder::init();
     filamat::MaterialBuilder builder;
     builder.name("D2S Preview Screen")
             .material(shader)
+            .require(filament::VertexAttribute::UV0)
             .shading(filament::Shading::UNLIT)
             .materialDomain(filament::MaterialDomain::SURFACE)
             .blending(filament::BlendingMode::TRANSPARENT)

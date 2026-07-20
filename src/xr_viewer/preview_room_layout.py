@@ -228,7 +228,8 @@ def main():
     native_window = _native_window_handle(window)
     preview = FilamentDesktopPreview(native_window, 1280, 720)
     preview.load_glb(glb_path.read_bytes(), max_texture_dimension=args.max_texture_size)
-    screen_pos = _scene_position_in_profile(profile, screen.get("position"))
+    # Screen positions are stored in the raw GLB scene coordinate space.
+    screen_pos = _vec3(screen.get("position"), [0.0, 1.2, -2.0])
     screen_width = float(screen.get("width", 2.4))
     screen_height = float(screen.get("height", screen_width * 9.0 / 16.0))
     preview.set_screen(
@@ -441,7 +442,7 @@ def main():
             screen_width = float(screen.get("width", 2.4))
             screen_height = float(screen.get("height", screen_width * 9.0 / 16.0))
             preview.set_screen(
-                _scene_position_in_profile(profile, pos),
+                pos,
                 screen_width,
                 screen_height,
                 rot,
@@ -471,7 +472,7 @@ def main():
             screen_width = float(screen.get("width", 2.4))
             screen_height = float(screen.get("height", screen_width * 9.0 / 16.0))
             preview.set_screen(
-                _scene_position_in_profile(profile, screen.get("position")),
+                _vec3(screen.get("position"), [0.0, 1.2, -2.0]),
                 screen_width,
                 screen_height,
                 _vec3(screen.get("rotation_deg"), [0.0, 0.0, 0.0]),
