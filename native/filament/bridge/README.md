@@ -26,21 +26,7 @@ current eye's OpenXR VkImages, calls `filament_bridge_set_acquired_image`, then
 brackets Filament rendering with `filament_bridge_begin_frame` and
 `filament_bridge_end_frame`.
 
-The desktop preview ABI also exposes `filament_preview_apply_animations`.
-The room layout preview calls it once per frame, so embedded glTF animations
-such as Artemis satellite orbits are evaluated by Filament. StarGlim is kept
-behind four narrow calls only:
-
-```text
-filament_preview_create_star_glim_material()
-filament_preview_set_star_glim_textures(stars, mask)
-filament_preview_set_star_glim_parameters(intensity, speed, seed)
-filament_preview_set_star_glim_time(time)
-```
-
-The preview creates the dynamic material after GLB loading, binds the sidecar
-stars/mask PNGs, and passes the same `animation_time` to both the GLB animator
-and the StarGlim material every frame.
+The desktop preview ABI exposes `filament_preview_apply_animations` for embedded glTF animations.
 
 GitHub Actions builds the Windows x86_64, Linux x86_64, and macOS arm64 release libraries from
 the matching official SDK archives, validates their SHA-256 digests, and uploads

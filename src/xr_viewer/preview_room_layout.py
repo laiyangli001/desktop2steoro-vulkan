@@ -191,30 +191,6 @@ def _profile_projection_planes(profile):
     return near, far
 
 
-def _load_star_glim_spec(glb_path: Path):
-    sidecar_path = glb_path.parent / "star_glim.json"
-    try:
-        spec = json.loads(sidecar_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return None
-    if not isinstance(spec, dict) or spec.get("schema_version") != 1 or spec.get("effect") != "star_glim":
-        return None
-    stars_name = spec.get("stars_texture")
-    mask_name = spec.get("mask_texture")
-    if not isinstance(stars_name, str) or not isinstance(mask_name, str):
-        return None
-    stars_path = (glb_path.parent / stars_name).resolve()
-    mask_path = (glb_path.parent / mask_name).resolve()
-    try:
-        stars_path.relative_to(glb_path.parent.resolve())
-        mask_path.relative_to(glb_path.parent.resolve())
-    except ValueError:
-        return None
-    if not stars_path.is_file() or not mask_path.is_file():
-        return None
-    return spec, stars_path, mask_path
-
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("room", nargs="?", default="bedroom")
@@ -252,17 +228,6 @@ def main():
     native_window = _native_window_handle(window)
     preview = FilamentDesktopPreview(native_window, 1280, 720)
     preview.load_glb(glb_path.read_bytes(), max_texture_dimension=args.max_texture_size)
-    star_glim = _load_star_glim_spec(glb_path)
-    if star_glim is not None:
-        star_spec, stars_path, mask_path = star_glim
-        preview.create_star_glim_material()
-        preview.set_star_glim_textures(stars_path.read_bytes(), mask_path.read_bytes())
-        preview.set_star_glim_parameters(
-            float(star_spec.get("intensity", 10.0)),
-            float(star_spec.get("speed", 0.0)),
-            float(star_spec.get("seed", 0.0)),
-        )
-        print(f"Preview star glim: enabled ({stars_path.name}, {mask_path.name})")
     preview_exposure = float(
         args.exposure if args.exposure is not None else profile.get("preview_exposure", 2.0)
     )
@@ -517,8 +482,6 @@ def main():
         preview.set_projection(80.0, aspect, projection_near, projection_far)
         animation_time = max(0.0, now - animation_start_time)
         preview.apply_animations(animation_time)
-        if star_glim is not None:
-            preview.set_star_glim_time(animation_time)
         preview.render()
         next_frame_time += 1.0 / 60.0
         delay = next_frame_time - glfw.get_time()

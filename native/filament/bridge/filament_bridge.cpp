@@ -188,11 +188,6 @@ struct MaterialBrightnessState {
     float skybox_brightness = 1.0f;
 };
 
-struct StarGlimVertex {
-    filament::math::float3 position;
-    filament::math::float2 uv;
-};
-
 struct FilamentBridge {
     filament::Engine* engine = nullptr;
     filament::Renderer* renderer = nullptr;
@@ -225,19 +220,6 @@ struct FilamentPreview {
     filament::gltfio::FilamentAsset* asset = nullptr;
     filament::SwapChain* swapchain = nullptr;
     utils::Entity fill_light;
-    utils::Entity star_glim_entity;
-    utils::Entity star_glim_source_entity;
-    filament::VertexBuffer* star_glim_vertex_buffer = nullptr;
-    filament::IndexBuffer* star_glim_index_buffer = nullptr;
-    std::vector<StarGlimVertex> star_glim_vertices;
-    std::vector<uint16_t> star_glim_indices;
-    filament::Material* star_glim_material = nullptr;
-    filament::MaterialInstance* star_glim_material_instance = nullptr;
-    filament::Texture* star_glim_stars = nullptr;
-    filament::Texture* star_glim_mask = nullptr;
-    float star_glim_intensity = 10.0f;
-    float star_glim_speed = 0.0f;
-    float star_glim_seed = 0.0f;
     MaterialBrightnessState brightness{ {}, {}, 2.0f, 1.0f };
     std::vector<uint8_t> glb_bytes;
     std::string last_error;
@@ -283,44 +265,6 @@ void destroy_preview_asset(FilamentPreview* preview) {
     preview->brightness.scene_materials.clear();
     preview->brightness.skybox_materials.clear();
     preview->glb_bytes.clear();
-}
-
-void destroy_skybox_star_layer(FilamentPreview* preview) {
-    if (!preview || !preview->engine) return;
-    if (preview->scene && !preview->star_glim_entity.isNull()) {
-        preview->scene->remove(preview->star_glim_entity);
-    }
-    if (!preview->star_glim_entity.isNull()) {
-        preview->engine->destroy(preview->star_glim_entity);
-        preview->star_glim_entity = {};
-    }
-    if (preview->star_glim_vertex_buffer) {
-        preview->engine->destroy(preview->star_glim_vertex_buffer);
-        preview->star_glim_vertex_buffer = nullptr;
-    }
-    if (preview->star_glim_index_buffer) {
-        preview->engine->destroy(preview->star_glim_index_buffer);
-        preview->star_glim_index_buffer = nullptr;
-    }
-    if (preview->star_glim_material_instance) {
-        preview->engine->destroy(preview->star_glim_material_instance);
-        preview->star_glim_material_instance = nullptr;
-    }
-    if (preview->star_glim_material) {
-        preview->engine->destroy(preview->star_glim_material);
-        preview->star_glim_material = nullptr;
-    }
-    if (preview->star_glim_stars) {
-        preview->engine->destroy(preview->star_glim_stars);
-        preview->star_glim_stars = nullptr;
-    }
-    if (preview->star_glim_mask) {
-        preview->engine->destroy(preview->star_glim_mask);
-        preview->star_glim_mask = nullptr;
-    }
-    preview->star_glim_source_entity = {};
-    preview->star_glim_vertices.clear();
-    preview->star_glim_indices.clear();
 }
 
 bool is_skybox_name(const char* name) {
@@ -689,7 +633,6 @@ FilamentPreview* filament_preview_create(void* native_window, uint32_t width, ui
 
 void filament_preview_destroy(FilamentPreview* preview) {
     if (!preview) return;
-    destroy_skybox_star_layer(preview);
     destroy_preview_asset(preview);
     if (preview->scene && !preview->fill_light.isNull()) {
         preview->scene->remove(preview->fill_light);
@@ -714,7 +657,6 @@ void filament_preview_destroy(FilamentPreview* preview) {
 
 int filament_preview_load_glb(FilamentPreview* preview, const uint8_t* bytes, uint32_t byte_count) {
     if (!preview || !preview->engine || !preview->asset_loader || !bytes || !byte_count) return 0;
-    destroy_skybox_star_layer(preview);
     destroy_preview_asset(preview);
     preview->last_error.clear();
     preview->glb_bytes.assign(bytes, bytes + byte_count);
@@ -754,274 +696,6 @@ int filament_preview_apply_animations(FilamentPreview* preview, double time_seco
         animator->applyAnimation(index, std::max(0.0f, time));
     }
     animator->updateBoneMatrices();
-    return 1;
-}
-
-int filament_preview_create_star_glim_material(FilamentPreview* preview) {
-    if (!preview || !preview->engine || !preview->scene || !preview->asset) {
-        return 0;
-    }
-
-    destroy_skybox_star_layer(preview);
-    auto& renderables = preview->engine->getRenderableManager();
-    utils::Entity source_entity;
-    filament::RenderableManager::Instance source_instance;
-    const utils::Entity named_skybox = preview->asset->getFirstEntityByName(
-            "Model_Artemis__SkyBox");
-    if (!named_skybox.isNull()) {
-        const auto named_instance = renderables.getInstance(named_skybox);
-        if (named_instance.isValid()) {
-            source_entity = named_skybox;
-            source_instance = named_instance;
-        }
-    }
-    if (source_entity.isNull()) {
-        for (size_t index = 0; index < preview->asset->getEntityCount(); ++index) {
-            const utils::Entity entity = preview->asset->getEntities()[index];
-            if (!is_skybox_name(preview->asset->getName(entity))) continue;
-            const auto instance = renderables.getInstance(entity);
-            if (instance.isValid()) {
-                source_entity = entity;
-                source_instance = instance;
-                break;
-            }
-        }
-    }
-    if (source_entity.isNull()) {
-        float largest_volume = -1.0f;
-        for (size_t index = 0; index < preview->asset->getEntityCount(); ++index) {
-            const utils::Entity entity = preview->asset->getEntities()[index];
-            const auto instance = renderables.getInstance(entity);
-            if (!instance.isValid()) continue;
-            const auto box = renderables.getAxisAlignedBoundingBox(instance);
-            const auto extent = box.halfExtent;
-            const float volume = extent.x * extent.y * extent.z;
-            if (volume > largest_volume) {
-                largest_volume = volume;
-                source_entity = entity;
-                source_instance = instance;
-            }
-        }
-    }
-    if (source_entity.isNull() || !source_instance.isValid()) {
-        set_preview_error(preview, "Filament could not find a SkyBox renderable");
-        return 0;
-    }
-
-    const auto box = renderables.getAxisAlignedBoundingBox(source_instance);
-    const filament::math::float3 center = box.center;
-    const filament::math::float3 half_extent = box.halfExtent * 0.995f;
-    const filament::math::float3 min = center - half_extent;
-    const filament::math::float3 max = center + half_extent;
-
-    std::string shader = R"FILAMENT(
-        void material(inout MaterialInputs material) {
-            prepareMaterial(material);
-            float2 uv = getUV0();
-            float3 stars = texture(materialParams_stars, uv).rgb;
-            float mask = texture(materialParams_mask, uv).r;
-            float phase = fract(sin(dot(floor(uv * 4096.0),
-                    float2(12.9898, 78.233)) + materialParams.starSeed) * 43758.5453);
-            float twinkle = 0.65 + 0.35 * sin(
-                    materialParams.starTime * materialParams.starSpeed + phase * 6.2831853);
-            float coverage = clamp(
-                    dot(stars, float3(0.2126, 0.7152, 0.0722)) * mask,
-                    0.0, 1.0);
-            material.baseColor = float4(
-                    stars * materialParams.starIntensity * twinkle, coverage);
-        }
-    )FILAMENT";
-
-    filamat::MaterialBuilder::init();
-    filamat::MaterialBuilder builder;
-    builder.name("D2S StarGlim")
-            .material(shader.c_str())
-            .parameter("stars", filamat::MaterialBuilder::SamplerType::SAMPLER_2D)
-            .parameter("mask", filamat::MaterialBuilder::SamplerType::SAMPLER_2D)
-            .parameter("starIntensity", filamat::MaterialBuilder::UniformType::FLOAT)
-            .parameter("starSpeed", filamat::MaterialBuilder::UniformType::FLOAT)
-            .parameter("starSeed", filamat::MaterialBuilder::UniformType::FLOAT)
-            .parameter("starTime", filamat::MaterialBuilder::UniformType::FLOAT)
-            .require(filament::VertexAttribute::UV0)
-            .shading(filament::Shading::UNLIT)
-            .materialDomain(filament::MaterialDomain::SURFACE)
-            .blending(filament::BlendingMode::MASKED)
-            .culling(filament::backend::CullingMode::FRONT)
-            .maskThreshold(0.001f)
-            .depthWrite(false)
-            .depthCulling(true)
-            .targetApi(filamat::MaterialBuilder::TargetApi::ALL)
-            .platform(filamat::MaterialBuilder::Platform::ALL);
-    filamat::Package package = builder.build(preview->engine->getJobSystem());
-    if (!package.isValid()) {
-        set_preview_error(preview, "Filament could not build StarGlim material");
-        return 0;
-    }
-
-    preview->star_glim_material = filament::Material::Builder()
-            .package(package.getData(), package.getSize())
-            .build(*preview->engine);
-    if (!preview->star_glim_material) {
-        set_preview_error(preview, "Filament could not create StarGlim material");
-        return 0;
-    }
-    preview->star_glim_material_instance = preview->star_glim_material->createInstance();
-    if (!preview->star_glim_material_instance) {
-        destroy_skybox_star_layer(preview);
-        set_preview_error(preview, "Filament could not create StarGlim material instance");
-        return 0;
-    }
-
-    preview->star_glim_vertices = {
-        {{min.x, min.y, min.z}, {0, 0}}, {{max.x, min.y, min.z}, {1, 0}},
-        {{max.x, max.y, min.z}, {1, 1}}, {{min.x, max.y, min.z}, {0, 1}},
-        {{max.x, min.y, max.z}, {0, 0}}, {{min.x, min.y, max.z}, {1, 0}},
-        {{min.x, max.y, max.z}, {1, 1}}, {{max.x, max.y, max.z}, {0, 1}},
-        {{min.x, min.y, max.z}, {0, 0}}, {{min.x, min.y, min.z}, {1, 0}},
-        {{min.x, max.y, min.z}, {1, 1}}, {{min.x, max.y, max.z}, {0, 1}},
-        {{max.x, min.y, min.z}, {0, 0}}, {{max.x, min.y, max.z}, {1, 0}},
-        {{max.x, max.y, max.z}, {1, 1}}, {{max.x, max.y, min.z}, {0, 1}},
-        {{min.x, max.y, min.z}, {0, 0}}, {{max.x, max.y, min.z}, {1, 0}},
-        {{max.x, max.y, max.z}, {1, 1}}, {{min.x, max.y, max.z}, {0, 1}},
-        {{min.x, min.y, max.z}, {0, 0}}, {{max.x, min.y, max.z}, {1, 0}},
-        {{max.x, min.y, min.z}, {1, 1}}, {{min.x, min.y, min.z}, {0, 1}},
-    };
-    preview->star_glim_indices = {
-        0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7,
-        8, 9, 10, 8, 10, 11, 12, 13, 14, 12, 14, 15,
-        16, 17, 18, 16, 18, 19, 20, 21, 22, 20, 22, 23,
-    };
-    preview->star_glim_vertex_buffer = filament::VertexBuffer::Builder()
-            .vertexCount(static_cast<uint32_t>(preview->star_glim_vertices.size()))
-            .bufferCount(1)
-            .attribute(filament::VertexAttribute::POSITION, 0,
-                    filament::VertexBuffer::AttributeType::FLOAT3,
-                    0, sizeof(StarGlimVertex))
-            .attribute(filament::VertexAttribute::UV0, 0,
-                    filament::VertexBuffer::AttributeType::FLOAT2,
-                    sizeof(float) * 3, sizeof(StarGlimVertex))
-            .build(*preview->engine);
-    preview->star_glim_index_buffer = filament::IndexBuffer::Builder()
-            .indexCount(static_cast<uint32_t>(preview->star_glim_indices.size()))
-            .bufferType(filament::IndexBuffer::IndexType::USHORT)
-            .build(*preview->engine);
-    if (!preview->star_glim_vertex_buffer || !preview->star_glim_index_buffer) {
-        destroy_skybox_star_layer(preview);
-        set_preview_error(preview, "Filament could not create StarGlim geometry");
-        return 0;
-    }
-    preview->star_glim_vertex_buffer->setBufferAt(*preview->engine, 0,
-            filament::VertexBuffer::BufferDescriptor(
-                    preview->star_glim_vertices.data(),
-                    preview->star_glim_vertices.size() * sizeof(StarGlimVertex), nullptr));
-    preview->star_glim_index_buffer->setBuffer(*preview->engine,
-            filament::IndexBuffer::BufferDescriptor(
-                    preview->star_glim_indices.data(),
-                    preview->star_glim_indices.size() * sizeof(uint16_t), nullptr));
-
-    preview->star_glim_material_instance->setParameter(
-            "starIntensity", preview->star_glim_intensity);
-    preview->star_glim_material_instance->setParameter(
-            "starSpeed", preview->star_glim_speed);
-    preview->star_glim_material_instance->setParameter(
-            "starSeed", preview->star_glim_seed);
-    preview->star_glim_material_instance->setParameter("starTime", 0.0f);
-
-    preview->star_glim_entity = utils::EntityManager::get().create();
-    const auto result = filament::RenderableManager::Builder(1)
-            .boundingBox({min, max})
-            .material(0, preview->star_glim_material_instance)
-            .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES,
-                    preview->star_glim_vertex_buffer, preview->star_glim_index_buffer,
-                    0, static_cast<uint32_t>(preview->star_glim_indices.size()))
-            .priority(7)
-            .culling(false)
-            .castShadows(false)
-            .receiveShadows(false)
-            .build(*preview->engine, preview->star_glim_entity);
-    if (result != filament::RenderableManager::Builder::Success) {
-        destroy_skybox_star_layer(preview);
-        set_preview_error(preview, "Filament could not create StarGlim renderable");
-        return 0;
-    }
-
-    auto& transforms = preview->engine->getTransformManager();
-    const auto source_transform = transforms.getInstance(source_entity);
-    transforms.create(preview->star_glim_entity);
-    const auto overlay_transform = transforms.getInstance(preview->star_glim_entity);
-    transforms.setTransform(overlay_transform, transforms.getWorldTransform(source_transform));
-    preview->star_glim_source_entity = source_entity;
-    preview->scene->addEntity(preview->star_glim_entity);
-    return 1;
-}
-
-int filament_preview_set_star_glim_textures(
-        FilamentPreview* preview,
-        const uint8_t* stars_bytes, uint32_t stars_byte_count,
-        const uint8_t* mask_bytes, uint32_t mask_byte_count) {
-    if (!preview || !preview->engine || !preview->texture_provider ||
-            !preview->star_glim_material_instance ||
-            !stars_bytes || !stars_byte_count || !mask_bytes || !mask_byte_count) {
-        return 0;
-    }
-    if (preview->star_glim_stars) {
-        preview->engine->destroy(preview->star_glim_stars);
-        preview->star_glim_stars = nullptr;
-    }
-    if (preview->star_glim_mask) {
-        preview->engine->destroy(preview->star_glim_mask);
-        preview->star_glim_mask = nullptr;
-    }
-    preview->star_glim_stars = preview->texture_provider->pushTexture(
-            stars_bytes, stars_byte_count, "image/png",
-            filament::gltfio::TextureProvider::TextureFlags::sRGB);
-    preview->star_glim_mask = preview->texture_provider->pushTexture(
-            mask_bytes, mask_byte_count, "image/png",
-            filament::gltfio::TextureProvider::TextureFlags::NONE);
-    if (!preview->star_glim_stars || !preview->star_glim_mask) {
-        destroy_skybox_star_layer(preview);
-        set_preview_error(preview, "Filament could not decode StarGlim textures");
-        return 0;
-    }
-    preview->texture_provider->waitForCompletion();
-    preview->texture_provider->updateQueue();
-    while (preview->texture_provider->popTexture()) {}
-    filament::TextureSampler sampler(
-            filament::TextureSampler::MinFilter::LINEAR_MIPMAP_LINEAR,
-            filament::TextureSampler::MagFilter::LINEAR);
-    preview->star_glim_material_instance->setParameter(
-            "stars", preview->star_glim_stars, sampler);
-    preview->star_glim_material_instance->setParameter(
-            "mask", preview->star_glim_mask, sampler);
-    return 1;
-}
-
-int filament_preview_set_star_glim_parameters(
-        FilamentPreview* preview, float intensity, float speed, float seed) {
-    if (!preview || !std::isfinite(intensity) ||
-            !std::isfinite(speed) || !std::isfinite(seed)) {
-        return 0;
-    }
-    preview->star_glim_intensity = std::max(0.0f, intensity);
-    preview->star_glim_speed = speed;
-    preview->star_glim_seed = seed;
-    if (preview->star_glim_material_instance) {
-        preview->star_glim_material_instance->setParameter(
-                "starIntensity", preview->star_glim_intensity);
-        preview->star_glim_material_instance->setParameter(
-                "starSpeed", preview->star_glim_speed);
-        preview->star_glim_material_instance->setParameter(
-                "starSeed", preview->star_glim_seed);
-    }
-    return 1;
-}
-
-int filament_preview_set_star_glim_time(FilamentPreview* preview, double time_seconds) {
-    if (!preview || !preview->star_glim_material_instance || !std::isfinite(time_seconds)) {
-        return 0;
-    }
-    preview->star_glim_material_instance->setParameter(
-            "starTime", static_cast<float>(std::max(0.0, time_seconds)));
     return 1;
 }
 
