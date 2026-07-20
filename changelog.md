@@ -311,3 +311,5 @@
 - Set the default test configuration to `OpenXR Link` with scene exposure `2.0` and skybox brightness `1.0`.
 - Fixed the OpenXR Vulkan device setup to stop calling the enable1-only `xrGetVulkanDeviceExtensionsKHR` while using `XR_KHR_vulkan_enable2`.
 - OpenXR Artemis lighting now reads the same exposure, skybox, and directional fill-light profile values as the desktop preview; the updated Bridge binary must be rebuilt by CI.
+- GitHub Actions run `29766759073` successfully rebuilt and committed Windows x86_64, Linux x86_64, and macOS arm64 Filament Bridge binaries; all three binaries were synchronized locally.
+- The next validation is headset A/B comparison of Preview and OpenXR brightness, tone mapping, and sRGB/UNORM output.
