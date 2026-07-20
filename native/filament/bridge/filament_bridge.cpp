@@ -310,6 +310,9 @@ void collect_material_brightness(BridgeType* bridge, bool enable_fill_channel) {
         if (!instance.isValid()) continue;
         const bool skybox = is_skybox_name(bridge->asset->getName(entity));
         if (skybox) {
+            // Render the exported skybox before regular scene geometry so its
+            // depth buffer cannot hide the Saturn ring or other scene meshes.
+            renderables.setPriority(instance, 0);
             renderables.setLightChannel(instance, 0, false);
             renderables.setLightChannel(instance, 1, false);
         } else if (enable_fill_channel) {
