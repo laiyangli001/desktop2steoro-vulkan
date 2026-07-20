@@ -44,8 +44,10 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install matrix test dependency
-        run: python -m pip install --disable-pip-version-check pytest
+      - name: Install matrix test dependencies
+        run: |
+          python -m pip install --disable-pip-version-check pytest numpy pyopenxr vulkan
+          python -m pip install --disable-pip-version-check torch --index-url https://download.pytorch.org/whl/cpu
 
       - name: Validate requirements traceability
         run: python src/tools/check_compliance.py
