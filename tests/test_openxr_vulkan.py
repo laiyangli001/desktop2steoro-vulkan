@@ -77,6 +77,13 @@ def test_image_state_tracker_updates_and_clears_state() -> None:
     assert tracker.get(17, undefined_layout=9).layout == 9
 
 
+def test_image_state_tracker_removes_released_image() -> None:
+    tracker = ImageStateTracker(default_queue_family_index=3)
+    tracker.update(17, ImageState(4, 8, 16, 3))
+    tracker.remove(17)
+    assert tracker.get(17, undefined_layout=9) == ImageState(9, 0, 0, 3)
+
+
 def test_image_state_tracker_rejects_wrong_queue_owner() -> None:
     tracker = ImageStateTracker(default_queue_family_index=3)
     tracker.update(17, ImageState(4, 8, 16, 2))

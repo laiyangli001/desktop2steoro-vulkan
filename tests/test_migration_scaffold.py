@@ -7,7 +7,9 @@ import pytest
 from app_runtime.probe import build_capability_report
 from stereo_runtime.vulkan_graph import (
     VulkanComputeGraph,
+    VulkanComputePass,
     VulkanGraphState,
+    VulkanPassDeclaration,
     VulkanStereoSubmission,
 )
 from viewer.vulkan_compute_pipeline import (
@@ -109,6 +111,70 @@ def test_vulkan_compute_graph_from_pipeline_records_dispatch():
         }),
         "compute",
     ]
+
+
+def test_vulkan_compute_graph_forwards_input_ready_timeline():
+    calls = []
+
+    class FakeContext:
+        def submit_on(self, role, record, **kwargs):
+            record("command-buffer")
+            calls.append((role, kwargs))
+            return 9
+
+    graph = VulkanComputeGraph(FakeContext(), lambda *_: None)
+    assert graph.submit(
+        VulkanStereoSubmission(3, object(), object(), 1, ready_timeline=7)
+    ) == 9
+    assert calls == [("compute", {"wait_for_timeline": 7})]
+
+
+def test_vulkan_compute_graph_from_passes_inserts_barrier_between_passes():
+    calls = []
+
+    class FakeVk:
+        VK_STRUCTURE_TYPE_MEMORY_BARRIER = 1
+        VK_ACCESS_SHADER_WRITE_BIT = 2
+        VK_ACCESS_SHADER_READ_BIT = 4
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT = 8
+
+        @staticmethod
+        def VkMemoryBarrier(**kwargs):
+            return kwargs
+
+        @staticmethod
+        def vkCmdPipelineBarrier(*args):
+            calls.append(args)
+
+    class FakeContext:
+        vk = FakeVk()
+
+        def submit_on(self, role, record, **kwargs):
+            assert role == "compute"
+            record("command-buffer")
+            return 11
+
+    class FakePipeline:
+        def __init__(self, name):
+            self.name = name
+
+        def record_dispatch(self, command_buffer, **kwargs):
+            calls.append((self.name, command_buffer, kwargs))
+
+    graph = VulkanComputeGraph.from_passes(
+        FakeContext(),
+        (
+            VulkanComputePass(
+                VulkanPassDeclaration("normalize", writes=("normalized",)),
+                FakePipeline("a"),
+            ),
+            VulkanComputePass(VulkanPassDeclaration("warp", reads=("normalized",)), FakePipeline("b")),
+        ),
+    )
+    assert graph.submit(VulkanStereoSubmission(1, object(), object(), 1)) == 11
+    assert calls[0][0] == "a"
+    assert calls[-1][0] == "b"
+    assert any(call[0] == "command-buffer" for call in calls[1:-1])
 
 
 def test_vulkan_compute_graph_close_rejects_new_work():

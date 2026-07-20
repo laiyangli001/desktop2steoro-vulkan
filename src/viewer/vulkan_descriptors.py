@@ -385,6 +385,8 @@ class VulkanStorageImage:
 
     def close(self) -> None:
         if self.context.device is not None:
+            if self.image is not None:
+                self.context.unregister_image_state(self.image)
             if self.view is not None:
                 self.vk.vkDestroyImageView(self.context.device, self.view, None)
             if self.image is not None:

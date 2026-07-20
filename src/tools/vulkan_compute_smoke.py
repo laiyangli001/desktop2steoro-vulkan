@@ -9,6 +9,7 @@ from viewer.vulkan_compute_pipeline import VulkanComputePipeline
 from viewer.vulkan_context import VulkanContext
 from viewer.vulkan_descriptors import (
     DescriptorBinding,
+    DescriptorBudget,
     VulkanDescriptorArena,
     VulkanStorageImage,
     VulkanStorageBuffer,
@@ -55,19 +56,28 @@ def main() -> int:
             graph.close()
         with VulkanComputePipeline(
             context,
-            "shaders/d2s_storage_image.spv",
+            "shaders/d2s_copy_image.spv",
             descriptor_bindings=[
                 DescriptorBinding(
                     binding=0,
                     descriptor_type=context.vk.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-                )
+                ),
+                DescriptorBinding(
+                    binding=1,
+                    descriptor_type=context.vk.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                ),
             ],
-        ) as image_pipeline, VulkanDescriptorArena(context) as image_arena, VulkanStorageImage(
+        ) as image_pipeline, VulkanDescriptorArena(
+            context,
+            DescriptorBudget(storage_images_per_set=2),
+        ) as image_arena, VulkanStorageImage(context) as source_image, VulkanStorageImage(
             context
-        ) as image:
-            image.transition_to_general()
+        ) as output_image:
+            source_image.transition_to_general()
+            output_image.transition_to_general()
             image_set = image_arena.allocate(image_pipeline.descriptor_set_layout)
-            image_arena.update_storage_image(image_set, 0, image)
+            image_arena.update_storage_image(image_set, 0, source_image)
+            image_arena.update_storage_image(image_set, 1, output_image)
             image_graph = VulkanComputeGraph.from_pipeline(
                 context, image_pipeline, descriptor_set=image_set
             )

@@ -1,0 +1,14 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(set = 0, binding = 0, rgba8) readonly uniform image2D input_image;
+layout(set = 0, binding = 1, rgba8) writeonly uniform image2D output_image;
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 extent = imageSize(output_image);
+    if (pixel.x >= extent.x || pixel.y >= extent.y) {
+        return;
+    }
+    imageStore(output_image, pixel, imageLoad(input_image, pixel));
+}

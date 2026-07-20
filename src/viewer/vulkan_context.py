@@ -122,6 +122,14 @@ class ImageStateTracker:
     def update(self, image_key: int, state: ImageState) -> None:
         self._states[int(image_key)] = state
 
+    def remove(self, image_key: int) -> None:
+        key = int(image_key)
+        if key in self._pending_transfers:
+            raise VulkanCapabilityError(
+                f"Image {key} cannot be removed during a pending queue ownership transfer"
+            )
+        self._states.pop(key, None)
+
     def require_owner(self, image_key: int, queue_family_index: int) -> ImageState:
         if int(image_key) in self._pending_transfers:
             raise VulkanCapabilityError(
@@ -405,6 +413,11 @@ class VulkanContext:
         self._ensure_open()
         return self._command_pool
 
+    @property
+    def last_submitted_timeline_value(self) -> int:
+        self._ensure_open()
+        return self._timeline_value
+
     def image_handle_from_address(self, address: int) -> Any:
         self._ensure_open()
         if not address:
@@ -414,6 +427,10 @@ class VulkanContext:
     def register_image_state(self, image: Any, state: ImageState) -> None:
         self._ensure_open()
         self._image_states.update(_cffi_handle_address(self.vk, image), state)
+
+    def unregister_image_state(self, image: Any) -> None:
+        self._ensure_open()
+        self._image_states.remove(_cffi_handle_address(self.vk, image))
 
     def image_state(self, image: Any) -> ImageState:
         self._ensure_open()
@@ -520,12 +537,20 @@ class VulkanContext:
         with self._lock:
             self._ensure_open()
             vk = self.vk
+            queue_role = str(role).lower()
+            if queue_role not in ("graphics", "compute", "transfer"):
+                raise ValueError(f"unknown Vulkan queue role: {role}")
             frame = self._frame_contexts[self._frame_index]
-            queue_resources = frame.queue_resources[str(role).lower()]
+            queue_resources = frame.queue_resources[queue_role]
             # Reuse is bounded by the frame fence instead of allocating per submit.
-            vk.vkWaitForFences(
+            wait_result = vk.vkWaitForFences(
                 self.device, 1, [queue_resources.fence], vk.VK_TRUE, 10_000_000_000
             )
+            timeout = getattr(vk, "VK_TIMEOUT", None)
+            if timeout is not None and wait_result == timeout:
+                raise VulkanCapabilityError(
+                    f"timed out waiting for {queue_role} FrameContext fence"
+                )
             vk.vkResetFences(self.device, 1, [queue_resources.fence])
             vk.vkResetCommandBuffer(queue_resources.command_buffer, 0)
             begin_info = vk.VkCommandBufferBeginInfo(

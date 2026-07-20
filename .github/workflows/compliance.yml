@@ -9,6 +9,28 @@ permissions:
   contents: read
 
 jobs:
+  shaders:
+    name: Compile Vulkan shaders
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shader compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes glslc spirv-tools
+
+      - name: Compile and validate SPIR-V
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/d2s-shaders"
+          for source in shaders/*.comp; do
+            output="$RUNNER_TEMP/d2s-shaders/$(basename "${source%.comp}").spv"
+            glslc -std=450 "$source" -o "$output"
+            spirv-val "$output"
+          done
+
   matrix:
     name: Requirements matrix
     runs-on: ubuntu-latest
