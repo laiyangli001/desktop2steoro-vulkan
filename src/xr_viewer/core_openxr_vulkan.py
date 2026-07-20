@@ -790,12 +790,12 @@ class OpenXrVulkanPresenter(
             model_matrix[:3, 3] = np.asarray(model_position[:3], dtype=np.float32)
             scale = np.asarray(model_scale[:3], dtype=np.float32)
             model_matrix[:3, :3] = model_matrix[:3, :3] @ np.diag(scale)
-            position = (np.linalg.inv(model_matrix) @ np.append(world_position_vec, 1.0))[:3]
+            glb_position = (np.linalg.inv(model_matrix) @ np.append(world_position_vec, 1.0))[:3]
         except (TypeError, ValueError, KeyError) as exc:
             raise ValueError("Filament profile view pose contains invalid values") from exc
 
         transform = euler_to_mat4(*rotation_rad).astype(np.float32)
-        transform[:3, 3] = np.asarray(position, dtype=np.float32)
+        transform[:3, 3] = np.asarray(glb_position, dtype=np.float32)
         self._profile_head_transform = transform
         self._profile_view_name = str(view_pose.get("name", "profile"))
         self._profile_near_plane = max(0.001, float(profile.get("xr_projection_near", 0.05)))
@@ -830,23 +830,23 @@ class OpenXrVulkanPresenter(
         )
         screen = profile.get("screen")
         if isinstance(screen, dict):
-            position = screen.get("position", [0.0, 1.2, -2.0])
+            screen_position = screen.get("position", [0.0, 1.2, -2.0])
             rotation = screen.get("rotation_deg", [0.0, 0.0, 0.0])
             if (
-                isinstance(position, (list, tuple))
-                and len(position) >= 3
+                isinstance(screen_position, (list, tuple))
+                and len(screen_position) >= 3
                 and isinstance(rotation, (list, tuple))
                 and len(rotation) >= 3
             ):
                 self._filament_screen = (
-                    tuple(float(value) for value in position[:3]),
+                    tuple(float(value) for value in screen_position[:3]),
                     float(screen.get("width", 2.4)),
                     float(screen.get("height", 2.4 * 9.0 / 16.0)),
                     tuple(float(value) for value in rotation[:3]),
                 )
         print(
             f"Loaded Filament profile view: {self._profile_view_name} "
-            f"world_position={world_position_vec.tolist()} glb_position={position.tolist()} "
+            f"world_position={world_position_vec.tolist()} glb_position={glb_position.tolist()} "
             f"rotation_rad={rotation_rad}",
             flush=True,
         )

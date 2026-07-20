@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import json
 import threading
 from types import SimpleNamespace
 
@@ -220,6 +221,21 @@ def test_presenter_uses_controller_action_mixin_initializer() -> None:
     presenter = OpenXrVulkanPresenter()
     assert hasattr(presenter, "_init_controller_actions")
     assert not hasattr(presenter, "_initialize_controller_actions")
+
+
+def test_filament_profile_keeps_glb_and_screen_positions_separate(tmp_path) -> None:
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_text(json.dumps({
+        "model_position": [0.0, 0.0, 0.0],
+        "view_poses": [{"x": 1.0, "y": 2.0, "z": 3.0}],
+        "screen": {"position": [10.0, 20.0, 30.0]},
+    }), encoding="utf-8")
+    presenter = OpenXrVulkanPresenter(OpenXrVulkanConfig(
+        filament_profile_path=str(profile_path),
+    ))
+    presenter._load_filament_profile()
+    assert presenter._profile_head_transform[:3, 3].tolist() == [1.0, 2.0, 3.0]
+    assert presenter._filament_screen[0] == (10.0, 20.0, 30.0)
 
 
 def test_presenter_run_until_owns_shutdown_close() -> None:

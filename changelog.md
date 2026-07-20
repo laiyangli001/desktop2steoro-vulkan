@@ -314,3 +314,4 @@
 - GitHub Actions run `29766759073` successfully rebuilt and committed Windows x86_64, Linux x86_64, and macOS arm64 Filament Bridge binaries; all three binaries were synchronized locally.
 - The next validation is headset A/B comparison of Preview and OpenXR brightness, tone mapping, and sRGB/UNORM output.
 - Fixed OpenXR startup failure caused by calling the obsolete `_initialize_controller_actions`; Presenter now calls the existing `_init_controller_actions` Mixin method.
+- Fixed profile loading variable reuse: GLB camera position and virtual screen position now use separate variables, preventing `.tolist()` startup failure and preserving the profile camera pose.
