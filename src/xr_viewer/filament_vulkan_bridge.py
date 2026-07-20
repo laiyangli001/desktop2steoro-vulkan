@@ -44,12 +44,17 @@ class FilamentVulkanBridge:
             self._library = ctypes.CDLL(str(path))
         except OSError as exc:
             raise FilamentBridgeError(f"unable to load Filament Bridge: {path}") from exc
+        self._controller_abi_available = False
         self._configure_abi()
         self._handle: ctypes.c_void_p | None = None
 
     @property
     def handle(self) -> int:
         return int(self._handle.value or 0) if self._handle is not None else 0
+
+    @property
+    def controller_abi_available(self) -> bool:
+        return self._controller_abi_available
 
     @property
     def loaded(self) -> bool:
@@ -191,6 +196,59 @@ class FilamentVulkanBridge:
             "load_glb",
         )
 
+    def load_controller(self, hand: int, data: bytes | bytearray | memoryview) -> None:
+        self._ensure_loaded()
+        self._ensure_controller_abi()
+        payload = bytes(data)
+        if int(hand) not in (0, 1) or not payload:
+            raise ValueError("controller hand must be 0 or 1 and payload must not be empty")
+        buffer = ctypes.create_string_buffer(payload)
+        self._check_result(
+            self._library.filament_bridge_load_controller(
+                self._handle, int(hand), buffer, len(payload)
+            ),
+            "load_controller",
+        )
+
+    def set_controller_pose(self, hand: int, matrix) -> None:
+        self._ensure_loaded()
+        self._ensure_controller_abi()
+        values = [float(value) for value in matrix.reshape(-1, order="F")]
+        if int(hand) not in (0, 1) or len(values) != 16:
+            raise ValueError("controller pose must be a 4x4 matrix")
+        array_type = ctypes.c_float * 16
+        self._check_result(
+            self._library.filament_bridge_set_controller_pose(
+                self._handle, int(hand), array_type(*values)
+            ),
+            "set_controller_pose",
+        )
+
+    def set_controller_inputs(
+        self,
+        hand: int,
+        *,
+        trigger: float,
+        grip: float,
+        joystick_x: float,
+        joystick_y: float,
+        button_mask: int,
+    ) -> None:
+        self._ensure_loaded()
+        self._ensure_controller_abi()
+        self._check_result(
+            self._library.filament_bridge_set_controller_inputs(
+                self._handle,
+                int(hand),
+                float(trigger),
+                float(grip),
+                float(joystick_x),
+                float(joystick_y),
+                int(button_mask),
+            ),
+            "set_controller_inputs",
+        )
+
     def set_scene_exposure(self, exposure_ev: float) -> None:
         self._ensure_loaded()
         self._check_result(
@@ -207,6 +265,33 @@ class FilamentVulkanBridge:
                 self._handle, float(brightness)
             ),
             "set_skybox_brightness",
+        )
+
+    def set_fill_light(self, color, intensity: float, direction) -> None:
+        self._ensure_loaded()
+        self._check_result(
+            self._library.filament_bridge_set_fill_light(
+                self._handle,
+                *(float(value) for value in (*color, intensity, *direction)),
+            ),
+            "set_fill_light",
+        )
+
+    def create_screen(self) -> None:
+        self._ensure_loaded()
+        self._check_result(
+            self._library.filament_bridge_create_screen(self._handle),
+            "create_screen",
+        )
+
+    def set_screen(self, position, width: float, height: float, rotation_deg) -> None:
+        self._ensure_loaded()
+        self._check_result(
+            self._library.filament_bridge_set_screen(
+                self._handle,
+                *(float(value) for value in (*position, width, height, *rotation_deg)),
+            ),
+            "set_screen",
         )
 
     def apply_animations(self, time_seconds: float) -> None:
@@ -277,6 +362,27 @@ class FilamentVulkanBridge:
             ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32
         ]
         library.filament_bridge_load_glb.restype = ctypes.c_int
+        controller_functions = (
+            "filament_bridge_load_controller",
+            "filament_bridge_set_controller_pose",
+            "filament_bridge_set_controller_inputs",
+        )
+        if all(hasattr(library, name) for name in controller_functions):
+            library.filament_bridge_load_controller.argtypes = [
+                ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32
+            ]
+            library.filament_bridge_load_controller.restype = ctypes.c_int
+            library.filament_bridge_set_controller_pose.argtypes = [
+                ctypes.c_void_p, ctypes.c_uint32, ctypes.POINTER(ctypes.c_float)
+            ]
+            library.filament_bridge_set_controller_pose.restype = ctypes.c_int
+            library.filament_bridge_set_controller_inputs.argtypes = [
+                ctypes.c_void_p, ctypes.c_uint32,
+                ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float,
+                ctypes.c_uint32,
+            ]
+            library.filament_bridge_set_controller_inputs.restype = ctypes.c_int
+            self._controller_abi_available = True
         library.filament_bridge_set_scene_exposure.argtypes = [
             ctypes.c_void_p, ctypes.c_float
         ]
@@ -285,12 +391,34 @@ class FilamentVulkanBridge:
             ctypes.c_void_p, ctypes.c_float
         ]
         library.filament_bridge_set_skybox_brightness.restype = ctypes.c_int
+        library.filament_bridge_set_fill_light.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_float, ctypes.c_float, ctypes.c_float,
+            ctypes.c_float,
+            ctypes.c_float, ctypes.c_float, ctypes.c_float,
+        ]
+        library.filament_bridge_set_fill_light.restype = ctypes.c_int
+        library.filament_bridge_create_screen.argtypes = [ctypes.c_void_p]
+        library.filament_bridge_create_screen.restype = ctypes.c_int
+        library.filament_bridge_set_screen.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_float, ctypes.c_float, ctypes.c_float,
+            ctypes.c_float, ctypes.c_float,
+            ctypes.c_float, ctypes.c_float, ctypes.c_float,
+        ]
+        library.filament_bridge_set_screen.restype = ctypes.c_int
         library.filament_bridge_apply_animations.argtypes = [
             ctypes.c_void_p, ctypes.c_double
         ]
         library.filament_bridge_apply_animations.restype = ctypes.c_int
         library.filament_bridge_last_error.argtypes = [ctypes.c_void_p]
         library.filament_bridge_last_error.restype = ctypes.c_char_p
+
+    def _ensure_controller_abi(self) -> None:
+        if not self._controller_abi_available:
+            raise FilamentBridgeError(
+                "Filament Bridge controller ABI is unavailable; rebuild the CI artifact"
+            )
 
     def _ensure_loaded(self) -> None:
         if not self.loaded:

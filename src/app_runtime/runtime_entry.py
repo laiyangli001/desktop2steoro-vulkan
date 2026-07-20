@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import platform
 import threading
 import time
 from pathlib import Path
@@ -35,6 +36,39 @@ from .runtime_context import (
     create_runtime_context,
 )
 from .runtime_output import CudaVulkanOutputAdapter, VulkanRuntimeOutputConsumer
+
+
+def _openxr_filament_config(settings: dict) -> dict[str, object]:
+    """Resolve the packaged Windows Filament scene for direct OpenXR runs."""
+    src_root = Path(__file__).resolve().parents[1]
+    platform_bridge = {
+        "Windows": src_root / "xr_viewer" / "native" / "filament_bridge.dll",
+        "Linux": src_root / "xr_viewer" / "native" / "libfilament_bridge.so",
+        "Darwin": src_root / "xr_viewer" / "native" / "libfilament_bridge.dylib",
+    }.get(platform.system())
+    glb_path = src_root / "xr_viewer" / "environments" / "Artemis" / "environment.glb"
+    profile_path = src_root / "xr_viewer" / "environments" / "Artemis" / "profile.json"
+
+    bridge_path = os.environ.get("D2S_FILAMENT_BRIDGE") or (
+        str(platform_bridge) if platform_bridge and platform_bridge.is_file() else None
+    )
+    configured_glb = os.environ.get("D2S_FILAMENT_GLB")
+    configured_profile = os.environ.get("D2S_FILAMENT_PROFILE")
+    return {
+        "swapchain_color_mode": str(
+            settings.get("OpenXR Color Mode", "sRGB")
+        ).strip().lower(),
+        "filament_bridge_path": bridge_path,
+        "filament_glb_path": configured_glb or (str(glb_path) if glb_path.is_file() else None),
+        "filament_profile_path": configured_profile
+        or (str(profile_path) if profile_path.is_file() else None),
+        "filament_scene_exposure_ev": float(
+            settings.get("Filament Scene Exposure", 2.0)
+        ),
+        "filament_skybox_brightness": float(
+            settings.get("Filament Skybox Brightness", 1.0)
+        ),
+    }
 
 
 def _queue_clear(queue) -> None:
@@ -127,12 +161,9 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
     if str(RUN_MODE).strip().lower() == "openxr":
         from xr_viewer.core_openxr_vulkan import OpenXrVulkanConfig, OpenXrVulkanPresenter
 
+        filament_config = _openxr_filament_config(settings)
         presenter = OpenXrVulkanPresenter(
-            OpenXrVulkanConfig(
-                filament_bridge_path=os.environ.get("D2S_FILAMENT_BRIDGE"),
-                filament_glb_path=os.environ.get("D2S_FILAMENT_GLB"),
-                filament_profile_path=os.environ.get("D2S_FILAMENT_PROFILE"),
-            )
+            OpenXrVulkanConfig(**filament_config)
         )
         presenter_thread = threading.Thread(
             target=presenter.run_until,

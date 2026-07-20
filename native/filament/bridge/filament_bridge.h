@@ -60,10 +60,35 @@ FILAMENT_BRIDGE_API int filament_bridge_end_frame(FilamentBridge* bridge);
 
 FILAMENT_BRIDGE_API int filament_bridge_load_glb(
         FilamentBridge* bridge, const uint8_t* bytes, uint32_t byte_count);
+
+// Controller assets are loaded into the same Filament scene as the environment.
+FILAMENT_BRIDGE_API int filament_bridge_load_controller(
+        FilamentBridge* bridge, uint32_t hand,
+        const uint8_t* bytes, uint32_t byte_count);
+FILAMENT_BRIDGE_API int filament_bridge_set_controller_pose(
+        FilamentBridge* bridge, uint32_t hand,
+        const float* matrix16);
+FILAMENT_BRIDGE_API int filament_bridge_set_controller_inputs(
+        FilamentBridge* bridge, uint32_t hand,
+        float trigger, float grip,
+        float joystick_x, float joystick_y,
+        uint32_t button_mask);
+
 FILAMENT_BRIDGE_API int filament_bridge_set_scene_exposure(
         FilamentBridge* bridge, float exposure_ev);
 FILAMENT_BRIDGE_API int filament_bridge_set_skybox_brightness(
         FilamentBridge* bridge, float brightness);
+FILAMENT_BRIDGE_API int filament_bridge_set_fill_light(
+        FilamentBridge* bridge,
+        float red, float green, float blue,
+        float intensity,
+        float direction_x, float direction_y, float direction_z);
+FILAMENT_BRIDGE_API int filament_bridge_create_screen(FilamentBridge* bridge);
+FILAMENT_BRIDGE_API int filament_bridge_set_screen(
+        FilamentBridge* bridge,
+        float position_x, float position_y, float position_z,
+        float width, float height,
+        float rotation_x_degrees, float rotation_y_degrees, float rotation_z_degrees);
 FILAMENT_BRIDGE_API int filament_bridge_apply_animations(
         FilamentBridge* bridge, double time_seconds);
 FILAMENT_BRIDGE_API uint32_t filament_bridge_animation_count(

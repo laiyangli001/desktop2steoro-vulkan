@@ -278,3 +278,36 @@
 ### 下一项内容
 
 下一项：提交源码并由 GitHub Actions 三平台重编译 Filament Bridge，下载新二进制后再测试 Artemis 星空与卫星动画同步效果。
+## 2026-07-21
+
+- Unified Preview and OpenXR Filament color processing in the shared native Bridge: both Views now explicitly use ACES legacy tone mapping, Rec709/sRGB/D65 output color space, and enabled post-processing.
+- Kept scene exposure, skybox brightness, and directional fill-light values profile-driven and shared by Preview/OpenXR; the new CI Bridge binary is required before headset comparison.
+
+- Added configurable OpenXR swapchain color mode: `sRGB`, `UNORM`, or `Auto`; the selected Vulkan format is logged for headset A/B validation.
+- Added focused coverage for sRGB versus UNORM selection and invalid mode rejection. The default remains `sRGB`.
+
+- Reused the legacy controller semantics in the Vulkan path: all complete brand folders under `src/xr_viewer/controllers/` are discovered, while the selected brand remains controlled by `D2S_CONTROLLER_MODEL`.
+- Added narrow Filament Bridge controller ABI for left/right GLB loading, grip-root pose updates, trigger/grip/stick values, and button bitmasks.
+- Implemented Filament-side `_value/_min/_max` node animation using the existing controller naming convention; no replacement renderer or new controller asset format was introduced.
+- Connected the copied OpenXR action bindings and grip pose locator to the Vulkan presenter so controller input and model animation use the same frame loop.
+- Python checks and focused OpenXR/Bridge tests pass: `26 passed`; the new Bridge ABI still requires the GitHub Actions three-platform rebuild before headset validation.
+
+### 验证结果
+
+- `src/python3/python.exe -m py_compile` passed for the new controller modules and OpenXR presenter.
+- `src/python3/python.exe -m pytest -q tests/test_openxr_vulkan.py tests/test_filament_vulkan_bridge.py`: `26 passed`.
+- `git diff --check` passed.
+
+### 未决事项
+
+- The controller ABI source is complete, but the checked-in native binaries do not contain these exports until the next GitHub Actions build.
+- Headset acceptance still needs to confirm model placement and real PICO input/button animation.
+
+### 下一项内容
+
+- Commit and push the controller ABI/source changes, then download the three-platform CI Bridge artifacts and run the OpenXR headset test.
+
+- OpenXR runtime now resolves the packaged platform Filament Bridge, Artemis GLB, and profile automatically; manual `D2S_FILAMENT_*` environment variables are no longer required for the Windows headset test.
+- Set the default test configuration to `OpenXR Link` with scene exposure `2.0` and skybox brightness `1.0`.
+- Fixed the OpenXR Vulkan device setup to stop calling the enable1-only `xrGetVulkanDeviceExtensionsKHR` while using `XR_KHR_vulkan_enable2`.
+- OpenXR Artemis lighting now reads the same exposure, skybox, and directional fill-light profile values as the desktop preview; the updated Bridge binary must be rebuilt by CI.

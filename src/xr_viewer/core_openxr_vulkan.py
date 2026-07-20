@@ -27,6 +27,10 @@ from viewer.vulkan_context import (
 from viewer.vulkan_resources import VulkanExportableImage, VulkanImageResource
 from app_runtime.output_contract import VulkanStereoOutputFrame
 
+from .core_controller_actions import CoreControllerActionsMixin
+from .core_controller_input import CoreControllerInputMixin
+from .core_controller_pose import CoreControllerPoseMixin
+from .controller_models import discover_controller_brands, select_controller_brand
 from .xr_math import _xr_quat_to_mat4, euler_to_mat4, mat4_to_xr_posef
 
 
@@ -40,11 +44,15 @@ class OpenXrVulkanConfig:
     render_scale: float = 1.0
     clear_color: tuple[float, float, float, float] = (0.02, 0.04, 0.08, 1.0)
     requested_vulkan_version: int = make_vulkan_version(1, 4, 0)
+    swapchain_color_mode: str = "srgb"
     filament_bridge_path: str | None = None
     filament_glb_path: str | None = None
     filament_profile_path: str | None = None
     filament_scene_exposure_ev: float = 0.0
     filament_skybox_brightness: float = 1.0
+    filament_fill_light_color: tuple[float, float, float] = (1.0, 0.88, 0.78)
+    filament_fill_light_intensity: float = 100000.0
+    filament_fill_light_direction: tuple[float, float, float] = (-0.35, -1.0, -0.55)
 
 
 @dataclass(slots=True)
@@ -90,8 +98,10 @@ class OpenXrCompositionBuilder:
         )
 
 
-class OpenXrVulkanPresenter:
-    """Minimal OpenXR Vulkan projection-layer presenter."""
+class OpenXrVulkanPresenter(
+    CoreControllerActionsMixin, CoreControllerPoseMixin, CoreControllerInputMixin
+):
+    """OpenXR Vulkan projection-layer presenter with Filament controllers."""
 
     _VULKAN_EXTENSION = "XR_KHR_vulkan_enable2"
 
@@ -127,6 +137,30 @@ class OpenXrVulkanPresenter:
         self._profile_view_name: str | None = None
         self._profile_near_plane = 0.05
         self._profile_far_plane = 1000.0
+        self._filament_scene_exposure = self.config.filament_scene_exposure_ev
+        self._filament_skybox_brightness = self.config.filament_skybox_brightness
+        self._filament_fill_light_color = self.config.filament_fill_light_color
+        self._filament_fill_light_intensity = self.config.filament_fill_light_intensity
+        self._filament_fill_light_direction = self.config.filament_fill_light_direction
+        self._filament_screen: tuple[
+            tuple[float, float, float], float, float, tuple[float, float, float]
+        ] | None = None
+        self._controllers_root = Path(__file__).resolve().parent / "controllers"
+        self._controller_brands = discover_controller_brands(self._controllers_root)
+        self._controller_brand = select_controller_brand(
+            self._controller_brands, os.environ.get("D2S_CONTROLLER_MODEL", "PICO")
+        )
+        self._controller_inputs = ({}, {})
+        self._aim_space_l = None
+        self._aim_space_r = None
+        self._grip_space_l = None
+        self._grip_space_r = None
+        self._aim_mat_l = None
+        self._aim_mat_r = None
+        self._grip_mat_l = None
+        self._grip_mat_r = None
+        self._frame_now = 0.0
+        self._LASER_MOVE_THRESH = 0.005
         self._initialized = False
         self._pending_output: VulkanStereoOutputFrame | None = None
 
@@ -176,6 +210,10 @@ class OpenXrVulkanPresenter:
             )
             self._create_vulkan_objects(api_version)
             self._create_session_and_swapchains()
+            self._xr_instance = self.instance
+            self._xr_session = self.session
+            self._xr_space = self.reference_space
+            self._initialize_controller_actions()
             self._load_filament_profile()
             self._initialize_filament_bridges()
             self._initialized = True
@@ -228,6 +266,13 @@ class OpenXrVulkanPresenter:
 
         xr = self.xr
         frame_state = xr.wait_frame(self.session)
+        self._frame_now = time.perf_counter()
+        try:
+            self._sync_controller_inputs(1.0 / 90.0)
+            self._update_aim_poses(frame_state.predicted_display_time)
+            self._update_grip_poses(frame_state.predicted_display_time)
+        except Exception:
+            pass
         xr.begin_frame(self.session)
         layer_structures: list[Any] = []
         layer_pointers: list[Any] = []
@@ -423,11 +468,9 @@ class OpenXrVulkanPresenter:
             queueCount=1,
             pQueuePriorities=[1.0],
         )
-        runtime_extensions = tuple(
-            name
-            for name in str(xr.get_vulkan_device_extensions_khr(self.instance, self.system_id)).split()
-            if name
-        )
+        # XR_KHR_vulkan_enable2 does not expose xrGetVulkanDeviceExtensionsKHR.
+        # Device extensions are selected from the application's Vulkan resource
+        # requirements and validated against the runtime-selected physical device.
         external_extensions = VulkanExportableImage.required_device_extensions()
         available_extensions = {
             _decode_name(item.extensionName)
@@ -441,7 +484,7 @@ class OpenXrVulkanPresenter:
                 "Vulkan external-memory extensions are unavailable: "
                 + ", ".join(missing_extensions)
             )
-        device_extensions = tuple(dict.fromkeys((*runtime_extensions, *external_extensions)))
+        device_extensions = tuple(dict.fromkeys(external_extensions))
         device_create_info = vk.VkDeviceCreateInfo(
             sType=vk.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
             pNext=timeline_features,
@@ -505,7 +548,16 @@ class OpenXrVulkanPresenter:
             ),
         )
         formats = list(xr.enumerate_swapchain_formats(self.session))
-        self.swapchain_format = _select_swapchain_format(vk, formats)
+        self.swapchain_format = _select_swapchain_format(
+            vk, formats, self.config.swapchain_color_mode
+        )
+        print(
+            "OpenXR swapchain color mode: "
+            f"requested={self.config.swapchain_color_mode} "
+            f"selected={_vulkan_format_name(vk, self.swapchain_format)} "
+            f"format={self.swapchain_format}",
+            flush=True,
+        )
         view_configs = xr.enumerate_view_configuration_views(
             self.instance, self.system_id, self._view_configuration_type
         )
@@ -633,8 +685,24 @@ class OpenXrVulkanPresenter:
                     glb_path = self.config.filament_glb_path
                     if glb_path:
                         bridge.load_glb(Path(glb_path).read_bytes())
-                    bridge.set_scene_exposure(self.config.filament_scene_exposure_ev)
-                    bridge.set_skybox_brightness(self.config.filament_skybox_brightness)
+                    if (
+                        self._controller_brand is not None
+                        and getattr(bridge, "controller_abi_available", True)
+                        and hasattr(bridge, "load_controller")
+                    ):
+                        bridge.load_controller(0, self._controller_brand.left_glb.read_bytes())
+                        bridge.load_controller(1, self._controller_brand.right_glb.read_bytes())
+                    if self._filament_screen is not None:
+                        position, width, height, rotation = self._filament_screen
+                        bridge.create_screen()
+                        bridge.set_screen(position, width, height, rotation)
+                    bridge.set_scene_exposure(self._filament_scene_exposure)
+                    bridge.set_skybox_brightness(self._filament_skybox_brightness)
+                    bridge.set_fill_light(
+                        self._filament_fill_light_color,
+                        self._filament_fill_light_intensity,
+                        self._filament_fill_light_direction,
+                    )
                     self.filament_bridges.append(bridge)
                 except Exception:
                     bridge.close()
@@ -644,6 +712,40 @@ class OpenXrVulkanPresenter:
                 bridge.close()
             self.filament_bridges.clear()
             raise
+
+    def _update_filament_controllers(self, bridge: Any) -> None:
+        if (
+            self._controller_brand is None
+            or not getattr(bridge, "controller_abi_available", True)
+            or not hasattr(bridge, "set_controller_pose")
+            or not hasattr(bridge, "set_controller_inputs")
+        ):
+            return
+        offset = np.eye(4, dtype=np.float32)
+        offset[:3, 3] = np.asarray(self._controller_brand.offset, dtype=np.float32)
+        rotation = euler_to_mat4(
+            math.radians(self._controller_brand.rotation_deg), 0.0, 0.0
+        ).astype(np.float32)
+        for hand, grip_matrix in enumerate((self._grip_mat_l, self._grip_mat_r)):
+            if grip_matrix is None:
+                continue
+            model_matrix = grip_matrix @ rotation @ offset
+            bridge.set_controller_pose(hand, model_matrix)
+            values = self._controller_input(hand)
+            button_mask = 0
+            for bit, name in enumerate(
+                ("a_button", "b_button", "x_button", "y_button", "menu_button")
+            ):
+                if values.get(name, 0.0) > 0.5:
+                    button_mask |= 1 << bit
+            bridge.set_controller_inputs(
+                hand,
+                trigger=values.get("trigger", 0.0),
+                grip=values.get("grip", 0.0),
+                joystick_x=values.get("joystick_x", 0.0),
+                joystick_y=values.get("joystick_y", 0.0),
+                button_mask=button_mask,
+            )
 
     def _load_filament_profile(self) -> None:
         profile_path = self.config.filament_profile_path
@@ -701,6 +803,47 @@ class OpenXrVulkanPresenter:
             self._profile_near_plane + 1.0,
             float(profile.get("xr_projection_far", 1000.0)),
         )
+        self._filament_scene_exposure = float(
+            profile.get("preview_exposure", self._filament_scene_exposure)
+        )
+        self._filament_skybox_brightness = float(
+            profile.get("preview_skybox_brightness", self._filament_skybox_brightness)
+        )
+        fill_color = profile.get(
+            "preview_fill_light_color", self._filament_fill_light_color
+        )
+        fill_direction = profile.get(
+            "preview_fill_light_direction", self._filament_fill_light_direction
+        )
+        if isinstance(fill_color, (list, tuple)) and len(fill_color) >= 3:
+            self._filament_fill_light_color = tuple(
+                float(value) for value in fill_color[:3]
+            )
+        if isinstance(fill_direction, (list, tuple)) and len(fill_direction) >= 3:
+            self._filament_fill_light_direction = tuple(
+                float(value) for value in fill_direction[:3]
+            )
+        self._filament_fill_light_intensity = float(
+            profile.get(
+                "preview_fill_light_intensity", self._filament_fill_light_intensity
+            )
+        )
+        screen = profile.get("screen")
+        if isinstance(screen, dict):
+            position = screen.get("position", [0.0, 1.2, -2.0])
+            rotation = screen.get("rotation_deg", [0.0, 0.0, 0.0])
+            if (
+                isinstance(position, (list, tuple))
+                and len(position) >= 3
+                and isinstance(rotation, (list, tuple))
+                and len(rotation) >= 3
+            ):
+                self._filament_screen = (
+                    tuple(float(value) for value in position[:3]),
+                    float(screen.get("width", 2.4)),
+                    float(screen.get("height", 2.4 * 9.0 / 16.0)),
+                    tuple(float(value) for value in rotation[:3]),
+                )
         print(
             f"Loaded Filament profile view: {self._profile_view_name} "
             f"world_position={world_position_vec.tolist()} glb_position={position.tolist()} "
@@ -728,7 +871,11 @@ class OpenXrVulkanPresenter:
     def _render_projection_layer(self, views: list[Any]) -> Any | None:
         if len(views) < len(self.swapchains):
             return None
-        views = self._apply_filament_profile(views)
+        # The profile adjusts the Filament camera relative to the model. The
+        # composition layer must retain the runtime-provided eye poses so the
+        # OpenXR compositor keeps the rendered image aligned with the headset.
+        composition_views = views
+        render_views = self._apply_filament_profile(views)
         xr = self.xr
         output_frame = self._pending_output
         for eye_index, eye in enumerate(self.swapchains):
@@ -737,10 +884,11 @@ class OpenXrVulkanPresenter:
                     bridge = self.filament_bridges[eye_index]
                     _update_filament_camera(
                         bridge,
-                        views[eye_index],
+                        render_views[eye_index],
                         near_plane=self._profile_near_plane,
                         far_plane=self._profile_far_plane,
                     )
+                    self._update_filament_controllers(bridge)
                     bridge.set_acquired_image(image_index)
                     bridge.begin_frame()
                     bridge.end_frame()
@@ -762,7 +910,7 @@ class OpenXrVulkanPresenter:
                         self.vulkan.clear_color_image(image, self.config.clear_color)
         self._pending_output = None
         return OpenXrCompositionBuilder(xr, self.reference_space).projection_layer(
-            views, self.swapchains
+            composition_views, self.swapchains
         )
 
     def _ensure_initialized(self) -> None:
@@ -890,13 +1038,25 @@ def _select_vulkan_api_version(requirements: Any, requested: int) -> int:
     return selected
 
 
-def _select_swapchain_format(vk: Any, available_formats: list[int]) -> int:
-    preferred = (
+def _select_swapchain_format(
+    vk: Any, available_formats: list[int], color_mode: str = "srgb"
+) -> int:
+    mode = str(color_mode or "srgb").strip().lower()
+    if mode not in {"srgb", "unorm", "auto"}:
+        raise ValueError("OpenXR swapchain color mode must be srgb, unorm, or auto")
+
+    srgb = (
         vk.VK_FORMAT_R8G8B8A8_SRGB,
         vk.VK_FORMAT_B8G8R8A8_SRGB,
+    )
+    unorm = (
         vk.VK_FORMAT_R8G8B8A8_UNORM,
         vk.VK_FORMAT_B8G8R8A8_UNORM,
     )
+    if mode == "unorm":
+        preferred = unorm + srgb
+    else:
+        preferred = srgb + unorm
     for candidate in preferred:
         if int(candidate) in available_formats:
             return int(candidate)
@@ -905,6 +1065,16 @@ def _select_swapchain_format(vk: Any, available_formats: list[int]) -> int:
             "OpenXR runtime returned no swapchain formats"
         )
     return int(available_formats[0])
+
+
+def _vulkan_format_name(vk: Any, value: int) -> str:
+    names = {
+        int(vk.VK_FORMAT_R8G8B8A8_SRGB): "R8G8B8A8_SRGB",
+        int(vk.VK_FORMAT_B8G8R8A8_SRGB): "B8G8R8A8_SRGB",
+        int(vk.VK_FORMAT_R8G8B8A8_UNORM): "R8G8B8A8_UNORM",
+        int(vk.VK_FORMAT_B8G8R8A8_UNORM): "B8G8R8A8_UNORM",
+    }
+    return names.get(int(value), "runtime-preferred")
 
 
 def _scaled_dimension(recommended: int, maximum: int, scale: float) -> int:

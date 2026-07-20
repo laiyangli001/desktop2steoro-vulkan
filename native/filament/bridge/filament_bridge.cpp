@@ -1,6 +1,7 @@
 #include "filament_bridge.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <memory>
@@ -10,6 +11,8 @@
 
 #include <backend/platforms/VulkanPlatform.h>
 #include <filament/Camera.h>
+#include <filament/ColorGrading.h>
+#include <filament/ColorSpace.h>
 #include <filament/Engine.h>
 #include <filament/IndexBuffer.h>
 #include <filament/LightManager.h>
@@ -193,12 +196,34 @@ struct MaterialBrightnessState {
     float skybox_brightness = 1.0f;
 };
 
+struct ControllerAnimation {
+    utils::Entity value_entity;
+    utils::Entity min_entity;
+    utils::Entity max_entity;
+    filament::math::mat4f value_transform;
+    filament::math::mat4f min_transform;
+    filament::math::mat4f max_transform;
+    std::string semantic;
+};
+
+struct ControllerAsset {
+    filament::gltfio::FilamentAsset* asset = nullptr;
+    std::vector<uint8_t> bytes;
+    std::vector<ControllerAnimation> animations;
+    float trigger = 0.0f;
+    float grip = 0.0f;
+    float joystick_x = 0.0f;
+    float joystick_y = 0.0f;
+    uint32_t button_mask = 0;
+};
+
 struct FilamentBridge {
     filament::Engine* engine = nullptr;
     filament::Renderer* renderer = nullptr;
     filament::Scene* scene = nullptr;
     filament::View* view = nullptr;
     filament::Camera* camera = nullptr;
+    filament::ColorGrading* color_grading = nullptr;
     filament::gltfio::MaterialProvider* materials = nullptr;
     filament::gltfio::TextureProvider* texture_provider = nullptr;
     filament::gltfio::AssetLoader* asset_loader = nullptr;
@@ -206,8 +231,17 @@ struct FilamentBridge {
     filament::SwapChain* swapchain = nullptr;
     OpenXrVulkanPlatform::ExternalSwapChain* external_swapchain = nullptr;
     OpenXrVulkanPlatform* platform = nullptr;
+    utils::Entity fill_light;
+    utils::Entity screen_entity;
+    filament::VertexBuffer* screen_vertex_buffer = nullptr;
+    filament::IndexBuffer* screen_index_buffer = nullptr;
+    filament::Material* screen_material = nullptr;
+    filament::MaterialInstance* screen_material_instance = nullptr;
+    std::vector<PreviewScreenVertex> screen_vertices;
+    std::vector<uint16_t> screen_indices;
     filament::backend::VulkanPlatform::VulkanSharedContext shared_context{};
     MaterialBrightnessState brightness;
+    std::array<ControllerAsset, 2> controllers;
     std::vector<uint8_t> glb_bytes;
     std::string last_error;
     bool frame_active = false;
@@ -219,6 +253,7 @@ struct FilamentPreview {
     filament::Scene* scene = nullptr;
     filament::View* view = nullptr;
     filament::Camera* camera = nullptr;
+    filament::ColorGrading* color_grading = nullptr;
     filament::gltfio::MaterialProvider* materials = nullptr;
     filament::gltfio::TextureProvider* texture_provider = nullptr;
     filament::gltfio::AssetLoader* asset_loader = nullptr;
@@ -239,9 +274,108 @@ struct FilamentPreview {
 
 namespace {
 
+template<typename Target>
+bool configure_color_pipeline(Target* target) {
+    if (!target || !target->engine || !target->view) {
+        return false;
+    }
+    target->color_grading = filament::ColorGrading::Builder()
+            .toneMapping(filament::ColorGrading::ToneMapping::ACES_LEGACY)
+            .outputColorSpace(filament::color::Rec709 - filament::color::sRGB - filament::color::D65)
+            .build(*target->engine);
+    if (!target->color_grading) {
+        return false;
+    }
+    target->view->setColorGrading(target->color_grading);
+    target->view->setPostProcessingEnabled(true);
+    return true;
+}
+
 void set_error(FilamentBridge* bridge, const char* message) {
     if (bridge) {
         bridge->last_error = message;
+    }
+}
+
+void destroy_controller_asset(FilamentBridge* bridge, ControllerAsset& controller) {
+    if (controller.asset && bridge->scene) {
+        bridge->scene->removeEntities(
+                controller.asset->getEntities(), controller.asset->getEntityCount());
+    }
+    if (controller.asset && bridge->asset_loader) {
+        bridge->asset_loader->destroyAsset(controller.asset);
+    }
+    controller = {};
+}
+
+std::string controller_semantic(std::string name) {
+    std::transform(name.begin(), name.end(), name.begin(),
+            [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
+    if (name.find("thumbstick_xaxis") != std::string::npos ||
+            name.find("touchpad_xaxis") != std::string::npos) return "joystick_x";
+    if (name.find("thumbstick_yaxis") != std::string::npos ||
+            name.find("touchpad_yaxis") != std::string::npos) return "joystick_y";
+    if (name.find("thumbstick") != std::string::npos ||
+            name.find("touchpad") != std::string::npos) return "joystick";
+    if (name.find("trigger") != std::string::npos) return "trigger";
+    if (name.find("squeeze") != std::string::npos ||
+            name.find("grip") != std::string::npos ||
+            name.find("grasp") != std::string::npos) return "grip";
+    if (name.find("a_button") != std::string::npos ||
+            name.find("abutton") != std::string::npos) return "a_button";
+    if (name.find("b_button") != std::string::npos ||
+            name.find("bbutton") != std::string::npos) return "b_button";
+    if (name.find("x_button") != std::string::npos ||
+            name.find("xbutton") != std::string::npos) return "x_button";
+    if (name.find("y_button") != std::string::npos ||
+            name.find("ybutton") != std::string::npos) return "y_button";
+    if (name.find("menu") != std::string::npos) return "menu_button";
+    return {};
+}
+
+filament::math::mat4f interpolate_controller_transform(
+        const filament::math::mat4f& minimum,
+        const filament::math::mat4f& maximum,
+        float amount) {
+    const float t = std::clamp(std::abs(amount), 0.0f, 1.0f);
+    const auto& target = amount < 0.0f ? minimum : maximum;
+    filament::math::mat4f result = target;
+    for (int column = 0; column < 4; ++column) {
+        for (int row = 0; row < 4; ++row) {
+            result[column][row] = minimum[column][row] +
+                    (target[column][row] - minimum[column][row]) * t;
+        }
+    }
+    return result;
+}
+
+float controller_animation_amount(
+        const ControllerAsset& controller, const std::string& semantic) {
+    if (semantic == "trigger") return controller.trigger;
+    if (semantic == "grip") return controller.grip;
+    if (semantic == "joystick_x") return controller.joystick_x;
+    if (semantic == "joystick_y") return controller.joystick_y;
+    if (semantic == "joystick") return controller.joystick_x != 0.0f ||
+            controller.joystick_y != 0.0f ? 1.0f : 0.0f;
+    if (semantic == "a_button") return (controller.button_mask & (1u << 0)) ? 1.0f : 0.0f;
+    if (semantic == "b_button") return (controller.button_mask & (1u << 1)) ? 1.0f : 0.0f;
+    if (semantic == "x_button") return (controller.button_mask & (1u << 2)) ? 1.0f : 0.0f;
+    if (semantic == "y_button") return (controller.button_mask & (1u << 3)) ? 1.0f : 0.0f;
+    if (semantic == "menu_button") return (controller.button_mask & (1u << 4)) ? 1.0f : 0.0f;
+    return 0.0f;
+}
+
+void update_controller_animations(
+        FilamentBridge* bridge, ControllerAsset& controller) {
+    if (!controller.asset || !bridge->engine) return;
+    auto& transforms = bridge->engine->getTransformManager();
+    for (const auto& animation : controller.animations) {
+        const float amount = controller_animation_amount(controller, animation.semantic);
+        if (!transforms.hasComponent(animation.value_entity)) continue;
+        transforms.setTransform(
+                transforms.getInstance(animation.value_entity),
+                interpolate_controller_transform(
+                        animation.min_transform, animation.max_transform, amount));
     }
 }
 
@@ -435,6 +569,154 @@ int create_preview_screen(FilamentPreview* preview) {
     return 1;
 }
 
+void destroy_bridge_screen(FilamentBridge* bridge) {
+    if (!bridge || !bridge->engine) return;
+    if (bridge->scene && !bridge->screen_entity.isNull()) {
+        bridge->scene->remove(bridge->screen_entity);
+    }
+    if (!bridge->screen_entity.isNull()) {
+        bridge->engine->destroy(bridge->screen_entity);
+        bridge->screen_entity = {};
+    }
+    if (bridge->screen_vertex_buffer) {
+        bridge->engine->destroy(bridge->screen_vertex_buffer);
+        bridge->screen_vertex_buffer = nullptr;
+    }
+    if (bridge->screen_index_buffer) {
+        bridge->engine->destroy(bridge->screen_index_buffer);
+        bridge->screen_index_buffer = nullptr;
+    }
+    if (bridge->screen_material_instance) {
+        bridge->engine->destroy(bridge->screen_material_instance);
+        bridge->screen_material_instance = nullptr;
+    }
+    if (bridge->screen_material) {
+        bridge->engine->destroy(bridge->screen_material);
+        bridge->screen_material = nullptr;
+    }
+    bridge->screen_vertices.clear();
+    bridge->screen_indices.clear();
+}
+
+int update_bridge_screen(
+        FilamentBridge* bridge,
+        float position_x, float position_y, float position_z,
+        float width, float height,
+        float rotation_x_degrees, float rotation_y_degrees, float rotation_z_degrees) {
+    if (!bridge || !bridge->engine || !bridge->screen_vertex_buffer ||
+            !std::isfinite(position_x) || !std::isfinite(position_y) ||
+            !std::isfinite(position_z) || !std::isfinite(width) ||
+            !std::isfinite(height) || width <= 0.0f || height <= 0.0f ||
+            !std::isfinite(rotation_x_degrees) || !std::isfinite(rotation_y_degrees) ||
+            !std::isfinite(rotation_z_degrees)) return 0;
+    constexpr float kPi = 3.14159265358979323846f;
+    const float yaw = rotation_x_degrees * kPi / 180.0f;
+    const float pitch = rotation_y_degrees * kPi / 180.0f;
+    const float roll = rotation_z_degrees * kPi / 180.0f;
+    const float cy = std::cos(yaw), sy = std::sin(yaw);
+    const float cp = std::cos(pitch), sp = std::sin(pitch);
+    const float cr = std::cos(roll), sr = std::sin(roll);
+    const filament::math::float3 right{
+            cy * cr + sy * sp * sr, sr * cp, -sy * cr + cy * sp * sr};
+    const filament::math::float3 up{
+            -cy * sr + sy * sp * cr, cr * cp, sr * sy + cy * sp * cr};
+    const filament::math::float3 center{position_x, position_y, position_z};
+    const filament::math::float3 half_right = right * (width * 0.5f);
+    const filament::math::float3 half_up = up * (height * 0.5f);
+    bridge->screen_vertices = {
+            {center - half_right - half_up, {0.0f, 0.0f}},
+            {center + half_right - half_up, {1.0f, 0.0f}},
+            {center - half_right + half_up, {0.0f, 1.0f}},
+            {center + half_right + half_up, {1.0f, 1.0f}},
+    };
+    bridge->screen_vertex_buffer->setBufferAt(*bridge->engine, 0,
+            filament::VertexBuffer::BufferDescriptor(
+                    bridge->screen_vertices.data(),
+                    bridge->screen_vertices.size() * sizeof(PreviewScreenVertex), nullptr));
+    return 1;
+}
+
+int create_bridge_screen(FilamentBridge* bridge) {
+    if (!bridge || !bridge->engine || !bridge->scene) return 0;
+    destroy_bridge_screen(bridge);
+    const char* shader = R"FILAMENT(
+        void material(inout MaterialInputs material) {
+            prepareMaterial(material);
+            float2 uv = getUV0();
+            float2 grid_uv = abs(fract(uv * float2(16.0, 9.0)) - 0.5);
+            float line = step(0.47, max(grid_uv.x, grid_uv.y));
+            float3 base = float3(0.1, 0.45, 1.0);
+            float3 grid = mix(base, float3(0.72, 0.88, 1.0), line * 0.35);
+            material.baseColor = float4(grid, 0.72);
+        }
+    )FILAMENT";
+    filamat::MaterialBuilder::init();
+    filamat::MaterialBuilder builder;
+    builder.name("D2S OpenXR Screen")
+            .material(shader)
+            .require(filament::VertexAttribute::UV0)
+            .shading(filament::Shading::UNLIT)
+            .materialDomain(filament::MaterialDomain::SURFACE)
+            .blending(filament::BlendingMode::TRANSPARENT)
+            .culling(filament::backend::CullingMode::NONE)
+            .depthWrite(false)
+            .depthCulling(false)
+            .targetApi(filamat::MaterialBuilder::TargetApi::ALL)
+            .platform(filamat::MaterialBuilder::Platform::ALL);
+    const filamat::Package package = builder.build(bridge->engine->getJobSystem());
+    if (!package.isValid()) {
+        set_error(bridge, "Filament could not build OpenXR screen material");
+        return 0;
+    }
+    bridge->screen_material = filament::Material::Builder()
+            .package(package.getData(), package.getSize())
+            .build(*bridge->engine);
+    if (!bridge->screen_material) {
+        set_error(bridge, "Filament could not create OpenXR screen material");
+        return 0;
+    }
+    bridge->screen_material_instance = bridge->screen_material->createInstance();
+    bridge->screen_vertices.resize(4);
+    bridge->screen_indices = {0, 1, 2, 1, 3, 2};
+    bridge->screen_vertex_buffer = filament::VertexBuffer::Builder()
+            .vertexCount(4).bufferCount(1)
+            .attribute(filament::VertexAttribute::POSITION, 0,
+                    filament::VertexBuffer::AttributeType::FLOAT3,
+                    0, sizeof(PreviewScreenVertex))
+            .attribute(filament::VertexAttribute::UV0, 0,
+                    filament::VertexBuffer::AttributeType::FLOAT2,
+                    sizeof(float) * 3, sizeof(PreviewScreenVertex))
+            .build(*bridge->engine);
+    bridge->screen_index_buffer = filament::IndexBuffer::Builder()
+            .indexCount(static_cast<uint32_t>(bridge->screen_indices.size()))
+            .bufferType(filament::IndexBuffer::IndexType::USHORT)
+            .build(*bridge->engine);
+    if (!bridge->screen_material_instance || !bridge->screen_vertex_buffer ||
+            !bridge->screen_index_buffer) {
+        set_error(bridge, "Filament could not create OpenXR screen geometry");
+        return 0;
+    }
+    bridge->screen_index_buffer->setBuffer(*bridge->engine,
+            filament::IndexBuffer::BufferDescriptor(
+                    bridge->screen_indices.data(),
+                    bridge->screen_indices.size() * sizeof(uint16_t), nullptr));
+    bridge->screen_entity = utils::EntityManager::get().create();
+    const auto result = filament::RenderableManager::Builder(1)
+            .boundingBox({{-20000.0f, -20000.0f, -20000.0f}, {20000.0f, 20000.0f, 20000.0f}})
+            .material(0, bridge->screen_material_instance)
+            .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES,
+                    bridge->screen_vertex_buffer, bridge->screen_index_buffer,
+                    0, static_cast<uint32_t>(bridge->screen_indices.size()))
+            .priority(7).culling(false).castShadows(false).receiveShadows(false)
+            .build(*bridge->engine, bridge->screen_entity);
+    if (result != filament::RenderableManager::Builder::Success) {
+        set_error(bridge, "Filament could not create OpenXR screen renderable");
+        return 0;
+    }
+    bridge->scene->addEntity(bridge->screen_entity);
+    return 1;
+}
+
 bool is_skybox_name(const char* name) {
     if (!name) return false;
     std::string value(name);
@@ -546,6 +828,10 @@ FilamentBridge* filament_bridge_create_vulkan(
             filament::math::float3{0.0f, 1.0f, 0.0f});
     bridge->view->setScene(bridge->scene);
     bridge->view->setCamera(bridge->camera);
+    if (!configure_color_pipeline(bridge.get())) {
+        set_error(bridge.get(), "Filament Vulkan color pipeline creation failed");
+        return bridge.release();
+    }
     filament::gltfio::AssetConfiguration config{bridge->engine, bridge->materials};
     bridge->asset_loader = filament::gltfio::AssetLoader::create(config);
     if (!bridge->asset_loader) {
@@ -557,14 +843,25 @@ FilamentBridge* filament_bridge_create_vulkan(
 void filament_bridge_destroy(FilamentBridge* bridge) {
     if (!bridge) return;
     destroy_asset(bridge);
+    for (auto& controller : bridge->controllers) {
+        destroy_controller_asset(bridge, controller);
+    }
+    destroy_bridge_screen(bridge);
     if (bridge->swapchain && bridge->engine) {
         bridge->engine->destroy(bridge->swapchain);
+    }
+    if (bridge->color_grading && bridge->engine) {
+        bridge->view->setColorGrading(nullptr);
+        bridge->engine->destroy(bridge->color_grading);
     }
     if (bridge->view && bridge->engine) {
         bridge->engine->destroy(bridge->view);
     }
     if (bridge->camera && bridge->engine) {
         bridge->engine->destroy(bridge->camera->getEntity());
+    }
+    if (!bridge->fill_light.isNull() && bridge->engine) {
+        bridge->engine->destroy(bridge->fill_light);
     }
     if (bridge->scene && bridge->engine) {
         bridge->engine->destroy(bridge->scene);
@@ -711,10 +1008,110 @@ int filament_bridge_load_glb(FilamentBridge* bridge, const uint8_t* bytes, uint3
     }
     bridge->scene->addEntities(
             bridge->asset->getEntities(), bridge->asset->getEntityCount());
-    collect_material_brightness(bridge, false);
+    collect_material_brightness(bridge, true);
     bridge->asset->releaseSourceData();
     bridge->engine->flushAndWait();
     bridge->glb_bytes.clear();
+    return 1;
+}
+
+int filament_bridge_load_controller(
+        FilamentBridge* bridge, uint32_t hand,
+        const uint8_t* bytes, uint32_t byte_count) {
+    if (!bridge || !bridge->engine || !bridge->asset_loader ||
+            hand > 1 || !bytes || !byte_count) {
+        return 0;
+    }
+    auto& controller = bridge->controllers[hand];
+    destroy_controller_asset(bridge, controller);
+    controller.bytes.assign(bytes, bytes + byte_count);
+    controller.asset = bridge->asset_loader->createAsset(
+            controller.bytes.data(), byte_count);
+    if (!controller.asset) {
+        set_error(bridge, "Filament could not parse controller GLB");
+        controller = {};
+        return 0;
+    }
+    filament::gltfio::ResourceConfiguration config{bridge->engine, nullptr, true};
+    filament::gltfio::ResourceLoader resources(config);
+    resources.addTextureProvider("image/png", bridge->texture_provider);
+    resources.addTextureProvider("image/jpeg", bridge->texture_provider);
+    if (!resources.loadResources(controller.asset)) {
+        destroy_controller_asset(bridge, controller);
+        set_error(bridge, "Filament could not load controller GLB resources");
+        return 0;
+    }
+    bridge->scene->addEntities(
+            controller.asset->getEntities(), controller.asset->getEntityCount());
+    const auto& transforms = bridge->engine->getTransformManager();
+    for (size_t index = 0; index < controller.asset->getEntityCount(); ++index) {
+        const auto entity = controller.asset->getEntities()[index];
+        const char* raw_name = controller.asset->getName(entity);
+        if (!raw_name) continue;
+        const std::string value_name(raw_name);
+        const std::string suffix = "_value";
+        if (value_name.size() <= suffix.size() ||
+                value_name.compare(value_name.size() - suffix.size(), suffix.size(), suffix) != 0) {
+            continue;
+        }
+        const std::string prefix = value_name.substr(0, value_name.size() - suffix.size());
+        const auto min_entity = controller.asset->getFirstEntityByName(
+                (prefix + "_min").c_str());
+        const auto max_entity = controller.asset->getFirstEntityByName(
+                (prefix + "_max").c_str());
+        const auto value_instance = transforms.getInstance(entity);
+        const auto min_instance = transforms.getInstance(min_entity);
+        const auto max_instance = transforms.getInstance(max_entity);
+        if (min_entity.isNull() || max_entity.isNull() ||
+                !value_instance.isValid() || !min_instance.isValid() || !max_instance.isValid()) {
+            continue;
+        }
+        const std::string semantic = controller_semantic(value_name);
+        if (semantic.empty()) continue;
+        controller.animations.push_back({
+                entity, min_entity, max_entity,
+                transforms.getTransform(value_instance),
+                transforms.getTransform(min_instance),
+                transforms.getTransform(max_instance),
+                semantic});
+    }
+    controller.asset->releaseSourceData();
+    controller.bytes.clear();
+    bridge->engine->flushAndWait();
+    update_controller_animations(bridge, controller);
+    return 1;
+}
+
+int filament_bridge_set_controller_pose(
+        FilamentBridge* bridge, uint32_t hand, const float* matrix16) {
+    if (!bridge || !bridge->engine || hand > 1 || !matrix16 ||
+            !bridge->controllers[hand].asset) return 0;
+    const auto root = bridge->controllers[hand].asset->getRoot();
+    auto& transforms = bridge->engine->getTransformManager();
+    const auto instance = transforms.getInstance(root);
+    if (!instance.isValid()) return 0;
+    const filament::math::mat4f matrix(
+            matrix16[0], matrix16[1], matrix16[2], matrix16[3],
+            matrix16[4], matrix16[5], matrix16[6], matrix16[7],
+            matrix16[8], matrix16[9], matrix16[10], matrix16[11],
+            matrix16[12], matrix16[13], matrix16[14], matrix16[15]);
+    transforms.setTransform(instance, matrix);
+    return 1;
+}
+
+int filament_bridge_set_controller_inputs(
+        FilamentBridge* bridge, uint32_t hand,
+        float trigger, float grip,
+        float joystick_x, float joystick_y,
+        uint32_t button_mask) {
+    if (!bridge || hand > 1 || !bridge->controllers[hand].asset) return 0;
+    auto& controller = bridge->controllers[hand];
+    controller.trigger = std::clamp(trigger, 0.0f, 1.0f);
+    controller.grip = std::clamp(grip, 0.0f, 1.0f);
+    controller.joystick_x = std::clamp(joystick_x, -1.0f, 1.0f);
+    controller.joystick_y = std::clamp(joystick_y, -1.0f, 1.0f);
+    controller.button_mask = button_mask;
+    update_controller_animations(bridge, controller);
     return 1;
 }
 
@@ -783,6 +1180,10 @@ FilamentPreview* filament_preview_create(void* native_window, uint32_t width, ui
             filament::math::float3{0.0f, 1.0f, 0.0f});
     preview->view->setScene(preview->scene);
     preview->view->setCamera(preview->camera);
+    if (!configure_color_pipeline(preview.get())) {
+        set_preview_error(preview.get(), "Filament preview color pipeline creation failed");
+        return preview.release();
+    }
     preview->view->setViewport(filament::Viewport{0, 0, width, height});
     preview->fill_light = utils::EntityManager::get().create();
     filament::LightManager::Builder(filament::LightManager::Type::DIRECTIONAL)
@@ -813,6 +1214,10 @@ void filament_preview_destroy(FilamentPreview* preview) {
         preview->engine->destroy(preview->fill_light);
     }
     if (preview->swapchain && preview->engine) preview->engine->destroy(preview->swapchain);
+    if (preview->color_grading && preview->engine) {
+        preview->view->setColorGrading(nullptr);
+        preview->engine->destroy(preview->color_grading);
+    }
     if (preview->view && preview->engine) preview->engine->destroy(preview->view);
     if (preview->camera && preview->engine) preview->engine->destroy(preview->camera->getEntity());
     if (preview->scene && preview->engine) preview->engine->destroy(preview->scene);
@@ -971,6 +1376,49 @@ int filament_bridge_set_skybox_brightness(FilamentBridge* bridge, float brightne
     bridge->brightness.skybox_brightness = std::min(brightness, 16.0f);
     apply_material_brightness(bridge);
     return 1;
+}
+
+int filament_bridge_set_fill_light(
+        FilamentBridge* bridge,
+        float red, float green, float blue,
+        float intensity,
+        float direction_x, float direction_y, float direction_z) {
+    if (!bridge || !bridge->engine || !bridge->scene ||
+            !std::isfinite(red) || !std::isfinite(green) ||
+            !std::isfinite(blue) || !std::isfinite(intensity) || intensity < 0.0f ||
+            !std::isfinite(direction_x) || !std::isfinite(direction_y) ||
+            !std::isfinite(direction_z)) {
+        return 0;
+    }
+    if (!bridge->fill_light.isNull()) {
+        bridge->scene->remove(bridge->fill_light);
+        bridge->engine->destroy(bridge->fill_light);
+        bridge->fill_light = {};
+    }
+    bridge->fill_light = utils::EntityManager::get().create();
+    filament::LightManager::Builder(filament::LightManager::Type::DIRECTIONAL)
+            .color(filament::LinearColor{red, green, blue})
+            .intensity(intensity)
+            .direction({direction_x, direction_y, direction_z})
+            .lightChannel(0, false)
+            .lightChannel(1, true)
+            .castShadows(false)
+            .build(*bridge->engine, bridge->fill_light);
+    bridge->scene->addEntity(bridge->fill_light);
+    return 1;
+}
+
+int filament_bridge_create_screen(FilamentBridge* bridge) {
+    return create_bridge_screen(bridge);
+}
+
+int filament_bridge_set_screen(
+        FilamentBridge* bridge,
+        float position_x, float position_y, float position_z,
+        float width, float height,
+        float rotation_x_degrees, float rotation_y_degrees, float rotation_z_degrees) {
+    return update_bridge_screen(bridge, position_x, position_y, position_z,
+            width, height, rotation_x_degrees, rotation_y_degrees, rotation_z_degrees);
 }
 
 int filament_preview_render(FilamentPreview* preview) {
