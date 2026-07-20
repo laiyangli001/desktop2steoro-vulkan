@@ -360,7 +360,7 @@ int create_preview_screen(FilamentPreview* preview) {
             .material(shader)
             .shading(filament::Shading::UNLIT)
             .materialDomain(filament::MaterialDomain::SURFACE)
-            .blending(filament::BlendingMode::TRANSLUCENT)
+            .blending(filament::BlendingMode::TRANSPARENT)
             .culling(filament::backend::CullingMode::NONE)
             .depthWrite(false)
             .depthCulling(true)
