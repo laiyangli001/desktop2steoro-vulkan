@@ -27,6 +27,7 @@ pygltflib>=1.16.5
 
 # Vulkan/OpenXR primary path
 pyopenxr==1.1.5301
+# PyPI package "vulkan" currently has no 1.4.x release; 1.3.275.1 is the latest available binding.
 vulkan==1.3.275.1
 
 # OpenGL fallback path

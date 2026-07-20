@@ -842,6 +842,7 @@ int filament_preview_create_star_glim_material(FilamentPreview* preview) {
             .parameter("starSpeed", filamat::MaterialBuilder::UniformType::FLOAT)
             .parameter("starSeed", filamat::MaterialBuilder::UniformType::FLOAT)
             .parameter("starTime", filamat::MaterialBuilder::UniformType::FLOAT)
+            .require(filament::VertexAttribute::UV0)
             .shading(filament::Shading::UNLIT)
             .materialDomain(filament::MaterialDomain::SURFACE)
             .blending(filament::BlendingMode::MASKED)
