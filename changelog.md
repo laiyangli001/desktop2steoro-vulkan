@@ -45,6 +45,7 @@
 - 修复头显转动时场景回弹抖动：首帧后每个 OpenXR tick 都按当前头显 pose 重新渲染 Filament 世界，仅复用没有新推理帧的 Quad Layer 输入，避免用上一张旧姿态投影图替代当前相机姿态。
 - 修复 GUI 子进程日志拼接误报：stdout/stderr 合并后若 profile 成功消息与 `[FPSBreakdown]` 粘连，先按日志标记拆分再分类，避免 `fx_entry_failed=` 等统计字段把成功消息标成 ERROR。
 - 完成 CUDA/Vulkan/Filament external semaphore ABI 的三平台远程编译：GitHub Actions 运行 `29818061943` 的 Windows、Linux、macOS Bridge 构建及二进制回写全部成功；本地已同步 `filament_bridge.dll`、`libfilament_bridge.so` 和 `libfilament_bridge.dylib`。
+- Vulkan 优化状态明确为分阶段完成：输出图像环、持久化纹理缓存、external semaphore 异步同步、双眼统一提交和单 Engine 资源共享已完成；完整 Compute Graph、Validation Layer、跨厂商互操作、性能基准和实机长稳验收仍未完成，不能标记为整体完成。
 
 ### 验证结果
 
