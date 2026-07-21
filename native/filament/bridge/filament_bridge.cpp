@@ -1212,7 +1212,10 @@ FilamentPreview* filament_preview_create(void* native_window, uint32_t width, ui
             utils::EntityManager::get().create());
     preview->materials = filament::gltfio::createJitShaderProvider(preview->engine);
     preview->texture_provider = filament::gltfio::createStbProvider(preview->engine);
-    preview->swapchain = preview->engine->createSwapChain(native_window);
+    // Keep the desktop preview target aligned with the validated OpenXR sRGB
+    // swapchain path and the shared Rec709 color-grading output.
+    preview->swapchain = preview->engine->createSwapChain(
+            native_window, filament::SwapChain::CONFIG_SRGB_COLORSPACE);
     if (!preview->renderer || !preview->scene || !preview->view || !preview->camera ||
             !preview->materials || !preview->texture_provider || !preview->swapchain) {
         set_preview_error(preview.get(), "Filament preview resource creation failed");
