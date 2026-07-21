@@ -10,6 +10,7 @@
 - 修复实机 Quad Layer 屏幕变成长条：profile 未显式提供高度时按宽度自动计算 16:9 高度；修复 profile 校准后控制器仍使用旧 OpenXR reference space，手柄位姿现在与场景使用同一世界空间。
 - 修复 Artemis 星空纹理转头闪烁：为 `Skybox__6464723579082975951` 的 8192x4096 纹理启用三线性 mipmap 采样，保留原始星空图像内容和空间位置。
 - 修复 Quad Layer 虚拟屏幕上下颠倒：运行时 Vulkan 到 OpenXR Quad swapchain 的 GPU 拷贝增加显式 Y 翻转，Projection Layer 复制路径不受影响。
+- 修复 Quad Layer 虚拟屏幕左右镜像：同一拷贝路径增加 X 翻转，当前 Quad Layer 使用 X/Y 双轴方向校正。
 
 - OpenXR 运行时 Vulkan 中间图像保持 UNORM 存储；Filament 屏幕纹理按 sRGB 语义采样，Projection Layer 使用 UNORM 目标，避免已编码输出重复执行传输函数。
 - 虚拟屏幕接入运行时左右眼 Vulkan 输出：导出图像增加 `SAMPLED` 用途，Filament Bridge 新增窄 C ABI，将借用的 Vulkan 图像导入屏幕材质；不引入 CPU 回读。

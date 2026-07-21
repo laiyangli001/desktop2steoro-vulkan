@@ -608,6 +608,7 @@ class VulkanContext:
         destination: Any,
         *,
         wait_for_timeline: int | None = None,
+        flip_x: bool = False,
         flip_y: bool = False,
     ) -> int:
         """Copy registered Vulkan images, optionally flipping the image on Y."""
@@ -684,7 +685,11 @@ class VulkanContext:
                 baseArrayLayer=0,
                 layerCount=1,
             )
-            if flip_y:
+            if flip_x or flip_y:
+                src_x0 = int(source.width) if flip_x else 0
+                src_x1 = 0 if flip_x else int(source.width)
+                src_y0 = int(source.height) if flip_y else 0
+                src_y1 = 0 if flip_y else int(source.height)
                 vk.vkCmdBlitImage(
                     command_buffer,
                     source.image,
@@ -696,8 +701,8 @@ class VulkanContext:
                         vk.VkImageBlit(
                             srcSubresource=subresource,
                             srcOffsets=[
-                                vk.VkOffset3D(x=0, y=int(source.height), z=0),
-                                vk.VkOffset3D(x=int(source.width), y=0, z=1),
+                                vk.VkOffset3D(x=src_x0, y=src_y0, z=0),
+                                vk.VkOffset3D(x=src_x1, y=src_y1, z=1),
                             ],
                             dstSubresource=subresource,
                             dstOffsets=[

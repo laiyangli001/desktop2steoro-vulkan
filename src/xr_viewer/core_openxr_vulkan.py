@@ -1255,6 +1255,7 @@ class OpenXrVulkanPresenter(
                 self.vulkan.copy_image(
                     source,
                     eye.resources[image_index],
+                    flip_x=True,
                     flip_y=True,
                 )
             layers.append(OpenXrCompositionBuilder(

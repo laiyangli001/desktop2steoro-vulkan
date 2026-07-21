@@ -245,6 +245,7 @@ def test_quad_layer_uses_runtime_output_size_and_openxr_visibility() -> None:
 
     assert "_ensure_quad_swapchains(width, height)" in source
     assert "flip_y=True" in source
+    assert "flip_x=True" in source
     assert "format_value if format_value is not None" in source
     assert "CompositionLayerQuad" in source
     assert "EyeVisibility.LEFT" in source
