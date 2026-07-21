@@ -1277,8 +1277,10 @@ class OpenXrVulkanPresenter(
                 self.vulkan.copy_image(
                     source,
                     eye.resources[image_index],
-                    flip_x=True,
-                    flip_y=output_frame.image_origin == "top_left",
+                    # The output contract and Vulkan swapchain both use a
+                    # top-left image origin. Only adapt an explicitly
+                    # bottom-left producer; never mirror the image on X.
+                    flip_y=output_frame.image_origin == "bottom_left",
                 )
             layers.append(OpenXrCompositionBuilder(
                 self.xr, self.reference_space
