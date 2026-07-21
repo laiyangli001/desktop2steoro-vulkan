@@ -6,21 +6,31 @@
 
 ### 已实现
 
-- OpenXR 默认交换链格式改为 `UNORM`。Filament 的 Rec709/sRGB 色彩输出不再被 Vulkan sRGB attachment 二次编码，保留 `srgb`/`unorm`/`auto` 配置用于 A/B 验证。
+- OpenXR 默认交换链目标统一为已验证的 `sRGB` 路径；运行时 Vulkan 中间图像保持 UNORM 存储，Filament 屏幕纹理按 sRGB 语义采样，避免各模式重复或遗漏传输函数。
 - 虚拟屏幕接入运行时左右眼 Vulkan 输出：导出图像增加 `SAMPLED` 用途，Filament Bridge 新增窄 C ABI，将借用的 Vulkan 图像导入屏幕材质；不引入 CPU 回读。
 - 补充 Pico 4、Pico 4U 和 Pico Neo3 的 OpenXR interaction profile 绑定别名，控制器模型继续使用 Grip 位姿并回退到 Aim 位姿。
 - 对照旧 `4k-stereo-synthesis-lab` 的已验证 Projection/Quad Layer 路径修正色彩契约：OpenXR/Filament 恢复 sRGB 交换链目标，运行时输出帧显式标记 `color_space=srgb`，Filament 屏幕纹理使用 `SRGB8_A8` 采样；本地预览、MJPEG 和 RTMP 保持 display-referred sRGB，不重复 gamma。
 - 桌面 Filament Preview native window swapchain 同样启用 `CONFIG_SRGB_COLORSPACE`，避免 Preview 与 OpenXR 使用不同的目标转换。
+- 修复 Hugging Face 模型下载链：`snapshot_download()` 现在在实际选中的 `HF_ENDPOINT` 上执行；残缺的“只有权重”缓存不会再被误判为完整模型，降级 HTTP 下载会补齐 `config.json`，并保留在线 endpoint fallback。
+- 按旧工程模型边界区分配置来源：DA3、InfiniDepth、VideoDepthAnything 使用 `src/stereo_runtime/model_impl` 内置结构配置，只要求远程权重；通用 Transformers 模型继续要求远程 `config.json`。
+- 对齐旧工程 OpenXR 待机恢复逻辑：头显未连接或处于待机时不再退出 Vulkan 线程，而是使用可中断退避等待；`STOPPING/LOSS_PENDING` 后释放并重建 OpenXR/Vulkan 资源。
+- 接入待机推理门控：头显等待前 60 秒保留 source 推理宽限期；持续不可用超过 60 秒后清空队列、停止捕捉和推理，头显恢复后重新打开推理并清理旧帧。
+- 修复实机待机回调调用不存在的 `StereoRuntime.set_inference_active`：StereoRuntime 现在提供统一推理门控，并在暂停状态拒绝新的 RGB/OpenXR 推理帧。
+- 修复 `WindowsCaptureCUDA` 与 TensorRT CUDA Graph 的 stream 冲突：检测到 CUDA 捕获时强制关闭已遗留的 depth CUDA Graph，并重建 provider 后使用普通 TensorRT enqueue。
+- 明确记录 OpenXR 头显等待状态：首次检测不到头显或头显待机时输出一次等待提示；恢复时重置提示状态，避免等待逻辑静默。
+- 重构 Filament Vulkan Bridge：左右眼现在共享一个 Filament Engine、Scene、GLB、控制器、屏幕材质和 Shader；每只眼睛仅保留独立 View、Camera、外部 OpenXR swapchain 和 acquired image。
 
 ### 验证结果
 
 - 项目 Python 环境 `src/python3/python.exe` 完成语法检查。
 - OpenXR、输出契约和运行时输出定向测试：`31 passed, 2 warnings`。
+- 待机门控、CUDA 捕获隔离和 OpenXR 定向测试：`57 passed, 2 warnings`。
+- 单 Engine 双眼 Bridge ABI 与 presenter 定向测试：`33 passed, 2 warnings`。
 - `git diff --check` 通过。
 
 ### 未决事项
 
-- 本轮 native Bridge 源码待 GitHub Actions 完成 Windows、Linux、macOS 三平台远程编译并下载回本地。
+- 本轮 native Bridge 源码待 GitHub Actions 完成 Windows、Linux、macOS 三平台远程编译并下载回本地；旧 native DLL 不包含新的双眼 ABI，下载新构建前不能用于实机启动。
 - 头显实机仍需确认 UNORM 色彩、控制器可见性和屏幕纹理同步；当前自动化测试不能替代真实 OpenXR Runtime 验收。
 
 ### 下一项内容

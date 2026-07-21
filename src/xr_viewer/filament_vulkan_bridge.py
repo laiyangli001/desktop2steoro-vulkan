@@ -112,6 +112,42 @@ class FilamentVulkanBridge:
         )
         self._check_result(result, "create_swapchain")
 
+    def create_eye_swapchain(
+        self,
+        eye_index: int,
+        image_handles: Iterable[Any],
+        *,
+        format: int,
+        width: int,
+        height: int,
+    ) -> None:
+        self._ensure_loaded()
+        values = [ctypes.c_void_p(_as_pointer_value(image)) for image in image_handles]
+        if int(eye_index) not in (0, 1) or not values:
+            raise ValueError("eye_index must be 0 or 1 and swapchain must not be empty")
+        array_type = ctypes.c_void_p * len(values)
+        self._check_result(
+            self._library.filament_bridge_create_eye_swapchain(
+                self._handle,
+                int(eye_index),
+                array_type(*values),
+                len(values),
+                int(format),
+                int(width),
+                int(height),
+            ),
+            "create_eye_swapchain",
+        )
+
+    def set_active_eye(self, eye_index: int) -> None:
+        self._ensure_loaded()
+        if int(eye_index) not in (0, 1):
+            raise ValueError("eye_index must be 0 or 1")
+        self._check_result(
+            self._library.filament_bridge_set_active_eye(self._handle, int(eye_index)),
+            "set_active_eye",
+        )
+
     def set_acquired_image(self, image_index: int) -> None:
         self._ensure_loaded()
         self._check_result(
@@ -352,6 +388,20 @@ class FilamentVulkanBridge:
             ctypes.c_uint32,
         ]
         library.filament_bridge_create_swapchain.restype = ctypes.c_int
+        library.filament_bridge_create_eye_swapchain.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_uint32,
+            ctypes.POINTER(ctypes.c_void_p),
+            ctypes.c_uint32,
+            ctypes.c_int32,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+        ]
+        library.filament_bridge_create_eye_swapchain.restype = ctypes.c_int
+        library.filament_bridge_set_active_eye.argtypes = [
+            ctypes.c_void_p, ctypes.c_uint32
+        ]
+        library.filament_bridge_set_active_eye.restype = ctypes.c_int
         library.filament_bridge_set_acquired_image.argtypes = [
             ctypes.c_void_p, ctypes.c_uint32
         ]

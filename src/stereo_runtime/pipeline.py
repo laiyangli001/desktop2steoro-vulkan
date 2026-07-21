@@ -130,6 +130,15 @@ def _enable_openxr_depth_cuda_graph_if_needed(
     if not openxr_full_synthesis:
         return
     if _captured_frame_uses_cuda_capture(captured_frame):
+        config = getattr(ctx.stereo_runtime, "config", None)
+        if config is not None and bool(getattr(config, "use_cuda_graph", False)):
+            # WindowsCaptureCUDA owns a blocking capture stream. Rebuilding the
+            # provider removes any graph captured before the capture backend was selected.
+            ctx.stereo_runtime.apply_settings_snapshot(
+                RuntimeSettingsSnapshot(version=int(time.time() * 1000), timestamp=time.time(), use_cuda_graph=False),
+                active_preset=ctx.stereo_active_preset,
+            )
+            ctx.source_stat_inc("openxr_depth_cuda_graph_disabled_cuda_capture")
         ctx.source_stat_inc("openxr_depth_cuda_graph_skipped_cuda_capture")
         return
     config = getattr(ctx.stereo_runtime, "config", None)

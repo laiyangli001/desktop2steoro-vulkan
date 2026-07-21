@@ -196,6 +196,15 @@ struct MaterialBrightnessState {
     float skybox_brightness = 1.0f;
 };
 
+struct FilamentEyeTarget {
+    filament::View* view = nullptr;
+    filament::Camera* camera = nullptr;
+    filament::ColorGrading* color_grading = nullptr;
+    filament::SwapChain* swapchain = nullptr;
+    OpenXrVulkanPlatform::ExternalSwapChain* external_swapchain = nullptr;
+    bool frame_active = false;
+};
+
 struct ControllerAnimation {
     utils::Entity value_entity;
     utils::Entity min_entity;
@@ -238,16 +247,38 @@ struct FilamentBridge {
     filament::Material* screen_material = nullptr;
     filament::MaterialInstance* screen_material_instance = nullptr;
     filament::Texture* screen_texture = nullptr;
+    std::array<filament::Texture*, 2> screen_textures{};
+    std::array<const void*, 2> screen_image_handles{};
     filament::TextureSampler screen_texture_sampler;
     std::vector<PreviewScreenVertex> screen_vertices;
     std::vector<uint16_t> screen_indices;
     filament::backend::VulkanPlatform::VulkanSharedContext shared_context{};
     MaterialBrightnessState brightness;
     std::array<ControllerAsset, 2> controllers;
+    std::array<FilamentEyeTarget, 2> eyes;
+    uint32_t active_eye = 0;
     std::vector<uint8_t> glb_bytes;
     std::string last_error;
     bool frame_active = false;
 };
+
+void activate_eye(FilamentBridge* bridge, uint32_t eye_index) {
+    if (!bridge || eye_index >= bridge->eyes.size()) return;
+    auto& eye = bridge->eyes[eye_index];
+    bridge->active_eye = eye_index;
+    bridge->view = eye.view;
+    bridge->camera = eye.camera;
+    bridge->color_grading = eye.color_grading;
+    bridge->swapchain = eye.swapchain;
+    bridge->external_swapchain = eye.external_swapchain;
+    bridge->frame_active = eye.frame_active;
+    bridge->screen_texture = bridge->screen_textures[eye_index];
+    if (bridge->screen_texture && bridge->screen_material_instance) {
+        bridge->screen_material_instance->setParameter(
+                "screenTexture", bridge->screen_texture,
+                bridge->screen_texture_sampler);
+    }
+}
 
 struct FilamentPreview {
     filament::Engine* engine = nullptr;
@@ -592,10 +623,14 @@ void destroy_bridge_screen(FilamentBridge* bridge) {
         bridge->engine->destroy(bridge->screen_material_instance);
         bridge->screen_material_instance = nullptr;
     }
-    if (bridge->screen_texture) {
-        bridge->engine->destroy(bridge->screen_texture);
-        bridge->screen_texture = nullptr;
+    for (auto& texture : bridge->screen_textures) {
+        if (texture) {
+            bridge->engine->destroy(texture);
+            texture = nullptr;
+        }
     }
+    bridge->screen_texture = nullptr;
+    bridge->screen_image_handles = {};
     if (bridge->screen_material) {
         bridge->engine->destroy(bridge->screen_material);
         bridge->screen_material = nullptr;
@@ -728,16 +763,18 @@ int set_bridge_screen_image(FilamentBridge* bridge, const void* image,
         set_error(bridge, "Unsupported virtual screen Vulkan image format");
         return 0;
     }
-    if (bridge->screen_texture &&
-            bridge->screen_texture->getWidth() == width &&
-            bridge->screen_texture->getHeight() == height) {
+    const uint32_t eye_index = bridge->active_eye;
+    if (bridge->screen_image_handles[eye_index] == image &&
+            bridge->screen_textures[eye_index] &&
+            bridge->screen_textures[eye_index]->getWidth() == width &&
+            bridge->screen_textures[eye_index]->getHeight() == height) {
         return 1;
     }
-    if (bridge->screen_texture) {
-        bridge->engine->destroy(bridge->screen_texture);
-        bridge->screen_texture = nullptr;
+    if (bridge->screen_textures[eye_index]) {
+        bridge->engine->destroy(bridge->screen_textures[eye_index]);
+        bridge->screen_textures[eye_index] = nullptr;
     }
-    bridge->screen_texture = filament::Texture::Builder()
+    bridge->screen_textures[eye_index] = filament::Texture::Builder()
             .width(width).height(height).levels(1)
             // Runtime eye images contain display-referred sRGB bytes in a
             // Vulkan UNORM storage image; decode them exactly once on sample.
@@ -746,10 +783,12 @@ int set_bridge_screen_image(FilamentBridge* bridge, const void* image,
             .usage(filament::Texture::Usage::SAMPLEABLE)
             .import(reinterpret_cast<intptr_t>(const_cast<void*>(image)))
             .build(*bridge->engine);
-    if (!bridge->screen_texture) {
+    if (!bridge->screen_textures[eye_index]) {
         set_error(bridge, "Filament could not import virtual screen Vulkan image");
         return 0;
     }
+    bridge->screen_image_handles[eye_index] = image;
+    bridge->screen_texture = bridge->screen_textures[eye_index];
     bridge->screen_material_instance->setParameter(
             "screenTexture", bridge->screen_texture,
             bridge->screen_texture_sampler);
@@ -851,26 +890,40 @@ FilamentBridge* filament_bridge_create_vulkan(
     }
     bridge->renderer = bridge->engine->createRenderer();
     bridge->scene = bridge->engine->createScene();
-    bridge->view = bridge->engine->createView();
-    bridge->camera = bridge->engine->createCamera(
-            utils::EntityManager::get().create());
     bridge->materials = filament::gltfio::createJitShaderProvider(bridge->engine);
     bridge->texture_provider = filament::gltfio::createStbProvider(bridge->engine);
-    if (!bridge->renderer || !bridge->scene || !bridge->view || !bridge->camera ||
-            !bridge->materials || !bridge->texture_provider) {
+    if (!bridge->renderer || !bridge->scene || !bridge->materials ||
+            !bridge->texture_provider) {
         set_error(bridge.get(), "Filament Vulkan resource creation failed");
         return bridge.release();
     }
-    bridge->camera->lookAt(
-            filament::math::float3{0.0f, 0.0f, 3.0f},
-            filament::math::float3{0.0f, 0.0f, 0.0f},
-            filament::math::float3{0.0f, 1.0f, 0.0f});
-    bridge->view->setScene(bridge->scene);
-    bridge->view->setCamera(bridge->camera);
-    if (!configure_color_pipeline(bridge.get())) {
-        set_error(bridge.get(), "Filament Vulkan color pipeline creation failed");
-        return bridge.release();
+    for (auto& eye : bridge->eyes) {
+        eye.view = bridge->engine->createView();
+        eye.camera = bridge->engine->createCamera(
+                utils::EntityManager::get().create());
+        if (!eye.view || !eye.camera) {
+            set_error(bridge.get(), "Filament Vulkan eye resource creation failed");
+            return bridge.release();
+        }
+        eye.camera->lookAt(
+                filament::math::float3{0.0f, 0.0f, 3.0f},
+                filament::math::float3{0.0f, 0.0f, 0.0f},
+                filament::math::float3{0.0f, 1.0f, 0.0f});
+        eye.view->setScene(bridge->scene);
+        eye.view->setCamera(eye.camera);
     }
+    activate_eye(bridge.get(), 0);
+    for (auto& eye : bridge->eyes) {
+        bridge->view = eye.view;
+        bridge->camera = eye.camera;
+        bridge->color_grading = nullptr;
+        if (!configure_color_pipeline(bridge.get())) {
+            set_error(bridge.get(), "Filament Vulkan color pipeline creation failed");
+            return bridge.release();
+        }
+        eye.color_grading = bridge->color_grading;
+    }
+    activate_eye(bridge.get(), 0);
     filament::gltfio::AssetConfiguration config{bridge->engine, bridge->materials};
     bridge->asset_loader = filament::gltfio::AssetLoader::create(config);
     if (!bridge->asset_loader) {
@@ -886,18 +939,20 @@ void filament_bridge_destroy(FilamentBridge* bridge) {
         destroy_controller_asset(bridge, controller);
     }
     destroy_bridge_screen(bridge);
-    if (bridge->swapchain && bridge->engine) {
-        bridge->engine->destroy(bridge->swapchain);
-    }
-    if (bridge->color_grading && bridge->engine) {
-        bridge->view->setColorGrading(nullptr);
-        bridge->engine->destroy(bridge->color_grading);
-    }
-    if (bridge->view && bridge->engine) {
-        bridge->engine->destroy(bridge->view);
-    }
-    if (bridge->camera && bridge->engine) {
-        bridge->engine->destroy(bridge->camera->getEntity());
+    for (auto& eye : bridge->eyes) {
+        if (eye.swapchain && bridge->engine) {
+            bridge->engine->destroy(eye.swapchain);
+        }
+        if (eye.color_grading && bridge->engine) {
+            if (eye.view) eye.view->setColorGrading(nullptr);
+            bridge->engine->destroy(eye.color_grading);
+        }
+        if (eye.view && bridge->engine) {
+            bridge->engine->destroy(eye.view);
+        }
+        if (eye.camera && bridge->engine) {
+            bridge->engine->destroy(eye.camera->getEntity());
+        }
     }
     if (!bridge->fill_light.isNull() && bridge->engine) {
         bridge->engine->destroy(bridge->fill_light);
@@ -930,11 +985,21 @@ int filament_bridge_create_swapchain(
         int32_t format,
         uint32_t width,
         uint32_t height) {
-    if (!bridge || !bridge->engine || !bridge->platform) return 0;
-    if (bridge->swapchain) {
-        bridge->engine->destroy(bridge->swapchain);
-        bridge->swapchain = nullptr;
-        bridge->external_swapchain = nullptr;
+    return filament_bridge_create_eye_swapchain(
+            bridge, 0, image_handles, image_count, format, width, height);
+}
+
+int filament_bridge_create_eye_swapchain(
+        FilamentBridge* bridge, uint32_t eye_index,
+        const void* const* image_handles, uint32_t image_count,
+        int32_t format, uint32_t width, uint32_t height) {
+    if (!bridge || !bridge->engine || !bridge->platform ||
+            eye_index >= bridge->eyes.size()) return 0;
+    auto& eye = bridge->eyes[eye_index];
+    if (eye.swapchain) {
+        bridge->engine->destroy(eye.swapchain);
+        eye.swapchain = nullptr;
+        eye.external_swapchain = nullptr;
     }
     auto* external = bridge->platform->create_external_swapchain(
             image_handles, image_count, static_cast<VkFormat>(format), width, height);
@@ -947,20 +1012,28 @@ int filament_bridge_create_swapchain(
             static_cast<VkFormat>(format) == VK_FORMAT_B8G8R8A8_SRGB) {
         swapchain_flags = filament::SwapChain::CONFIG_SRGB_COLORSPACE;
     }
-    bridge->swapchain = bridge->engine->createSwapChain(external, swapchain_flags);
-    if (!bridge->swapchain) {
+    eye.swapchain = bridge->engine->createSwapChain(external, swapchain_flags);
+    if (!eye.swapchain) {
         bridge->platform->destroy(external);
         set_error(bridge, "Filament Vulkan SwapChain creation failed");
         return 0;
     }
-    bridge->external_swapchain =
+    eye.external_swapchain =
             static_cast<OpenXrVulkanPlatform::ExternalSwapChain*>(external);
-    bridge->camera->setProjection(
+    eye.camera->setProjection(
             45.0,
             static_cast<double>(width) / static_cast<double>(height),
             0.05,
             1000.0);
-    bridge->view->setViewport(filament::Viewport{0, 0, width, height});
+    eye.view->setViewport(filament::Viewport{0, 0, width, height});
+    activate_eye(bridge, eye_index);
+    return 1;
+}
+
+int filament_bridge_set_active_eye(FilamentBridge* bridge, uint32_t eye_index) {
+    if (!bridge || eye_index >= bridge->eyes.size()) return 0;
+    if (bridge->frame_active || bridge->eyes[eye_index].frame_active) return 0;
+    activate_eye(bridge, eye_index);
     return 1;
 }
 
@@ -1015,6 +1088,7 @@ int filament_bridge_begin_frame(FilamentBridge* bridge) {
         return 0;
     }
     bridge->frame_active = bridge->renderer->beginFrame(bridge->swapchain);
+    bridge->eyes[bridge->active_eye].frame_active = bridge->frame_active;
     if (!bridge->frame_active) {
         set_error(bridge, "Filament Renderer::beginFrame failed");
     }
@@ -1026,6 +1100,7 @@ int filament_bridge_end_frame(FilamentBridge* bridge) {
     if (!bridge || !bridge->renderer || !bridge->frame_active) return 0;
     bridge->renderer->endFrame();
     bridge->frame_active = false;
+    bridge->eyes[bridge->active_eye].frame_active = false;
     if (!bridge->engine) return 0;
     bridge->engine->flushAndWait();
     return 1;

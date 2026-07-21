@@ -10,6 +10,15 @@ from .progress import stage_progress
 OnnxDtypeMode = Literal["auto", "fp16", "fp32"]
 ArtifactBackend = Literal["onnx", "tensorrt", "migraphx"]
 MODEL_WEIGHT_FILENAMES = ("model.safetensors", "model.pt", "model.ckpt")
+MODEL_CONFIG_FILENAMES = ("config.json",)
+# These model families build their network from the bundled implementation.
+# Their Hugging Face repositories provide weights, not the runtime structure.
+LOCAL_CONFIG_MODEL_FAMILIES = frozenset({
+    "infinidepth",
+    "da3",
+    "video-depth-anything",
+    "metric-video-depth-anything",
+})
 
 
 @dataclass(frozen=True)
@@ -119,7 +128,7 @@ def ensure_model_downloaded(
 ) -> Path:
     """Download or validate a Hugging Face model without importing D2S settings."""
     model_dir = model_spec.model_dir(cache_dir)
-    if not force_download and find_local_model_weight(model_dir) is not None:
+    if not force_download and _model_cache_is_complete(model_spec, model_dir):
         return model_dir
     if model_spec.family == "infinidepth":
         from .depth_provider import _resolve_hf_model_file
@@ -134,38 +143,72 @@ def ensure_model_downloaded(
             raise FileNotFoundError(f"model weights resolved but model directory was not found: {model_dir}")
         return model_dir
 
-    from .depth_provider import _download_hf_file_direct, _hf_download_progress_patch, _reachable_hf_endpoints
+    from .depth_provider import (
+        _download_hf_file_direct,
+        _hf_download_progress_patch,
+        _hf_endpoint,
+        _reachable_hf_endpoints,
+    )
     from huggingface_hub import snapshot_download
 
     endpoints = _reachable_hf_endpoints(model_spec.model_id)
-    try:
-        with _hf_download_progress_patch():
-            snapshot_download(
-                repo_id=model_spec.model_id,
-                cache_dir=str(cache_dir),
-                local_files_only=local_files_only,
-                force_download=force_download,
-            )
-    except Exception:
-        if local_files_only:
-            raise
-    if find_local_model_weight(model_dir) is not None:
-        return model_dir
-    if local_files_only:
-        raise FileNotFoundError(f"local model weights are missing or empty: {model_dir}")
     last_error: Exception | None = None
+    for endpoint in endpoints:
+        try:
+            # snapshot_download reads HF_ENDPOINT when the Hub client is built.
+            # Keep the probe and the actual download on the same endpoint.
+            with _hf_endpoint(endpoint), _hf_download_progress_patch():
+                snapshot_download(
+                    repo_id=model_spec.model_id,
+                    cache_dir=str(cache_dir),
+                    local_files_only=local_files_only,
+                    force_download=force_download,
+                )
+            if _model_cache_is_complete(model_spec, model_dir):
+                return model_dir
+        except Exception as exc:
+            last_error = exc
+            if local_files_only:
+                raise
+    if local_files_only:
+        raise FileNotFoundError(f"local model files are incomplete: {model_dir}") from last_error
     for endpoint in endpoints:
         for filename in MODEL_WEIGHT_FILENAMES:
             try:
+                existing = model_dir / filename
+                if existing.is_file() and existing.stat().st_size > 0:
+                    break
                 _download_hf_file_direct(model_spec.model_id, filename, cache_dir, endpoint)
-                return model_dir
+                break
             except Exception as exc:
                 last_error = exc
+        for filename in MODEL_CONFIG_FILENAMES:
+            try:
+                existing = model_dir / filename
+                if existing.is_file() and existing.stat().st_size > 0:
+                    continue
+                _download_hf_file_direct(model_spec.model_id, filename, cache_dir, endpoint)
+            except Exception as exc:
+                last_error = exc
+        if _model_cache_is_complete(model_spec, model_dir):
+            return model_dir
     if not model_dir.exists():
         raise FileNotFoundError(f"download completed but model directory was not found: {model_dir}")
-    if last_error is not None:
-        raise FileNotFoundError(f"download completed but no valid model weight was found: {model_dir}") from last_error
-    return model_dir
+    raise FileNotFoundError(f"download completed but model files are incomplete: {model_dir}") from last_error
+
+
+def _model_cache_is_complete(model_spec: DepthModelSpec, model_dir: str | Path) -> bool:
+    """Require model metadata as well as weights before allowing ONNX export."""
+    root = Path(model_dir)
+    if find_local_model_weight(root) is None:
+        return False
+    if model_spec.family in LOCAL_CONFIG_MODEL_FAMILIES:
+        return True
+    return any(
+        path.is_file() and path.stat().st_size > 0
+        for filename in MODEL_CONFIG_FILENAMES
+        for path in (root / filename, *root.rglob(filename))
+    )
 
 
 def find_local_model_weight(model_dir: str | Path) -> Path | None:
@@ -356,14 +399,14 @@ def prepare_model_artifacts(
         migraphx_path = existing_migraphx or paths.migraphx_fp16_path
         trt_ready = existing_trt is not None
         migraphx_ready = existing_migraphx is not None
-        local_weight = find_local_model_weight(paths.model_dir)
         progress.update(1)
 
         progress.set_postfix_str("checking ONNX artifact", refresh=True)
         executable_ready = trt_ready or migraphx_ready
         needs_onnx_export = export_onnx_if_missing or (wants_trt and build_trt_if_missing) or (wants_migraphx and build_migraphx_if_missing)
         if selected_onnx is None and not executable_ready and needs_onnx_export:
-            if force_download or local_weight is None:
+            model_cache_complete = _model_cache_is_complete(spec, paths.model_dir)
+            if force_download or not _model_cache_is_complete(spec, paths.model_dir):
                 ensure_model_downloaded(
                     spec,
                     cache_dir=cache_dir,
@@ -378,7 +421,10 @@ def prepare_model_artifacts(
                 height=export_height,
                 width=export_width,
                 dtype=onnx_dtype,
-                local_files_only=local_files_only or local_weight is not None,
+                # A downloaded weight does not imply that the Hub metadata is
+                # cached. Let from_pretrained use the selected endpoint unless
+                # the user explicitly requested offline mode.
+                local_files_only=local_files_only or model_cache_complete,
                 export_if_missing=True,
             )
             trt_path = paths.trt_path_for_dtype(dtype_from_onnx_path(selected_onnx))

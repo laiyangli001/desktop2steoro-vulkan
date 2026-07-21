@@ -104,6 +104,12 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
     )
     callbacks = RuntimeCallbacks(context)
 
+    if str(RUN_MODE).strip().lower() == "openxr":
+        # Keep source inference alive during the headset wake-up grace period.
+        # The presenter enters hard idle after the configured 60-second timeout.
+        context.openxr_state.bootstrap_done.set()
+        context.openxr_state.source_active.set()
+
     capture_callbacks = build_capture_callbacks(
         raw_q=context.raw_q,
         shutdown_event=shutdown_event,
@@ -163,7 +169,8 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
 
         filament_config = _openxr_filament_config(settings)
         presenter = OpenXrVulkanPresenter(
-            OpenXrVulkanConfig(**filament_config)
+            OpenXrVulkanConfig(**filament_config),
+            on_headset_state=callbacks.on_openxr_headset_state,
         )
         presenter_thread = threading.Thread(
             target=presenter.run_until,

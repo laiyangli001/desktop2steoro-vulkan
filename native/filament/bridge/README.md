@@ -9,6 +9,8 @@ The OpenXR application owns the Vulkan instance, device, queue, swapchain image
 acquire/release, and frame pacing. The bridge only borrows those handles and
 lets Filament render into the acquired image. The bridge never calls
 `vkAcquireNextImageKHR`, `vkQueuePresentKHR`, or destroys an OpenXR object.
+One bridge owns one Filament Engine and shared Scene; its two eye targets own
+independent Filament Views, Cameras, and external swapchains.
 
 Each target platform needs its matching official Filament SDK archive. Configure
 CMake with `FILAMENT_SDK_ROOT` pointing at that extracted archive. The generated
@@ -21,10 +23,12 @@ Linux:   libfilament_bridge.so
 ```
 
 The C ABI in `filament_bridge.h` is intentionally narrow. Python first creates
-the bridge with `filament_bridge_create_vulkan`, creates a swapchain from the
-current eye's OpenXR VkImages, calls `filament_bridge_set_acquired_image`, then
-brackets Filament rendering with `filament_bridge_begin_frame` and
-`filament_bridge_end_frame`.
+one bridge with `filament_bridge_create_vulkan`, registers both eye swapchains
+with `filament_bridge_create_eye_swapchain`, selects the eye with
+`filament_bridge_set_active_eye`, calls `filament_bridge_set_acquired_image`,
+then brackets Filament rendering with `filament_bridge_begin_frame` and
+`filament_bridge_end_frame`. GLB and controller assets are loaded once into the
+shared Scene.
 
 The desktop preview ABI exposes `filament_preview_apply_animations` for embedded glTF animations.
 

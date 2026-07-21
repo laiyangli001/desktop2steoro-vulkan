@@ -40,6 +40,12 @@ FILAMENT_BRIDGE_API int filament_bridge_create_swapchain(
         int32_t format,
         uint32_t width,
         uint32_t height);
+FILAMENT_BRIDGE_API int filament_bridge_create_eye_swapchain(
+        FilamentBridge* bridge, uint32_t eye_index,
+        const void* const* image_handles, uint32_t image_count,
+        int32_t format, uint32_t width, uint32_t height);
+FILAMENT_BRIDGE_API int filament_bridge_set_active_eye(
+        FilamentBridge* bridge, uint32_t eye_index);
 FILAMENT_BRIDGE_API int filament_bridge_set_acquired_image(
         FilamentBridge* bridge, uint32_t image_index);
 FILAMENT_BRIDGE_API int filament_bridge_set_camera_look_at(

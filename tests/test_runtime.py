@@ -110,6 +110,28 @@ def test_runtime_process_rgb_frame_uses_persistent_provider_and_returns_report()
     assert provider.close_count == 1
 
 
+def test_runtime_inference_gate_pauses_processing_and_reports_state():
+    provider = FakeDepthProvider()
+    config = StereoRuntimeConfig(
+        model_id="lc700x/Distill-Any-Depth-Base-hf",
+        model_dir=r"D:\Desktop2Stereo\models\models--lc700x--Distill-Any-Depth-Base-hf",
+        depth_backend="pytorch_cuda",
+        stereo_quality="fast",
+        temporal=False,
+    )
+    runtime = StereoRuntime(config, depth_provider=provider, collect_memory_stats=False)
+    rgb = torch.rand(1, 3, 8, 12)
+
+    runtime.set_inference_active(False)
+    with pytest.raises(RuntimeError, match="inference is paused"):
+        runtime.process_rgb_frame(rgb)
+    assert runtime.to_report()["inference_active"] is False
+
+    runtime.set_inference_active(True)
+    runtime.process_rgb_frame(rgb)
+    assert provider.predict_count == 1
+
+
 def test_runtime_dynamic_convergence_uses_depth_quantile_in_debug_info():
     provider = FakeDepthProvider()
     config = StereoRuntimeConfig(

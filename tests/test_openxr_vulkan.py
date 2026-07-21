@@ -256,6 +256,48 @@ def test_presenter_run_until_owns_shutdown_close() -> None:
     assert calls == ["initialize", "frame", "close"]
 
 
+def test_presenter_waits_for_headset_and_retries_initialization() -> None:
+    presenter = OpenXrVulkanPresenter(OpenXrVulkanConfig(
+        openxr_no_headset_retry_interval=0.001,
+        openxr_standby_retry_interval=0.001,
+        openxr_standby_retry_max_interval=0.001,
+    ))
+    shutdown = threading.Event()
+    calls = []
+
+    def initialize():
+        calls.append("initialize")
+        if calls.count("initialize") == 1:
+            raise type("FormFactorUnavailableError", (RuntimeError,), {})()
+
+    def run_frame():
+        calls.append("frame")
+        shutdown.set()
+        return True
+
+    presenter.initialize = initialize
+    presenter.run_frame = run_frame
+    presenter.close = lambda: calls.append("close")
+
+    assert presenter.run_until(shutdown) == 0
+    assert calls == ["initialize", "close", "initialize", "frame", "close"]
+
+
+def test_presenter_wait_enters_hard_idle_after_configured_timeout(capsys) -> None:
+    states = []
+    presenter = OpenXrVulkanPresenter(
+        OpenXrVulkanConfig(headset_wait_inference_timeout=0.0),
+        on_headset_state=states.append,
+    )
+
+    presenter._notify_headset_waiting()
+    assert states == ["waiting", "hard_idle"]
+    assert "Headset not detected or in standby" in capsys.readouterr().out
+
+    presenter._notify_headset_active()
+    assert states[-1] == "active"
+
+
 def test_filament_bridge_binds_each_openxr_eye(monkeypatch) -> None:
     calls: list[tuple[str, object]] = []
 
@@ -266,8 +308,8 @@ def test_filament_bridge_binds_each_openxr_eye(monkeypatch) -> None:
         def create(self, **kwargs):
             calls.append(("create", kwargs["device"]))
 
-        def create_swapchain(self, images, **kwargs):
-            calls.append(("swapchain", (list(images), kwargs["format"])))
+        def create_eye_swapchain(self, eye_index, images, **kwargs):
+            calls.append(("swapchain", (eye_index, list(images), kwargs["format"])))
 
         def set_scene_exposure(self, _value):
             pass
@@ -301,14 +343,12 @@ def test_filament_bridge_binds_each_openxr_eye(monkeypatch) -> None:
 
     presenter._initialize_filament_bridges()
 
-    assert len(presenter.filament_bridges) == 2
+    assert presenter.filament_bridge is not None
     assert calls == [
         ("load", "bridge.dll"),
         ("create", 3),
-        ("swapchain", (["left-image"], 43)),
-        ("load", "bridge.dll"),
-        ("create", 3),
-        ("swapchain", (["right-image"], 43)),
+        ("swapchain", (0, ["left-image"], 43)),
+        ("swapchain", (1, ["right-image"], 43)),
     ]
 
 

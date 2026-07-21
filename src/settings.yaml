@@ -1,5 +1,5 @@
 Capture Mode: Monitor
-Monitor Index: 2
+Monitor Index: 1
 Window Title: ''
 Show FPS: false
 Model List:
@@ -465,7 +465,7 @@ Model List:
   DepthPro-Large:
     resolutions:
     - 1536
-Depth Model: Depth-Anything-V2-Base
+Depth Model: Distill-Any-Depth-Base
 Depth Strength: 0.25
 Depth Quick: Standard
 Depth Resolution: 518
@@ -512,7 +512,7 @@ Recompile MIGraphX: false
 Recompile OpenVINO: false
 Computing Device: 0
 Language: CN
-Run Mode: Local Viewer
+Run Mode: OpenXR Link
 XR Headset Model: Pico 4 / 4 Ultra
 XR Preview Window: false
 VSync: false
@@ -540,7 +540,7 @@ Lossless Scaling Support: false
 Capture Tool: WindowsCaptureCUDA
 Fill 16:9: true
 Fix Viewer Aspect: false
-Stereo Output: 1
+Stereo Output: 2
 Show Log Panel: true
 OpenVINO: null
 Synthetic View: quality_4k

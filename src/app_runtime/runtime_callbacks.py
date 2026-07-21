@@ -78,6 +78,31 @@ class RuntimeCallbacks:
             on_enter=self.on_openxr_hard_idle_enter
         )
 
+    def on_openxr_headset_state(self, state: str) -> None:
+        """Mirror Vulkan headset availability into capture and inference gates."""
+        state = str(state).strip().lower()
+        openxr_state = self.context.openxr_state
+        if state == "waiting":
+            openxr_state.render_active.clear()
+            return
+        if state == "hard_idle":
+            openxr_state.render_active.clear()
+            openxr_state.source_active.clear()
+            openxr_state.wait_idle_active.set()
+            self.context.stereo_runtime.set_inference_active(False)
+            self.on_openxr_hard_idle_enter()
+            return
+        if state == "active":
+            was_idle = openxr_state.wait_idle_active.is_set()
+            openxr_state.wait_idle_active.clear()
+            openxr_state.source_active.set()
+            openxr_state.render_active.set()
+            self.context.stereo_runtime.set_inference_active(True)
+            if was_idle:
+                self.queue_clear_nonblocking(self.context.raw_q)
+                self.queue_clear_nonblocking(self.context.runtime_q)
+                print("[Main] OpenXR headset resumed; inference restarted", flush=True)
+
     def queue_put_latest(self, q, item):
         put_latest(q, item)
 

@@ -1,5 +1,6 @@
 from pathlib import Path
 from types import SimpleNamespace
+import os
 
 import pytest
 
@@ -115,6 +116,7 @@ def test_prepare_model_artifacts_passes_local_files_only_to_onnx_export(monkeypa
 
     def fake_snapshot_download(**kwargs):
         (paths.model_dir / "model.safetensors").write_bytes(b"weights")
+        (paths.model_dir / "config.json").write_text("{}", encoding="utf-8")
         return str(paths.model_dir / "snapshots" / "fake")
 
     monkeypatch.setattr("huggingface_hub.snapshot_download", fake_snapshot_download)
@@ -295,6 +297,7 @@ def test_prepare_model_artifacts_confirms_model_before_onnx_export(monkeypatch, 
         calls.append("download")
         paths.model_dir.mkdir(parents=True, exist_ok=True)
         (paths.model_dir / "model.safetensors").write_bytes(b"weights")
+        (paths.model_dir / "config.json").write_text("{}", encoding="utf-8")
         return str(paths.model_dir / "snapshots" / "fake")
 
     def fake_export(**kwargs):
@@ -348,6 +351,23 @@ def test_infinidepth_download_requires_resolved_weight_file(monkeypatch, tmp_pat
     }
 
 
+@pytest.mark.parametrize(
+    "model_name",
+    ["DA3-BASE", "Video-Depth-Anything-Base", "Metric-Video-Depth-Anything-Base"],
+)
+def test_local_config_model_families_do_not_require_remote_config(
+    model_name: str, tmp_path: Path
+):
+    spec = ModelRegistry.default().get(model_name)
+    model_dir = spec.model_dir(tmp_path)
+    model_dir.mkdir(parents=True)
+    (model_dir / "model.safetensors").write_bytes(b"weights")
+
+    from stereo_runtime.model_artifacts import _model_cache_is_complete
+
+    assert _model_cache_is_complete(spec, model_dir) is True
+
+
 def test_generic_download_confirms_snapshot_even_when_cache_dir_exists(monkeypatch, tmp_path: Path):
     calls = {}
     spec = ModelRegistry.default().get("Distill-Any-Depth-Base")
@@ -356,6 +376,7 @@ def test_generic_download_confirms_snapshot_even_when_cache_dir_exists(monkeypat
 
     def fake_snapshot_download(**kwargs):
         (model_dir / "model.safetensors").write_bytes(b"weights")
+        (model_dir / "config.json").write_text("{}", encoding="utf-8")
         calls.update(kwargs)
         return str(model_dir / "snapshots" / "fake")
 
@@ -367,6 +388,28 @@ def test_generic_download_confirms_snapshot_even_when_cache_dir_exists(monkeypat
     assert calls["cache_dir"] == str(tmp_path)
     assert calls["local_files_only"] is False
     assert calls["force_download"] is False
+
+
+def test_generic_snapshot_download_uses_selected_hf_endpoint(monkeypatch, tmp_path: Path):
+    spec = ModelRegistry.default().get("Distill-Any-Depth-Base")
+    model_dir = spec.model_dir(tmp_path)
+    observed = []
+
+    def fake_snapshot_download(**kwargs):
+        observed.append(os.environ.get("HF_ENDPOINT"))
+        model_dir.mkdir(parents=True, exist_ok=True)
+        (model_dir / "model.safetensors").write_bytes(b"weights")
+        (model_dir / "config.json").write_text("{}", encoding="utf-8")
+        return str(model_dir / "snapshots" / "fake")
+
+    monkeypatch.setattr("huggingface_hub.snapshot_download", fake_snapshot_download)
+    monkeypatch.setattr(
+        "stereo_runtime.depth_provider._reachable_hf_endpoints",
+        lambda model_id: ("https://hf-mirror.com",),
+    )
+
+    assert ensure_model_downloaded(spec, cache_dir=tmp_path) == model_dir
+    assert observed == ["https://hf-mirror.com"]
 
 
 def test_generic_snapshot_download_uses_structured_progress_patch(monkeypatch, tmp_path: Path):
@@ -388,6 +431,7 @@ def test_generic_snapshot_download_uses_structured_progress_patch(monkeypatch, t
     def fake_snapshot_download(**kwargs):
         events.append("download")
         (model_dir / "model.safetensors").write_bytes(b"weights")
+        (model_dir / "config.json").write_text("{}", encoding="utf-8")
         return str(model_dir / "snapshots" / "fake")
 
     monkeypatch.setattr("huggingface_hub.snapshot_download", fake_snapshot_download)
@@ -419,7 +463,10 @@ def test_generic_snapshot_download_falls_back_when_weight_is_empty(monkeypatch, 
     monkeypatch.setattr("stereo_runtime.depth_provider._download_hf_file_direct", fake_direct)
 
     assert ensure_model_downloaded(spec, cache_dir=tmp_path, local_files_only=False) == model_dir
-    assert direct_calls == [("lc700x/Distill-Any-Depth-Base-hf", "model.safetensors", "https://hf-mirror.com")]
+    assert direct_calls == [
+        ("lc700x/Distill-Any-Depth-Base-hf", "model.safetensors", "https://hf-mirror.com"),
+        ("lc700x/Distill-Any-Depth-Base-hf", "config.json", "https://hf-mirror.com"),
+    ]
 
 
 def test_generic_snapshot_download_error_falls_back_to_direct(monkeypatch, tmp_path: Path):
@@ -442,7 +489,10 @@ def test_generic_snapshot_download_error_falls_back_to_direct(monkeypatch, tmp_p
     monkeypatch.setattr("stereo_runtime.depth_provider._download_hf_file_direct", fake_direct)
 
     assert ensure_model_downloaded(spec, cache_dir=tmp_path, local_files_only=False) == model_dir
-    assert direct_calls == [("lc700x/Distill-Any-Depth-Base-hf", "model.safetensors", "https://hf-mirror.com")]
+    assert direct_calls == [
+        ("lc700x/Distill-Any-Depth-Base-hf", "model.safetensors", "https://hf-mirror.com"),
+        ("lc700x/Distill-Any-Depth-Base-hf", "config.json", "https://hf-mirror.com"),
+    ]
 
 
 def test_prepare_model_artifacts_builds_trt_from_existing_onnx(monkeypatch, tmp_path: Path):

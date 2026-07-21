@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
@@ -55,6 +55,10 @@ class OpenXrVulkanConfig:
     filament_fill_light_color: tuple[float, float, float] = (1.0, 0.88, 0.78)
     filament_fill_light_intensity: float = 100000.0
     filament_fill_light_direction: tuple[float, float, float] = (-0.35, -1.0, -0.55)
+    openxr_no_headset_retry_interval: float = 3.0
+    openxr_standby_retry_interval: float = 3.0
+    openxr_standby_retry_max_interval: float = 30.0
+    headset_wait_inference_timeout: float = 60.0
 
 
 @dataclass(slots=True)
@@ -107,8 +111,14 @@ class OpenXrVulkanPresenter(
 
     _VULKAN_EXTENSION = "XR_KHR_vulkan_enable2"
 
-    def __init__(self, config: OpenXrVulkanConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: OpenXrVulkanConfig | None = None,
+        *,
+        on_headset_state: Callable[[str], None] | None = None,
+    ) -> None:
         self.config = config or OpenXrVulkanConfig()
+        self._on_headset_state = on_headset_state
         if self.config.render_scale <= 0:
             raise ValueError("render_scale must be greater than zero")
         if len(self.config.clear_color) != 4:
@@ -122,7 +132,7 @@ class OpenXrVulkanPresenter(
         self.vulkan: VulkanContext | None = None
         self.swapchain_format: int | None = None
         self.swapchains: list[_EyeSwapchain] = []
-        self.filament_bridges: list[Any] = []
+        self.filament_bridge: Any | None = None
         self.session_state: Any = None
         self.session_running = False
         self.exit_requested = False
@@ -166,6 +176,10 @@ class OpenXrVulkanPresenter(
         self._LASER_MOVE_THRESH = 0.005
         self._initialized = False
         self._pending_output: VulkanStereoOutputFrame | None = None
+        self._headset_wait_started = 0.0
+        self._headset_hard_idle_notified = False
+        self._headset_active_notified = False
+        self._headset_wait_logged = False
 
     @property
     def initialized(self) -> bool:
@@ -264,12 +278,17 @@ class OpenXrVulkanPresenter(
         if self.exit_requested:
             return False
         if not self.session_running:
+            self._notify_headset_waiting()
             time.sleep(0.01)
             return True
 
         xr = self.xr
         frame_state = xr.wait_frame(self.session)
         self._frame_now = time.perf_counter()
+        if frame_state.should_render:
+            self._notify_headset_active()
+        else:
+            self._notify_headset_waiting()
         try:
             self._sync_controller_inputs(1.0 / 90.0)
             self._update_aim_poses(frame_state.predicted_display_time)
@@ -318,15 +337,111 @@ class OpenXrVulkanPresenter(
 
     def run_until(self, shutdown_event: Any) -> int:
         """Run the XR frame loop until the application shutdown event is set."""
-
-        self.initialize()
+        retry_count = 0
         try:
             while not shutdown_event.is_set() and not self.exit_requested:
-                if not self.run_frame():
+                try:
+                    if not self._initialized:
+                        self.initialize()
+                    retry_count = 0
+                    while not shutdown_event.is_set() and not self.exit_requested:
+                        if not self.run_frame():
+                            break
+                        if self._session_requires_reconnect():
+                            self.close()
+                            self.exit_requested = False
+                            self._notify_headset_waiting()
+                            break
+                    if self._session_requires_reconnect():
+                        self.close()
+                        self.exit_requested = False
+                        self._notify_headset_waiting()
+                except Exception as exc:
+                    if not self._is_no_headset_error(exc):
+                        raise
+                    self.close()
+                    self._notify_headset_waiting()
+
+                if shutdown_event.is_set() or self.exit_requested:
                     break
+                retry_count += 1
+                delay = self._retry_delay(retry_count)
+                print(
+                    f"[OpenXRViewer] Waiting for VR headset connect... "
+                    f"(retry in {delay:.1f}s)",
+                    flush=True,
+                )
+                shutdown_event.wait(delay)
             return self.frame_count
         finally:
             self.close()
+
+    @staticmethod
+    def _is_no_headset_error(exc: BaseException) -> bool:
+        return type(exc).__name__ == "FormFactorUnavailableError"
+
+    def _session_requires_reconnect(self) -> bool:
+        state = self.session_state
+        state_name = str(getattr(state, "name", state)).upper()
+        return state_name in {"STOPPING", "LOSS_PENDING"}
+
+    def _retry_delay(self, retry_count: int) -> float:
+        base = max(0.1, float(self.config.openxr_standby_retry_interval))
+        maximum = max(base, float(self.config.openxr_standby_retry_max_interval))
+        if self.session_state is None:
+            base = max(0.1, float(self.config.openxr_no_headset_retry_interval))
+        return min(maximum, base * (2 ** max(0, retry_count - 1)))
+
+    def _notify_headset_state(self, state: str) -> None:
+        callback = self._on_headset_state
+        if callback is None:
+            return
+        try:
+            callback(state)
+        except Exception as exc:
+            print(
+                f"[OpenXRViewer] Headset state callback failed: "
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+
+    def _notify_headset_waiting(self) -> None:
+        now = time.perf_counter()
+        if self._headset_wait_started <= 0.0:
+            self._headset_wait_started = now
+            self._headset_hard_idle_notified = False
+            self._headset_active_notified = False
+            self._headset_wait_logged = False
+            self._notify_headset_state("waiting")
+        if not self._headset_wait_logged:
+            self._headset_wait_logged = True
+            print(
+                "[OpenXRViewer] Headset not detected or in standby; "
+                "waiting for headset wake-up",
+                flush=True,
+            )
+        timeout = max(0.0, float(self.config.headset_wait_inference_timeout))
+        if (
+            not self._headset_hard_idle_notified
+            and now - self._headset_wait_started >= timeout
+        ):
+            self._headset_hard_idle_notified = True
+            self._notify_headset_state("hard_idle")
+            print(
+                f"[OpenXRViewer] No headset detected for {timeout:.0f}s; "
+                "stopping source inference",
+                flush=True,
+            )
+
+    def _notify_headset_active(self) -> None:
+        if self._headset_active_notified:
+            return
+        self._headset_wait_started = 0.0
+        self._headset_hard_idle_notified = False
+        self._headset_active_notified = True
+        self._headset_wait_logged = False
+        self._notify_headset_state("active")
+        print("[OpenXRViewer] Headset detected; source inference resumed", flush=True)
 
     def close(self) -> None:
         xr = self.xr
@@ -336,12 +451,12 @@ class OpenXrVulkanPresenter(
             except Exception:
                 pass
 
-        for bridge in reversed(self.filament_bridges):
+        if self.filament_bridge is not None:
             try:
-                bridge.close()
+                self.filament_bridge.close()
             except Exception:
                 pass
-        self.filament_bridges.clear()
+            self.filament_bridge = None
 
         if xr is not None:
             for eye in reversed(self.swapchains):
@@ -669,66 +784,60 @@ class OpenXrVulkanPresenter(
 
         from .filament_vulkan_bridge import FilamentVulkanBridge
 
+        bridge = FilamentVulkanBridge(bridge_path)
         try:
-            for eye in self.swapchains:
-                bridge = FilamentVulkanBridge(bridge_path)
-                try:
-                    bridge.create(
-                        instance=self.vulkan.instance,
-                        physical_device=self.vulkan.physical_device,
-                        device=self.vulkan.device,
-                        queue_family_index=self.vulkan.queue_family_index,
-                        queue_index=0,
-                    )
-                    bridge.create_swapchain(
-                        (image.image for image in eye.images),
-                        format=self.swapchain_format,
-                        width=eye.width,
-                        height=eye.height,
-                    )
-                    glb_path = self.config.filament_glb_path
-                    if glb_path:
-                        bridge.load_glb(Path(glb_path).read_bytes())
-                    if (
-                        self._controller_brand is not None
-                        and getattr(bridge, "controller_abi_available", True)
-                        and hasattr(bridge, "load_controller")
-                    ):
-                        bridge.load_controller(0, self._controller_brand.left_glb.read_bytes())
-                        bridge.load_controller(1, self._controller_brand.right_glb.read_bytes())
-                        if eye is self.swapchains[0]:
-                            print(
-                                "Filament controllers loaded: "
-                                f"brand={self._controller_brand.name} "
-                                f"abi={bridge.controller_abi_available}",
-                                flush=True,
-                            )
-                    if self._filament_screen is not None:
-                        position, width, height, rotation = self._filament_screen
-                        bridge.create_screen()
-                        bridge.set_screen(position, width, height, rotation)
-                        if eye is self.swapchains[0]:
-                            print(
-                                "Filament screen loaded: "
-                                f"position={position} size={width:.3f}x{height:.3f} "
-                                f"rotation={rotation}",
-                                flush=True,
-                            )
-                    bridge.set_scene_exposure(self._filament_scene_exposure)
-                    bridge.set_skybox_brightness(self._filament_skybox_brightness)
-                    bridge.set_fill_light(
-                        self._filament_fill_light_color,
-                        self._filament_fill_light_intensity,
-                        self._filament_fill_light_direction,
-                    )
-                    self.filament_bridges.append(bridge)
-                except Exception:
-                    bridge.close()
-                    raise
+            bridge.create(
+                instance=self.vulkan.instance,
+                physical_device=self.vulkan.physical_device,
+                device=self.vulkan.device,
+                queue_family_index=self.vulkan.queue_family_index,
+                queue_index=0,
+            )
+            for eye_index, eye in enumerate(self.swapchains):
+                bridge.create_eye_swapchain(
+                    eye_index,
+                    (image.image for image in eye.images),
+                    format=self.swapchain_format,
+                    width=eye.width,
+                    height=eye.height,
+                )
+            glb_path = self.config.filament_glb_path
+            if glb_path:
+                bridge.load_glb(Path(glb_path).read_bytes())
+            if (
+                self._controller_brand is not None
+                and getattr(bridge, "controller_abi_available", True)
+                and hasattr(bridge, "load_controller")
+            ):
+                bridge.load_controller(0, self._controller_brand.left_glb.read_bytes())
+                bridge.load_controller(1, self._controller_brand.right_glb.read_bytes())
+                print(
+                    "Filament controllers loaded: "
+                    f"brand={self._controller_brand.name} "
+                    f"abi={bridge.controller_abi_available}",
+                    flush=True,
+                )
+            if self._filament_screen is not None:
+                position, width, height, rotation = self._filament_screen
+                bridge.create_screen()
+                bridge.set_screen(position, width, height, rotation)
+                print(
+                    "Filament screen loaded: "
+                    f"position={position} size={width:.3f}x{height:.3f} "
+                    f"rotation={rotation}",
+                    flush=True,
+                )
+            bridge.set_scene_exposure(self._filament_scene_exposure)
+            bridge.set_skybox_brightness(self._filament_skybox_brightness)
+            bridge.set_fill_light(
+                self._filament_fill_light_color,
+                self._filament_fill_light_intensity,
+                self._filament_fill_light_direction,
+            )
+            self.filament_bridge = bridge
         except Exception:
-            for bridge in reversed(self.filament_bridges):
-                bridge.close()
-            self.filament_bridges.clear()
+            bridge.close()
+            self.filament_bridge = None
             raise
 
     def _update_filament_controllers(self, bridge: Any) -> None:
@@ -904,8 +1013,9 @@ class OpenXrVulkanPresenter(
         animation_time = max(0.0, self._frame_now - self._filament_animation_origin)
         for eye_index, eye in enumerate(self.swapchains):
             with _acquired_swapchain_image(xr, eye) as image_index:
-                if eye_index < len(self.filament_bridges):
-                    bridge = self.filament_bridges[eye_index]
+                if self.filament_bridge is not None:
+                    bridge = self.filament_bridge
+                    bridge.set_active_eye(eye_index)
                     if (
                         output_frame is not None
                         and getattr(bridge, "screen_image_abi_available", False)

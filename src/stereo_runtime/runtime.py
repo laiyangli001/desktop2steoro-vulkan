@@ -809,6 +809,7 @@ class StereoRuntime:
         self._openxr_depth_temporal: torch.Tensor | None = None
         self._openxr_rgb_depth_dumped = False
         self._loaded = False
+        self._active = True
         self.last_timing: dict[str, float] = {}
         self.last_memory: dict[str, float] = {}
         self.active_settings_snapshot = RuntimeSettingsSnapshot(version=0, timestamp=0.0)
@@ -832,6 +833,10 @@ class StereoRuntime:
         if callable(load):
             load()
         self._loaded = True
+
+    def set_inference_active(self, active: bool) -> None:
+        """Pause or resume depth and stereo processing for headset idle state."""
+        self._active = bool(active)
 
     def reset_temporal(self) -> None:
         self.temporal_state.reset()
@@ -977,9 +982,12 @@ class StereoRuntime:
         report["last_timing"] = dict(self.last_timing)
         report["last_memory"] = dict(self.last_memory)
         report["rolling_stats"] = self.stats.to_report()
+        report["inference_active"] = self._active
         return report
 
     def process_rgb_frame(self, rgb_frame: torch.Tensor, *, skip_sbs_output: bool = False) -> StereoRuntimeResult:
+        if not self._active:
+            raise RuntimeError("StereoRuntime inference is paused")
         self.load()
         self._reset_cuda_peak_if_needed()
         rgb_frame = _validate_runtime_rgb_frame(rgb_frame)
@@ -1161,6 +1169,8 @@ class StereoRuntime:
         rgb_frame: torch.Tensor,
         openxr_config: OpenXRRenderConfig | None = None,
     ) -> OpenXRRuntimeResult:
+        if not self._active:
+            raise RuntimeError("StereoRuntime inference is paused")
         self.load()
         self._reset_cuda_peak_if_needed()
         rgb_frame = _validate_runtime_rgb_frame(rgb_frame)
