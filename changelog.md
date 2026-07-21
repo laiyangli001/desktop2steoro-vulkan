@@ -15,6 +15,7 @@
 - 修复 OpenXR Quad Layer 色彩路径：优先选择 sRGB Quad swapchain，与旧工程验证过的输出策略一致；OpenXR 配置现在使用用户选择的控制器型号。
 - 修复 Filament 控制器模型全黑：控制器 GLB 加载后加入共享 fill-light channel，并保留各控制器 `profile.json` 的偏移/旋转校正。
 - 对齐旧工程环境视角校准：profile reference space 应用时水平化初始头显姿态，再重新定位视图，避免实机视角偏离预览位置。
+- 修复 Quad Layer sRGB 回归：UNORM runtime eye 到 sRGB Quad swapchain 现在使用 Vulkan blit 完成兼容格式转换，不再因格式不一致导致 OpenXR 线程退出。
 
 - OpenXR 运行时 Vulkan 中间图像保持 UNORM 存储；Filament 屏幕纹理按 sRGB 语义采样，Projection Layer 使用 UNORM 目标，避免已编码输出重复执行传输函数。
 - 虚拟屏幕接入运行时左右眼 Vulkan 输出：导出图像增加 `SAMPLED` 用途，Filament Bridge 新增窄 C ABI，将借用的 Vulkan 图像导入屏幕材质；不引入 CPU 回读。

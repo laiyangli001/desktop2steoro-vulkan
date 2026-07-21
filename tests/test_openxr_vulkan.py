@@ -272,6 +272,14 @@ def test_profile_screen_height_defaults_to_16_9_width() -> None:
     assert "Render the world at the current headset pose" in source
 
 
+def test_vulkan_copy_allows_srgb_unorm_quad_conversion() -> None:
+    source = (Path(__file__).resolve().parents[1] /
+              "src/viewer/vulkan_context.py").read_text(encoding="utf-8")
+
+    assert "formats_are_srgb_compatible" in source
+    assert "or not formats_match" in source
+
+
 def test_profile_pose_is_applied_once_to_openxr_reference_space() -> None:
     source = (Path(__file__).resolve().parents[1] /
               "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")

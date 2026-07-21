@@ -621,10 +621,26 @@ class VulkanContext:
             raise VulkanCapabilityError("source and destination Vulkan images must differ")
         if int(source.width) != int(destination.width) or int(source.height) != int(destination.height):
             raise ValueError("Vulkan image copy dimensions must match")
-        if int(source.format) != int(destination.format):
-            raise ValueError("Vulkan image copy formats must match")
 
         vk = self.vk
+        source_format = int(source.format)
+        destination_format = int(destination.format)
+        format_pair = frozenset((source_format, destination_format))
+        srgb_unorm_pairs = {
+            frozenset((
+                int(vk.VK_FORMAT_R8G8B8A8_UNORM),
+                int(vk.VK_FORMAT_R8G8B8A8_SRGB),
+            )),
+            frozenset((
+                int(vk.VK_FORMAT_B8G8R8A8_UNORM),
+                int(vk.VK_FORMAT_B8G8R8A8_SRGB),
+            )),
+        }
+        formats_match = source_format == destination_format
+        formats_are_srgb_compatible = format_pair in srgb_unorm_pairs
+        if not formats_match and not formats_are_srgb_compatible:
+            raise ValueError("Vulkan image copy formats must match or be sRGB/UNORM compatible")
+
         source_key = _cffi_handle_address(vk, source.image)
         destination_key = _cffi_handle_address(vk, destination.image)
         source_state = self._image_states.get(
@@ -685,7 +701,9 @@ class VulkanContext:
                 baseArrayLayer=0,
                 layerCount=1,
             )
-            if flip_x or flip_y:
+            # vkCmdCopyImage requires identical formats. Use a blit for the
+            # validated UNORM <-> sRGB pair as well as for coordinate flips.
+            if flip_x or flip_y or not formats_match:
                 src_x0 = int(source.width) if flip_x else 0
                 src_x1 = 0 if flip_x else int(source.width)
                 src_y0 = int(source.height) if flip_y else 0
