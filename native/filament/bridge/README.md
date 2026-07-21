@@ -10,7 +10,9 @@ acquire/release, and frame pacing. The bridge only borrows those handles and
 lets Filament render into the acquired image. The bridge never calls
 `vkAcquireNextImageKHR`, `vkQueuePresentKHR`, or destroys an OpenXR object.
 One bridge owns one Filament Engine and shared Scene; its two eye targets own
-independent Filament Views, Cameras, and external swapchains.
+independent Filament Renderers, Views, Cameras, and external swapchains. The
+separate Renderers keep Filament frame state isolated while GLB, materials,
+textures, and shader resources remain shared by the Engine.
 
 Each target platform needs its matching official Filament SDK archive. Configure
 CMake with `FILAMENT_SDK_ROOT` pointing at that extracted archive. The generated
@@ -28,7 +30,8 @@ with `filament_bridge_create_eye_swapchain`, selects the eye with
 `filament_bridge_set_active_eye`, calls `filament_bridge_set_acquired_image`,
 then brackets Filament rendering with `filament_bridge_begin_frame` and
 `filament_bridge_end_frame`. GLB and controller assets are loaded once into the
-shared Scene.
+shared Scene; each eye's active Renderer brackets only its own external
+Swapchain frame.
 
 The desktop preview ABI exposes `filament_preview_apply_animations` for embedded glTF animations.
 

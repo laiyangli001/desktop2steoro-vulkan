@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+from pathlib import Path
 
 import pytest
 
@@ -29,3 +30,16 @@ def test_pointer_value_accepts_integer_and_c_void_p() -> None:
 def test_missing_bridge_library_is_reported() -> None:
     with pytest.raises(FilamentBridgeError, match="unable to load"):
         FilamentVulkanBridge("missing-filament-bridge.dll")
+
+
+def test_native_bridge_keeps_eye_renderer_and_screen_lifetimes_explicit() -> None:
+    source = (Path(__file__).resolve().parents[1] /
+              "native/filament/bridge/filament_bridge.cpp").read_text(
+                  encoding="utf-8"
+              )
+
+    assert "filament::Renderer* renderer = nullptr;" in source
+    assert "eye.renderer = bridge->engine->createRenderer();" in source
+    assert "bridge->engine->destroy(eye.renderer);" in source
+    assert "bool screen_in_scene = false;" in source
+    assert "The sampler is required by the material" in source
