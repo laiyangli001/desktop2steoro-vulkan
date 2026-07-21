@@ -64,6 +64,7 @@ class CudaVulkanOutputAdapter:
             ready_timeline=None,
             metadata=dict(getattr(runtime_result, "debug_info", None) or {}),
             color_space="srgb",
+            image_origin="top_left",
         )
 
     def close(self) -> None:
@@ -144,6 +145,11 @@ class VulkanRuntimeOutputConsumer:
             color_space=str(
                 (getattr(runtime_result, "debug_info", None) or {}).get(
                     "output_color_space", "srgb"
+                )
+            ),
+            image_origin=str(
+                (getattr(runtime_result, "debug_info", None) or {}).get(
+                    "output_image_origin", "top_left"
                 )
             ),
         )

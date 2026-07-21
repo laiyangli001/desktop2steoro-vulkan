@@ -42,3 +42,14 @@ def test_output_frame_and_router_reject_invalid_state() -> None:
 def test_output_frame_rejects_unknown_color_space() -> None:
     with pytest.raises(ValueError, match="color_space"):
         VulkanStereoOutputFrame(1, 0.0, object(), object(), color_space="pq")
+
+
+def test_output_frame_declares_srgb_top_left_contract() -> None:
+    frame = _frame()
+    assert frame.color_space == "srgb"
+    assert frame.image_origin == "top_left"
+
+
+def test_output_frame_rejects_unknown_image_origin() -> None:
+    with pytest.raises(ValueError, match="image_origin"):
+        VulkanStereoOutputFrame(1, 0.0, object(), object(), image_origin="right")

@@ -46,6 +46,7 @@ class OpenXrVulkanConfig:
     # Keep the validated OpenXR projection target as sRGB. The Filament bridge
     # is configured for linear Rec709 output so the target performs one OETF.
     swapchain_color_mode: str = "srgb"
+    controller_model: str = "PICO"
     filament_bridge_path: str | None = None
     filament_glb_path: str | None = None
     filament_profile_path: str | None = None
@@ -191,7 +192,8 @@ class OpenXrVulkanPresenter(
         self._controllers_root = Path(__file__).resolve().parent / "controllers"
         self._controller_brands = discover_controller_brands(self._controllers_root)
         self._controller_brand = select_controller_brand(
-            self._controller_brands, os.environ.get("D2S_CONTROLLER_MODEL", "PICO")
+            self._controller_brands,
+            self.config.controller_model or os.environ.get("D2S_CONTROLLER_MODEL", "PICO"),
         )
         self._controller_inputs = ({}, {})
         self._aim_space_l = None
@@ -1098,7 +1100,11 @@ class OpenXrVulkanPresenter(
         eye_matrices = [_xr_view_pose_to_model_mat4(view.pose) for view in views[:2]]
         raw_head = eye_matrices[0].copy()
         raw_head[:3, 3] = (eye_matrices[0][:3, 3] + eye_matrices[1][:3, 3]) * 0.5
-        space_pose = raw_head @ np.linalg.inv(self._profile_head_transform)
+        # Match the legacy environment path: keep the room level by removing
+        # headset pitch/roll from the initial pose, then place the saved
+        # profile pose in that stable world space.
+        reference_head = self._level_head_model_mat4(raw_head)
+        space_pose = reference_head @ np.linalg.inv(self._profile_head_transform)
         try:
             new_space = self.xr.create_reference_space(
                 self.session,
@@ -1126,6 +1132,20 @@ class OpenXrVulkanPresenter(
                 pass
         print("[OpenXRViewer] Applied profile pose to stable OpenXR reference space", flush=True)
         return True
+
+    @staticmethod
+    def _level_head_model_mat4(head_mat: np.ndarray) -> np.ndarray:
+        """Keep position and yaw while preserving a level environment."""
+        pos = head_mat[:3, 3].copy()
+        forward = -head_mat[:3, 2].astype(np.float32)
+        forward[1] = 0.0
+        norm = float(np.linalg.norm(forward))
+        yaw = 0.0 if norm < 1e-6 else math.atan2(
+            -float(forward[0] / norm), -float(forward[2] / norm)
+        )
+        leveled = euler_to_mat4(yaw, 0.0, 0.0).astype(np.float32)
+        leveled[:3, 3] = pos
+        return leveled
 
     def _render_projection_layer(self, views: list[Any]) -> Any | None:
         if len(views) < len(self.swapchains):
@@ -1193,7 +1213,9 @@ class OpenXrVulkanPresenter(
         self._destroy_quad_swapchains()
         vk = self.vulkan.vk
         formats = list(self.xr.enumerate_swapchain_formats(self.session))
-        quad_format = _select_swapchain_format(vk, formats, "unorm")
+        # The runtime output contract is display-referred sRGB. Match the
+        # validated legacy Quad Layer path and prefer an sRGB target.
+        quad_format = _select_swapchain_format(vk, formats, "srgb")
         for _ in range(2):
             handle = self.xr.create_swapchain(
                 self.session,
@@ -1256,7 +1278,7 @@ class OpenXrVulkanPresenter(
                     source,
                     eye.resources[image_index],
                     flip_x=True,
-                    flip_y=True,
+                    flip_y=output_frame.image_origin == "top_left",
                 )
             layers.append(OpenXrCompositionBuilder(
                 self.xr, self.reference_space

@@ -285,6 +285,7 @@ CaptureFrame {
   width, height
   pixel_format
   color_space
+  image_origin
   gpu_resource
 }
 ```

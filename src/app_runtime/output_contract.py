@@ -19,6 +19,7 @@ class VulkanStereoOutputFrame:
     ready_timeline: int | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     color_space: str = "srgb"
+    image_origin: str = "top_left"
 
     def __post_init__(self) -> None:
         if int(self.frame_id) < 0:
@@ -31,6 +32,8 @@ class VulkanStereoOutputFrame:
             raise ValueError("output_format must not be empty")
         if str(self.color_space).strip().lower() not in {"srgb", "linear"}:
             raise ValueError("output color_space must be srgb or linear")
+        if str(self.image_origin).strip().lower() not in {"top_left", "bottom_left"}:
+            raise ValueError("output image_origin must be top_left or bottom_left")
         if self.ready_timeline is not None and int(self.ready_timeline) < 0:
             raise ValueError("ready_timeline must not be negative")
 

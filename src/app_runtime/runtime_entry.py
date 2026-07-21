@@ -58,6 +58,7 @@ def _openxr_filament_config(settings: dict) -> dict[str, object]:
         "swapchain_color_mode": str(
             settings.get("OpenXR Color Mode", "sRGB")
         ).strip().lower(),
+        "controller_model": str(settings.get("Controller Model", "PICO")),
         "filament_bridge_path": bridge_path,
         "filament_glb_path": configured_glb or (str(glb_path) if glb_path.is_file() else None),
         "filament_profile_path": configured_profile

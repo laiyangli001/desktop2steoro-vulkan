@@ -1212,6 +1212,16 @@ int filament_bridge_load_controller(
     }
     bridge->scene->addEntities(
             controller.asset->getEntities(), controller.asset->getEntityCount());
+    // Controllers are runtime overlays lit by the shared fill-light channel.
+    // Without this channel assignment their PBR materials receive no light
+    // because the environment asset owns the default channel routing.
+    auto& renderables = bridge->engine->getRenderableManager();
+    for (size_t index = 0; index < controller.asset->getRenderableEntityCount(); ++index) {
+        const auto entity = controller.asset->getRenderableEntities()[index];
+        const auto instance = renderables.getInstance(entity);
+        if (!instance.isValid()) continue;
+        renderables.setLightChannel(instance, 1, true);
+    }
     const auto& transforms = bridge->engine->getTransformManager();
     for (size_t index = 0; index < controller.asset->getEntityCount(); ++index) {
         const auto entity = controller.asset->getEntities()[index];

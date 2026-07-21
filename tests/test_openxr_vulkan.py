@@ -221,6 +221,7 @@ def test_presenter_validates_configuration() -> None:
 
 def test_openxr_defaults_to_validated_srgb_projection_target() -> None:
     assert OpenXrVulkanConfig().swapchain_color_mode == "srgb"
+    assert OpenXrVulkanConfig().controller_model == "PICO"
 
 
 def test_presenter_uses_controller_action_mixin_initializer() -> None:
@@ -244,8 +245,9 @@ def test_quad_layer_uses_runtime_output_size_and_openxr_visibility() -> None:
               "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
 
     assert "_ensure_quad_swapchains(width, height)" in source
-    assert "flip_y=True" in source
+    assert '_select_swapchain_format(vk, formats, "srgb")' in source
     assert "flip_x=True" in source
+    assert 'flip_y=output_frame.image_origin == "top_left"' in source
     assert "format_value if format_value is not None" in source
     assert "CompositionLayerQuad" in source
     assert "EyeVisibility.LEFT" in source
@@ -276,7 +278,8 @@ def test_profile_pose_is_applied_once_to_openxr_reference_space() -> None:
 
     assert "_apply_profile_reference_space(views)" in source
     assert "self._profile_space_applied = True" in source
-    assert "space_pose = raw_head @ np.linalg.inv(self._profile_head_transform)" in source
+    assert "reference_head = self._level_head_model_mat4(raw_head)" in source
+    assert "space_pose = reference_head @ np.linalg.inv(self._profile_head_transform)" in source
     assert "xr.ReferenceSpaceType.STAGE" in source
     assert "enumerate_reference_spaces(self.session)" in source
 

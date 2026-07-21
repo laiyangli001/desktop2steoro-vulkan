@@ -414,9 +414,11 @@ class StereoFrame:
     packed_sbs: GpuImageView | None
     ready: SyncPoint
     config_version: int
+    color_space: str = "srgb"
+    image_origin: str = "top_left"
 ```
 
-Left/Right Eye 是标准输出；只有虚拟屏幕材质或输出目标需要时才生成 `packed_sbs`。未生成时使用空 view，不分配无意义图像。
+Left/Right Eye 是标准输出；只有虚拟屏幕材质或输出目标需要时才生成 `packed_sbs`。未生成时使用空 view，不分配无意义图像。输出帧契约明确声明 `color_space=srgb` 和 `image_origin=top_left`；任何 OpenXR、Preview 或编码后端需要改变目标坐标原点时，必须在边界处显式适配，不能修改源图像语义。
 
 ### 6.5 FrameContext
 
