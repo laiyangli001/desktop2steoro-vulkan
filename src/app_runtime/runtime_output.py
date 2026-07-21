@@ -19,6 +19,11 @@ from .output_contract import VulkanStereoOutputFrame
 class CudaVulkanOutputAdapter:
     """Convert CUDA RGBA tensors into persistent Vulkan image slots."""
 
+    @staticmethod
+    def _external_semaphore_requested() -> bool:
+        value = os.environ.get("D2S_ENABLE_CUDA_EXTERNAL_SEMAPHORE", "0")
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+
     def __init__(self, presenter):
         self.presenter = presenter
         self.importer = None
@@ -64,7 +69,18 @@ class CudaVulkanOutputAdapter:
             )
             for index in range(self.ring_size)
         ]
+        external_semaphore_requested = bool(
+            self._external_semaphore_requested()
+            and getattr(
+                getattr(self.presenter, "filament_bridge", None),
+                "screen_ready_semaphore_abi_available",
+                False,
+            )
+        )
         try:
+            if not external_semaphore_requested:
+                self._extent = (width, height)
+                return
             self.left_ready_semaphores = [
                 VulkanExportableSemaphore(
                     context, label=f"runtime-left-ready-{index}"

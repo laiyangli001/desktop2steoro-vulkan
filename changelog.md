@@ -47,6 +47,7 @@
 - 完成 CUDA/Vulkan/Filament external semaphore ABI 的三平台远程编译：GitHub Actions 运行 `29818061943` 的 Windows、Linux、macOS Bridge 构建及二进制回写全部成功；本地已同步 `filament_bridge.dll`、`libfilament_bridge.so` 和 `libfilament_bridge.dylib`。
 - Vulkan 优化状态明确为分阶段完成：输出图像环、持久化纹理缓存、external semaphore 异步同步、双眼统一提交和单 Engine 资源共享已完成；完整 Compute Graph、Validation Layer、跨厂商互操作、性能基准和实机长稳验收仍未完成，不能标记为整体完成。
 - 修复实机 `Windows fatal exception: access violation`：根因是 CUDA `cudaSignalExternalSemaphoresAsync` 的 ctypes 调用参数数量和 `cudaExternalSemaphoreSignalParams` 内存布局错误；现已按 CUDA Runtime 头文件使用 `extSemArray + paramsArray + count + stream` 的 ABI，并加入结构体偏移/尺寸回归测试。
+- 针对 external semaphore 接入在 Filament `beginFrame` 阶段暴露的 native 生命周期风险，改为 `D2S_ENABLE_CUDA_EXTERNAL_SEMAPHORE=1` 显式启用，默认使用已验证的 CUDA stream 同步降级；Vulkan 输出图像环和持久化纹理缓存继续启用，避免实机默认路径再次发生 native access violation。
 
 ### 验证结果
 

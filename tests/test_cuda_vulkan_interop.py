@@ -27,6 +27,13 @@ def test_cuda_external_semaphore_signal_params_match_runtime_abi() -> None:
     assert ctypes.sizeof(_ExternalSemaphoreSignalParams) == 144
 
 
+def test_cuda_external_semaphore_requires_explicit_opt_in(monkeypatch) -> None:
+    monkeypatch.delenv("D2S_ENABLE_CUDA_EXTERNAL_SEMAPHORE", raising=False)
+    assert not CudaVulkanOutputAdapter._external_semaphore_requested()
+    monkeypatch.setenv("D2S_ENABLE_CUDA_EXTERNAL_SEMAPHORE", "1")
+    assert CudaVulkanOutputAdapter._external_semaphore_requested()
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA GPU is unavailable")
 def test_cuda_tensor_reaches_vulkan_output_slot_without_cpu_roundtrip() -> None:
     context = VulkanContext.create(
