@@ -3,6 +3,7 @@ from __future__ import annotations
 import ctypes
 import json
 import threading
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -226,6 +227,15 @@ def test_presenter_uses_controller_action_mixin_initializer() -> None:
     presenter = OpenXrVulkanPresenter()
     assert hasattr(presenter, "_init_controller_actions")
     assert not hasattr(presenter, "_initialize_controller_actions")
+
+
+def test_openxr_frame_gate_waits_for_runtime_output_before_filament() -> None:
+    source = (Path(__file__).resolve().parents[1] /
+              "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
+
+    assert "if self._pending_output is None:" in source
+    assert "waiting for first runtime eye frame" in source
+    assert "layer = self._render_projection_layer(views)" in source
 
 
 def test_filament_profile_keeps_glb_and_screen_positions_separate(tmp_path) -> None:

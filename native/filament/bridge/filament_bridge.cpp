@@ -4,6 +4,8 @@
 #include <array>
 #include <cctype>
 #include <cmath>
+#include <cstdint>
+#include <cstdio>
 #include <memory>
 #include <string>
 #include <iterator>
@@ -261,6 +263,7 @@ struct FilamentBridge {
     uint32_t active_eye = 0;
     std::vector<uint8_t> glb_bytes;
     std::string last_error;
+    uint32_t diagnostic_frame_count = 0;
     bool frame_active = false;
 };
 
@@ -1032,6 +1035,14 @@ int filament_bridge_create_eye_swapchain(
     }
     eye.external_swapchain =
             static_cast<OpenXrVulkanPlatform::ExternalSwapChain*>(external);
+    std::fprintf(stderr,
+            "[FilamentBridge] eye swapchain created eye=%u images=%u format=%d "
+            "extent=%ux%u first_image=%p\n",
+            eye_index, image_count, format, width, height,
+            image_count ? reinterpret_cast<void*>(
+                    reinterpret_cast<uintptr_t>(eye.external_swapchain->images[0]))
+                         : nullptr);
+    std::fflush(stderr);
     eye.camera->setProjection(
             45.0,
             static_cast<double>(width) / static_cast<double>(height),
@@ -1051,8 +1062,19 @@ int filament_bridge_set_active_eye(FilamentBridge* bridge, uint32_t eye_index) {
 
 int filament_bridge_set_acquired_image(FilamentBridge* bridge, uint32_t image_index) {
     if (!bridge || !bridge->swapchain || !bridge->platform) return 0;
-    return bridge->platform->set_pending_image(
+    const int result = bridge->platform->set_pending_image(
             bridge->external_swapchain, image_index) ? 1 : 0;
+    if (bridge->diagnostic_frame_count < 8) {
+        const auto& images = bridge->external_swapchain->images;
+        const void* image = image_index < images.size()
+                ? reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(images[image_index]))
+                : nullptr;
+        std::fprintf(stderr,
+                "[FilamentBridge] acquired eye=%u index=%u image=%p result=%d\n",
+                bridge->active_eye, image_index, image, result);
+        std::fflush(stderr);
+    }
+    return result;
 }
 
 int filament_bridge_set_camera_look_at(
@@ -1104,6 +1126,13 @@ int filament_bridge_begin_frame(FilamentBridge* bridge) {
     if (!bridge->frame_active) {
         set_error(bridge, "Filament Renderer::beginFrame failed");
     }
+    if (bridge->diagnostic_frame_count < 8) {
+        std::fprintf(stderr,
+                "[FilamentBridge] begin eye=%u renderer=%p swapchain=%p active=%d\n",
+                bridge->active_eye, static_cast<void*>(bridge->renderer),
+                static_cast<void*>(bridge->swapchain), bridge->frame_active ? 1 : 0);
+        std::fflush(stderr);
+    }
     bridge->renderer->render(bridge->view);
     return bridge->frame_active ? 1 : 0;
 }
@@ -1115,6 +1144,13 @@ int filament_bridge_end_frame(FilamentBridge* bridge) {
     bridge->eyes[bridge->active_eye].frame_active = false;
     if (!bridge->engine) return 0;
     bridge->engine->flushAndWait();
+    if (bridge->diagnostic_frame_count < 8) {
+        std::fprintf(stderr, "[FilamentBridge] end eye=%u\n", bridge->active_eye);
+        std::fflush(stderr);
+        if (bridge->active_eye == 1) {
+            ++bridge->diagnostic_frame_count;
+        }
+    }
     return 1;
 }
 

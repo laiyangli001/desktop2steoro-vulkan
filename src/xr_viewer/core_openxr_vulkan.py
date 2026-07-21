@@ -181,6 +181,7 @@ class OpenXrVulkanPresenter(
         self._headset_active_notified = False
         self._headset_wait_logged = False
         self._accept_output = False
+        self._source_frame_wait_logged = False
 
     @property
     def initialized(self) -> bool:
@@ -314,7 +315,20 @@ class OpenXrVulkanPresenter(
                     | xr.ViewStateFlags.ORIENTATION_VALID_BIT
                 )
                 if view_state.view_state_flags & valid_flags == valid_flags:
-                    layer = self._render_projection_layer(views)
+                    # Match the legacy frame gate: runtime rendering readiness
+                    # is separate from the availability of a fresh stereo frame.
+                    if self._pending_output is None:
+                        if not self._source_frame_wait_logged:
+                            self._source_frame_wait_logged = True
+                            print(
+                                "[OpenXRViewer] OpenXR render ready; "
+                                "waiting for first runtime eye frame",
+                                flush=True,
+                            )
+                        layer = None
+                    else:
+                        self._source_frame_wait_logged = False
+                        layer = self._render_projection_layer(views)
                     if layer is not None:
                         layer_structures.append(layer)
                         layer_pointers.append(ctypes.pointer(layer))
@@ -449,6 +463,7 @@ class OpenXrVulkanPresenter(
         self._headset_hard_idle_notified = False
         self._headset_active_notified = True
         self._headset_wait_logged = False
+        self._source_frame_wait_logged = False
         self._accept_output = True
         self._notify_headset_state("active")
         print("[OpenXRViewer] Headset detected; source inference resumed", flush=True)
@@ -532,6 +547,7 @@ class OpenXrVulkanPresenter(
         self._graphics_binding = None
         self._initialized = False
         self._pending_output = None
+        self._source_frame_wait_logged = False
         self._accept_output = False
         self._filament_animation_origin = None
 

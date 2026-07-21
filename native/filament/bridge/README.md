@@ -35,6 +35,11 @@ Swapchain frame.
 
 The desktop preview ABI exposes `filament_preview_apply_animations` for embedded glTF animations.
 
+The OpenXR bridge prints bounded native diagnostics for the first eight stereo
+frames, including eye, acquired image index, raw image handle, Renderer, and
+Swapchain pointers. These messages are intended to identify external image
+lifetime failures without enabling a per-frame verbose log mode.
+
 GitHub Actions builds the Windows x86_64, Linux x86_64, and macOS arm64 release libraries from
 the matching official SDK archives, validates their SHA-256 digests, and uploads
 the resulting library as a workflow artifact.

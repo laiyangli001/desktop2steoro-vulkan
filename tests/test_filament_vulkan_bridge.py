@@ -43,3 +43,5 @@ def test_native_bridge_keeps_eye_renderer_and_screen_lifetimes_explicit() -> Non
     assert "bridge->engine->destroy(eye.renderer);" in source
     assert "bool screen_in_scene = false;" in source
     assert "The sampler is required by the material" in source
+    assert "diagnostic_frame_count < 8" in source
+    assert "[FilamentBridge] acquired eye=" in source
