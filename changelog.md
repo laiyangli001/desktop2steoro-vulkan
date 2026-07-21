@@ -9,14 +9,14 @@
 - 修复 OpenXR 场景发白：保留旧工程验证过的 `R8G8B8A8_SRGB`/`B8G8R8A8_SRGB` Projection Layer 目标，将 Filament ColorGrading 输出改为线性 Rec709，由 sRGB 目标执行唯一一次 OETF；虚拟屏幕 Quad Layer 继续独立使用 UNORM 链。
 - 修复实机 Quad Layer 屏幕变成长条：profile 未显式提供高度时按宽度自动计算 16:9 高度；修复 profile 校准后控制器仍使用旧 OpenXR reference space，手柄位姿现在与场景使用同一世界空间。
 - 修复 Artemis 星空纹理转头闪烁：为 `Skybox__6464723579082975951` 的 8192x4096 纹理启用三线性 mipmap 采样，保留原始星空图像内容和空间位置。
-- 修复 Quad Layer 虚拟屏幕上下颠倒：运行时 Vulkan 到 OpenXR Quad swapchain 的 GPU 拷贝增加显式 Y 翻转，Projection Layer 复制路径不受影响。
-- 修复 Quad Layer 虚拟屏幕左右镜像：同一拷贝路径增加 X 翻转，当前 Quad Layer 使用 X/Y 双轴方向校正。
-- 完善统一输出契约：`VulkanStereoOutputFrame` 现在显式声明 `color_space=srgb` 和 `image_origin=top_left`；OpenXR Quad Layer 根据 origin 执行后端坐标适配。
+- 修复 Quad Layer 虚拟屏幕上下颠倒：运行时输出和 Quad swapchain 统一采用 `top_left` 行序，拷贝路径不再强制额外 Y 翻转，Projection Layer 复制路径不受影响。
+- 修复 Quad Layer 虚拟屏幕左右镜像：移除拷贝路径中的 X 翻转，避免把源图像方向问题误当成屏幕姿态问题。
+- 完善统一输出契约：`VulkanStereoOutputFrame` 现在显式声明 `color_space=srgb` 和 `image_origin=top_left`；Quad Layer 不再对 `top_left` 源图像重复做方向转换。
 - 修复 OpenXR Quad Layer 色彩路径：优先选择 sRGB Quad swapchain，与旧工程验证过的输出策略一致；OpenXR 配置现在使用用户选择的控制器型号。
 - 修复 Filament 控制器模型全黑：控制器 GLB 加载后加入共享 fill-light channel，并保留各控制器 `profile.json` 的偏移/旋转校正。
 - 对齐旧工程环境视角校准：profile reference space 应用时水平化初始头显姿态，再重新定位视图，避免实机视角偏离预览位置。
 - 修复 Quad Layer sRGB 回归：UNORM runtime eye 到 sRGB Quad swapchain 现在使用 Vulkan blit 完成兼容格式转换，不再因格式不一致导致 OpenXR 线程退出。
-- 统一 Quad Layer 图像方向：`image_origin=top_left` 不再触发 X/Y 翻转；仅显式声明 `bottom_left` 的输入执行 Y 适配，避免历史硬编码镜像污染原始画面。
+- 统一 Quad Layer 图像方向：`image_origin=top_left` 在 Vulkan 拷贝路径不执行额外 X/Y 翻转，屏幕姿态与图像行序独立处理，避免历史硬编码镜像污染原始画面。
 
 - OpenXR 运行时 Vulkan 中间图像保持 UNORM 存储；Filament 屏幕纹理按 sRGB 语义采样，Projection Layer 使用 UNORM 目标，避免已编码输出重复执行传输函数。
 - 虚拟屏幕接入运行时左右眼 Vulkan 输出：导出图像增加 `SAMPLED` 用途，Filament Bridge 新增窄 C ABI，将借用的 Vulkan 图像导入屏幕材质；不引入 CPU 回读。
@@ -379,3 +379,16 @@
 - Fixed profile loading variable reuse: GLB camera position and virtual screen position now use separate variables, preventing `.tolist()` startup failure and preserving the profile camera pose.
 - Fixed OpenXR Filament output setup: sRGB swapchains now pass `CONFIG_SRGB_COLORSPACE`; each frame now advances GLB animations on one shared timeline.
 - Controller pose updates now fall back from grip pose to aim pose, and startup logs report controller brand, screen dimensions, and loaded Bridge state.
+## 2026-07-21
+
+- 修复 OpenXR Quad Layer 颜色路径：运行时 `uint8` 输出是已经编码的显示用 sRGB 字节，CUDA 导出图像和 Quad Layer 统一使用 `R8G8B8A8_SRGB`，同格式路径使用 `vkCmdCopyImage` 原样复制，避免 `UNORM -> SRGB` Blit 再次编码导致画面发白。
+- Filament 虚拟屏幕继续以 `SRGB8_A8` 采样，并只在采样边界解码一次；CUDA 互操作只处理 RGBA 通道布局，不执行颜色转换。
+- 修复 OpenXR Quad Layer 方向适配：保持输出契约 `image_origin=top_left`，仅在 Quad Layer 提交边界执行 Y 适配，不再进行 X 翻转。
+- 修复环境 `profile.json` 相机高度：恢复旧工程的 `model_position/model_rotation_deg/model_scale` 逆变换，将世界坐标 `view_poses` 转为 GLB 局部坐标后再校准 OpenXR reference space。
+- 修复控制器 profile 姿态：`model_rotation_deg` 按旧工程约定绕控制器模型局部 X 轴应用。
+- 修复 Quad Layer 屏幕姿态：profile 的 `[yaw, pitch, roll]` 现在按旧工程的 Y/X/Z 旋转顺序转换为 OpenXR 四元数，不再把 yaw 错误当成 X 轴旋转。
+- 规范化预览运行时和保存的姿态角：view 和 screen 的旋转始终保持在 `[-180°, 180°)`，避免连续旋转后出现 `902°` 等等价但难以阅读的角度。
+- 修复 Projection Layer 虚拟屏幕无立体输入：每只眼睛的 Filament screen material 现在绑定对应的运行时 Vulkan eye image，避免屏幕纹理未接入或左右眼复用同一张图像。
+- 对齐旧工程 Projection Layer 屏幕路径：屏幕仍作为场景几何体参与每眼投影渲染，纹理按 Vulkan image handle 缓存复用，不改为单张 2D 合成层。
+- 按旧工程的异步提交边界优化 Projection Layer：左右眼 `end_frame` 只提交 Filament 工作，整帧两眼完成后统一等待一次，避免每眼一次 `flushAndWait` 串行阻塞；旧 Bridge 二进制仍保留兼容路径，需 CI 重编译后生效。
+- 增加 CUDA/Vulkan/Filament external semaphore 路径：每个输出槽位创建可导出的 Vulkan binary semaphore，CUDA copy 完成后异步 signal，Filament Bridge 在目标 swapchain acquire 时等待对应 semaphore；平台或运行库不支持时自动退回 CUDA stream 同步。

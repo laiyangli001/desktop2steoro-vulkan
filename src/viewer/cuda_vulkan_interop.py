@@ -9,7 +9,11 @@ from pathlib import Path
 from typing import Any
 
 from .vulkan_interop import VulkanInteropCapabilities, VulkanInteropMode
-from .vulkan_resources import VulkanExportableImage, VulkanImageResource
+from .vulkan_resources import (
+    VulkanExportableImage,
+    VulkanExportableSemaphore,
+    VulkanImageResource,
+)
 
 
 class CudaVulkanInteropError(RuntimeError):
@@ -61,11 +65,35 @@ class _ExternalMipmappedArrayDesc(ctypes.Structure):
     ]
 
 
+class _ExternalSemaphoreHandleDesc(ctypes.Structure):
+    _fields_ = [
+        ("type", ctypes.c_int),
+        ("handle", _ExternalHandleUnion),
+        ("flags", ctypes.c_uint),
+        ("reserved", ctypes.c_uint * 16),
+    ]
+
+
+class _ExternalSemaphoreSignalParams(ctypes.Structure):
+    _fields_ = [
+        ("ext_sem", ctypes.c_void_p),
+        ("value", ctypes.c_uint64),
+        ("flags", ctypes.c_uint),
+        ("reserved", ctypes.c_uint * 16),
+    ]
+
+
 class _CudaSlot:
     def __init__(self, target: VulkanExportableImage, external_memory: ctypes.c_void_p, array: ctypes.c_void_p):
         self.target = target
         self.external_memory = external_memory
         self.array = array
+
+
+class _CudaSemaphore:
+    def __init__(self, target: VulkanExportableSemaphore, external: ctypes.c_void_p):
+        self.target = target
+        self.external = external
 
 
 class CudaVulkanImageImporter:
@@ -79,6 +107,7 @@ class CudaVulkanImageImporter:
     def __init__(self, *, cudart_path: str | None = None) -> None:
         self._cudart = self._load_cudart(cudart_path)
         self._slots: dict[int, _CudaSlot] = {}
+        self._semaphores: dict[int, _CudaSemaphore] = {}
 
     @property
     def capabilities(self) -> VulkanInteropCapabilities:
@@ -86,7 +115,14 @@ class CudaVulkanImageImporter:
             producer="nvidia-cuda-runtime",
             mode=VulkanInteropMode.GPU_COPY,
             external_memory=True,
-            external_semaphore=False,
+            external_semaphore=all(
+                hasattr(self._cudart, name)
+                for name in (
+                    "cudaImportExternalSemaphore",
+                    "cudaSignalExternalSemaphoresAsync",
+                    "cudaDestroyExternalSemaphore",
+                )
+            ),
             zero_copy=False,
         )
 
@@ -124,6 +160,25 @@ class CudaVulkanImageImporter:
         lib.cudaMemcpy2DToArrayAsync.restype = ctypes.c_int
         lib.cudaDestroyExternalMemory.argtypes = [ctypes.c_void_p]
         lib.cudaDestroyExternalMemory.restype = ctypes.c_int
+        import_external = getattr(lib, "cudaImportExternalSemaphore", None)
+        signal_external = getattr(lib, "cudaSignalExternalSemaphoresAsync", None)
+        destroy_external = getattr(lib, "cudaDestroyExternalSemaphore", None)
+        if import_external is not None:
+            import_external.argtypes = [
+                ctypes.POINTER(ctypes.c_void_p),
+                ctypes.POINTER(_ExternalSemaphoreHandleDesc),
+            ]
+            import_external.restype = ctypes.c_int
+        if signal_external is not None:
+            signal_external.argtypes = [
+                ctypes.POINTER(_ExternalSemaphoreSignalParams),
+                ctypes.c_uint,
+                ctypes.c_void_p,
+            ]
+            signal_external.restype = ctypes.c_int
+        if destroy_external is not None:
+            destroy_external.argtypes = [ctypes.c_void_p]
+            destroy_external.restype = ctypes.c_int
         lib.cudaStreamSynchronize.argtypes = [ctypes.c_void_p]
         lib.cudaStreamSynchronize.restype = ctypes.c_int
         return lib
@@ -160,7 +215,8 @@ class CudaVulkanImageImporter:
             self._cudart.cudaImportExternalMemory(ctypes.byref(external_memory), ctypes.byref(desc)),
             "cudaImportExternalMemory",
         )
-        # The CUDA array format matches VK_FORMAT_R8G8B8A8_UNORM.
+        # CUDA receives raw RGBA bytes. Vulkan's sRGB/UNORM interpretation is
+        # carried by the image format and does not change this channel layout.
         mapped_desc = _ExternalMipmappedArrayDesc(
             offset=0,
             format_desc=_ChannelFormatDesc(8, 8, 8, 8, 0),
@@ -226,12 +282,65 @@ class CudaVulkanImageImporter:
             stream = int(torch.cuda.current_stream().cuda_stream)
         self._check(self._cudart.cudaStreamSynchronize(ctypes.c_void_p(int(stream))), "cudaStreamSynchronize")
 
+    def register_semaphore(self, target: VulkanExportableSemaphore) -> None:
+        if not self.capabilities.external_semaphore:
+            raise CudaVulkanInteropError("CUDA external semaphore API is unavailable")
+        key = id(target)
+        if key in self._semaphores:
+            return
+        handle = target.export_handle
+        desc = _ExternalSemaphoreHandleDesc(
+            type=(self._CUDA_OPAQUE_WIN32 if os.name == "nt" else self._CUDA_OPAQUE_FD),
+            flags=0,
+        )
+        if os.name == "nt":
+            desc.handle.win32.handle = ctypes.c_void_p(int(handle))
+        else:
+            desc.handle.fd = int(handle)
+        external = ctypes.c_void_p()
+        self._check(
+            self._cudart.cudaImportExternalSemaphore(
+                ctypes.byref(external), ctypes.byref(desc)
+            ),
+            "cudaImportExternalSemaphore",
+        )
+        target.close_export_handle()
+        self._semaphores[key] = _CudaSemaphore(target, external)
+
+    def signal_semaphore(
+        self, target: VulkanExportableSemaphore, *, stream: int | None = None
+    ) -> None:
+        if stream is None:
+            import torch
+
+            stream = int(torch.cuda.current_stream().cuda_stream)
+        semaphore = self._semaphores.get(id(target))
+        if semaphore is None:
+            raise CudaVulkanInteropError("CUDA external semaphore is not registered")
+        params = _ExternalSemaphoreSignalParams(
+            ext_sem=semaphore.external,
+            value=0,
+            flags=0,
+        )
+        self._check(
+            self._cudart.cudaSignalExternalSemaphoresAsync(
+                ctypes.byref(params), 1, ctypes.c_void_p(int(stream))
+            ),
+            "cudaSignalExternalSemaphoresAsync",
+        )
+
     def release_slot(self, target: VulkanExportableImage) -> None:
         slot = self._slots.pop(id(target), None)
         if slot is not None:
             self._check(self._cudart.cudaDestroyExternalMemory(slot.external_memory), "cudaDestroyExternalMemory")
 
     def close(self) -> None:
+        for semaphore in tuple(self._semaphores.values()):
+            self._check(
+                self._cudart.cudaDestroyExternalSemaphore(semaphore.external),
+                "cudaDestroyExternalSemaphore",
+            )
+        self._semaphores.clear()
         for slot in tuple(self._slots.values()):
             self._check(self._cudart.cudaDestroyExternalMemory(slot.external_memory), "cudaDestroyExternalMemory")
         self._slots.clear()

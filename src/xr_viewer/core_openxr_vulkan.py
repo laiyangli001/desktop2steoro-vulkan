@@ -30,7 +30,12 @@ from .core_controller_actions import CoreControllerActionsMixin
 from .core_controller_input import CoreControllerInputMixin
 from .core_controller_pose import CoreControllerPoseMixin
 from .controller_models import discover_controller_brands, select_controller_brand
-from .xr_math import _xr_quat_to_mat4, euler_to_mat4, mat4_to_xr_posef
+from .xr_math import (
+    _mat3_to_quat_xyzw,
+    _xr_quat_to_mat4,
+    euler_to_mat4,
+    mat4_to_xr_posef,
+)
 
 
 class OpenXrVulkanUnavailableError(RuntimeError):
@@ -692,7 +697,18 @@ class OpenXrVulkanPresenter(
                 "Vulkan external-memory extensions are unavailable: "
                 + ", ".join(missing_extensions)
             )
-        device_extensions = tuple(dict.fromkeys(external_extensions))
+        optional_external_semaphore = (
+            VulkanExportableImage.optional_external_semaphore_extensions()
+        )
+        enabled_optional = (
+            optional_external_semaphore
+            if optional_external_semaphore
+            and all(name in available_extensions for name in optional_external_semaphore)
+            else ()
+        )
+        device_extensions = tuple(
+            dict.fromkeys((*external_extensions, *enabled_optional))
+        )
         device_create_info = vk.VkDeviceCreateInfo(
             sType=vk.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
             pNext=timeline_features,
@@ -931,6 +947,12 @@ class OpenXrVulkanPresenter(
                     f"rotation={rotation}",
                     flush=True,
                 )
+                print(
+                    "Filament screen image path: "
+                    f"abi={getattr(bridge, 'screen_image_abi_available', False)} "
+                    "per_eye=runtime_output.left_eye/right_eye",
+                    flush=True,
+                )
             bridge.set_scene_exposure(self._filament_scene_exposure)
             bridge.set_skybox_brightness(self._filament_skybox_brightness)
             bridge.set_fill_light(
@@ -954,8 +976,10 @@ class OpenXrVulkanPresenter(
             return
         offset = np.eye(4, dtype=np.float32)
         offset[:3, 3] = np.asarray(self._controller_brand.offset, dtype=np.float32)
+        # Controller profiles use the legacy model calibration convention:
+        # model_rotation_deg is a rotation around the local X axis.
         rotation = euler_to_mat4(
-            math.radians(self._controller_brand.rotation_deg), 0.0, 0.0
+            0.0, math.radians(self._controller_brand.rotation_deg), 0.0
         ).astype(np.float32)
         for hand, (grip_matrix, aim_matrix) in enumerate(
             zip((self._grip_mat_l, self._grip_mat_r), (self._aim_mat_l, self._aim_mat_r))
@@ -999,7 +1023,9 @@ class OpenXrVulkanPresenter(
             raise ValueError("Filament profile does not contain a view pose")
 
         try:
-            model_position = profile.get("model_position", profile.get("position", [0.0, 0.0, 0.0]))
+            model_position = profile.get(
+                "model_position", profile.get("position", [0.0, 0.0, 0.0])
+            )
             if not isinstance(model_position, (list, tuple)) or len(model_position) < 3:
                 model_position = [0.0, 0.0, 0.0]
             model_rotation_deg = profile.get("model_rotation_deg", [0.0, 0.0, 0.0])
@@ -1018,13 +1044,20 @@ class OpenXrVulkanPresenter(
                 rotation_deg = [float(view_pose.get("angle", 0.0)), 0.0, 0.0]
             rotation_rad = [math.radians(float(value)) for value in rotation_deg[:3]]
 
+            # view_poses are authored in environment world coordinates while
+            # the imported GLB and calibrated OpenXR space use GLB-local
+            # coordinates. Match the legacy viewer by applying the inverse
+            # model transform before rebasing the reference space.
             model_matrix = euler_to_mat4(
                 *(math.radians(float(value)) for value in model_rotation_deg[:3])
             ).astype(np.float32)
             model_matrix[:3, 3] = np.asarray(model_position[:3], dtype=np.float32)
             scale = np.asarray(model_scale[:3], dtype=np.float32)
             model_matrix[:3, :3] = model_matrix[:3, :3] @ np.diag(scale)
-            glb_position = (np.linalg.inv(model_matrix) @ np.append(world_position_vec, 1.0))[:3]
+            glb_position = (
+                np.linalg.inv(model_matrix)
+                @ np.append(world_position_vec, 1.0)
+            )[:3]
         except (TypeError, ValueError, KeyError) as exc:
             raise ValueError("Filament profile view pose contains invalid values") from exc
 
@@ -1089,6 +1122,9 @@ class OpenXrVulkanPresenter(
         )
 
     def _apply_filament_profile(self, views: list[Any]) -> list[Any]:
+        # The environment profile is applied once by rebasing the shared
+        # OpenXR reference space. Runtime eye views must remain unmodified so
+        # the compositor receives the matching headset poses.
         return views
 
     def _apply_profile_reference_space(self, views: list[Any]) -> bool:
@@ -1160,8 +1196,19 @@ class OpenXrVulkanPresenter(
         if self._filament_animation_origin is None:
             self._filament_animation_origin = self._frame_now
         animation_time = max(0.0, self._frame_now - self._filament_animation_origin)
-        for eye_index, eye in enumerate(self.swapchains):
-            with _acquired_swapchain_image(xr, eye) as image_index:
+        acquired_images: list[tuple[_EyeSwapchain, int]] = []
+        try:
+            # Keep both OpenXR images acquired while Filament queues both eye
+            # submissions. They are released only after the single frame-wide
+            # completion wait below.
+            for eye in self.swapchains:
+                image_index = xr.acquire_swapchain_image(eye.handle)
+                acquired_images.append((eye, image_index))
+                xr.wait_swapchain_image(
+                    eye.handle,
+                    xr.SwapchainImageWaitInfo(timeout=xr.INFINITE_DURATION),
+                )
+            for eye_index, (eye, image_index) in enumerate(acquired_images):
                 if self.filament_bridge is not None:
                     bridge = self.filament_bridge
                     bridge.set_active_eye(eye_index)
@@ -1174,6 +1221,39 @@ class OpenXrVulkanPresenter(
                         near_plane=self._profile_near_plane,
                         far_plane=self._profile_far_plane,
                     )
+                    if (
+                        output_frame is not None
+                        and self._filament_screen is not None
+                        and getattr(bridge, "screen_image_abi_available", False)
+                    ):
+                        screen_source = (
+                            output_frame.left_eye
+                            if eye_index == 0
+                            else output_frame.right_eye
+                        )
+                        # Bind the matching runtime eye image to the Filament
+                        # screen material. The native bridge caches imported
+                        # VkImages by handle, so this is not a per-frame
+                        # texture allocation.
+                        bridge.set_screen_image(
+                            screen_source.image,
+                            width=screen_source.width,
+                            height=screen_source.height,
+                            format=screen_source.format,
+                        )
+                        ready_key = (
+                            "vulkan_ready_semaphore_left"
+                            if eye_index == 0
+                            else "vulkan_ready_semaphore_right"
+                        )
+                        ready_semaphore = (output_frame.metadata or {}).get(ready_key)
+                        if (
+                            ready_semaphore is not None
+                            and getattr(
+                                bridge, "screen_ready_semaphore_abi_available", False
+                            )
+                        ):
+                            bridge.set_screen_ready_semaphore(ready_semaphore)
                     self._update_filament_controllers(bridge)
                     if hasattr(bridge, "apply_animations"):
                         bridge.apply_animations(animation_time)
@@ -1196,6 +1276,14 @@ class OpenXrVulkanPresenter(
                         image_address = _ctypes_handle_address(eye.images[image_index].image)
                         image = self.vulkan.image_handle_from_address(image_address)
                         self.vulkan.clear_color_image(image, self.config.clear_color)
+            if self.filament_bridge is not None:
+                bridge = self.filament_bridge
+                if getattr(bridge, "async_submit_abi_available", False):
+                    # Both eyes are submitted before the single completion wait.
+                    bridge.wait_for_idle()
+        finally:
+            for eye, _image_index in acquired_images:
+                xr.release_swapchain_image(eye.handle)
         self._pending_output = None
         return OpenXrCompositionBuilder(xr, self.reference_space).projection_layer(
             composition_views, self.swapchains
@@ -1273,14 +1361,13 @@ class OpenXrVulkanPresenter(
         for eye_index, eye in enumerate(self._quad_swapchains):
             source = output_frame.left_eye if eye_index == 0 else output_frame.right_eye
             with _acquired_swapchain_image(self.xr, eye) as image_index:
-                # Vulkan image memory and OpenXR Quad Layer UV origins differ.
+                # The output contract is top-left and the Vulkan swapchain
+                # image uses the same row order. Do not apply a second Y
+                # transform here; screen pose is handled independently below.
                 self.vulkan.copy_image(
                     source,
                     eye.resources[image_index],
-                    # The output contract and Vulkan swapchain both use a
-                    # top-left image origin. Only adapt an explicitly
-                    # bottom-left producer; never mirror the image on X.
-                    flip_y=output_frame.image_origin == "bottom_left",
+                    flip_y=False,
                 )
             layers.append(OpenXrCompositionBuilder(
                 self.xr, self.reference_space
@@ -1316,17 +1403,12 @@ def _xr_view_pose_to_model_mat4(pose: Any) -> np.ndarray:
 
 
 def _euler_degrees_to_quaternion(rotation: tuple[float, float, float]) -> tuple[float, float, float, float]:
-    """Convert profile XYZ Euler degrees to an OpenXR quaternion."""
-    x, y, z = (math.radians(float(value)) * 0.5 for value in rotation[:3])
-    cx, sx = math.cos(x), math.sin(x)
-    cy, sy = math.cos(y), math.sin(y)
-    cz, sz = math.cos(z), math.sin(z)
-    return (
-        sx * cy * cz - cx * sy * sz,
-        cx * sy * cz + sx * cy * sz,
-        cx * cy * sz - sx * sy * cz,
-        cx * cy * cz + sx * sy * sz,
+    """Convert legacy profile yaw/pitch/roll degrees to OpenXR xyzw."""
+    yaw, pitch, roll = (
+        math.radians(float(value)) for value in rotation[:3]
     )
+    matrix = euler_to_mat4(yaw, pitch, roll)
+    return tuple(float(value) for value in _mat3_to_quat_xyzw(matrix[:3, :3]))
 
 
 def _update_filament_camera(

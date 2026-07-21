@@ -88,7 +88,15 @@ class VulkanExternalImageRegistry:
 class VulkanExportableImage:
     """Own one Vulkan image whose memory can be imported by a GPU producer."""
 
-    def __init__(self, context: Any, width: int, height: int, *, label: str) -> None:
+    def __init__(
+        self,
+        context: Any,
+        width: int,
+        height: int,
+        *,
+        label: str,
+        format: int | None = None,
+    ) -> None:
         if int(width) < 1 or int(height) < 1:
             raise ValueError("exportable image dimensions must be positive")
         if not str(label).strip():
@@ -98,6 +106,7 @@ class VulkanExportableImage:
         self.width = int(width)
         self.height = int(height)
         self.label = str(label)
+        self.format = int(format or self.vk.VK_FORMAT_R8G8B8A8_UNORM)
         self.image = None
         self.memory = None
         self.allocation_size = 0
@@ -120,6 +129,14 @@ class VulkanExportableImage:
                 "VK_KHR_external_memory_fd",
             )
         raise RuntimeError(f"unsupported external-memory platform: {os.name}")
+
+    @staticmethod
+    def optional_external_semaphore_extensions() -> tuple[str, ...]:
+        if os.name == "nt":
+            return ("VK_KHR_external_semaphore", "VK_KHR_external_semaphore_win32")
+        if os.name == "posix":
+            return ("VK_KHR_external_semaphore", "VK_KHR_external_semaphore_fd")
+        return ()
 
     def _resolve_handle_type(self) -> int:
         if os.name == "nt":
@@ -151,7 +168,7 @@ class VulkanExportableImage:
                 sType=vk.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
                 pNext=external_image,
                 imageType=vk.VK_IMAGE_TYPE_2D,
-                format=vk.VK_FORMAT_R8G8B8A8_UNORM,
+                format=self.format,
                 extent=vk.VkExtent3D(width=self.width, height=self.height, depth=1),
                 mipLevels=1,
                 arrayLayers=1,
@@ -205,7 +222,7 @@ class VulkanExportableImage:
                 sType=vk.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
                 image=self.image,
                 viewType=vk.VK_IMAGE_VIEW_TYPE_2D,
-                format=vk.VK_FORMAT_R8G8B8A8_UNORM,
+                format=self.format,
                 subresourceRange=vk.VkImageSubresourceRange(
                     aspectMask=vk.VK_IMAGE_ASPECT_COLOR_BIT,
                     baseMipLevel=0,
@@ -222,7 +239,7 @@ class VulkanExportableImage:
             view=self.view,
             width=self.width,
             height=self.height,
-            format=vk.VK_FORMAT_R8G8B8A8_UNORM,
+            format=self.format,
             layout=vk.VK_IMAGE_LAYOUT_UNDEFINED,
             access_mask=0,
             stage_mask=0,
@@ -321,6 +338,101 @@ class VulkanExportableImage:
         self.allocation_size = 0
 
     def __enter__(self) -> "VulkanExportableImage":
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        self.close()
+
+
+class VulkanExportableSemaphore:
+    """Own a binary Vulkan semaphore exported to an external GPU producer."""
+
+    def __init__(self, context: Any, *, label: str = "external-semaphore") -> None:
+        self.context = context
+        self.vk = context.vk
+        self.label = str(label)
+        self._handle_type = self._resolve_handle_type()
+        self.semaphore = None
+        self._export_handle = None
+        export_info = self.vk.VkExportSemaphoreCreateInfo(
+            sType=self.vk.VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO,
+            handleTypes=self._handle_type,
+        )
+        self.semaphore = self.vk.vkCreateSemaphore(
+            context.device,
+            self.vk.VkSemaphoreCreateInfo(
+                sType=self.vk.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+                pNext=export_info,
+            ),
+            None,
+        )
+
+    def _resolve_handle_type(self) -> int:
+        if os.name == "nt":
+            return int(self.vk.VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT)
+        if os.name == "posix":
+            return int(self.vk.VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT)
+        raise RuntimeError(f"unsupported external-semaphore platform: {os.name}")
+
+    @property
+    def export_handle(self) -> Any:
+        if self._export_handle is None:
+            vk = self.vk
+            if os.name == "nt":
+                proc = vk.lib.vkGetDeviceProcAddr(
+                    self.context.device, b"vkGetSemaphoreWin32HandleKHR"
+                )
+                if proc == vk.ffi.NULL:
+                    raise RuntimeError("vkGetSemaphoreWin32HandleKHR is unavailable")
+                function = vk.ffi.cast(
+                    "VkResult(*)(VkDevice, const VkSemaphoreGetWin32HandleInfoKHR*, void**)" ,
+                    proc,
+                )
+                output = vk.ffi.new("void **")
+                info = vk.ffi.new("VkSemaphoreGetWin32HandleInfoKHR *")
+                info.sType = vk.VK_STRUCTURE_TYPE_SEMAPHORE_GET_WIN32_HANDLE_INFO_KHR
+                info.semaphore = self.semaphore
+                info.handleType = self._handle_type
+                result = function(self.context.device, info, output)
+                if int(result) != int(vk.VK_SUCCESS):
+                    raise RuntimeError(f"vkGetSemaphoreWin32HandleKHR failed: {result}")
+                self._export_handle = int(vk.ffi.cast("uintptr_t", output[0]))
+            else:
+                proc = vk.lib.vkGetDeviceProcAddr(
+                    self.context.device, b"vkGetSemaphoreFdKHR"
+                )
+                if proc == vk.ffi.NULL:
+                    raise RuntimeError("vkGetSemaphoreFdKHR is unavailable")
+                function = vk.ffi.cast(
+                    "VkResult(*)(VkDevice, const VkSemaphoreGetFdInfoKHR*, int*)", proc
+                )
+                output = vk.ffi.new("int *")
+                info = vk.ffi.new("VkSemaphoreGetFdInfoKHR *")
+                info.sType = vk.VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR
+                info.semaphore = self.semaphore
+                info.handleType = self._handle_type
+                result = function(self.context.device, info, output)
+                if int(result) != int(vk.VK_SUCCESS):
+                    raise RuntimeError(f"vkGetSemaphoreFdKHR failed: {result}")
+                self._export_handle = int(output[0])
+        return self._export_handle
+
+    def close_export_handle(self) -> None:
+        if self._export_handle is None:
+            return
+        if os.name == "nt":
+            ctypes.windll.kernel32.CloseHandle(ctypes.c_void_p(int(self._export_handle)))
+        else:
+            os.close(int(self._export_handle))
+        self._export_handle = None
+
+    def close(self) -> None:
+        self.close_export_handle()
+        if self.semaphore is not None and self.context.device is not None:
+            self.vk.vkDestroySemaphore(self.context.device, self.semaphore, None)
+        self.semaphore = None
+
+    def __enter__(self) -> "VulkanExportableSemaphore":
         return self
 
     def __exit__(self, exc_type, exc, traceback) -> None:

@@ -46,6 +46,8 @@ class FilamentVulkanBridge:
             raise FilamentBridgeError(f"unable to load Filament Bridge: {path}") from exc
         self._controller_abi_available = False
         self._screen_image_abi_available = False
+        self._screen_ready_semaphore_abi_available = False
+        self._async_submit_abi_available = False
         self._configure_abi()
         self._handle: ctypes.c_void_p | None = None
 
@@ -60,6 +62,14 @@ class FilamentVulkanBridge:
     @property
     def screen_image_abi_available(self) -> bool:
         return self._screen_image_abi_available
+
+    @property
+    def screen_ready_semaphore_abi_available(self) -> bool:
+        return self._screen_ready_semaphore_abi_available
+
+    @property
+    def async_submit_abi_available(self) -> bool:
+        return self._async_submit_abi_available
 
     @property
     def loaded(self) -> bool:
@@ -224,6 +234,15 @@ class FilamentVulkanBridge:
             self._library.filament_bridge_end_frame(self._handle), "end_frame"
         )
 
+    def wait_for_idle(self) -> None:
+        self._ensure_loaded()
+        if not self._async_submit_abi_available:
+            return
+        self._check_result(
+            self._library.filament_bridge_wait_for_idle(self._handle),
+            "wait_for_idle",
+        )
+
     def load_glb(self, data: bytes | bytearray | memoryview) -> None:
         self._ensure_loaded()
         payload = bytes(data)
@@ -351,6 +370,17 @@ class FilamentVulkanBridge:
             "set_screen_image",
         )
 
+    def set_screen_ready_semaphore(self, semaphore: Any) -> None:
+        self._ensure_loaded()
+        if not self._screen_ready_semaphore_abi_available:
+            return
+        self._check_result(
+            self._library.filament_bridge_set_screen_ready_semaphore(
+                self._handle, ctypes.c_void_p(_as_pointer_value(semaphore))
+            ),
+            "set_screen_ready_semaphore",
+        )
+
     def apply_animations(self, time_seconds: float) -> None:
         self._ensure_loaded()
         self._check_result(
@@ -429,6 +459,11 @@ class FilamentVulkanBridge:
             function = getattr(library, name)
             function.argtypes = [ctypes.c_void_p]
             function.restype = ctypes.c_int
+        wait_for_idle = getattr(library, "filament_bridge_wait_for_idle", None)
+        if wait_for_idle is not None:
+            wait_for_idle.argtypes = [ctypes.c_void_p]
+            wait_for_idle.restype = ctypes.c_int
+            self._async_submit_abi_available = True
         library.filament_bridge_load_glb.argtypes = [
             ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32
         ]
@@ -488,6 +523,12 @@ class FilamentVulkanBridge:
             ]
             library.filament_bridge_set_screen_image.restype = ctypes.c_int
             self._screen_image_abi_available = True
+        if hasattr(library, "filament_bridge_set_screen_ready_semaphore"):
+            library.filament_bridge_set_screen_ready_semaphore.argtypes = [
+                ctypes.c_void_p, ctypes.c_void_p
+            ]
+            library.filament_bridge_set_screen_ready_semaphore.restype = ctypes.c_int
+            self._screen_ready_semaphore_abi_available = True
         library.filament_bridge_apply_animations.argtypes = [
             ctypes.c_void_p, ctypes.c_double
         ]

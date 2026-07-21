@@ -76,6 +76,12 @@ def _pose_rotation_deg(view: dict, default=(0.0, 0.0, 0.0)):
     return list(default)
 
 
+def _normalize_angle_deg(value: float) -> float:
+    """Keep an equivalent angle in the canonical [-180, 180) range."""
+    normalized = (float(value) + 180.0) % 360.0 - 180.0
+    return 0.0 if abs(normalized) < 0.0005 else normalized
+
+
 def _set_pose_position(view: dict, pos):
     rounded = [round(float(v), 4) for v in pos]
     if any(key in view for key in ("x", "y", "z")):
@@ -85,7 +91,7 @@ def _set_pose_position(view: dict, pos):
 
 
 def _set_pose_rotation_deg(view: dict, rot):
-    rounded = [round(float(v), 3) for v in rot]
+    rounded = [round(_normalize_angle_deg(v), 3) for v in rot]
     view["rotation_deg"] = rounded
     if "angle" in view:
         view["angle"] = rounded[0]
@@ -261,7 +267,7 @@ def main():
     view_pos = _pose_position_in_scene(profile, view_pose)
     if args.center_view:
         print("--center-view is ignored by the Filament preview; use VIEW controls to adjust the profile seat.")
-    view_rot_deg = _pose_rotation_deg(view_pose, [0.0, 0.0, 0.0])
+    view_rot_deg = [_normalize_angle_deg(value) for value in _pose_rotation_deg(view_pose, [0.0, 0.0, 0.0])]
     view_rot = [math.radians(v) for v in view_rot_deg]
     speed, size_speed = 1.0, 0.8
     rot_speed = 45.0
@@ -304,7 +310,7 @@ def main():
         dx = x - last_mouse[0]
         dy = y - last_mouse[1]
         last_mouse = (x, y)
-        view_rot_deg = _pose_rotation_deg(view_pose, [math.degrees(v) for v in view_rot])
+        view_rot_deg = [_normalize_angle_deg(value) for value in _pose_rotation_deg(view_pose, [math.degrees(v) for v in view_rot])]
         view_rot_deg[0] -= dx * 0.12
         view_rot_deg[1] = max(-89.0, min(89.0, view_rot_deg[1] - dy * 0.12))
         _set_pose_rotation_deg(view_pose, view_rot_deg)
@@ -354,8 +360,8 @@ def main():
         tab_was_down = tab_down
 
         pos = _vec3(screen.get("position"), [0.0, 1.2, -2.0])
-        rot = _vec3(screen.get("rotation_deg"), [0.0, 0.0, 0.0])
-        view_rot_deg = _pose_rotation_deg(view_pose, [math.degrees(v) for v in view_rot])
+        rot = [_normalize_angle_deg(value) for value in _vec3(screen.get("rotation_deg"), [0.0, 0.0, 0.0])]
+        view_rot_deg = [_normalize_angle_deg(value) for value in _pose_rotation_deg(view_pose, [math.degrees(v) for v in view_rot])]
         changed_screen = False
         changed_view = False
 
@@ -438,7 +444,7 @@ def main():
 
         if changed_screen:
             screen["position"] = [round(v, 4) for v in pos]
-            screen["rotation_deg"] = [round(v, 3) for v in rot]
+            screen["rotation_deg"] = [round(_normalize_angle_deg(v), 3) for v in rot]
             screen_width = float(screen.get("width", 2.4))
             screen_height = float(screen.get("height", screen_width * 9.0 / 16.0))
             preview.set_screen(
@@ -463,7 +469,7 @@ def main():
                 view_pose = profile.setdefault("view_pose", {})
             screen = profile.setdefault("screen", {})
             view_pos = _pose_position_in_scene(profile, view_pose)
-            view_rot_deg = _pose_rotation_deg(view_pose, [0.0, 0.0, 0.0])
+            view_rot_deg = [_normalize_angle_deg(value) for value in _pose_rotation_deg(view_pose, [0.0, 0.0, 0.0])]
             view_rot = [math.radians(v) for v in view_rot_deg]
             animation_start_time = glfw.get_time()
             speed, size_speed = 1.0, 0.8

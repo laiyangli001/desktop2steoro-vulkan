@@ -63,6 +63,8 @@ FILAMENT_BRIDGE_API int filament_bridge_set_camera_projection_frustum(
         double near_plane, double far_plane);
 FILAMENT_BRIDGE_API int filament_bridge_begin_frame(FilamentBridge* bridge);
 FILAMENT_BRIDGE_API int filament_bridge_end_frame(FilamentBridge* bridge);
+// Submit queued work without blocking; wait once after the complete XR frame.
+FILAMENT_BRIDGE_API int filament_bridge_wait_for_idle(FilamentBridge* bridge);
 
 FILAMENT_BRIDGE_API int filament_bridge_load_glb(
         FilamentBridge* bridge, const uint8_t* bytes, uint32_t byte_count);
@@ -99,6 +101,9 @@ FILAMENT_BRIDGE_API int filament_bridge_set_screen(
 FILAMENT_BRIDGE_API int filament_bridge_set_screen_image(
         FilamentBridge* bridge, const void* image,
         uint32_t width, uint32_t height, int32_t format);
+// Set a borrowed binary semaphore signaled by the runtime output producer.
+FILAMENT_BRIDGE_API int filament_bridge_set_screen_ready_semaphore(
+        FilamentBridge* bridge, const void* semaphore);
 FILAMENT_BRIDGE_API int filament_bridge_apply_animations(
         FilamentBridge* bridge, double time_seconds);
 FILAMENT_BRIDGE_API uint32_t filament_bridge_animation_count(

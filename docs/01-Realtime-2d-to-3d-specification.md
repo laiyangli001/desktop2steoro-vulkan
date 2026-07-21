@@ -487,6 +487,28 @@ xrWaitFrame
 
 每眼 Projection View 必须使用本帧 `xrLocateViews` 返回的 pose 和 FOV。场景相机 near/far clip 应由配置显式给出，并适配大型 glTF 场景；不得依赖旧查看器默认值。
 
+### 8.2.1 Vulkan 输出图像环与异步纹理管理
+
+运行时屏幕图像不得使用单个可变纹理作为跨线程共享缓冲。Vulkan 主路径必须为左右眼分别创建有界的输出图像环，默认容量为 3，可在 2 至 4 之间配置：
+
+```text
+Left  VkImage[0..N-1]  <- CUDA external memory import once per slot
+Right VkImage[0..N-1]  <- CUDA external memory import once per slot
+                         |
+                         +-> Filament Texture cache, one import per VkImage
+```
+
+每个环槽的 Vulkan image、image view、CUDA external-memory mapping 和 Filament Texture 必须保持稳定。正常帧不得执行以下操作：
+
+- 重新创建或销毁运行时屏幕纹理；
+- 为每帧分配新的 external-memory handle；
+- 将 GPU 图像回读到 CPU；
+- 用 `vkDeviceWaitIdle`、`vkQueueWaitIdle` 或 `flushAndWait` 作为每眼同步。
+
+帧生命周期固定为：选择可复用槽位 -> CUDA 写入 -> 发布 ready 同步点 -> Projection Layer 绑定对应左右眼槽位 -> Filament 提交两眼 -> 完成后回收槽位。槽位在 graphics 完成前不得被 CUDA 重写。当前已接入 CUDA external semaphore signal 与 Filament image-ready wait；平台、CUDA Runtime 或旧 Bridge ABI 不支持时，才退回 `cudaStreamSynchronize` 兼容安全栅栏。
+
+Filament Bridge 必须缓存每眼所有已导入的环槽纹理，并只更新当前材质绑定。Projection Layer 两眼应先完成 acquire/wait，再批量提交，整帧只执行一次必要的完成等待，随后统一 release 两眼 OpenXR 图像。
+
 ### 8.3 Composition Layer
 
 - 主场景使用 `XrCompositionLayerProjection`。
@@ -560,6 +582,8 @@ capture_ready(frame_id)
 ```
 
 Vulkan 内部同步优先使用 Timeline Semaphore + Synchronization2。与 CUDA/HIP 交界使用平台支持的 external semaphore。只在无法表达 timeline 的外部 API 上使用 binary semaphore。
+
+图像槽位的同步点必须随输出契约传递，至少包含 `frame_id`、`ring_slot`、producer ready point、consumer completion point 和 image ownership。`ready_timeline=None` 只能表示当前兼容路径已在发布前完成 CUDA stream 同步，不得被解释为 GPU 工作已经没有依赖。
 
 Timeline Semaphore 是设备能力，不由 Vulkan API 版本号自动开启。所有 NVIDIA、AMD、Intel 和 MoltenVK 目标都必须执行运行时 capability probe；Vulkan 1.4 请求失败或被 Runtime 裁剪到 1.2 不构成错误，只要 Timeline Semaphore 等最低能力满足即可。
 

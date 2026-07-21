@@ -237,7 +237,7 @@ def test_openxr_frame_gate_waits_for_runtime_output_before_filament() -> None:
     assert "if self._pending_output is None and not self._has_presented_frame:" in source
     assert "waiting for first runtime eye frame" in source
     assert "layer = self._render_projection_layer(views)" in source
-    assert "bridge.set_screen_image(" not in source
+    assert "bridge.set_screen_image(" in source
 
 
 def test_quad_layer_uses_runtime_output_size_and_openxr_visibility() -> None:
@@ -247,7 +247,7 @@ def test_quad_layer_uses_runtime_output_size_and_openxr_visibility() -> None:
     assert "_ensure_quad_swapchains(width, height)" in source
     assert '_select_swapchain_format(vk, formats, "srgb")' in source
     assert "flip_x=True" not in source
-    assert 'flip_y=output_frame.image_origin == "bottom_left"' in source
+    assert "flip_y=False" in source
     assert "format_value if format_value is not None" in source
     assert "CompositionLayerQuad" in source
     assert "EyeVisibility.LEFT" in source
@@ -305,6 +305,44 @@ def test_filament_profile_keeps_glb_and_screen_positions_separate(tmp_path) -> N
     presenter._load_filament_profile()
     assert presenter._profile_head_transform[:3, 3].tolist() == [1.0, 2.0, 3.0]
     assert presenter._filament_screen[0] == (10.0, 20.0, 30.0)
+
+
+def test_filament_profile_view_pose_is_converted_to_glb_local_space(tmp_path) -> None:
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_text(json.dumps({
+        "model_position": [0.0, 843.0, 0.0],
+        "view_poses": [{"x": -24.0, "y": 900.0, "z": -961.0}],
+    }), encoding="utf-8")
+    presenter = OpenXrVulkanPresenter(OpenXrVulkanConfig(
+        filament_profile_path=str(profile_path),
+    ))
+    presenter._load_filament_profile()
+    assert presenter._profile_head_transform[:3, 3].tolist() == [-24.0, 57.0, -961.0]
+
+
+def test_controller_profile_rotation_uses_local_x_axis() -> None:
+    source = (Path(__file__).resolve().parents[1] /
+              "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
+    assert "0.0, math.radians(self._controller_brand.rotation_deg), 0.0" in source
+
+
+def test_quad_profile_rotation_uses_legacy_yaw_pitch_roll_order() -> None:
+    from xr_viewer.core_openxr_vulkan import _euler_degrees_to_quaternion
+
+    x, y, z, w = _euler_degrees_to_quaternion((90.0, 0.0, 0.0))
+    assert abs(x) < 1e-6
+    assert abs(y - 2 ** -0.5) < 1e-6
+    assert abs(z) < 1e-6
+    assert abs(w - 2 ** -0.5) < 1e-6
+
+
+def test_projection_layer_binds_matching_runtime_eye_to_filament_screen() -> None:
+    source = (Path(__file__).resolve().parents[1] /
+              "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
+    assert "bridge.set_screen_image(" in source
+    assert "output_frame.left_eye" in source
+    assert "output_frame.right_eye" in source
+    assert "screen_image_abi_available" in source
 
 
 def test_presenter_run_until_owns_shutdown_close() -> None:

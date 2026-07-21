@@ -30,9 +30,20 @@ def test_cuda_tensor_reaches_vulkan_output_slot_without_cpu_roundtrip() -> None:
 
         assert frame.left_eye.width == 48
         assert frame.left_eye.height == 32
+        assert frame.left_eye.format == context.vk.VK_FORMAT_R8G8B8A8_SRGB
+        assert len(adapter.left_slots) == 3
+        assert len(adapter.right_slots) == 3
+        assert frame.metadata["vulkan_output_ring_slot"] == 0
+        assert frame.metadata["vulkan_output_ring_size"] == 3
         assert context.image_state(frame.left_eye.image).layout == context.vk.VK_IMAGE_LAYOUT_GENERAL
 
-        destination = VulkanExportableImage(context, 48, 32, label="cuda-output-destination")
+        destination = VulkanExportableImage(
+            context,
+            48,
+            32,
+            label="cuda-output-destination",
+            format=context.vk.VK_FORMAT_R8G8B8A8_SRGB,
+        )
         timeline = context.copy_image(frame.left_eye, destination.resource)
         context.wait_idle()
         assert timeline > 0

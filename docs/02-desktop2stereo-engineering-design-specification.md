@@ -341,6 +341,35 @@ Capture 与 Inference 以 latest-frame 推进；新 screen image 完成后以原
 
 Effects Graph 消费最近完成的 screen slot，并发布 `latest_effect_slot`。Graphics Queue 从不等待指定 frame ID 的光效结果。
 
+### 5.4 Vulkan 屏幕图像环
+
+`CudaVulkanOutputAdapter` 负责拥有左右眼输出图像环，默认 `D2S_VULKAN_OUTPUT_RING_SIZE=3`。它必须：
+
+1. 为每个环槽创建可导出、可采样的 device-local `VkImage`；
+2. 为每个环槽只注册一次 CUDA external memory 和 mapped array；
+3. 按 `frame_id % ring_size` 选择槽位，并在输出元数据中记录 `vulkan_output_ring_slot`；
+4. 让 `VulkanStereoOutputFrame` 持有该槽位的非拥有资源视图，不复制像素；
+5. 在尺寸变化或关闭阶段等待有限的在途工作后统一释放整个环。
+
+Filament Bridge 对每只眼维护 `VkImage -> Filament Texture` 缓存。`set_screen_image` 命中缓存时只切换材质参数，不能销毁旧 Texture 后重新 import。槽位扩容或尺寸变化属于受控重配置，不得发生在正常帧循环。
+
+当前实现状态：图像环、Filament 多槽缓存和 external semaphore ABI 已完成。CUDA copy 完成后 signal 对应槽位 semaphore，Filament 在目标 swapchain acquire 时等待；平台、CUDA Runtime 或旧 Bridge 不支持时保留 CPU stream 同步降级。下一阶段是三平台 CI 二进制和 Validation Layer/头显长稳验证。
+
+### 5.5 Projection Layer 异步提交
+
+XR/Render Thread 对一帧执行：
+
+```text
+acquire + wait(left), acquire + wait(right)
+-> set active ring slot and camera for each eye
+-> begin/end Filament frame for left and right
+-> one frame-wide completion wait
+-> release(left), release(right)
+-> xrEndFrame
+```
+
+Bridge 的 `end_frame` 只提交当前眼睛的命令，不等待 GPU。`wait_for_idle` 只作为当前 external synchronization ABI 的帧边界兼容实现；external semaphore 完成后应替换为按槽位 completion point 回收，不能恢复每眼 `flushAndWait`。
+
 ---
 
 ## 6. 核心数据契约
@@ -373,7 +402,24 @@ class GpuImageView:
 
 `GpuImageView`是非拥有视图。拥有资源由`GpuImage`显式管理，并提供幂等`close()`和context manager；不得依赖Python垃圾回收时机释放Vulkan对象。
 
-### 6.2 CaptureFrame
+### 6.2 输出同步契约
+
+```python
+OutputFrame {
+  frame_id
+  ring_slot
+  left_eye
+  right_eye
+  color_space = "srgb"
+  image_origin = "top_left"
+  producer_ready: SyncPoint | None
+  consumer_release: SyncPoint | None
+}
+```
+
+`producer_ready` 未提供时，生产者必须在发布前完成等价的 CUDA/GPU 同步，并将实际降级方式写入 metadata。任何消费者不得假设图像可立即复用；槽位回收必须由 producer 和 graphics consumer 的完成点共同决定。
+
+### 6.3 CaptureFrame
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -389,7 +435,7 @@ class CaptureFrame:
 
 `ExternalImageHandle` 是 tagged union，平台实现可以承载 Vulkan image、Win32 handle、DMA-BUF/FD、IOSurface 或受控 CPU 测试帧。实时模式下不接受普通 CPU pointer。
 
-### 6.3 InferenceResult
+### 6.4 InferenceResult
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -403,7 +449,7 @@ class InferenceResult:
 
 `DepthMetadata` 必须包含模型 ID、backend、precision、near/far direction、normalization、模型输入尺寸和 GPU timing。下游不得猜测深度方向。
 
-### 6.4 StereoFrame
+### 6.5 StereoFrame
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -420,7 +466,7 @@ class StereoFrame:
 
 Left/Right Eye 是标准输出；只有虚拟屏幕材质或输出目标需要时才生成 `packed_sbs`。未生成时使用空 view，不分配无意义图像。输出帧契约明确声明 `color_space=srgb` 和 `image_origin=top_left`；任何 OpenXR、Preview 或编码后端需要改变目标坐标原点时，必须在边界处显式适配，不能修改源图像语义。
 
-### 6.5 FrameContext
+### 6.6 FrameContext
 
 每个 Frame Context 独占 command pool、command buffer、descriptor arena、timestamp query 范围和中间图像索引。Frame Context 只能在其最终 timeline 值完成后复用。
 

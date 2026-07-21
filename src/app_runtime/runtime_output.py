@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import os
 import queue
 import time
 
 from viewer.cuda_vulkan_interop import CudaVulkanImageImporter
-from viewer.vulkan_resources import VulkanExportableImage, VulkanImageResource
+from viewer.vulkan_resources import (
+    VulkanExportableImage,
+    VulkanExportableSemaphore,
+    VulkanImageResource,
+)
 
 from .output_contract import VulkanStereoOutputFrame
 
@@ -17,6 +22,12 @@ class CudaVulkanOutputAdapter:
     def __init__(self, presenter):
         self.presenter = presenter
         self.importer = None
+        self.ring_size = max(2, int(os.environ.get("D2S_VULKAN_OUTPUT_RING_SIZE", "3")))
+        self.left_slots = []
+        self.right_slots = []
+        self.left_ready_semaphores = []
+        self.right_ready_semaphores = []
+        self.external_semaphore_enabled = False
         self.left_slot = None
         self.right_slot = None
         self._extent = None
@@ -38,12 +49,43 @@ class CudaVulkanOutputAdapter:
             return
         self.close()
         self.importer = CudaVulkanImageImporter()
-        self.left_slot = VulkanExportableImage(
-            context, width, height, label="runtime-left-eye"
-        )
-        self.right_slot = VulkanExportableImage(
-            context, width, height, label="runtime-right-eye"
-        )
+        # Runtime eye tensors contain display-referred sRGB bytes. Keep the
+        # Vulkan image format sRGB so Quad Layer copies remain byte-preserving.
+        output_format = context.vk.VK_FORMAT_R8G8B8A8_SRGB
+        self.left_slots = [
+            VulkanExportableImage(
+                context, width, height, label=f"runtime-left-eye-{index}", format=output_format
+            )
+            for index in range(self.ring_size)
+        ]
+        self.right_slots = [
+            VulkanExportableImage(
+                context, width, height, label=f"runtime-right-eye-{index}", format=output_format
+            )
+            for index in range(self.ring_size)
+        ]
+        try:
+            self.left_ready_semaphores = [
+                VulkanExportableSemaphore(
+                    context, label=f"runtime-left-ready-{index}"
+                )
+                for index in range(self.ring_size)
+            ]
+            self.right_ready_semaphores = [
+                VulkanExportableSemaphore(
+                    context, label=f"runtime-right-ready-{index}"
+                )
+                for index in range(self.ring_size)
+            ]
+            for semaphore in (*self.left_ready_semaphores, *self.right_ready_semaphores):
+                self.importer.register_semaphore(semaphore)
+            self.external_semaphore_enabled = self.importer.capabilities.external_semaphore
+        except Exception:
+            for semaphore in (*self.left_ready_semaphores, *self.right_ready_semaphores):
+                semaphore.close()
+            self.left_ready_semaphores = []
+            self.right_ready_semaphores = []
+            self.external_semaphore_enabled = False
         self._extent = (width, height)
 
     def convert(self, runtime_result, *, frame_id: int, timestamp: float):
@@ -53,16 +95,50 @@ class CudaVulkanOutputAdapter:
         if self._tensor_extent(right) != (width, height):
             raise ValueError("left/right runtime eye dimensions differ")
         self._ensure_slots(width, height)
+        slot_index = int(frame_id) % self.ring_size
+        self.left_slot = self.left_slots[slot_index]
+        self.right_slot = self.right_slots[slot_index]
         self.importer.copy_tensor(left, self.left_slot)
         self.importer.copy_tensor(right, self.right_slot)
-        self.importer.synchronize()
+        left_ready = None
+        right_ready = None
+        bridge = getattr(self.presenter, "filament_bridge", None)
+        use_external_semaphore = bool(
+            self.external_semaphore_enabled
+            and getattr(bridge, "screen_ready_semaphore_abi_available", False)
+        )
+        if use_external_semaphore:
+            left_ready = self.left_ready_semaphores[slot_index]
+            right_ready = self.right_ready_semaphores[slot_index]
+            stream = None
+            self.importer.signal_semaphore(left_ready, stream=stream)
+            self.importer.signal_semaphore(right_ready, stream=stream)
+        # Keep the safe compatibility fence until CUDA external semaphores
+        # are connected directly to the Filament submit path.
+        if not use_external_semaphore:
+            self.importer.synchronize()
         return VulkanStereoOutputFrame(
             frame_id=frame_id,
             timestamp=timestamp,
             left_eye=self.left_slot.resource,
             right_eye=self.right_slot.resource,
             ready_timeline=None,
-            metadata=dict(getattr(runtime_result, "debug_info", None) or {}),
+            metadata={
+                **dict(getattr(runtime_result, "debug_info", None) or {}),
+                "vulkan_output_ring_slot": slot_index,
+                "vulkan_output_ring_size": self.ring_size,
+                "vulkan_output_sync": (
+                    "cuda_external_semaphore"
+                    if use_external_semaphore
+                    else "cuda_stream_synchronized"
+                ),
+                "vulkan_ready_semaphore_left": (
+                    left_ready.semaphore if left_ready is not None else None
+                ),
+                "vulkan_ready_semaphore_right": (
+                    right_ready.semaphore if right_ready is not None else None
+                ),
+            },
             color_space="srgb",
             image_origin="top_left",
         )
@@ -71,9 +147,17 @@ class CudaVulkanOutputAdapter:
         if self.importer is not None:
             self.importer.close()
         self.importer = None
-        for slot in (self.left_slot, self.right_slot):
+        for slot in (*self.left_slots, *self.right_slots):
             if slot is not None:
                 slot.close()
+        self.left_slots = []
+        self.right_slots = []
+        for semaphore in (*self.left_ready_semaphores, *self.right_ready_semaphores):
+            if semaphore is not None:
+                semaphore.close()
+        self.left_ready_semaphores = []
+        self.right_ready_semaphores = []
+        self.external_semaphore_enabled = False
         self.left_slot = None
         self.right_slot = None
         self._extent = None

@@ -46,6 +46,7 @@ namespace {
 
 using VulkanPlatform = filament::backend::VulkanPlatform;
 using VkImage = ::VkImage;
+using VkSemaphore = ::VkSemaphore;
 
 constexpr uint32_t kInvalidImageIndex = UINT32_MAX;
 
@@ -61,6 +62,7 @@ public:
         VkFormat format = VK_FORMAT_UNDEFINED;
         VkExtent2D extent{0, 0};
         uint32_t pending_image = kInvalidImageIndex;
+        VkSemaphore pending_ready_semaphore = VK_NULL_HANDLE;
         uint32_t current_image = kInvalidImageIndex;
     };
 
@@ -101,6 +103,13 @@ public:
         return set_pending_image(m_active_swapchain, image_index);
     }
 
+    bool set_pending_ready_semaphore(SwapChainPtr handle, VkSemaphore semaphore) noexcept {
+        auto* swapchain = as_external(handle);
+        if (!swapchain) return false;
+        swapchain->pending_ready_semaphore = semaphore;
+        return true;
+    }
+
     SwapChainPtr createSwapChain(void* native_window, uint64_t,
             VkExtent2D) override {
         auto* swapchain = static_cast<ExternalSwapChain*>(native_window);
@@ -133,7 +142,8 @@ public:
         swapchain->current_image = swapchain->pending_image;
         swapchain->pending_image = kInvalidImageIndex;
         out_sync->imageIndex = swapchain->current_image;
-        out_sync->imageReadySemaphore = VK_NULL_HANDLE;
+        out_sync->imageReadySemaphore = swapchain->pending_ready_semaphore;
+        swapchain->pending_ready_semaphore = VK_NULL_HANDLE;
         return VK_SUCCESS;
     }
 
@@ -229,6 +239,14 @@ struct ControllerAsset {
     uint32_t button_mask = 0;
 };
 
+struct ScreenTextureSlot {
+    const void* image = nullptr;
+    filament::Texture* texture = nullptr;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    int32_t format = VK_FORMAT_UNDEFINED;
+};
+
 struct FilamentBridge {
     filament::Engine* engine = nullptr;
     filament::Renderer* renderer = nullptr;
@@ -252,7 +270,7 @@ struct FilamentBridge {
     bool screen_in_scene = false;
     filament::Texture* screen_texture = nullptr;
     std::array<filament::Texture*, 2> screen_textures{};
-    std::array<const void*, 2> screen_image_handles{};
+    std::array<std::vector<ScreenTextureSlot>, 2> screen_texture_cache;
     filament::TextureSampler screen_texture_sampler;
     std::vector<PreviewScreenVertex> screen_vertices;
     std::vector<uint16_t> screen_indices;
@@ -632,14 +650,17 @@ void destroy_bridge_screen(FilamentBridge* bridge) {
         bridge->engine->destroy(bridge->screen_material_instance);
         bridge->screen_material_instance = nullptr;
     }
-    for (auto& texture : bridge->screen_textures) {
-        if (texture) {
-            bridge->engine->destroy(texture);
-            texture = nullptr;
+    for (auto& cache : bridge->screen_texture_cache) {
+        for (auto& slot : cache) {
+            if (slot.texture) {
+                bridge->engine->destroy(slot.texture);
+                slot.texture = nullptr;
+            }
         }
+        cache.clear();
     }
+    bridge->screen_textures = {};
     bridge->screen_texture = nullptr;
-    bridge->screen_image_handles = {};
     if (bridge->screen_material) {
         bridge->engine->destroy(bridge->screen_material);
         bridge->screen_material = nullptr;
@@ -774,34 +795,37 @@ int set_bridge_screen_image(FilamentBridge* bridge, const void* image,
         return 0;
     }
     const uint32_t eye_index = bridge->active_eye;
-    if (bridge->screen_image_handles[eye_index] == image &&
-            bridge->screen_textures[eye_index] &&
-            bridge->screen_textures[eye_index]->getWidth() == width &&
-            bridge->screen_textures[eye_index]->getHeight() == height) {
-        return 1;
+    for (const auto& slot : bridge->screen_texture_cache[eye_index]) {
+        if (slot.image == image && slot.width == width &&
+                slot.height == height && slot.format == format && slot.texture) {
+            bridge->screen_textures[eye_index] = slot.texture;
+            bridge->screen_texture = slot.texture;
+            bridge->screen_material_instance->setParameter(
+                    "screenTexture", slot.texture, bridge->screen_texture_sampler);
+            if (!bridge->screen_in_scene && !bridge->screen_entity.isNull()) {
+                bridge->scene->addEntity(bridge->screen_entity);
+                bridge->screen_in_scene = true;
+            }
+            return 1;
+        }
     }
-    if (bridge->screen_textures[eye_index]) {
-        // Imported VkImages may still be referenced by the previous Filament
-        // frame. Defer destruction until the shared queue has completed.
-        bridge->engine->flushAndWait();
-        bridge->engine->destroy(bridge->screen_textures[eye_index]);
-        bridge->screen_textures[eye_index] = nullptr;
-    }
-    bridge->screen_textures[eye_index] = filament::Texture::Builder()
+    auto* texture = filament::Texture::Builder()
             .width(width).height(height).levels(1)
             // Runtime eye images contain display-referred sRGB bytes in a
-            // Vulkan UNORM storage image; decode them exactly once on sample.
+            // Vulkan SRGB image; decode them exactly once on sample.
             .format(filament::Texture::InternalFormat::SRGB8_A8)
             .sampler(filament::Texture::Sampler::SAMPLER_2D)
             .usage(filament::Texture::Usage::SAMPLEABLE)
             .import(reinterpret_cast<intptr_t>(const_cast<void*>(image)))
             .build(*bridge->engine);
-    if (!bridge->screen_textures[eye_index]) {
+    if (!texture) {
         set_error(bridge, "Filament could not import virtual screen Vulkan image");
         return 0;
     }
-    bridge->screen_image_handles[eye_index] = image;
-    bridge->screen_texture = bridge->screen_textures[eye_index];
+    bridge->screen_texture_cache[eye_index].push_back(
+            ScreenTextureSlot{image, texture, width, height, format});
+    bridge->screen_textures[eye_index] = texture;
+    bridge->screen_texture = texture;
     bridge->screen_material_instance->setParameter(
             "screenTexture", bridge->screen_texture,
             bridge->screen_texture_sampler);
@@ -1145,7 +1169,10 @@ int filament_bridge_end_frame(FilamentBridge* bridge) {
     bridge->frame_active = false;
     bridge->eyes[bridge->active_eye].frame_active = false;
     if (!bridge->engine) return 0;
-    bridge->engine->flushAndWait();
+    // Queue this eye and let the presenter synchronize once after both eyes.
+    // Waiting here serialized the two eye submissions and caused avoidable
+    // frame stalls in the projection-layer path.
+    bridge->engine->flush();
     if (bridge->diagnostic_frame_count < 8) {
         std::fprintf(stderr, "[FilamentBridge] end eye=%u\n", bridge->active_eye);
         std::fflush(stderr);
@@ -1153,6 +1180,12 @@ int filament_bridge_end_frame(FilamentBridge* bridge) {
             ++bridge->diagnostic_frame_count;
         }
     }
+    return 1;
+}
+
+int filament_bridge_wait_for_idle(FilamentBridge* bridge) {
+    if (!bridge || !bridge->engine) return 0;
+    bridge->engine->flushAndWait();
     return 1;
 }
 
@@ -1606,6 +1639,15 @@ int filament_bridge_set_screen(
 int filament_bridge_set_screen_image(FilamentBridge* bridge, const void* image,
         uint32_t width, uint32_t height, int32_t format) {
     return set_bridge_screen_image(bridge, image, width, height, format);
+}
+
+int filament_bridge_set_screen_ready_semaphore(
+        FilamentBridge* bridge, const void* semaphore) {
+    if (!bridge || !bridge->platform || !bridge->swapchain || !semaphore) return 0;
+    const auto ready = reinterpret_cast<VkSemaphore>(
+            const_cast<void*>(semaphore));
+    return bridge->platform->set_pending_ready_semaphore(bridge->swapchain, ready)
+            ? 1 : 0;
 }
 
 int filament_preview_render(FilamentPreview* preview) {
