@@ -1646,7 +1646,7 @@ int filament_bridge_set_screen_ready_semaphore(
     if (!bridge || !bridge->platform || !bridge->swapchain || !semaphore) return 0;
     const auto ready = reinterpret_cast<VkSemaphore>(
             const_cast<void*>(semaphore));
-    return bridge->platform->set_pending_ready_semaphore(bridge->swapchain, ready)
+    return bridge->platform->set_pending_ready_semaphore(bridge->external_swapchain, ready)
             ? 1 : 0;
 }
 
