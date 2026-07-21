@@ -197,6 +197,7 @@ struct MaterialBrightnessState {
 };
 
 struct FilamentEyeTarget {
+    filament::Renderer* renderer = nullptr;
     filament::View* view = nullptr;
     filament::Camera* camera = nullptr;
     filament::ColorGrading* color_grading = nullptr;
@@ -267,6 +268,7 @@ void activate_eye(FilamentBridge* bridge, uint32_t eye_index) {
     if (!bridge || eye_index >= bridge->eyes.size()) return;
     auto& eye = bridge->eyes[eye_index];
     bridge->active_eye = eye_index;
+    bridge->renderer = eye.renderer;
     bridge->view = eye.view;
     bridge->camera = eye.camera;
     bridge->color_grading = eye.color_grading;
@@ -898,20 +900,20 @@ FilamentBridge* filament_bridge_create_vulkan(
         bridge->platform = nullptr;
         return bridge.release();
     }
-    bridge->renderer = bridge->engine->createRenderer();
     bridge->scene = bridge->engine->createScene();
     bridge->materials = filament::gltfio::createJitShaderProvider(bridge->engine);
     bridge->texture_provider = filament::gltfio::createStbProvider(bridge->engine);
-    if (!bridge->renderer || !bridge->scene || !bridge->materials ||
+    if (!bridge->scene || !bridge->materials ||
             !bridge->texture_provider) {
         set_error(bridge.get(), "Filament Vulkan resource creation failed");
         return bridge.release();
     }
     for (auto& eye : bridge->eyes) {
+        eye.renderer = bridge->engine->createRenderer();
         eye.view = bridge->engine->createView();
         eye.camera = bridge->engine->createCamera(
                 utils::EntityManager::get().create());
-        if (!eye.view || !eye.camera) {
+        if (!eye.renderer || !eye.view || !eye.camera) {
             set_error(bridge.get(), "Filament Vulkan eye resource creation failed");
             return bridge.release();
         }
@@ -950,6 +952,9 @@ void filament_bridge_destroy(FilamentBridge* bridge) {
     }
     destroy_bridge_screen(bridge);
     for (auto& eye : bridge->eyes) {
+        if (eye.renderer && bridge->engine) {
+            bridge->engine->destroy(eye.renderer);
+        }
         if (eye.swapchain && bridge->engine) {
             bridge->engine->destroy(eye.swapchain);
         }
@@ -969,9 +974,6 @@ void filament_bridge_destroy(FilamentBridge* bridge) {
     }
     if (bridge->scene && bridge->engine) {
         bridge->engine->destroy(bridge->scene);
-    }
-    if (bridge->renderer && bridge->engine) {
-        bridge->engine->destroy(bridge->renderer);
     }
     if (bridge->asset_loader) {
         filament::gltfio::AssetLoader::destroy(&bridge->asset_loader);

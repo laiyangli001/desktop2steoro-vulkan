@@ -22,6 +22,7 @@
 - 头显未连接时明确记录 `xr.get_system` 尚未获得 HMD form factor，Vulkan/Filament 初始化会延迟到头显唤醒，不再让日志看起来像 Engine 创建失败。
 - 修复头显从 60 秒 hard idle 恢复后的 Vulkan 外部图像生命周期竞态：等待态清空并拒绝旧输出帧，只有 `session_running` 且头显恢复渲染后才接收新帧；Filament 销毁导入屏幕纹理前等待 GPU 完成，避免 `Handle ... is being used after it has been freed` 导致原生进程中止。
 - 修复 OpenXR 首帧退出：运行时输出尚未到达时，Filament 屏幕 Renderable 不再提前加入 Scene；收到有效 Vulkan 屏幕图像后才绑定 sampler 并显示，避免未设置 `screenTexture` 触发无效句柄访问。
+- 修复双眼外部 Swapchain 的 Filament 帧状态隔离：共享一个 Engine、Scene 和资源，但左右眼各自使用独立 Renderer、View、Camera 和 Swapchain，避免单 Renderer 在两个 OpenXR Swapchain 间切换造成首帧 access violation。
 
 ### 验证结果
 
