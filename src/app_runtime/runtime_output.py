@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import queue
+import threading
 import time
 
 from viewer.cuda_vulkan_interop import CudaVulkanImageImporter
@@ -36,6 +37,9 @@ class CudaVulkanOutputAdapter:
         self.left_slot = None
         self.right_slot = None
         self._extent = None
+        self._lease_condition = threading.Condition()
+        self._active_leases: dict[int, int] = {}
+        self._closed = False
 
     @staticmethod
     def _tensor_extent(tensor):
@@ -43,6 +47,23 @@ class CudaVulkanOutputAdapter:
         if len(shape) != 3 or shape[-1] != 4:
             raise ValueError("runtime eye must be an HxWx4 tensor")
         return shape[1], shape[0]
+
+    def _claim_slot(self, slot_index: int, frame_id: int) -> None:
+        with self._lease_condition:
+            while slot_index in self._active_leases and not self._closed:
+                self._lease_condition.wait()
+            if self._closed:
+                raise RuntimeError("Vulkan output adapter is closed")
+            self._active_leases[slot_index] = int(frame_id)
+
+    def release_frame(self, frame_id: int) -> None:
+        """Release a producer slot after the XR consumer no longer samples it."""
+        with self._lease_condition:
+            for slot_index, lease_frame_id in tuple(self._active_leases.items()):
+                if lease_frame_id == int(frame_id):
+                    del self._active_leases[slot_index]
+                    self._lease_condition.notify_all()
+                    return
 
     def _ensure_slots(self, width: int, height: int) -> None:
         if not bool(getattr(self.presenter, "initialized", False)):
@@ -53,6 +74,8 @@ class CudaVulkanOutputAdapter:
         if self._extent == (width, height):
             return
         self.close()
+        with self._lease_condition:
+            self._closed = False
         self.importer = CudaVulkanImageImporter()
         # Runtime eye tensors contain display-referred sRGB bytes. Keep the
         # Vulkan image format sRGB so Quad Layer copies remain byte-preserving.
@@ -112,27 +135,30 @@ class CudaVulkanOutputAdapter:
             raise ValueError("left/right runtime eye dimensions differ")
         self._ensure_slots(width, height)
         slot_index = int(frame_id) % self.ring_size
+        self._claim_slot(slot_index, frame_id)
         self.left_slot = self.left_slots[slot_index]
         self.right_slot = self.right_slots[slot_index]
-        self.importer.copy_tensor(left, self.left_slot)
-        self.importer.copy_tensor(right, self.right_slot)
-        left_ready = None
-        right_ready = None
-        bridge = getattr(self.presenter, "filament_bridge", None)
-        use_external_semaphore = bool(
-            self.external_semaphore_enabled
-            and getattr(bridge, "screen_ready_semaphore_abi_available", False)
-        )
-        if use_external_semaphore:
-            left_ready = self.left_ready_semaphores[slot_index]
-            right_ready = self.right_ready_semaphores[slot_index]
-            stream = None
-            self.importer.signal_semaphore(left_ready, stream=stream)
-            self.importer.signal_semaphore(right_ready, stream=stream)
-        # Keep the safe compatibility fence until CUDA external semaphores
-        # are connected directly to the Filament submit path.
-        if not use_external_semaphore:
-            self.importer.synchronize()
+        try:
+            self.importer.copy_tensor(left, self.left_slot)
+            self.importer.copy_tensor(right, self.right_slot)
+            left_ready = None
+            right_ready = None
+            bridge = getattr(self.presenter, "filament_bridge", None)
+            use_external_semaphore = bool(
+                self.external_semaphore_enabled
+                and getattr(bridge, "screen_ready_semaphore_abi_available", False)
+            )
+            if use_external_semaphore:
+                left_ready = self.left_ready_semaphores[slot_index]
+                right_ready = self.right_ready_semaphores[slot_index]
+                stream = None
+                self.importer.signal_semaphore(left_ready, stream=stream)
+                self.importer.signal_semaphore(right_ready, stream=stream)
+            if not use_external_semaphore:
+                self.importer.synchronize()
+        except Exception:
+            self.release_frame(frame_id)
+            raise
         return VulkanStereoOutputFrame(
             frame_id=frame_id,
             timestamp=timestamp,
@@ -154,12 +180,17 @@ class CudaVulkanOutputAdapter:
                 "vulkan_ready_semaphore_right": (
                     right_ready.semaphore if right_ready is not None else None
                 ),
+                "_vulkan_output_release": self.release_frame,
             },
             color_space="srgb",
             image_origin="top_left",
         )
 
     def close(self) -> None:
+        with self._lease_condition:
+            self._closed = True
+            self._active_leases.clear()
+            self._lease_condition.notify_all()
         if self.importer is not None:
             self.importer.close()
         self.importer = None
@@ -256,6 +287,11 @@ class VulkanRuntimeOutputConsumer:
         self._next_frame_id += 1
         return frame
 
+    def _release_frame(self, frame) -> None:
+        release = getattr(self.gpu_adapter, "release_frame", None)
+        if callable(release):
+            release(frame.frame_id)
+
     def run(self) -> None:
         while not self.shutdown_event.is_set():
             item = self._take_latest()
@@ -266,13 +302,16 @@ class VulkanRuntimeOutputConsumer:
                 continue
             if self.sink is None:
                 self.source_stat_inc("runtime_output_no_sink")
+                self._release_frame(frame)
                 continue
             if not bool(getattr(self.sink, "initialized", True)):
                 self.source_stat_inc("runtime_output_waiting_for_openxr")
+                self._release_frame(frame)
                 continue
             try:
                 self.sink.submit_output(frame)
             except Exception as exc:
+                self._release_frame(frame)
                 self.source_stat_inc(
                     "runtime_output_submit_errors",
                     last_error=f"{type(exc).__name__}: {exc}",

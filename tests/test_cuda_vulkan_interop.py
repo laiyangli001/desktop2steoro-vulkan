@@ -1,4 +1,5 @@
 import ctypes
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -32,6 +33,27 @@ def test_cuda_external_semaphore_requires_explicit_opt_in(monkeypatch) -> None:
     assert not CudaVulkanOutputAdapter._external_semaphore_requested()
     monkeypatch.setenv("D2S_ENABLE_CUDA_EXTERNAL_SEMAPHORE", "1")
     assert CudaVulkanOutputAdapter._external_semaphore_requested()
+
+
+def test_vulkan_output_slot_waits_for_consumer_release() -> None:
+    adapter = CudaVulkanOutputAdapter.__new__(CudaVulkanOutputAdapter)
+    adapter._lease_condition = threading.Condition()
+    adapter._active_leases = {}
+    adapter._closed = False
+    adapter._claim_slot(0, 10)
+    claimed = threading.Event()
+
+    def claim_reused_slot() -> None:
+        adapter._claim_slot(0, 11)
+        claimed.set()
+
+    worker = threading.Thread(target=claim_reused_slot)
+    worker.start()
+    assert not claimed.wait(0.05)
+    adapter.release_frame(10)
+    worker.join(timeout=1.0)
+    assert claimed.is_set()
+    adapter.release_frame(11)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA GPU is unavailable")

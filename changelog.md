@@ -48,6 +48,7 @@
 - Vulkan 优化状态明确为分阶段完成：输出图像环、持久化纹理缓存、external semaphore 异步同步、双眼统一提交和单 Engine 资源共享已完成；完整 Compute Graph、Validation Layer、跨厂商互操作、性能基准和实机长稳验收仍未完成，不能标记为整体完成。
 - 修复实机 `Windows fatal exception: access violation`：根因是 CUDA `cudaSignalExternalSemaphoresAsync` 的 ctypes 调用参数数量和 `cudaExternalSemaphoreSignalParams` 内存布局错误；现已按 CUDA Runtime 头文件使用 `extSemArray + paramsArray + count + stream` 的 ABI，并加入结构体偏移/尺寸回归测试。
 - 针对 external semaphore 接入在 Filament `beginFrame` 阶段暴露的 native 生命周期风险，改为 `D2S_ENABLE_CUDA_EXTERNAL_SEMAPHORE=1` 显式启用，默认使用已验证的 CUDA stream 同步降级；Vulkan 输出图像环和持久化纹理缓存继续启用，避免实机默认路径再次发生 native access violation。
+- 补齐 Vulkan 输出槽位消费端释放/复用保护：新增 producer lease 和跨线程条件等待；pending 帧被新帧替换时释放，当前 Filament 屏幕帧在 Projection/Quad 提交完成前保持占用，头显待机、提交失败和关闭路径统一释放，ring wrap 不再覆盖仍被消费的 VkImage。
 
 ### 验证结果
 

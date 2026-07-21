@@ -7,6 +7,7 @@ import json
 import math
 import os
 import sys
+import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -25,6 +26,9 @@ from viewer.vulkan_context import (
 )
 from viewer.vulkan_resources import VulkanExportableImage, VulkanImageResource
 from app_runtime.output_contract import VulkanStereoOutputFrame
+
+
+_OUTPUT_FRAME_UNSET = object()
 
 from .core_controller_actions import CoreControllerActionsMixin
 from .core_controller_input import CoreControllerInputMixin
@@ -214,6 +218,9 @@ class OpenXrVulkanPresenter(
         self._LASER_MOVE_THRESH = 0.005
         self._initialized = False
         self._pending_output: VulkanStereoOutputFrame | None = None
+        self._displayed_output: VulkanStereoOutputFrame | None = None
+        self._rendering_output: VulkanStereoOutputFrame | None = None
+        self._output_lock = threading.Lock()
         self._headset_wait_started = 0.0
         self._headset_hard_idle_notified = False
         self._headset_active_notified = False
@@ -364,7 +371,8 @@ class OpenXrVulkanPresenter(
                                 space=self.reference_space,
                             ),
                         )
-                    output_frame = self._pending_output
+                    with self._output_lock:
+                        output_frame = self._pending_output
                     # Match the legacy frame gate: runtime rendering readiness
                     # is separate from the availability of a fresh stereo frame.
                     if self._pending_output is None and not self._has_presented_frame:
@@ -380,14 +388,19 @@ class OpenXrVulkanPresenter(
                         self._source_frame_wait_logged = False
                         # Render the world at the current headset pose on
                         # every XR tick; only inference input may be reused.
-                        layer = self._render_projection_layer(views)
+                        layer = self._render_projection_layer(views, output_frame)
                     if layer is not None:
                         layer_structures.append(layer)
                         layer_pointers.append(ctypes.pointer(layer))
                         if output_frame is not None:
-                            quad_layers = self._render_quad_layers(output_frame)
-                            if quad_layers:
-                                self._last_quad_layers = quad_layers
+                            try:
+                                quad_layers = self._render_quad_layers(output_frame)
+                                if quad_layers:
+                                    self._last_quad_layers = quad_layers
+                                self._commit_output_frame(output_frame)
+                            except Exception:
+                                self._abort_output_frame(output_frame)
+                                raise
                         self._has_presented_frame = True
                         layer_structures.extend(self._last_quad_layers)
                         layer_pointers.extend(
@@ -489,7 +502,7 @@ class OpenXrVulkanPresenter(
     def _notify_headset_waiting(self) -> None:
         # Do not let a frame produced before standby cross the recovery boundary.
         self._accept_output = False
-        self._pending_output = None
+        self._drop_output_frames()
         now = time.perf_counter()
         if self._headset_wait_started <= 0.0:
             self._headset_wait_started = now
@@ -536,6 +549,8 @@ class OpenXrVulkanPresenter(
                 self.vulkan.wait_idle()
             except Exception:
                 pass
+
+        self._drop_output_frames()
 
         if self.filament_bridge is not None:
             try:
@@ -608,7 +623,7 @@ class OpenXrVulkanPresenter(
         self.swapchain_format = None
         self._graphics_binding = None
         self._initialized = False
-        self._pending_output = None
+        self._drop_output_frames()
         self._has_presented_frame = False
         self._last_quad_layers = []
         self._source_frame_wait_logged = False
@@ -893,7 +908,52 @@ class OpenXrVulkanPresenter(
             raise TypeError("OpenXR Vulkan output requires VulkanImageResource eyes")
         if frame.left_eye.context is not self.vulkan or frame.right_eye.context is not self.vulkan:
             raise ValueError("OpenXR output images belong to a different Vulkan context")
-        self._pending_output = frame
+        with self._output_lock:
+            previous = self._pending_output
+            self._pending_output = frame
+        if previous is not None and previous is not frame:
+            self._release_output_frame(previous)
+
+    @staticmethod
+    def _release_output_frame(frame: VulkanStereoOutputFrame | None) -> None:
+        if frame is None:
+            return
+        callback = (frame.metadata or {}).get("_vulkan_output_release")
+        if callable(callback):
+            callback(frame.frame_id)
+
+    def _drop_output_frames(self) -> None:
+        with self._output_lock:
+            pending = self._pending_output
+            displayed = self._displayed_output
+            rendering = self._rendering_output
+            self._pending_output = None
+            self._displayed_output = None
+            self._rendering_output = None
+        self._release_output_frame(pending)
+        if displayed is not pending and displayed is not rendering:
+            self._release_output_frame(displayed)
+        if rendering is not pending and rendering is not displayed:
+            self._release_output_frame(rendering)
+
+    def _commit_output_frame(self, frame: VulkanStereoOutputFrame) -> None:
+        with self._output_lock:
+            previous = self._displayed_output
+            if self._pending_output is frame:
+                self._pending_output = None
+            if self._rendering_output is frame:
+                self._rendering_output = None
+            self._displayed_output = frame
+        if previous is not None and previous is not frame:
+            self._release_output_frame(previous)
+
+    def _abort_output_frame(self, frame: VulkanStereoOutputFrame) -> None:
+        with self._output_lock:
+            if self._rendering_output is frame:
+                self._rendering_output = None
+            if self._pending_output is frame:
+                self._pending_output = None
+        self._release_output_frame(frame)
 
     def _initialize_filament_bridges(self) -> None:
         bridge_path = self.config.filament_bridge_path or os.environ.get(
@@ -1183,7 +1243,11 @@ class OpenXrVulkanPresenter(
         leveled[:3, 3] = pos
         return leveled
 
-    def _render_projection_layer(self, views: list[Any]) -> Any | None:
+    def _render_projection_layer(
+        self,
+        views: list[Any],
+        output_frame: VulkanStereoOutputFrame | None | object = _OUTPUT_FRAME_UNSET,
+    ) -> Any | None:
         if len(views) < len(self.swapchains):
             return None
         # The profile adjusts the Filament camera relative to the model. The
@@ -1192,11 +1256,22 @@ class OpenXrVulkanPresenter(
         composition_views = views
         render_views = self._apply_filament_profile(views)
         xr = self.xr
-        output_frame = self._pending_output
+        if output_frame is _OUTPUT_FRAME_UNSET:
+            with self._output_lock:
+                output_frame = self._pending_output
+                self._pending_output = None
+        else:
+            with self._output_lock:
+                if self._pending_output is output_frame:
+                    self._pending_output = None
+        if isinstance(output_frame, VulkanStereoOutputFrame):
+            with self._output_lock:
+                self._rendering_output = output_frame
         if self._filament_animation_origin is None:
             self._filament_animation_origin = self._frame_now
         animation_time = max(0.0, self._frame_now - self._filament_animation_origin)
         acquired_images: list[tuple[_EyeSwapchain, int]] = []
+        render_succeeded = False
         try:
             # Keep both OpenXR images acquired while Filament queues both eye
             # submissions. They are released only after the single frame-wide
@@ -1281,10 +1356,15 @@ class OpenXrVulkanPresenter(
                 if getattr(bridge, "async_submit_abi_available", False):
                     # Both eyes are submitted before the single completion wait.
                     bridge.wait_for_idle()
+            render_succeeded = True
         finally:
             for eye, _image_index in acquired_images:
                 xr.release_swapchain_image(eye.handle)
-        self._pending_output = None
+            if (
+                isinstance(output_frame, VulkanStereoOutputFrame)
+                and not render_succeeded
+            ):
+                self._abort_output_frame(output_frame)
         return OpenXrCompositionBuilder(xr, self.reference_space).projection_layer(
             composition_views, self.swapchains
         )
