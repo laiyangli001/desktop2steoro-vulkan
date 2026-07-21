@@ -233,7 +233,7 @@ def test_openxr_frame_gate_waits_for_runtime_output_before_filament() -> None:
     source = (Path(__file__).resolve().parents[1] /
               "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
 
-    assert "if self._pending_output is None:" in source
+    assert "if self._pending_output is None and not self._has_presented_frame:" in source
     assert "waiting for first runtime eye frame" in source
     assert "layer = self._render_projection_layer(views)" in source
     assert "bridge.set_screen_image(" not in source
@@ -251,6 +251,7 @@ def test_quad_layer_uses_runtime_output_size_and_openxr_visibility() -> None:
     assert "EyeVisibility.RIGHT" in source
     assert "_has_presented_frame" in source
     assert "self._last_quad_layers" in source
+    assert "Render the world at the current headset pose" in source
 
 
 def test_profile_pose_is_applied_once_to_openxr_reference_space() -> None:

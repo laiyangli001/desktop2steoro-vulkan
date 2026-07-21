@@ -369,29 +369,23 @@ class OpenXrVulkanPresenter(
                                 flush=True,
                             )
                         layer = None
-                    elif self._pending_output is None:
-                        self._source_frame_wait_logged = False
-                        layer = OpenXrCompositionBuilder(
-                            xr, self.reference_space
-                        ).projection_layer(views, self.swapchains)
-                        layer_structures.append(layer)
-                        layer_pointers.append(ctypes.pointer(layer))
-                        layer_structures.extend(self._last_quad_layers)
-                        layer_pointers.extend(
-                            ctypes.pointer(item) for item in self._last_quad_layers
-                        )
-                        layer = None
                     else:
                         self._source_frame_wait_logged = False
+                        # Render the world at the current headset pose on
+                        # every XR tick; only inference input may be reused.
                         layer = self._render_projection_layer(views)
                     if layer is not None:
                         layer_structures.append(layer)
                         layer_pointers.append(ctypes.pointer(layer))
-                        quad_layers = self._render_quad_layers(output_frame)
-                        self._last_quad_layers = quad_layers
+                        if output_frame is not None:
+                            quad_layers = self._render_quad_layers(output_frame)
+                            if quad_layers:
+                                self._last_quad_layers = quad_layers
                         self._has_presented_frame = True
-                        layer_structures.extend(quad_layers)
-                        layer_pointers.extend(ctypes.pointer(item) for item in quad_layers)
+                        layer_structures.extend(self._last_quad_layers)
+                        layer_pointers.extend(
+                            ctypes.pointer(item) for item in self._last_quad_layers
+                        )
         finally:
             end_info = xr.FrameEndInfo(
                 display_time=frame_state.predicted_display_time,
