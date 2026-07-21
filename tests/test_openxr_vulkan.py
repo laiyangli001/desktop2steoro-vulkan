@@ -239,6 +239,18 @@ def test_openxr_frame_gate_waits_for_runtime_output_before_filament() -> None:
     assert "bridge.set_screen_image(" not in source
 
 
+def test_quad_layer_uses_runtime_output_size_and_openxr_visibility() -> None:
+    source = (Path(__file__).resolve().parents[1] /
+              "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
+
+    assert "_ensure_quad_swapchains(width, height)" in source
+    assert "self.vulkan.copy_image(source, eye.resources[image_index])" in source
+    assert "format_value if format_value is not None" in source
+    assert "CompositionLayerQuad" in source
+    assert "EyeVisibility.LEFT" in source
+    assert "EyeVisibility.RIGHT" in source
+
+
 def test_filament_profile_keeps_glb_and_screen_positions_separate(tmp_path) -> None:
     profile_path = tmp_path / "profile.json"
     profile_path.write_text(json.dumps({

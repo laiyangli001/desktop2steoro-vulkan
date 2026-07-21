@@ -103,6 +103,33 @@ class OpenXrCompositionBuilder:
             views=projection_views,
         )
 
+    def quad_layer(
+        self, swapchain: _EyeSwapchain, position: tuple[float, float, float],
+        width: float, height: float, rotation: tuple[float, float, float],
+        eye_index: int,
+    ) -> Any:
+        qx, qy, qz, qw = _euler_degrees_to_quaternion(rotation)
+        return self.xr.CompositionLayerQuad(
+            space=self.reference_space,
+            eye_visibility=(self.xr.EyeVisibility.LEFT if eye_index == 0
+                            else self.xr.EyeVisibility.RIGHT),
+            sub_image=self.xr.SwapchainSubImage(
+                swapchain=swapchain.handle,
+                image_rect=self.xr.Rect2Di(
+                    offset=self.xr.Offset2Di(x=0, y=0),
+                    extent=self.xr.Extent2Di(width=swapchain.width, height=swapchain.height),
+                ),
+                image_array_index=0,
+            ),
+            pose=self.xr.Posef(
+                orientation=self.xr.Quaternionf(x=qx, y=qy, z=qz, w=qw),
+                position=self.xr.Vector3f(
+                    x=float(position[0]), y=float(position[1]), z=float(position[2])
+                ),
+            ),
+            size=self.xr.Extent2Df(width=float(width), height=float(height)),
+        )
+
 
 class OpenXrVulkanPresenter(
     CoreControllerActionsMixin, CoreControllerPoseMixin, CoreControllerInputMixin
@@ -132,6 +159,9 @@ class OpenXrVulkanPresenter(
         self.vulkan: VulkanContext | None = None
         self.swapchain_format: int | None = None
         self.swapchains: list[_EyeSwapchain] = []
+        self._quad_swapchains: list[_EyeSwapchain] = []
+        self._quad_swapchain_format: int | None = None
+        self._quad_swapchain_extent: tuple[int, int] | None = None
         self.filament_bridge: Any | None = None
         self.session_state: Any = None
         self.session_running = False
@@ -315,6 +345,7 @@ class OpenXrVulkanPresenter(
                     | xr.ViewStateFlags.ORIENTATION_VALID_BIT
                 )
                 if view_state.view_state_flags & valid_flags == valid_flags:
+                    output_frame = self._pending_output
                     # Match the legacy frame gate: runtime rendering readiness
                     # is separate from the availability of a fresh stereo frame.
                     if self._pending_output is None:
@@ -332,6 +363,9 @@ class OpenXrVulkanPresenter(
                     if layer is not None:
                         layer_structures.append(layer)
                         layer_pointers.append(ctypes.pointer(layer))
+                        quad_layers = self._render_quad_layers(output_frame)
+                        layer_structures.extend(quad_layers)
+                        layer_pointers.extend(ctypes.pointer(item) for item in quad_layers)
         finally:
             end_info = xr.FrameEndInfo(
                 display_time=frame_state.predicted_display_time,
@@ -484,6 +518,7 @@ class OpenXrVulkanPresenter(
             self.filament_bridge = None
 
         if xr is not None:
+            self._destroy_quad_swapchains()
             for eye in reversed(self.swapchains):
                 for resource in reversed(eye.resources):
                     try:
@@ -758,7 +793,8 @@ class OpenXrVulkanPresenter(
             )
 
     def _register_swapchain_images(
-        self, images: list[Any], width: int, height: int
+        self, images: list[Any], width: int, height: int,
+        format_value: int | None = None,
     ) -> list[VulkanImageResource]:
         resources: list[VulkanImageResource] = []
         try:
@@ -772,7 +808,7 @@ class OpenXrVulkanPresenter(
                     view=None,
                     width=width,
                     height=height,
-                    format=int(self.swapchain_format),
+                    format=int(format_value if format_value is not None else self.swapchain_format),
                     layout=self.vulkan.vk.VK_IMAGE_LAYOUT_UNDEFINED,
                     access_mask=0,
                     stage_mask=0,
@@ -1086,6 +1122,80 @@ class OpenXrVulkanPresenter(
         if not self._initialized:
             raise RuntimeError("OpenXrVulkanPresenter is not initialized")
 
+    def _ensure_quad_swapchains(self, width: int, height: int) -> None:
+        if self._quad_swapchain_extent == (width, height) and len(self._quad_swapchains) == 2:
+            return
+        if self.xr is None or self.session is None or self.vulkan is None:
+            return
+        self._destroy_quad_swapchains()
+        vk = self.vulkan.vk
+        formats = list(self.xr.enumerate_swapchain_formats(self.session))
+        quad_format = _select_swapchain_format(vk, formats, "unorm")
+        for _ in range(2):
+            handle = self.xr.create_swapchain(
+                self.session,
+                self.xr.SwapchainCreateInfo(
+                    usage_flags=(self.xr.SwapchainUsageFlags.COLOR_ATTACHMENT_BIT
+                                 | self.xr.SwapchainUsageFlags.TRANSFER_DST_BIT),
+                    format=quad_format, sample_count=1, width=width, height=height,
+                    face_count=1, array_size=1, mip_count=1,
+                ),
+            )
+            images = list(self.xr.enumerate_swapchain_images(
+                handle, self.xr.SwapchainImageVulkan2KHR
+            ))
+            self._quad_swapchains.append(_EyeSwapchain(
+                handle, images, width, height,
+                self._register_swapchain_images(images, width, height, quad_format),
+            ))
+        self._quad_swapchain_format = int(quad_format)
+        self._quad_swapchain_extent = (width, height)
+        print(
+            f"[OpenXRViewer] Quad layer swapchains created: "
+            f"format={_vulkan_format_name(vk, quad_format)} extent={width}x{height}",
+            flush=True,
+        )
+
+    def _destroy_quad_swapchains(self) -> None:
+        if self.xr is None:
+            self._quad_swapchains.clear()
+            return
+        for eye in reversed(self._quad_swapchains):
+            for resource in reversed(eye.resources):
+                try:
+                    if self.vulkan is not None:
+                        self.vulkan.unregister_external_image(resource)
+                except Exception:
+                    pass
+            try:
+                self.xr.destroy_swapchain(eye.handle)
+            except Exception:
+                pass
+        self._quad_swapchains.clear()
+        self._quad_swapchain_format = None
+        self._quad_swapchain_extent = None
+
+    def _render_quad_layers(self, output_frame: VulkanStereoOutputFrame | None) -> list[Any]:
+        if output_frame is None or self._filament_screen is None:
+            return []
+        width = int(output_frame.left_eye.width)
+        height = int(output_frame.left_eye.height)
+        self._ensure_quad_swapchains(width, height)
+        if len(self._quad_swapchains) < 2:
+            return []
+        position, screen_width, screen_height, rotation = self._filament_screen
+        layers = []
+        for eye_index, eye in enumerate(self._quad_swapchains):
+            source = output_frame.left_eye if eye_index == 0 else output_frame.right_eye
+            with _acquired_swapchain_image(self.xr, eye) as image_index:
+                self.vulkan.copy_image(source, eye.resources[image_index])
+            layers.append(OpenXrCompositionBuilder(
+                self.xr, self.reference_space
+            ).quad_layer(
+                eye, position, screen_width, screen_height, rotation, eye_index
+            ))
+        return layers
+
 
 @contextmanager
 def _acquired_swapchain_image(xr: Any, eye: _EyeSwapchain):
@@ -1110,6 +1220,20 @@ def _xr_view_pose_to_model_mat4(pose: Any) -> np.ndarray:
         float(pose.position.z),
     )
     return matrix
+
+
+def _euler_degrees_to_quaternion(rotation: tuple[float, float, float]) -> tuple[float, float, float, float]:
+    """Convert profile XYZ Euler degrees to an OpenXR quaternion."""
+    x, y, z = (math.radians(float(value)) * 0.5 for value in rotation[:3])
+    cx, sx = math.cos(x), math.sin(x)
+    cy, sy = math.cos(y), math.sin(y)
+    cz, sz = math.cos(z), math.sin(z)
+    return (
+        sx * cy * cz - cx * sy * sz,
+        cx * sy * cz + sx * cy * sz,
+        cx * cy * sz - sx * sy * cz,
+        cx * cy * cz + sx * sy * sz,
+    )
 
 
 def _update_filament_camera(
