@@ -1046,21 +1046,9 @@ class OpenXrVulkanPresenter(
                 if self.filament_bridge is not None:
                     bridge = self.filament_bridge
                     bridge.set_active_eye(eye_index)
-                    if (
-                        output_frame is not None
-                        and getattr(bridge, "screen_image_abi_available", False)
-                    ):
-                        source = (
-                            output_frame.left_eye
-                            if eye_index == 0
-                            else output_frame.right_eye
-                        )
-                        bridge.set_screen_image(
-                            source.image,
-                            width=source.width,
-                            height=source.height,
-                            format=source.format,
-                        )
+                    # Do not pass a raw Vulkan VkImage to Filament's generic
+                    # Texture::Builder::import API. The old validated path
+                    # presents the virtual screen as an OpenXR quad layer.
                     _update_filament_camera(
                         bridge,
                         render_views[eye_index],

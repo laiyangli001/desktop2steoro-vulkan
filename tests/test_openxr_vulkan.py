@@ -236,6 +236,7 @@ def test_openxr_frame_gate_waits_for_runtime_output_before_filament() -> None:
     assert "if self._pending_output is None:" in source
     assert "waiting for first runtime eye frame" in source
     assert "layer = self._render_projection_layer(views)" in source
+    assert "bridge.set_screen_image(" not in source
 
 
 def test_filament_profile_keeps_glb_and_screen_positions_separate(tmp_path) -> None:

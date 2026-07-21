@@ -25,6 +25,7 @@
 - 修复双眼外部 Swapchain 的 Filament 帧状态隔离：共享一个 Engine、Scene 和资源，但左右眼各自使用独立 Renderer、View、Camera 和 Swapchain，避免单 Renderer 在两个 OpenXR Swapchain 间切换造成首帧 access violation。
 - 为 OpenXR native Bridge 增加有界诊断：记录前八个立体帧的 eye、acquired image index、VkImage、Renderer 和 Swapchain 句柄，便于区分 OpenXR 图像句柄失效与 Filament 内部资源失效。
 - 按旧工程 `OpenXRFrameGate` 补齐首帧门控：`should_render` 仅表示运行时允许渲染；在 `_pending_output` 尚未收到有效立体帧时只提交空 OpenXR 帧，不访问 Filament 或外部 swapchain，避免待机恢复阶段使用失效句柄。
+- 修复首帧 Filament access violation 根因：不再把普通 Vulkan `VkImage` 直接传给 Filament 未定义 Vulkan 行为的 `Texture::Builder::import()`；虚拟屏幕后续按旧工程使用独立 OpenXR Quad Layer 接入。
 
 ### 验证结果
 
