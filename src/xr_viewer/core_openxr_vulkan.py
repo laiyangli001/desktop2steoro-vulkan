@@ -43,8 +43,8 @@ class OpenXrVulkanConfig:
     render_scale: float = 1.0
     clear_color: tuple[float, float, float, float] = (0.02, 0.04, 0.08, 1.0)
     requested_vulkan_version: int = make_vulkan_version(1, 4, 0)
-    # Match the validated OpenXR path: Filament renders to an sRGB target and
-    # its Vulkan swapchain configuration performs the transfer at the target.
+    # Keep the validated OpenXR projection target as sRGB. The Filament bridge
+    # is configured for linear Rec709 output so the target performs one OETF.
     swapchain_color_mode: str = "srgb"
     filament_bridge_path: str | None = None
     filament_glb_path: str | None = None

@@ -219,7 +219,7 @@ def test_presenter_validates_configuration() -> None:
         OpenXrVulkanPresenter(OpenXrVulkanConfig(render_scale=0))
 
 
-def test_openxr_defaults_to_validated_srgb_target_path() -> None:
+def test_openxr_defaults_to_validated_srgb_projection_target() -> None:
     assert OpenXrVulkanConfig().swapchain_color_mode == "srgb"
 
 

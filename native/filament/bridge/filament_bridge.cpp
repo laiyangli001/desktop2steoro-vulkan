@@ -320,7 +320,9 @@ bool configure_color_pipeline(Target* target) {
     }
     target->color_grading = filament::ColorGrading::Builder()
             .toneMapping(filament::ColorGrading::ToneMapping::ACES_LEGACY)
-            .outputColorSpace(filament::color::Rec709 - filament::color::sRGB - filament::color::D65)
+            // Keep the projection target in sRGB format and let its target
+            // conversion perform the single sRGB OETF at store time.
+            .outputColorSpace(filament::color::Rec709 - filament::color::Linear - filament::color::D65)
             .build(*target->engine);
     if (!target->color_grading) {
         return false;
