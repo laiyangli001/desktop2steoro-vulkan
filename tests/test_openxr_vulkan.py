@@ -299,6 +299,20 @@ def test_presenter_wait_enters_hard_idle_after_configured_timeout(capsys) -> Non
     assert states[-1] == "active"
 
 
+def test_presenter_rejects_output_while_headset_is_waiting() -> None:
+    from types import SimpleNamespace
+
+    presenter = OpenXrVulkanPresenter()
+
+    with pytest.raises(RuntimeError, match="waiting for headset rendering"):
+        presenter.submit_output(object())
+
+    presenter._notify_headset_active()
+    presenter.session_running = True
+    with pytest.raises(TypeError, match="VulkanImageResource"):
+        presenter.submit_output(SimpleNamespace(left_eye=None, right_eye=None))
+
+
 def test_filament_bridge_binds_each_openxr_eye(monkeypatch) -> None:
     calls: list[tuple[str, object]] = []
 

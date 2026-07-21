@@ -180,6 +180,7 @@ class OpenXrVulkanPresenter(
         self._headset_hard_idle_notified = False
         self._headset_active_notified = False
         self._headset_wait_logged = False
+        self._accept_output = False
 
     @property
     def initialized(self) -> bool:
@@ -411,6 +412,9 @@ class OpenXrVulkanPresenter(
             )
 
     def _notify_headset_waiting(self) -> None:
+        # Do not let a frame produced before standby cross the recovery boundary.
+        self._accept_output = False
+        self._pending_output = None
         now = time.perf_counter()
         if self._headset_wait_started <= 0.0:
             self._headset_wait_started = now
@@ -445,6 +449,7 @@ class OpenXrVulkanPresenter(
         self._headset_hard_idle_notified = False
         self._headset_active_notified = True
         self._headset_wait_logged = False
+        self._accept_output = True
         self._notify_headset_state("active")
         print("[OpenXRViewer] Headset detected; source inference resumed", flush=True)
 
@@ -527,6 +532,7 @@ class OpenXrVulkanPresenter(
         self._graphics_binding = None
         self._initialized = False
         self._pending_output = None
+        self._accept_output = False
         self._filament_animation_origin = None
 
     def __enter__(self) -> "OpenXrVulkanPresenter":
@@ -771,6 +777,9 @@ class OpenXrVulkanPresenter(
 
     def submit_output(self, frame: VulkanStereoOutputFrame) -> None:
         """Queue the newest Vulkan left/right frame for the next XR frame."""
+
+        if not self._accept_output or not self.session_running:
+            raise RuntimeError("OpenXR presenter is waiting for headset rendering")
 
         if not isinstance(frame.left_eye, VulkanImageResource) or not isinstance(
             frame.right_eye, VulkanImageResource

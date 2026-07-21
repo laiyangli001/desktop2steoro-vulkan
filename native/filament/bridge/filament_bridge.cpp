@@ -771,6 +771,9 @@ int set_bridge_screen_image(FilamentBridge* bridge, const void* image,
         return 1;
     }
     if (bridge->screen_textures[eye_index]) {
+        // Imported VkImages may still be referenced by the previous Filament
+        // frame. Defer destruction until the shared queue has completed.
+        bridge->engine->flushAndWait();
         bridge->engine->destroy(bridge->screen_textures[eye_index]);
         bridge->screen_textures[eye_index] = nullptr;
     }
