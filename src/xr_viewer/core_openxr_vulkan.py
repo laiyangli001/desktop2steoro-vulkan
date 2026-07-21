@@ -359,6 +359,11 @@ class OpenXrVulkanPresenter(
                 except Exception as exc:
                     if not self._is_no_headset_error(exc):
                         raise
+                    print(
+                        "[OpenXRViewer] OpenXR HMD form factor unavailable; "
+                        "Vulkan/Filament initialization deferred until headset wake-up",
+                        flush=True,
+                    )
                     self.close()
                     self._notify_headset_waiting()
 

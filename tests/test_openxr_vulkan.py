@@ -256,7 +256,7 @@ def test_presenter_run_until_owns_shutdown_close() -> None:
     assert calls == ["initialize", "frame", "close"]
 
 
-def test_presenter_waits_for_headset_and_retries_initialization() -> None:
+def test_presenter_waits_for_headset_and_retries_initialization(capsys) -> None:
     presenter = OpenXrVulkanPresenter(OpenXrVulkanConfig(
         openxr_no_headset_retry_interval=0.001,
         openxr_standby_retry_interval=0.001,
@@ -281,6 +281,7 @@ def test_presenter_waits_for_headset_and_retries_initialization() -> None:
 
     assert presenter.run_until(shutdown) == 0
     assert calls == ["initialize", "close", "initialize", "frame", "close"]
+    assert "Vulkan/Filament initialization deferred" in capsys.readouterr().out
 
 
 def test_presenter_wait_enters_hard_idle_after_configured_timeout(capsys) -> None:
