@@ -238,6 +238,7 @@ def test_openxr_frame_gate_waits_for_runtime_output_before_filament() -> None:
     assert "waiting for first runtime eye frame" in source
     assert "layer = self._render_projection_layer(views, output_frame)" in source
     assert "bridge.set_screen_image(" in source
+    assert "D2S_ENABLE_FILAMENT_SCREEN_IMAGE" in source
 
 
 def test_quad_layer_uses_runtime_output_size_and_openxr_visibility() -> None:
@@ -343,6 +344,7 @@ def test_projection_layer_binds_matching_runtime_eye_to_filament_screen() -> Non
     assert "output_frame.left_eye" in source
     assert "output_frame.right_eye" in source
     assert "screen_image_abi_available" in source
+    assert "self._filament_screen_image_enabled" in source
 
 
 def test_presenter_run_until_owns_shutdown_close() -> None:

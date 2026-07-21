@@ -198,6 +198,12 @@ class OpenXrVulkanPresenter(
         self._filament_screen: tuple[
             tuple[float, float, float], float, float, tuple[float, float, float]
         ] | None = None
+        # Directly importing runtime CUDA VkImages into Filament is not used
+        # by the stable OpenXR path; the virtual screen is submitted as a Quad
+        # Layer through the Vulkan copy path.
+        self._filament_screen_image_enabled = os.environ.get(
+            "D2S_ENABLE_FILAMENT_SCREEN_IMAGE", "0"
+        ).strip().lower() in {"1", "true", "yes", "on"}
         self._controllers_root = Path(__file__).resolve().parent / "controllers"
         self._controller_brands = discover_controller_brands(self._controllers_root)
         self._controller_brand = select_controller_brand(
@@ -1009,8 +1015,9 @@ class OpenXrVulkanPresenter(
                 )
                 print(
                     "Filament screen image path: "
+                    f"enabled={self._filament_screen_image_enabled} "
                     f"abi={getattr(bridge, 'screen_image_abi_available', False)} "
-                    "per_eye=runtime_output.left_eye/right_eye",
+                    "fallback=OpenXR Quad Layer Vulkan copy",
                     flush=True,
                 )
             bridge.set_scene_exposure(self._filament_scene_exposure)
@@ -1298,6 +1305,7 @@ class OpenXrVulkanPresenter(
                     )
                     if (
                         output_frame is not None
+                        and self._filament_screen_image_enabled
                         and self._filament_screen is not None
                         and getattr(bridge, "screen_image_abi_available", False)
                     ):
