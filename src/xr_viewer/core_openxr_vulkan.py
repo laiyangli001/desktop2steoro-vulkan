@@ -212,6 +212,8 @@ class OpenXrVulkanPresenter(
         self._headset_wait_logged = False
         self._accept_output = False
         self._source_frame_wait_logged = False
+        self._has_presented_frame = False
+        self._last_quad_layers: list[Any] = []
 
     @property
     def initialized(self) -> bool:
@@ -348,7 +350,7 @@ class OpenXrVulkanPresenter(
                     output_frame = self._pending_output
                     # Match the legacy frame gate: runtime rendering readiness
                     # is separate from the availability of a fresh stereo frame.
-                    if self._pending_output is None:
+                    if self._pending_output is None and not self._has_presented_frame:
                         if not self._source_frame_wait_logged:
                             self._source_frame_wait_logged = True
                             print(
@@ -357,6 +359,18 @@ class OpenXrVulkanPresenter(
                                 flush=True,
                             )
                         layer = None
+                    elif self._pending_output is None:
+                        self._source_frame_wait_logged = False
+                        layer = OpenXrCompositionBuilder(
+                            xr, self.reference_space
+                        ).projection_layer(views, self.swapchains)
+                        layer_structures.append(layer)
+                        layer_pointers.append(ctypes.pointer(layer))
+                        layer_structures.extend(self._last_quad_layers)
+                        layer_pointers.extend(
+                            ctypes.pointer(item) for item in self._last_quad_layers
+                        )
+                        layer = None
                     else:
                         self._source_frame_wait_logged = False
                         layer = self._render_projection_layer(views)
@@ -364,6 +378,8 @@ class OpenXrVulkanPresenter(
                         layer_structures.append(layer)
                         layer_pointers.append(ctypes.pointer(layer))
                         quad_layers = self._render_quad_layers(output_frame)
+                        self._last_quad_layers = quad_layers
+                        self._has_presented_frame = True
                         layer_structures.extend(quad_layers)
                         layer_pointers.extend(ctypes.pointer(item) for item in quad_layers)
         finally:
@@ -582,6 +598,8 @@ class OpenXrVulkanPresenter(
         self._graphics_binding = None
         self._initialized = False
         self._pending_output = None
+        self._has_presented_frame = False
+        self._last_quad_layers = []
         self._source_frame_wait_logged = False
         self._accept_output = False
         self._filament_animation_origin = None

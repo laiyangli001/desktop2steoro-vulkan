@@ -249,6 +249,8 @@ def test_quad_layer_uses_runtime_output_size_and_openxr_visibility() -> None:
     assert "CompositionLayerQuad" in source
     assert "EyeVisibility.LEFT" in source
     assert "EyeVisibility.RIGHT" in source
+    assert "_has_presented_frame" in source
+    assert "self._last_quad_layers" in source
 
 
 def test_filament_profile_keeps_glb_and_screen_positions_separate(tmp_path) -> None:
