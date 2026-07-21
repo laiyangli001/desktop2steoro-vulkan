@@ -487,6 +487,14 @@ class GUIProcessMixin:
         text = str(line or "").strip()
         if not text:
             return
+        # stdout and stderr are merged by the child process pipe. A producer
+        # can write the next tagged record before the previous record reaches
+        # this reader, so split known records before level classification.
+        fps_marker = text.find("[FPSBreakdown]", 1)
+        if fps_marker > 0:
+            self._log_child_line(text[:fps_marker])
+            self._log_child_line(text[fps_marker:])
+            return
         lower = text.lower()
         if text.startswith(_STATUS_PREFIX):
             status_logger.info(text[len(_STATUS_PREFIX):].strip())

@@ -44,7 +44,29 @@ def test_debug_file_logging_writes_debug_without_console_handler(tmp_path):
         for handler in list(root.handlers):
             if handler not in before:
                 root.removeHandler(handler)
-                handler.close()
+            handler.close()
+
+
+def test_child_log_line_splits_embedded_fps_record(caplog):
+    from gui.process import GUIProcessMixin
+
+    class Harness(GUIProcessMixin):
+        pass
+
+    # Exercise the actual splitter without starting the Flet process.
+    harness = Harness()
+    with caplog.at_level(logging.DEBUG, logger="child"):
+        harness._log_child_line(
+            "[OpenXRViewer] Applied profile pose [FPSBreakdown] target=60Hz"
+        )
+    assert [record.levelno for record in caplog.records[-2:]] == [
+        logging.INFO,
+        logging.DEBUG,
+    ]
+    assert [record.message for record in caplog.records[-2:]] == [
+        "[OpenXRViewer] Applied profile pose",
+        "[FPSBreakdown] target=60Hz",
+    ]
 
 
 def test_i18n_locale_completeness():
