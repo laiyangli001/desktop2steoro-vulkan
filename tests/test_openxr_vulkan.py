@@ -224,10 +224,31 @@ def test_openxr_defaults_to_validated_srgb_projection_target() -> None:
     assert OpenXrVulkanConfig().controller_model == "PICO"
 
 
-def test_presenter_defaults_virtual_screen_to_per_eye_projection_path(monkeypatch) -> None:
+def test_presenter_defaults_to_capability_gated_zero_copy_path(monkeypatch) -> None:
     monkeypatch.delenv("D2S_ENABLE_FILAMENT_SCREEN_IMAGE", raising=False)
     presenter = OpenXrVulkanPresenter()
     assert presenter._filament_screen_image_enabled is True
+
+
+def test_filament_screen_image_requires_per_eye_external_ready_semaphores() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_screen_image_enabled = True
+
+    class Bridge:
+        screen_image_abi_available = True
+        screen_ready_semaphore_abi_available = True
+
+    presenter.filament_bridge = Bridge()
+    frame = SimpleNamespace(
+        metadata={
+            "vulkan_output_sync": "cuda_stream_synchronized",
+            "vulkan_ready_semaphore_left": object(),
+            "vulkan_ready_semaphore_right": object(),
+        }
+    )
+    assert presenter._can_use_filament_screen_image(frame) is False
+    frame.metadata["vulkan_output_sync"] = "cuda_external_semaphore"
+    assert presenter._can_use_filament_screen_image(frame) is True
 
 
 def test_presenter_uses_controller_action_mixin_initializer() -> None:

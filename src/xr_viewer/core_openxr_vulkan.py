@@ -223,6 +223,8 @@ class OpenXrVulkanPresenter(
         # The virtual screen must be rendered as scene geometry so each eye
         # samples its own stereo output. Quad Layer is reserved for 2D tools.
         self._filament_screen_image_enabled = os.environ.get(
+            # Prefer zero-copy when the per-frame synchronization contract is
+            # available; _can_use_filament_screen_image provides the fallback.
             "D2S_ENABLE_FILAMENT_SCREEN_IMAGE", "1"
         ).strip().lower() in {"1", "true", "yes", "on"}
         self._controllers_root = Path(__file__).resolve().parent / "controllers"
@@ -650,6 +652,34 @@ class OpenXrVulkanPresenter(
         self._filament_screen = (tuple(float(value) for value in position), width, height, pose_rotation)
         if self.filament_bridge is not None:
             self.filament_bridge.set_screen(self._filament_screen[0], width, height, pose_rotation)
+
+    def _can_use_filament_screen_image(
+        self, output_frame: VulkanStereoOutputFrame | None
+    ) -> bool:
+        """Require a producer completion primitive before zero-copy sampling.
+
+        A raw VkImage handle is not sufficient to establish visibility for a
+        Filament shader. The producer must publish both per-eye ready
+        semaphores, and the bridge must consume them from the same Vulkan
+        device before rendering the imported image.
+        """
+        if (
+            output_frame is None
+            or not self._filament_screen_image_enabled
+            or self.filament_bridge is None
+            or not getattr(self.filament_bridge, "screen_image_abi_available", False)
+            or not getattr(
+                self.filament_bridge, "screen_ready_semaphore_abi_available", False
+            )
+        ):
+            return False
+        metadata = dict(output_frame.metadata or {})
+        if metadata.get("vulkan_output_sync") != "cuda_external_semaphore":
+            return False
+        return bool(
+            metadata.get("vulkan_ready_semaphore_left")
+            and metadata.get("vulkan_ready_semaphore_right")
+        )
 
     def _handle_vulkan_pointer_input(self) -> None:
         """Reuse legacy trigger hold/drag semantics for the Vulkan screen."""
@@ -1603,6 +1633,7 @@ class OpenXrVulkanPresenter(
                     eye.handle,
                     xr.SwapchainImageWaitInfo(timeout=xr.INFINITE_DURATION),
                 )
+            screen_image_projection = self._can_use_filament_screen_image(output_frame)
             for eye_index, (eye, image_index) in enumerate(acquired_images):
                 if self.filament_bridge is not None:
                     bridge = self.filament_bridge
@@ -1618,9 +1649,8 @@ class OpenXrVulkanPresenter(
                     )
                     if (
                         output_frame is not None
-                        and self._filament_screen_image_enabled
+                        and screen_image_projection
                         and self._filament_screen is not None
-                        and getattr(bridge, "screen_image_abi_available", False)
                     ):
                         screen_source = (
                             output_frame.left_eye
@@ -1777,11 +1807,7 @@ class OpenXrVulkanPresenter(
         if self._filament_screen is None:
             return []
         layers = self._render_tool_quad_layers()
-        screen_in_projection = bool(
-            self._filament_screen_image_enabled
-            and self.filament_bridge is not None
-            and getattr(self.filament_bridge, "screen_image_abi_available", False)
-        )
+        screen_in_projection = self._can_use_filament_screen_image(output_frame)
         if screen_in_projection:
             return layers
         width = int(output_frame.left_eye.width)
