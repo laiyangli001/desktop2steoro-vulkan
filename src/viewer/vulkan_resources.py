@@ -85,6 +85,102 @@ class VulkanExternalImageRegistry:
         return len(self._resources)
 
 
+class VulkanHostImage:
+    """Host-visible linear image used to upload small Vulkan overlay textures."""
+
+    def __init__(self, context: Any, width: int, height: int, *, format: int, label: str):
+        self.context = context
+        self.vk = context.vk
+        self.width = int(width)
+        self.height = int(height)
+        self.format = int(format)
+        self.label = str(label)
+        vk = self.vk
+        self.image = vk.vkCreateImage(
+            context.device,
+            vk.VkImageCreateInfo(
+                sType=vk.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+                imageType=vk.VK_IMAGE_TYPE_2D,
+                format=self.format,
+                extent=vk.VkExtent3D(width=self.width, height=self.height, depth=1),
+                mipLevels=1,
+                arrayLayers=1,
+                samples=vk.VK_SAMPLE_COUNT_1_BIT,
+                tiling=vk.VK_IMAGE_TILING_LINEAR,
+                usage=vk.VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                sharingMode=vk.VK_SHARING_MODE_EXCLUSIVE,
+                initialLayout=vk.VK_IMAGE_LAYOUT_PREINITIALIZED,
+            ),
+            None,
+        )
+        requirements = vk.vkGetImageMemoryRequirements(context.device, self.image)
+        properties = vk.vkGetPhysicalDeviceMemoryProperties(context.physical_device)
+        flags = int(vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
+        memory_type = next(
+            (index for index, item in enumerate(properties.memoryTypes)
+             if requirements.memoryTypeBits & (1 << index)
+             and int(item.propertyFlags) & flags == flags),
+            None,
+        )
+        if memory_type is None:
+            vk.vkDestroyImage(context.device, self.image, None)
+            raise RuntimeError("no host-visible Vulkan memory type for overlay upload")
+        self.memory = vk.vkAllocateMemory(
+            context.device,
+            vk.VkMemoryAllocateInfo(
+                sType=vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+                allocationSize=requirements.size,
+                memoryTypeIndex=memory_type,
+            ),
+            None,
+        )
+        vk.vkBindImageMemory(context.device, self.image, self.memory, 0)
+        subresource = vk.VkImageSubresource(
+            aspectMask=vk.VK_IMAGE_ASPECT_COLOR_BIT, mipLevel=0, arrayLayer=0
+        )
+        self._layout = vk.vkGetImageSubresourceLayout(context.device, self.image, subresource)
+        self.resource = VulkanImageResource(
+            context=context,
+            image=self.image,
+            view=None,
+            width=self.width,
+            height=self.height,
+            format=self.format,
+            layout=vk.VK_IMAGE_LAYOUT_PREINITIALIZED,
+            access_mask=vk.VK_ACCESS_HOST_WRITE_BIT,
+            stage_mask=vk.VK_PIPELINE_STAGE_HOST_BIT,
+            queue_family_index=context.queue_family_index,
+            external=True,
+            label=self.label,
+        )
+        context.register_external_image(self.resource)
+
+    def upload(self, rgba) -> None:
+        import numpy as np
+
+        pixels = np.ascontiguousarray(rgba, dtype=np.uint8)
+        if pixels.shape != (self.height, self.width, 4):
+            raise ValueError("overlay upload dimensions must match VulkanHostImage")
+        vk = self.vk
+        mapped = vk.vkMapMemory(self.context.device, self.memory, 0, self._layout.size, 0)
+        try:
+            base = vk.ffi.cast("char *", mapped) + int(self._layout.offset)
+            row_pitch = int(self._layout.rowPitch)
+            row_bytes = self.width * 4
+            for row in range(self.height):
+                vk.ffi.memmove(base + row * row_pitch, pixels[row].ctypes.data, row_bytes)
+        finally:
+            vk.vkUnmapMemory(self.context.device, self.memory)
+
+    def close(self) -> None:
+        try:
+            self.context.unregister_external_image(self.resource)
+        except Exception:
+            pass
+        self.vk.vkDestroyImage(self.context.device, self.image, None)
+        self.vk.vkFreeMemory(self.context.device, self.memory, None)
+
+
 class VulkanExportableImage:
     """Own one Vulkan image whose memory can be imported by a GPU producer."""
 

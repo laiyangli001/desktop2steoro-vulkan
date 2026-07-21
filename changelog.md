@@ -6,6 +6,11 @@
 
 ### 已实现
 
+- 继续迁移旧工程完整 OpenXR 控制状态机：菜单、A/B/X/Y 和左右摇杆按键均支持短按/长按计时；短按/长按快捷键通过 Windows 输入注入，X 键切换虚拟键盘，菜单/A/B/Y 控制工具面板与屏幕复位。
+- 迁移旧工程键盘输入保持状态：触发器进入、悬停、按住、切换按键和释放均由 `CoreInputHelpersMixin` 管理，支持 Shift/Ctrl/Alt/Win、Caps Lock、双击修饰键和方向键注入；Grip 按下时抑制误触键盘。
+- 迁移旧工程鼠标长按/拖动状态：触发器先点击，超过 350ms 后进入拖动，释放时保证发送对应鼠标抬起；左右手分别映射右键/左键，键盘命中时不再穿透为桌面鼠标。
+- 补齐 Vulkan 工具交互：左 Grip 锁定并移动键盘或虚拟屏幕，右 Grip 按横向位移调整屏幕宽度并保持纵横比；键盘 Quad Layer 使用当前位姿、Shift 状态和实时键盘尺寸生成。
+
 - 修复 OpenXR 场景发白：保留旧工程验证过的 `R8G8B8A8_SRGB`/`B8G8R8A8_SRGB` Projection Layer 目标，将 Filament ColorGrading 输出改为线性 Rec709，由 sRGB 目标执行唯一一次 OETF；虚拟屏幕 Quad Layer 继续独立使用 UNORM 链。
 - 修复实机 Quad Layer 屏幕变成长条：profile 未显式提供高度时按宽度自动计算 16:9 高度；修复 profile 校准后控制器仍使用旧 OpenXR reference space，手柄位姿现在与场景使用同一世界空间。
 - 修复 Artemis 星空纹理转头闪烁：为 `Skybox__6464723579082975951` 的 8192x4096 纹理启用三线性 mipmap 采样，保留原始星空图像内容和空间位置。

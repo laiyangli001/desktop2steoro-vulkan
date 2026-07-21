@@ -224,10 +224,38 @@ def test_openxr_defaults_to_validated_srgb_projection_target() -> None:
     assert OpenXrVulkanConfig().controller_model == "PICO"
 
 
+def test_presenter_defaults_virtual_screen_to_per_eye_projection_path(monkeypatch) -> None:
+    monkeypatch.delenv("D2S_ENABLE_FILAMENT_SCREEN_IMAGE", raising=False)
+    presenter = OpenXrVulkanPresenter()
+    assert presenter._filament_screen_image_enabled is True
+
+
 def test_presenter_uses_controller_action_mixin_initializer() -> None:
     presenter = OpenXrVulkanPresenter()
     assert hasattr(presenter, "_init_controller_actions")
     assert not hasattr(presenter, "_initialize_controller_actions")
+
+
+def test_vulkan_presenter_exposes_legacy_overlay_shortcut_state() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._controller_inputs = (
+        {"x_button": 0.0, "menu_button": 0.0},
+        {"a_button": 0.0, "b_button": 0.0, "menu_button": 0.0},
+    )
+    presenter._handle_controller_shortcuts()
+    presenter._controller_inputs = (
+        {"x_button": 1.0, "menu_button": 0.0},
+        {"a_button": 0.0, "b_button": 0.0, "menu_button": 0.0},
+    )
+    presenter._handle_controller_shortcuts()
+    presenter._controller_inputs = ({"x_button": 0.0}, {})
+    presenter._handle_controller_shortcuts()
+    assert presenter._keyboard_visible is True
+    presenter._controller_inputs = ({"x_button": 1.0}, {})
+    presenter._handle_controller_shortcuts()
+    presenter._controller_inputs = ({"x_button": 0.0}, {})
+    presenter._handle_controller_shortcuts()
+    assert presenter._keyboard_visible is False
 
 
 def test_openxr_frame_gate_waits_for_runtime_output_before_filament() -> None:
@@ -345,6 +373,7 @@ def test_projection_layer_binds_matching_runtime_eye_to_filament_screen() -> Non
     assert "output_frame.right_eye" in source
     assert "screen_image_abi_available" in source
     assert "self._filament_screen_image_enabled" in source
+    assert "The main virtual screen is rendered in the Projection Layer" in source
 
 
 def test_presenter_run_until_owns_shutdown_close() -> None:
