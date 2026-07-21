@@ -608,8 +608,9 @@ class VulkanContext:
         destination: Any,
         *,
         wait_for_timeline: int | None = None,
+        flip_y: bool = False,
     ) -> int:
-        """Copy two registered Vulkan images without a CPU pixel round trip."""
+        """Copy registered Vulkan images, optionally flipping the image on Y."""
 
         self._ensure_open()
         for resource in (source, destination):
@@ -683,25 +684,50 @@ class VulkanContext:
                 baseArrayLayer=0,
                 layerCount=1,
             )
-            vk.vkCmdCopyImage(
-                command_buffer,
-                source.image,
-                vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                destination.image,
-                vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                1,
-                [
-                    vk.VkImageCopy(
-                        srcSubresource=subresource,
-                        srcOffset=vk.VkOffset3D(x=0, y=0, z=0),
-                        dstSubresource=subresource,
-                        dstOffset=vk.VkOffset3D(x=0, y=0, z=0),
-                        extent=vk.VkExtent3D(
-                            width=int(source.width), height=int(source.height), depth=1
-                        ),
-                    )
-                ],
-            )
+            if flip_y:
+                vk.vkCmdBlitImage(
+                    command_buffer,
+                    source.image,
+                    vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    destination.image,
+                    vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    1,
+                    [
+                        vk.VkImageBlit(
+                            srcSubresource=subresource,
+                            srcOffsets=[
+                                vk.VkOffset3D(x=0, y=int(source.height), z=0),
+                                vk.VkOffset3D(x=int(source.width), y=0, z=1),
+                            ],
+                            dstSubresource=subresource,
+                            dstOffsets=[
+                                vk.VkOffset3D(x=0, y=0, z=0),
+                                vk.VkOffset3D(x=int(destination.width), y=int(destination.height), z=1),
+                            ],
+                        )
+                    ],
+                    vk.VK_FILTER_NEAREST,
+                )
+            else:
+                vk.vkCmdCopyImage(
+                    command_buffer,
+                    source.image,
+                    vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    destination.image,
+                    vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    1,
+                    [
+                        vk.VkImageCopy(
+                            srcSubresource=subresource,
+                            srcOffset=vk.VkOffset3D(x=0, y=0, z=0),
+                            dstSubresource=subresource,
+                            dstOffset=vk.VkOffset3D(x=0, y=0, z=0),
+                            extent=vk.VkExtent3D(
+                                width=int(source.width), height=int(source.height), depth=1
+                            ),
+                        )
+                    ],
+                )
             to_runtime = [
                 vk.VkImageMemoryBarrier(
                     sType=vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,

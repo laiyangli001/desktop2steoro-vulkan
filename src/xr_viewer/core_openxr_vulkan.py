@@ -1251,7 +1251,12 @@ class OpenXrVulkanPresenter(
         for eye_index, eye in enumerate(self._quad_swapchains):
             source = output_frame.left_eye if eye_index == 0 else output_frame.right_eye
             with _acquired_swapchain_image(self.xr, eye) as image_index:
-                self.vulkan.copy_image(source, eye.resources[image_index])
+                # Vulkan image memory and OpenXR Quad Layer UV origins differ.
+                self.vulkan.copy_image(
+                    source,
+                    eye.resources[image_index],
+                    flip_y=True,
+                )
             layers.append(OpenXrCompositionBuilder(
                 self.xr, self.reference_space
             ).quad_layer(

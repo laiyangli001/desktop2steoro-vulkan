@@ -244,7 +244,7 @@ def test_quad_layer_uses_runtime_output_size_and_openxr_visibility() -> None:
               "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
 
     assert "_ensure_quad_swapchains(width, height)" in source
-    assert "self.vulkan.copy_image(source, eye.resources[image_index])" in source
+    assert "flip_y=True" in source
     assert "format_value if format_value is not None" in source
     assert "CompositionLayerQuad" in source
     assert "EyeVisibility.LEFT" in source
