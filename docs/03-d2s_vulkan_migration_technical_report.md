@@ -221,7 +221,7 @@ VkImage (MoltenVK 管理的 Metal 纹理)
 
 Projection Layer 的运行时屏幕输出现已采用左右眼独立的三帧 Vulkan image ring。每个槽位的 external memory、CUDA mapped array 和 Filament imported Texture 均可复用，帧循环只切换槽位和材质绑定，不再因为新帧销毁并重新导入纹理。Bridge 同时将左右眼提交合并到一次帧边界等待，避免旧实现每只眼睛一次 `flushAndWait`。
 
-当前已增加 CUDA/Vulkan/Filament external semaphore signal/wait ABI：支持路径不再在发布前执行 CUDA stream synchronization，Filament 在图形提交时等待对应槽位 semaphore；平台、CUDA Runtime 或旧 Bridge 不支持时自动保留 CPU 同步降级。下一阶段是 Windows/Linux/macOS Bridge CI、Validation Layer 和头显长稳验证。
+当前已增加 CUDA/Vulkan/Filament external semaphore signal/wait ABI：支持路径不再在发布前执行 CUDA stream synchronization，Filament 在图形提交时等待对应槽位 semaphore；平台、CUDA Runtime 或旧 Bridge 不支持时自动保留 CPU 同步降级。Windows/Linux/macOS Bridge CI 已完成并回写最新二进制；下一阶段是 Validation Layer 和头显长稳验证。
 
 ### 5.1 主图形队列（每帧必须完成）
 

@@ -44,6 +44,7 @@
 - 进一步对齐旧工程 reference space 选择：OpenXR Vulkan 路径优先使用 `STAGE` 地面世界坐标，运行时不提供时才回退 `LOCAL`；profile 校准复用实际选择的 reference space 类型，避免 LOCAL 原点绑定头显启动方向。
 - 修复头显转动时场景回弹抖动：首帧后每个 OpenXR tick 都按当前头显 pose 重新渲染 Filament 世界，仅复用没有新推理帧的 Quad Layer 输入，避免用上一张旧姿态投影图替代当前相机姿态。
 - 修复 GUI 子进程日志拼接误报：stdout/stderr 合并后若 profile 成功消息与 `[FPSBreakdown]` 粘连，先按日志标记拆分再分类，避免 `fx_entry_failed=` 等统计字段把成功消息标成 ERROR。
+- 完成 CUDA/Vulkan/Filament external semaphore ABI 的三平台远程编译：GitHub Actions 运行 `29818061943` 的 Windows、Linux、macOS Bridge 构建及二进制回写全部成功；本地已同步 `filament_bridge.dll`、`libfilament_bridge.so` 和 `libfilament_bridge.dylib`。
 
 ### 验证结果
 
@@ -57,12 +58,11 @@
 
 ### 未决事项
 
-- 本轮 native Bridge 源码待 GitHub Actions 完成 Windows、Linux、macOS 三平台远程编译并下载回本地；旧 native DLL 不包含新的双眼 ABI，下载新构建前不能用于实机启动。
 - 头显实机仍需确认 UNORM 色彩、控制器可见性和屏幕纹理同步；当前自动化测试不能替代真实 OpenXR Runtime 验收。
 
 ### 下一项内容
 
-- 通过 GitHub Actions 远程生成三平台 Bridge，更新本地二进制后进行 NVIDIA + OpenXR 头显实测。
+- 启用 Vulkan Validation Layer 进行帧时序和 external semaphore 验证，然后进行 NVIDIA + OpenXR 头显长稳实测。
 
 ## 2026-07-20
 
