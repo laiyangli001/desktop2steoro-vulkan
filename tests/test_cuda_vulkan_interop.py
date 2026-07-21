@@ -1,3 +1,4 @@
+import ctypes
 from types import SimpleNamespace
 
 import pytest
@@ -5,8 +6,25 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from app_runtime.runtime_output import CudaVulkanOutputAdapter
+from viewer.cuda_vulkan_interop import (
+    _ExternalSemaphoreSignalParams,
+    _SemaphoreSignalParams,
+)
 from viewer.vulkan_context import VulkanContext, VulkanContextConfig
 from viewer.vulkan_resources import VulkanExportableImage
+
+
+def test_cuda_external_semaphore_signal_params_match_runtime_abi() -> None:
+    # CUDA's v2 signal parameter layout is 72 bytes of nested params,
+    # followed by flags and sixteen reserved uint32 values.
+    assert _SemaphoreSignalParams.fence_value.offset == 0
+    assert _SemaphoreSignalParams.nv_sci_sync.offset == 8
+    assert _SemaphoreSignalParams.keyed_mutex_key.offset == 16
+    assert _SemaphoreSignalParams.reserved.offset == 24
+    assert ctypes.sizeof(_SemaphoreSignalParams) == 72
+    assert _ExternalSemaphoreSignalParams.params.offset == 0
+    assert _ExternalSemaphoreSignalParams.flags.offset == 72
+    assert ctypes.sizeof(_ExternalSemaphoreSignalParams) == 144
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA GPU is unavailable")

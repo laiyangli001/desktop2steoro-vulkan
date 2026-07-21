@@ -74,10 +74,25 @@ class _ExternalSemaphoreHandleDesc(ctypes.Structure):
     ]
 
 
+class _SemaphoreNvSciSync(ctypes.Union):
+    _fields_ = [
+        ("fence", ctypes.c_void_p),
+        ("reserved", ctypes.c_uint64),
+    ]
+
+
+class _SemaphoreSignalParams(ctypes.Structure):
+    _fields_ = [
+        ("fence_value", ctypes.c_uint64),
+        ("nv_sci_sync", _SemaphoreNvSciSync),
+        ("keyed_mutex_key", ctypes.c_uint64),
+        ("reserved", ctypes.c_uint * 12),
+    ]
+
+
 class _ExternalSemaphoreSignalParams(ctypes.Structure):
     _fields_ = [
-        ("ext_sem", ctypes.c_void_p),
-        ("value", ctypes.c_uint64),
+        ("params", _SemaphoreSignalParams),
         ("flags", ctypes.c_uint),
         ("reserved", ctypes.c_uint * 16),
     ]
@@ -171,6 +186,7 @@ class CudaVulkanImageImporter:
             import_external.restype = ctypes.c_int
         if signal_external is not None:
             signal_external.argtypes = [
+                ctypes.POINTER(ctypes.c_void_p),
                 ctypes.POINTER(_ExternalSemaphoreSignalParams),
                 ctypes.c_uint,
                 ctypes.c_void_p,
@@ -318,13 +334,19 @@ class CudaVulkanImageImporter:
         if semaphore is None:
             raise CudaVulkanInteropError("CUDA external semaphore is not registered")
         params = _ExternalSemaphoreSignalParams(
-            ext_sem=semaphore.external,
-            value=0,
+            params=_SemaphoreSignalParams(
+                fence_value=0,
+                keyed_mutex_key=0,
+            ),
             flags=0,
         )
+        semaphore_array = (ctypes.c_void_p * 1)(semaphore.external)
         self._check(
             self._cudart.cudaSignalExternalSemaphoresAsync(
-                ctypes.byref(params), 1, ctypes.c_void_p(int(stream))
+                semaphore_array,
+                ctypes.byref(params),
+                1,
+                ctypes.c_void_p(int(stream)),
             ),
             "cudaSignalExternalSemaphoresAsync",
         )
