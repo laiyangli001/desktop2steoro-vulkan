@@ -50,6 +50,7 @@
 - 针对 external semaphore 接入在 Filament `beginFrame` 阶段暴露的 native 生命周期风险，改为 `D2S_ENABLE_CUDA_EXTERNAL_SEMAPHORE=1` 显式启用，默认使用已验证的 CUDA stream 同步降级；Vulkan 输出图像环和持久化纹理缓存继续启用，避免实机默认路径再次发生 native access violation。
 - 补齐 Vulkan 输出槽位消费端释放/复用保护：新增 producer lease 和跨线程条件等待；pending 帧被新帧替换时释放，当前 Filament 屏幕帧在 Projection/Quad 提交完成前保持占用，头显待机、提交失败和关闭路径统一释放，ring wrap 不再覆盖仍被消费的 VkImage。
 - 修复实机首次 Projection 渲染 access violation：默认关闭运行时 CUDA `VkImage` 直接导入 Filament 屏幕材质的路径，屏幕改由已验证的 OpenXR Quad Layer Vulkan GPU copy 提交；保留 `D2S_ENABLE_FILAMENT_SCREEN_IMAGE=1` 作为后续 Validation Layer 验证用显式实验开关。
+- 修复共享 Filament Engine 双眼切换 access violation：每只眼 `endFrame` 后先执行 `flushAndWait`，再切换到另一只外部 Vulkan Swapchain，避免上一只眼仍在后端处理时调用下一眼 `beginFrame`；该安全串行基线需要三平台 Bridge 重新远程编译。
 
 ### 验证结果
 

@@ -46,5 +46,6 @@ def test_native_bridge_keeps_eye_renderer_and_screen_lifetimes_explicit() -> Non
     assert "filament_bridge_set_screen_ready_semaphore" in source
     assert "pending_ready_semaphore" in source
     assert "screen_texture_cache" in source
+    assert "bridge->engine->flushAndWait();" in source
     assert "diagnostic_frame_count < 8" in source
     assert "[FilamentBridge] acquired eye=" in source

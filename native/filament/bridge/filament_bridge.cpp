@@ -1169,10 +1169,13 @@ int filament_bridge_end_frame(FilamentBridge* bridge) {
     bridge->frame_active = false;
     bridge->eyes[bridge->active_eye].frame_active = false;
     if (!bridge->engine) return 0;
-    // Queue this eye and let the presenter synchronize once after both eyes.
-    // Waiting here serialized the two eye submissions and caused avoidable
-    // frame stalls in the projection-layer path.
-    bridge->engine->flush();
+    // The shared Engine switches between two external Vulkan swapchains. A
+    // non-blocking flush is insufficient here: the next eye may call
+    // beginFrame while the backend is still consuming the previous swapchain.
+    // Complete this eye before switching targets to keep the external
+    // swapchain lifetime valid. This is the safe baseline until a native
+    // multi-swapchain frame scheduler is added.
+    bridge->engine->flushAndWait();
     if (bridge->diagnostic_frame_count < 8) {
         std::fprintf(stderr, "[FilamentBridge] end eye=%u\n", bridge->active_eye);
         std::fflush(stderr);
