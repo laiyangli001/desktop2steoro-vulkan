@@ -37,3 +37,8 @@ def test_output_frame_and_router_reject_invalid_state() -> None:
     router.close()
     with pytest.raises(RuntimeError, match="closed"):
         router.publish(_frame())
+
+
+def test_output_frame_rejects_unknown_color_space() -> None:
+    with pytest.raises(ValueError, match="color_space"):
+        VulkanStereoOutputFrame(1, 0.0, object(), object(), color_space="pq")

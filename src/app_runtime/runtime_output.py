@@ -63,6 +63,7 @@ class CudaVulkanOutputAdapter:
             right_eye=self.right_slot.resource,
             ready_timeline=None,
             metadata=dict(getattr(runtime_result, "debug_info", None) or {}),
+            color_space="srgb",
         )
 
     def close(self) -> None:
@@ -140,6 +141,11 @@ class VulkanRuntimeOutputConsumer:
             sbs=getattr(runtime_result, "sbs", None),
             ready_timeline=getattr(runtime_result, "ready_timeline", None),
             metadata=dict(getattr(runtime_result, "debug_info", None) or {}),
+            color_space=str(
+                (getattr(runtime_result, "debug_info", None) or {}).get(
+                    "output_color_space", "srgb"
+                )
+            ),
         )
         self._next_frame_id += 1
         return frame

@@ -44,10 +44,9 @@ class OpenXrVulkanConfig:
     render_scale: float = 1.0
     clear_color: tuple[float, float, float, float] = (0.02, 0.04, 0.08, 1.0)
     requested_vulkan_version: int = make_vulkan_version(1, 4, 0)
-    # Filament already emits Rec709/sRGB encoded values after color grading.
-    # OpenXR receives those bytes in a UNORM image; using an SRGB attachment
-    # here would apply a second transfer function in the Vulkan target.
-    swapchain_color_mode: str = "unorm"
+    # Match the validated OpenXR path: Filament renders to an sRGB target and
+    # its Vulkan swapchain configuration performs the transfer at the target.
+    swapchain_color_mode: str = "srgb"
     filament_bridge_path: str | None = None
     filament_glb_path: str | None = None
     filament_profile_path: str | None = None

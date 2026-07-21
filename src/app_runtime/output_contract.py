@@ -18,6 +18,7 @@ class VulkanStereoOutputFrame:
     output_format: str = "openxr_full_synthesis_eyes"
     ready_timeline: int | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    color_space: str = "srgb"
 
     def __post_init__(self) -> None:
         if int(self.frame_id) < 0:
@@ -28,6 +29,8 @@ class VulkanStereoOutputFrame:
             raise ValueError("output frame requires both left_eye and right_eye")
         if not str(self.output_format).strip():
             raise ValueError("output_format must not be empty")
+        if str(self.color_space).strip().lower() not in {"srgb", "linear"}:
+            raise ValueError("output color_space must be srgb or linear")
         if self.ready_timeline is not None and int(self.ready_timeline) < 0:
             raise ValueError("ready_timeline must not be negative")
 

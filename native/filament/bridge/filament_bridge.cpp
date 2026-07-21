@@ -739,7 +739,9 @@ int set_bridge_screen_image(FilamentBridge* bridge, const void* image,
     }
     bridge->screen_texture = filament::Texture::Builder()
             .width(width).height(height).levels(1)
-            .format(filament::Texture::InternalFormat::RGBA8)
+            // Runtime eye images contain display-referred sRGB bytes in a
+            // Vulkan UNORM storage image; decode them exactly once on sample.
+            .format(filament::Texture::InternalFormat::SRGB8_A8)
             .sampler(filament::Texture::Sampler::SAMPLER_2D)
             .usage(filament::Texture::Usage::SAMPLEABLE)
             .import(reinterpret_cast<intptr_t>(const_cast<void*>(image)))

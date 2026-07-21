@@ -218,8 +218,8 @@ def test_presenter_validates_configuration() -> None:
         OpenXrVulkanPresenter(OpenXrVulkanConfig(render_scale=0))
 
 
-def test_openxr_defaults_to_unorm_for_filament_srgb_output() -> None:
-    assert OpenXrVulkanConfig().swapchain_color_mode == "unorm"
+def test_openxr_defaults_to_validated_srgb_target_path() -> None:
+    assert OpenXrVulkanConfig().swapchain_color_mode == "srgb"
 
 
 def test_presenter_uses_controller_action_mixin_initializer() -> None:
