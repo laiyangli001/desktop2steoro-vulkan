@@ -246,6 +246,7 @@ struct FilamentBridge {
     filament::IndexBuffer* screen_index_buffer = nullptr;
     filament::Material* screen_material = nullptr;
     filament::MaterialInstance* screen_material_instance = nullptr;
+    bool screen_in_scene = false;
     filament::Texture* screen_texture = nullptr;
     std::array<filament::Texture*, 2> screen_textures{};
     std::array<const void*, 2> screen_image_handles{};
@@ -604,9 +605,10 @@ int create_preview_screen(FilamentPreview* preview) {
 
 void destroy_bridge_screen(FilamentBridge* bridge) {
     if (!bridge || !bridge->engine) return;
-    if (bridge->scene && !bridge->screen_entity.isNull()) {
+    if (bridge->scene && bridge->screen_in_scene && !bridge->screen_entity.isNull()) {
         bridge->scene->remove(bridge->screen_entity);
     }
+    bridge->screen_in_scene = false;
     if (!bridge->screen_entity.isNull()) {
         bridge->engine->destroy(bridge->screen_entity);
         bridge->screen_entity = {};
@@ -750,7 +752,8 @@ int create_bridge_screen(FilamentBridge* bridge) {
         set_error(bridge, "Filament could not create OpenXR screen renderable");
         return 0;
     }
-    bridge->scene->addEntity(bridge->screen_entity);
+    // The sampler is required by the material. Keep the renderable detached
+    // until a valid runtime Vulkan image has been imported.
     return 1;
 }
 
@@ -795,6 +798,10 @@ int set_bridge_screen_image(FilamentBridge* bridge, const void* image,
     bridge->screen_material_instance->setParameter(
             "screenTexture", bridge->screen_texture,
             bridge->screen_texture_sampler);
+    if (!bridge->screen_in_scene && !bridge->screen_entity.isNull()) {
+        bridge->scene->addEntity(bridge->screen_entity);
+        bridge->screen_in_scene = true;
+    }
     return 1;
 }
 
