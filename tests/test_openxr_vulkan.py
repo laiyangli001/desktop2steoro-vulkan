@@ -260,6 +260,8 @@ def test_profile_pose_is_applied_once_to_openxr_reference_space() -> None:
     assert "_apply_profile_reference_space(views)" in source
     assert "self._profile_space_applied = True" in source
     assert "space_pose = raw_head @ np.linalg.inv(self._profile_head_transform)" in source
+    assert "xr.ReferenceSpaceType.STAGE" in source
+    assert "enumerate_reference_spaces(self.session)" in source
 
 
 def test_filament_profile_keeps_glb_and_screen_positions_separate(tmp_path) -> None:

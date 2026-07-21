@@ -155,6 +155,7 @@ class OpenXrVulkanPresenter(
         self.system_id: Any = None
         self.session: Any = None
         self.reference_space: Any = None
+        self._reference_space_type: Any = None
         self.vulkan: VulkanContext | None = None
         self.swapchain_format: int | None = None
         self.swapchains: list[_EyeSwapchain] = []
@@ -614,6 +615,7 @@ class OpenXrVulkanPresenter(
         self._filament_animation_origin = None
         self._profile_initial_head = None
         self._profile_space_applied = False
+        self._reference_space_type = None
 
     def __enter__(self) -> "OpenXrVulkanPresenter":
         self.initialize()
@@ -751,11 +753,22 @@ class OpenXrVulkanPresenter(
                 ),
             ),
         )
+        available_spaces = xr.enumerate_reference_spaces(self.session)
+        self._reference_space_type = (
+            xr.ReferenceSpaceType.STAGE
+            if xr.ReferenceSpaceType.STAGE in available_spaces
+            else xr.ReferenceSpaceType.LOCAL
+        )
         self.reference_space = xr.create_reference_space(
             self.session,
             xr.ReferenceSpaceCreateInfo(
-                reference_space_type=xr.ReferenceSpaceType.LOCAL
+                reference_space_type=self._reference_space_type
             ),
+        )
+        print(
+            f"[OpenXRViewer] Reference space selected: "
+            f"{getattr(self._reference_space_type, 'name', self._reference_space_type)}",
+            flush=True,
         )
         formats = list(xr.enumerate_swapchain_formats(self.session))
         self.swapchain_format = _select_swapchain_format(
@@ -1093,7 +1106,10 @@ class OpenXrVulkanPresenter(
             new_space = self.xr.create_reference_space(
                 self.session,
                 self.xr.ReferenceSpaceCreateInfo(
-                    reference_space_type=self.xr.ReferenceSpaceType.LOCAL,
+                    reference_space_type=(
+                        self._reference_space_type
+                        or self.xr.ReferenceSpaceType.LOCAL
+                    ),
                     pose_in_reference_space=mat4_to_xr_posef(space_pose.astype(np.float32)),
                 ),
             )

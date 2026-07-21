@@ -29,6 +29,7 @@
 - 接入 OpenXR Quad Layer 屏幕路径：首帧输出后按实际推理尺寸延迟创建左右眼 UNORM swapchain，使用 Vulkan GPU copy 写入并提交独立 Quad Layer；Quad 资源格式不再错误复用投影 sRGB 格式。
 - 修复 Quad Layer 接入后的画面闪烁：首帧建立后，在没有新推理帧的 OpenXR tick 中复用上一帧 Projection/Quad Layer，不再提交空 layer；只有首帧前才进入等待状态。
 - 对齐旧工程世界姿态处理：profile 座位姿态只在首个有效头部姿态时写入 OpenXR LOCAL reference space，并重新定位一次 views；后续 Filament 相机与 Projection Layer 使用同一套世界坐标 views，避免场景跟随头显初始姿态或转头抖动。
+- 进一步对齐旧工程 reference space 选择：OpenXR Vulkan 路径优先使用 `STAGE` 地面世界坐标，运行时不提供时才回退 `LOCAL`；profile 校准复用实际选择的 reference space 类型，避免 LOCAL 原点绑定头显启动方向。
 - 修复 GUI 子进程日志拼接误报：stdout/stderr 合并后若 profile 成功消息与 `[FPSBreakdown]` 粘连，先按日志标记拆分再分类，避免 `fx_entry_failed=` 等统计字段把成功消息标成 ERROR。
 
 ### 验证结果
