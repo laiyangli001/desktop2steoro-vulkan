@@ -248,6 +248,21 @@ def test_quad_layer_uses_runtime_output_size_and_openxr_visibility() -> None:
     assert "format_value if format_value is not None" in source
     assert "CompositionLayerQuad" in source
     assert "EyeVisibility.LEFT" in source
+
+
+def test_profile_reference_space_is_shared_with_controller_pose_queries() -> None:
+    source = (Path(__file__).resolve().parents[1] /
+              "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
+
+    assert "self.reference_space = new_space" in source
+    assert "self._xr_space = new_space" in source
+
+
+def test_profile_screen_height_defaults_to_16_9_width() -> None:
+    source = (Path(__file__).resolve().parents[1] /
+              "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
+
+    assert 'float(screen.get("width", 2.4)) * 9.0 / 16.0' in source
     assert "EyeVisibility.RIGHT" in source
     assert "_has_presented_frame" in source
     assert "self._last_quad_layers" in source

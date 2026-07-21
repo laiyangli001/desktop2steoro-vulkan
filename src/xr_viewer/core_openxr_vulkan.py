@@ -1073,7 +1073,10 @@ class OpenXrVulkanPresenter(
                 self._filament_screen = (
                     tuple(float(value) for value in screen_position[:3]),
                     float(screen.get("width", 2.4)),
-                    float(screen.get("height", 2.4 * 9.0 / 16.0)),
+                    float(screen.get(
+                        "height",
+                        float(screen.get("width", 2.4)) * 9.0 / 16.0,
+                    )),
                     tuple(float(value) for value in rotation[:3]),
                 )
         print(
@@ -1112,6 +1115,8 @@ class OpenXrVulkanPresenter(
             return False
         old_space = self.reference_space
         self.reference_space = new_space
+        # Controller action spaces must use the same calibrated world space.
+        self._xr_space = new_space
         self._profile_space_applied = True
         self._profile_initial_head = raw_head
         if old_space is not None:
