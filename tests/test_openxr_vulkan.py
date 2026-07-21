@@ -251,6 +251,26 @@ def test_filament_screen_image_requires_per_eye_external_ready_semaphores() -> N
     assert presenter._can_use_filament_screen_image(frame) is True
 
 
+def test_host_image_upload_writes_padded_rows_without_pointer_cast() -> None:
+    from viewer.vulkan_resources import VulkanHostImage
+    import numpy as np
+
+    image = VulkanHostImage.__new__(VulkanHostImage)
+    image.width = 2
+    image.height = 2
+    image._layout = SimpleNamespace(offset=2, rowPitch=12, size=26)
+    mapped = bytearray(26)
+    image.vk = SimpleNamespace(
+        vkMapMemory=lambda *args: mapped,
+        vkUnmapMemory=lambda *args: None,
+    )
+    image.context = SimpleNamespace(device=object())
+    image.memory = object()
+    image.upload(np.arange(16, dtype=np.uint8).reshape(2, 2, 4))
+    assert mapped[2:10] == bytes(range(8))
+    assert mapped[14:22] == bytes(range(8, 16))
+
+
 def test_presenter_uses_controller_action_mixin_initializer() -> None:
     presenter = OpenXrVulkanPresenter()
     assert hasattr(presenter, "_init_controller_actions")

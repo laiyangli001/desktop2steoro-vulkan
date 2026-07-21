@@ -164,11 +164,14 @@ class VulkanHostImage:
         vk = self.vk
         mapped = vk.vkMapMemory(self.context.device, self.memory, 0, self._layout.size, 0)
         try:
-            base = vk.ffi.cast("char *", mapped) + int(self._layout.offset)
             row_pitch = int(self._layout.rowPitch)
             row_bytes = self.width * 4
             for row in range(self.height):
-                vk.ffi.memmove(base + row * row_pitch, pixels[row].ctypes.data, row_bytes)
+                start = int(self._layout.offset) + row * row_pitch
+                # PyVulkan exposes mapped host memory as a writable buffer.
+                # Keep the write on that buffer; casting the returned cffi
+                # object as an integer pointer fails on current PyVulkan.
+                mapped[start:start + row_bytes] = pixels[row].tobytes()
         finally:
             vk.vkUnmapMemory(self.context.device, self.memory)
 
