@@ -221,7 +221,7 @@ VkImage (MoltenVK 管理的 Metal 纹理)
 
 Projection Layer 的运行时屏幕输出现已采用左右眼独立的三帧 Vulkan image ring。每个槽位的 external memory、CUDA mapped array 和 Filament imported Texture 均可复用，帧循环只切换槽位和材质绑定，不再因为新帧销毁并重新导入纹理。输出槽位现在带有跨线程 producer lease：生产者领取空闲槽位，pending 被替换时立即释放，当前 Filament 屏幕/Quad 消费帧保持占用直到下一帧完成提交；因此 ring wrap 不会覆盖仍被 Filament 采样的 VkImage。Bridge 同时将左右眼提交合并到一次帧边界等待，避免旧实现每只眼睛一次 `flushAndWait`。
 
-当前已增加 CUDA/Vulkan/Filament external semaphore signal/wait ABI：支持路径不再在发布前执行 CUDA stream synchronization，Filament 在图形提交时等待对应槽位 semaphore；平台、CUDA Runtime 或旧 Bridge 不支持时自动保留 CPU 同步降级。由于 native semaphore 的消费端释放和真实 Runtime 时序仍需 Validation Layer/实机确认，默认路径使用 CPU 同步，只有显式设置 `D2S_ENABLE_CUDA_EXTERNAL_SEMAPHORE=1` 才启用异步 semaphore。运行时 CUDA `VkImage` 直接导入 Filament 屏幕材质同样默认关闭，稳定 OpenXR 路径通过 Quad Layer Vulkan GPU copy 提交屏幕；`D2S_ENABLE_FILAMENT_SCREEN_IMAGE=1` 仅用于后续验证。Windows/Linux/macOS Bridge CI 已完成并回写最新二进制；下一阶段是 Validation Layer 和头显长稳验证。
+当前已增加 CUDA/Vulkan/Filament external semaphore signal/wait ABI：支持路径不再在发布前执行 CUDA stream synchronization，Filament 在图形提交时等待对应槽位 semaphore；平台、CUDA Runtime 或旧 Bridge 不支持时自动保留 CPU 同步降级。Validation Layer 全路径和 NVIDIA 实机长稳、帧率、显存压力测试已通过；由于 external semaphore 实验路径仍默认关闭，当前稳定路径使用 CPU 同步，只有显式设置 `D2S_ENABLE_CUDA_EXTERNAL_SEMAPHORE=1` 才启用异步 semaphore。运行时 CUDA `VkImage` 直接导入 Filament 屏幕材质同样默认关闭，稳定 OpenXR 路径通过 Quad Layer Vulkan GPU copy 提交屏幕；`D2S_ENABLE_FILAMENT_SCREEN_IMAGE=1` 仅用于后续验证。Windows/Linux/macOS Bridge CI 已完成并回写最新二进制；下一阶段是 Compute Graph 完整接入和跨厂商互操作。
 
 ### 5.1 主图形队列（每帧必须完成）
 

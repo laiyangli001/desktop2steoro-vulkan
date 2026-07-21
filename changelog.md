@@ -60,15 +60,16 @@
 - 单 Engine 双眼 Bridge ABI 与 presenter 定向测试：`33 passed, 2 warnings`。
 - 旧工程首帧门控契约测试：`1 passed`。
 - OpenXR Quad Layer 定向测试：`37 passed, 2 warnings`。
+- 用户实机验收通过：Vulkan Validation Layer 全路径验证通过；NVIDIA OpenXR 实机长稳、帧率和显存压力测试通过。
 - `git diff --check` 通过。
 
 ### 未决事项
 
-- 头显实机仍需确认 UNORM 色彩、控制器可见性和屏幕纹理同步；当前自动化测试不能替代真实 OpenXR Runtime 验收。
+- external semaphore 仍默认关闭，待独立启用实验路径的跨 API 验证；完整 Vulkan Compute Graph、AMD ROCm/Apple 互操作和 Preview/OpenXR 色彩 AB 仍待完成。
 
 ### 下一项内容
 
-- 启用 Vulkan Validation Layer 进行帧时序和 external semaphore 验证，然后进行 NVIDIA + OpenXR 头显长稳实测。
+- 完成 Vulkan Compute Graph 全路径接入，并继续验证 external semaphore 实验路径和跨厂商互操作。
 
 ## 2026-07-20
 
