@@ -89,6 +89,10 @@ FILAMENT_BRIDGE_API int filament_bridge_set_screen(
         float position_x, float position_y, float position_z,
         float width, float height,
         float rotation_x_degrees, float rotation_y_degrees, float rotation_z_degrees);
+// image is a borrowed Vulkan VkImage owned by the runtime output adapter.
+FILAMENT_BRIDGE_API int filament_bridge_set_screen_image(
+        FilamentBridge* bridge, const void* image,
+        uint32_t width, uint32_t height, int32_t format);
 FILAMENT_BRIDGE_API int filament_bridge_apply_animations(
         FilamentBridge* bridge, double time_seconds);
 FILAMENT_BRIDGE_API uint32_t filament_bridge_animation_count(

@@ -45,6 +45,7 @@ class FilamentVulkanBridge:
         except OSError as exc:
             raise FilamentBridgeError(f"unable to load Filament Bridge: {path}") from exc
         self._controller_abi_available = False
+        self._screen_image_abi_available = False
         self._configure_abi()
         self._handle: ctypes.c_void_p | None = None
 
@@ -55,6 +56,10 @@ class FilamentVulkanBridge:
     @property
     def controller_abi_available(self) -> bool:
         return self._controller_abi_available
+
+    @property
+    def screen_image_abi_available(self) -> bool:
+        return self._screen_image_abi_available
 
     @property
     def loaded(self) -> bool:
@@ -294,6 +299,22 @@ class FilamentVulkanBridge:
             "set_screen",
         )
 
+    def set_screen_image(
+        self, image: Any, *, width: int, height: int, format: int
+    ) -> None:
+        """Bind a borrowed Vulkan image as the virtual screen texture."""
+        self._ensure_loaded()
+        self._check_result(
+            self._library.filament_bridge_set_screen_image(
+                self._handle,
+                ctypes.c_void_p(_as_pointer_value(image)),
+                int(width),
+                int(height),
+                int(format),
+            ),
+            "set_screen_image",
+        )
+
     def apply_animations(self, time_seconds: float) -> None:
         self._ensure_loaded()
         self._check_result(
@@ -407,6 +428,16 @@ class FilamentVulkanBridge:
             ctypes.c_float, ctypes.c_float, ctypes.c_float,
         ]
         library.filament_bridge_set_screen.restype = ctypes.c_int
+        if hasattr(library, "filament_bridge_set_screen_image"):
+            library.filament_bridge_set_screen_image.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_uint32,
+                ctypes.c_uint32,
+                ctypes.c_int32,
+            ]
+            library.filament_bridge_set_screen_image.restype = ctypes.c_int
+            self._screen_image_abi_available = True
         library.filament_bridge_apply_animations.argtypes = [
             ctypes.c_void_p, ctypes.c_double
         ]

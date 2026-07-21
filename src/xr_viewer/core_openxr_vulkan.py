@@ -44,7 +44,10 @@ class OpenXrVulkanConfig:
     render_scale: float = 1.0
     clear_color: tuple[float, float, float, float] = (0.02, 0.04, 0.08, 1.0)
     requested_vulkan_version: int = make_vulkan_version(1, 4, 0)
-    swapchain_color_mode: str = "srgb"
+    # Filament already emits Rec709/sRGB encoded values after color grading.
+    # OpenXR receives those bytes in a UNORM image; using an SRGB attachment
+    # here would apply a second transfer function in the Vulkan target.
+    swapchain_color_mode: str = "unorm"
     filament_bridge_path: str | None = None
     filament_glb_path: str | None = None
     filament_profile_path: str | None = None
@@ -904,6 +907,21 @@ class OpenXrVulkanPresenter(
             with _acquired_swapchain_image(xr, eye) as image_index:
                 if eye_index < len(self.filament_bridges):
                     bridge = self.filament_bridges[eye_index]
+                    if (
+                        output_frame is not None
+                        and getattr(bridge, "screen_image_abi_available", False)
+                    ):
+                        source = (
+                            output_frame.left_eye
+                            if eye_index == 0
+                            else output_frame.right_eye
+                        )
+                        bridge.set_screen_image(
+                            source.image,
+                            width=source.width,
+                            height=source.height,
+                            format=source.format,
+                        )
                     _update_filament_camera(
                         bridge,
                         render_views[eye_index],

@@ -218,6 +218,10 @@ def test_presenter_validates_configuration() -> None:
         OpenXrVulkanPresenter(OpenXrVulkanConfig(render_scale=0))
 
 
+def test_openxr_defaults_to_unorm_for_filament_srgb_output() -> None:
+    assert OpenXrVulkanConfig().swapchain_color_mode == "unorm"
+
+
 def test_presenter_uses_controller_action_mixin_initializer() -> None:
     presenter = OpenXrVulkanPresenter()
     assert hasattr(presenter, "_init_controller_actions")

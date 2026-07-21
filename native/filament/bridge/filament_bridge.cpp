@@ -237,6 +237,8 @@ struct FilamentBridge {
     filament::IndexBuffer* screen_index_buffer = nullptr;
     filament::Material* screen_material = nullptr;
     filament::MaterialInstance* screen_material_instance = nullptr;
+    filament::Texture* screen_texture = nullptr;
+    filament::TextureSampler screen_texture_sampler;
     std::vector<PreviewScreenVertex> screen_vertices;
     std::vector<uint16_t> screen_indices;
     filament::backend::VulkanPlatform::VulkanSharedContext shared_context{};
@@ -590,6 +592,10 @@ void destroy_bridge_screen(FilamentBridge* bridge) {
         bridge->engine->destroy(bridge->screen_material_instance);
         bridge->screen_material_instance = nullptr;
     }
+    if (bridge->screen_texture) {
+        bridge->engine->destroy(bridge->screen_texture);
+        bridge->screen_texture = nullptr;
+    }
     if (bridge->screen_material) {
         bridge->engine->destroy(bridge->screen_material);
         bridge->screen_material = nullptr;
@@ -642,12 +648,7 @@ int create_bridge_screen(FilamentBridge* bridge) {
     const char* shader = R"FILAMENT(
         void material(inout MaterialInputs material) {
             prepareMaterial(material);
-            float2 uv = getUV0();
-            float2 grid_uv = abs(fract(uv * float2(16.0, 9.0)) - 0.5);
-            float line = step(0.47, max(grid_uv.x, grid_uv.y));
-            float3 base = float3(0.1, 0.45, 1.0);
-            float3 grid = mix(base, float3(0.72, 0.88, 1.0), line * 0.35);
-            material.baseColor = float4(grid, 0.72);
+            material.baseColor = texture(materialParams_screenTexture, getUV0());
         }
     )FILAMENT";
     filamat::MaterialBuilder::init();
@@ -655,6 +656,7 @@ int create_bridge_screen(FilamentBridge* bridge) {
     builder.name("D2S OpenXR Screen")
             .material(shader)
             .require(filament::VertexAttribute::UV0)
+            .parameter("screenTexture", filamat::MaterialBuilder::SamplerType::SAMPLER_2D)
             .shading(filament::Shading::UNLIT)
             .materialDomain(filament::MaterialDomain::SURFACE)
             .blending(filament::BlendingMode::TRANSPARENT)
@@ -714,6 +716,41 @@ int create_bridge_screen(FilamentBridge* bridge) {
         return 0;
     }
     bridge->scene->addEntity(bridge->screen_entity);
+    return 1;
+}
+
+int set_bridge_screen_image(FilamentBridge* bridge, const void* image,
+        uint32_t width, uint32_t height, int32_t format) {
+    if (!bridge || !bridge->engine || !bridge->screen_material_instance ||
+            !image || width == 0 || height == 0) return 0;
+    if (format != VK_FORMAT_R8G8B8A8_UNORM &&
+            format != VK_FORMAT_R8G8B8A8_SRGB) {
+        set_error(bridge, "Unsupported virtual screen Vulkan image format");
+        return 0;
+    }
+    if (bridge->screen_texture &&
+            bridge->screen_texture->getWidth() == width &&
+            bridge->screen_texture->getHeight() == height) {
+        return 1;
+    }
+    if (bridge->screen_texture) {
+        bridge->engine->destroy(bridge->screen_texture);
+        bridge->screen_texture = nullptr;
+    }
+    bridge->screen_texture = filament::Texture::Builder()
+            .width(width).height(height).levels(1)
+            .format(filament::Texture::InternalFormat::RGBA8)
+            .sampler(filament::Texture::Sampler::SAMPLER_2D)
+            .usage(filament::Texture::Usage::SAMPLEABLE)
+            .import(reinterpret_cast<intptr_t>(const_cast<void*>(image)))
+            .build(*bridge->engine);
+    if (!bridge->screen_texture) {
+        set_error(bridge, "Filament could not import virtual screen Vulkan image");
+        return 0;
+    }
+    bridge->screen_material_instance->setParameter(
+            "screenTexture", bridge->screen_texture,
+            bridge->screen_texture_sampler);
     return 1;
 }
 
@@ -1424,6 +1461,11 @@ int filament_bridge_set_screen(
         float rotation_x_degrees, float rotation_y_degrees, float rotation_z_degrees) {
     return update_bridge_screen(bridge, position_x, position_y, position_z,
             width, height, rotation_x_degrees, rotation_y_degrees, rotation_z_degrees);
+}
+
+int filament_bridge_set_screen_image(FilamentBridge* bridge, const void* image,
+        uint32_t width, uint32_t height, int32_t format) {
+    return set_bridge_screen_image(bridge, image, width, height, format);
 }
 
 int filament_preview_render(FilamentPreview* preview) {

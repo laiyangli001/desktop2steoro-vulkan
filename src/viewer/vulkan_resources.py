@@ -161,6 +161,7 @@ class VulkanExportableImage:
                     vk.VK_IMAGE_USAGE_STORAGE_BIT
                     | vk.VK_IMAGE_USAGE_TRANSFER_SRC_BIT
                     | vk.VK_IMAGE_USAGE_TRANSFER_DST_BIT
+                    | vk.VK_IMAGE_USAGE_SAMPLED_BIT
                 ),
                 sharingMode=sharing_mode,
                 queueFamilyIndexCount=len(sharing_families) if len(sharing_families) > 1 else 0,

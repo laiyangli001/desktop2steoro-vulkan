@@ -2,6 +2,29 @@
 
 本文件记录项目重大更新和每日工作收尾。新记录按日期倒序追加；每个工作日结束时更新“已实现”“验证结果”“未决事项”和“下一项内容”。
 
+## 2026-07-21
+
+### 已实现
+
+- OpenXR 默认交换链格式改为 `UNORM`。Filament 的 Rec709/sRGB 色彩输出不再被 Vulkan sRGB attachment 二次编码，保留 `srgb`/`unorm`/`auto` 配置用于 A/B 验证。
+- 虚拟屏幕接入运行时左右眼 Vulkan 输出：导出图像增加 `SAMPLED` 用途，Filament Bridge 新增窄 C ABI，将借用的 Vulkan 图像导入屏幕材质；不引入 CPU 回读。
+- 补充 Pico 4、Pico 4U 和 Pico Neo3 的 OpenXR interaction profile 绑定别名，控制器模型继续使用 Grip 位姿并回退到 Aim 位姿。
+
+### 验证结果
+
+- 项目 Python 环境 `src/python3/python.exe` 完成语法检查。
+- OpenXR、输出契约和运行时输出定向测试：`31 passed, 2 warnings`。
+- `git diff --check` 通过。
+
+### 未决事项
+
+- 本轮 native Bridge 源码待 GitHub Actions 完成 Windows、Linux、macOS 三平台远程编译并下载回本地。
+- 头显实机仍需确认 UNORM 色彩、控制器可见性和屏幕纹理同步；当前自动化测试不能替代真实 OpenXR Runtime 验收。
+
+### 下一项内容
+
+- 通过 GitHub Actions 远程生成三平台 Bridge，更新本地二进制后进行 NVIDIA + OpenXR 头显实测。
+
 ## 2026-07-20
 
 - Added a bounded runtime output consumer that converts only registered Vulkan eye resources into the unified output contract and reports Torch/CPU results as waiting for a vendor interop importer; no implicit CPU image readback is allowed.

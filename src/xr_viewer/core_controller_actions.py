@@ -315,6 +315,12 @@ class CoreControllerActionsMixin:
             ],
         }
 
+        # Pico runtimes use both the legacy 4 and newer 4U profile names.
+        pico_bindings = _b.get("/interaction_profiles/bytedance/pico_4u_controller")
+        if pico_bindings is not None:
+            _b["/interaction_profiles/bytedance/pico_4_controller"] = pico_bindings
+            _b["/interaction_profiles/bytedance/pico_neo3_controller"] = pico_bindings
+
         for profile, pairs in _b.items():
             try:
                 xr.suggest_interaction_profile_bindings(
