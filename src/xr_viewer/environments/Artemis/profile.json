@@ -6,8 +6,8 @@
   "glb": "environment.glb",
   "model_position": [
     0.0,
-    843.0854,
-    -0.1649
+    843,
+    0
   ],
   "model_rotation_deg": [
     0.0,
@@ -34,9 +34,17 @@
   "panda_light_scale": 4.0,
   "preview_exposure": 2.0,
   "preview_skybox_brightness": 1.0,
-  "preview_fill_light_color": [1.0, 0.88, 0.78],
+  "preview_fill_light_color": [
+    1.0,
+    0.88,
+    0.78
+  ],
   "preview_fill_light_intensity": 100000.0,
-  "preview_fill_light_direction": [-0.35, -1.0, -0.55],
+  "preview_fill_light_direction": [
+    -0.35,
+    -1.0,
+    -0.55
+  ],
   "xr_render_scale": 1.0,
   "xr_projection_near": 0.1,
   "xr_projection_far": 20000.0,
@@ -99,13 +107,13 @@
     },
     {
       "name": "Model Center",
-      "x": -24.5487,
-      "y": 901.0986,
-      "z": -961.4048,
-      "angle": 897.72,
+      "x": -24.5209,
+      "y": 900.768,
+      "z": -961.2054,
+      "angle": 179.04,
       "rotation_deg": [
-        897.72,
-        -4.76,
+        179.04,
+        3.04,
         0.0
       ]
     },
@@ -126,12 +134,12 @@
     "allow_controller_move": true,
     "width": 90.5689,
     "position": [
-      -22.3741,
-      50,
-      -903.2128
+      -25,
+      57,
+      -903
     ],
     "rotation_deg": [
-      -179.48,
+      -180,
       0.0,
       0.0
     ],
