@@ -11,7 +11,6 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, Callable
 
 import numpy as np
@@ -176,6 +175,7 @@ class OpenXrVulkanPresenter(
         self._provisional_vk_device: Any = None
         self._profile_head_transform: np.ndarray | None = None
         self._profile_initial_head: np.ndarray | None = None
+        self._profile_space_applied = False
         self._profile_view_name: str | None = None
         self._profile_near_plane = 0.05
         self._profile_far_plane = 1000.0
@@ -347,6 +347,15 @@ class OpenXrVulkanPresenter(
                     | xr.ViewStateFlags.ORIENTATION_VALID_BIT
                 )
                 if view_state.view_state_flags & valid_flags == valid_flags:
+                    if self._apply_profile_reference_space(views):
+                        view_state, views = xr.locate_views(
+                            self.session,
+                            xr.ViewLocateInfo(
+                                view_configuration_type=self._view_configuration_type,
+                                display_time=frame_state.predicted_display_time,
+                                space=self.reference_space,
+                            ),
+                        )
                     output_frame = self._pending_output
                     # Match the legacy frame gate: runtime rendering readiness
                     # is separate from the availability of a fresh stereo frame.
@@ -603,6 +612,8 @@ class OpenXrVulkanPresenter(
         self._source_frame_wait_logged = False
         self._accept_output = False
         self._filament_animation_origin = None
+        self._profile_initial_head = None
+        self._profile_space_applied = False
 
     def __enter__(self) -> "OpenXrVulkanPresenter":
         self.initialize()
@@ -1066,21 +1077,40 @@ class OpenXrVulkanPresenter(
         )
 
     def _apply_filament_profile(self, views: list[Any]) -> list[Any]:
-        if self._profile_head_transform is None or len(views) < 2:
-            return views
-        eye_matrices = [_xr_view_pose_to_model_mat4(view.pose) for view in views[:2]]
-        if self._profile_initial_head is None:
-            initial_head = eye_matrices[0].copy()
-            initial_head[:3, 3] = (eye_matrices[0][:3, 3] + eye_matrices[1][:3, 3]) * 0.5
-            self._profile_initial_head = initial_head
-            print("Filament profile tracking anchor captured.", flush=True)
+        return views
 
-        tracking_delta = self._profile_head_transform @ np.linalg.inv(self._profile_initial_head)
-        adjusted = []
-        for view, eye_matrix in zip(views, eye_matrices):
-            adjusted_pose = mat4_to_xr_posef(tracking_delta @ eye_matrix)
-            adjusted.append(SimpleNamespace(pose=adjusted_pose, fov=view.fov))
-        return adjusted
+    def _apply_profile_reference_space(self, views: list[Any]) -> bool:
+        """Apply the saved seat pose once, keeping subsequent views world-locked."""
+        if self._profile_space_applied or self._profile_head_transform is None:
+            return False
+        if len(views) < 2 or self.xr is None or self.session is None:
+            return False
+        eye_matrices = [_xr_view_pose_to_model_mat4(view.pose) for view in views[:2]]
+        raw_head = eye_matrices[0].copy()
+        raw_head[:3, 3] = (eye_matrices[0][:3, 3] + eye_matrices[1][:3, 3]) * 0.5
+        space_pose = raw_head @ np.linalg.inv(self._profile_head_transform)
+        try:
+            new_space = self.xr.create_reference_space(
+                self.session,
+                self.xr.ReferenceSpaceCreateInfo(
+                    reference_space_type=self.xr.ReferenceSpaceType.LOCAL,
+                    pose_in_reference_space=mat4_to_xr_posef(space_pose.astype(np.float32)),
+                ),
+            )
+        except Exception as exc:
+            print(f"[OpenXRViewer] Failed to apply profile reference space: {exc}", flush=True)
+            return False
+        old_space = self.reference_space
+        self.reference_space = new_space
+        self._profile_space_applied = True
+        self._profile_initial_head = raw_head
+        if old_space is not None:
+            try:
+                self.xr.destroy_space(old_space)
+            except Exception:
+                pass
+        print("[OpenXRViewer] Applied profile pose to stable OpenXR reference space", flush=True)
+        return True
 
     def _render_projection_layer(self, views: list[Any]) -> Any | None:
         if len(views) < len(self.swapchains):

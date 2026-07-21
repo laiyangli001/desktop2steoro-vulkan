@@ -253,6 +253,15 @@ def test_quad_layer_uses_runtime_output_size_and_openxr_visibility() -> None:
     assert "self._last_quad_layers" in source
 
 
+def test_profile_pose_is_applied_once_to_openxr_reference_space() -> None:
+    source = (Path(__file__).resolve().parents[1] /
+              "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
+
+    assert "_apply_profile_reference_space(views)" in source
+    assert "self._profile_space_applied = True" in source
+    assert "space_pose = raw_head @ np.linalg.inv(self._profile_head_transform)" in source
+
+
 def test_filament_profile_keeps_glb_and_screen_positions_separate(tmp_path) -> None:
     profile_path = tmp_path / "profile.json"
     profile_path.write_text(json.dumps({
