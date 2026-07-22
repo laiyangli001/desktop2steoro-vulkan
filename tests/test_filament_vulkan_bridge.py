@@ -128,6 +128,24 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "controller loaded hand=%u animations=%zu" in source
     assert "kControllerValues" in source
     assert "getFirstEntityByName(value_name)" in source
+    assert "renderables.setLightChannel(instance, 0, false);" in source
+    assert '"specularColorFactor"' in source
+    assert '"roughnessFactor", 0.4f' in source
+
+
+def test_artemis_controller_lighting_uses_indoor_physical_baseline() -> None:
+    root = Path(__file__).resolve().parents[1]
+    profile = json.loads(
+        (root / "src/xr_viewer/environments/Artemis/profile.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert profile["preview_fill_light_intensity"] == 300.0
+    assert profile["preview_exposure"] == 0.0
+    config = (root / "src/xr_viewer/core_openxr_vulkan.py").read_text(
+        encoding="utf-8"
+    )
+    assert "filament_fill_light_intensity: float = 300.0" in config
 
 
 @pytest.mark.parametrize("hand", ("left", "right"))

@@ -32,14 +32,14 @@
   "env_emissive_strength": 10.0,
   "env_khr_light_scale": 1.0,
   "panda_light_scale": 4.0,
-  "preview_exposure": 2.0,
+  "preview_exposure": 0.0,
   "preview_skybox_brightness": 1.0,
   "preview_fill_light_color": [
     1.0,
     0.88,
     0.78
   ],
-  "preview_fill_light_intensity": 100000.0,
+  "preview_fill_light_intensity": 300.0,
   "preview_fill_light_direction": [
     -0.35,
     -1.0,

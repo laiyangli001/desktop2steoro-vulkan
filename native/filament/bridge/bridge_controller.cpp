@@ -283,7 +283,20 @@ int bridge_controller_load(
         const auto entity = controller.asset->getRenderableEntities()[index];
         const auto instance = renderables.getInstance(entity);
         if (!instance.isValid()) continue;
+        // Keep controller lighting physically bounded and isolated from scene lights.
+        renderables.setLightChannel(instance, 0, false);
         renderables.setLightChannel(instance, 1, true);
+        for (size_t primitive = 0; primitive < renderables.getPrimitiveCount(instance); ++primitive) {
+            auto* material = renderables.getMaterialInstanceAt(instance, primitive);
+            if (!material) continue;
+            if (material->getMaterial()->hasParameter("specularColorFactor")) {
+                material->setParameter(
+                        "specularColorFactor", filament::math::float3{1.0f, 1.0f, 1.0f});
+            }
+            if (material->getMaterial()->hasParameter("roughnessFactor")) {
+                material->setParameter("roughnessFactor", 0.4f);
+            }
+        }
     }
     for (size_t index = 0; index < controller.asset->getEntityCount(); ++index) {
         const auto entity = controller.asset->getEntities()[index];

@@ -82,7 +82,7 @@ class OpenXrVulkanConfig:
     filament_scene_exposure_ev: float = 0.0
     filament_skybox_brightness: float = 1.0
     filament_fill_light_color: tuple[float, float, float] = (1.0, 0.88, 0.78)
-    filament_fill_light_intensity: float = 100000.0
+    filament_fill_light_intensity: float = 300.0
     filament_fill_light_direction: tuple[float, float, float] = (-0.35, -1.0, -0.55)
     openxr_no_headset_retry_interval: float = 3.0
     openxr_standby_retry_interval: float = 3.0
