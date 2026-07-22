@@ -383,6 +383,78 @@ def build_help_rgba(*, environment_mode=False, font_type=None, lang="EN"):
     return _build_help_rows_rgba(rows, font_type=font_type, two_columns=True)
 
 
+def build_controller_callout_rgba(*, font_type=None, lang="CN", size=(2048, 1536)):
+    """Build a transparent, controller-centered operation callout texture."""
+    width, height = int(size[0]), int(size[1])
+    scale_x = width / 1024.0
+    scale_y = height / 768.0
+    scale = min(scale_x, scale_y)
+
+    def point(value):
+        return (int(round(value[0] * scale_x)), int(round(value[1] * scale_y)))
+
+    def rectangle(value):
+        return tuple(
+            int(round(component * (scale_x if index % 2 == 0 else scale_y)))
+            for index, component in enumerate(value)
+        )
+
+    # Transparent texels deliberately keep white RGB. This prevents bilinear
+    # filtering at thin opaque edges from sampling transparent black and
+    # producing dark borders in the OpenXR compositor.
+    img = Image.new("RGBA", (width, height), (255, 255, 255, 0))
+    draw = ImageDraw.Draw(img)
+    title_font = load_overlay_font(int(round(28 * scale)), font_type, prefer_cjk=True)
+    body_font = load_overlay_font(int(round(20 * scale)), font_type, prefer_cjk=True)
+    border = (255, 255, 255, 255)
+    title_color = (255, 255, 255, 255)
+    body_color = (255, 255, 255, 255)
+    fill = (255, 255, 255, 0)
+
+    if str(lang).upper() == "CN":
+        callouts = (
+            ((600, 210, 850, 330), "B 键", ("长按：显示操作说明",), (540, 300)),
+        )
+    else:
+        callouts = (
+            ((600, 210, 850, 330), "B button", ("Hold: show operation guide",), (540, 300)),
+        )
+
+    for rect, title, lines, target in callouts:
+        x0, y0, x1, y1 = rect
+        scaled_rect = rectangle(rect)
+        draw.rounded_rectangle(
+            scaled_rect,
+            radius=max(1, int(round(8 * scale))),
+            fill=fill,
+            outline=border,
+            width=max(1, int(round(3 * scale))),
+        )
+        draw.text(point((x0 + 16, y0 + 10)), title, font=title_font, fill=title_color)
+        for index, line in enumerate(lines):
+            draw.text(
+                point((x0 + 16, y0 + 52 + index * 30)),
+                f"• {line}",
+                font=body_font,
+                fill=body_color,
+            )
+        edge = (x1, (y0 + y1) // 2) if x1 < 512 else (x0, (y0 + y1) // 2)
+        elbow_x = edge[0] + (34 if edge[0] < 512 else -34)
+        scaled_edge = point(edge)
+        scaled_elbow = point((elbow_x, edge[1]))
+        scaled_target = point(target)
+        draw.line(
+            (scaled_edge, scaled_elbow, scaled_target),
+            fill=border,
+            width=max(1, int(round(3 * scale))),
+        )
+        tx, ty = scaled_target
+        radius = max(2, int(round(5 * scale)))
+        draw.ellipse((tx - radius, ty - radius, tx + radius, ty + radius), fill=border)
+
+    return np.ascontiguousarray(np.asarray(img, dtype=np.uint8))
+
+
 def build_team_help_rgba(*, font_type=None, lang="EN"):
     rows, _env_rows = get_controller_help_rows(lang)
     return _build_help_rows_rgba(rows, font_type=font_type, two_columns=False)

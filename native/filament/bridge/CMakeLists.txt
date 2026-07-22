@@ -75,6 +75,7 @@ add_library(filament_bridge SHARED
     bridge_eye.cpp
     bridge_scene.cpp
     bridge_controller.cpp
+    bridge_controller_guide.cpp
     bridge_laser.cpp
     bridge_screen.cpp
     bridge_material.cpp

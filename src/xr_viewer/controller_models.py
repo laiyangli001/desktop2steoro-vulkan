@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 
@@ -67,3 +68,28 @@ def select_controller_brand(
     if requested and requested in brands:
         return brands[requested]
     return brands[sorted(brands)[0]]
+
+
+@lru_cache(maxsize=32)
+def controller_button_local_position(glb_path: str, button: str) -> tuple[float, float, float] | None:
+    """Resolve a controller button node origin in model-local coordinates."""
+    from .gltf.document import _load_gltf_document
+    from .gltf.scene import _build_node_matrices
+
+    try:
+        document, _binary = _load_gltf_document(glb_path)
+        world_matrices = _build_node_matrices(document)
+    except (OSError, ValueError, TypeError):
+        return None
+
+    semantic = str(button).strip().lower()
+    candidates = []
+    for index, node in enumerate(document.get("nodes", [])):
+        name = str(node.get("name") or "").strip().lower()
+        if name in {semantic, f"right_{semantic}", f"{semantic}_mesh"} or name.endswith(f"_{semantic}"):
+            if not any(marker in name for marker in ("_min", "_max", "_value")):
+                candidates.append(index)
+    if not candidates:
+        return None
+    position = world_matrices[candidates[0]][:3, 3]
+    return tuple(float(value) for value in position)

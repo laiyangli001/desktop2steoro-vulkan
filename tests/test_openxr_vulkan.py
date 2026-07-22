@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import json
+import math
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -35,6 +36,9 @@ from xr_viewer.core_openxr_vulkan import (
     _select_vulkan_api_version,
     _update_filament_camera,
 )
+from xr_viewer.controller_models import controller_button_local_position
+from xr_viewer.overlay_textures import build_controller_callout_rgba
+from xr_viewer.xr_math import _xr_quat_to_mat4
 
 
 def test_vulkan_version_round_trip() -> None:
@@ -225,6 +229,139 @@ def test_presenter_validates_configuration() -> None:
 def test_openxr_defaults_to_validated_srgb_projection_target() -> None:
     assert OpenXrVulkanConfig().swapchain_color_mode == "srgb"
     assert OpenXrVulkanConfig().controller_model == "PICO"
+    assert OpenXrVulkanConfig().controller_guide_max_distance == pytest.approx(0.4)
+
+
+def test_presenter_rejects_non_positive_controller_guide_distance() -> None:
+    with pytest.raises(ValueError, match="controller_guide_max_distance"):
+        OpenXrVulkanPresenter(OpenXrVulkanConfig(controller_guide_max_distance=0.0))
+
+
+def test_controller_callout_texture_keeps_controller_center_transparent() -> None:
+    rgba = build_controller_callout_rgba(lang="CN")
+
+    assert rgba.shape == (1536, 2048, 4)
+    assert rgba.dtype == np.uint8
+    assert rgba[768, 1024, 3] == 0
+    assert tuple(rgba[768, 1024, :3]) == (255, 255, 255)
+    assert tuple(rgba[420, 1400]) == (255, 255, 255, 255)
+    assert tuple(rgba[600, 1080]) == (255, 255, 255, 255)
+    assert rgba[252, 300, 3] == 0
+    assert int(rgba[..., 3].max()) == 255
+
+
+def test_controller_guide_pose_hides_beyond_headset_distance() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._grip_mat_r = np.eye(4, dtype=np.float64)
+    presenter._aim_mat_r = np.eye(4, dtype=np.float64)
+    presenter._head_position_w = np.asarray((0.0, 0.0, 0.4), dtype=np.float64)
+
+    pose = presenter._controller_guide_pose()
+    assert pose is not None
+    assert pose[1] == pytest.approx((0.34, 0.255))
+    assert np.linalg.norm(np.asarray(pose[2], dtype=np.float64)) == pytest.approx(1.0)
+
+    presenter._head_position_w[2] = 0.401
+    assert presenter._controller_guide_pose() is None
+
+
+def test_pico_b_button_position_is_resolved_from_glb() -> None:
+    path = (Path(__file__).resolve().parents[1] /
+            "src/xr_viewer/controllers/PICO/right.glb")
+
+    position = controller_button_local_position(str(path), "b_button")
+
+    assert position == pytest.approx((-0.00672205, 0.01771696, -0.02744452))
+
+
+def test_controller_guide_stays_head_facing_while_endpoint_follows_b_button() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._head_position_w = np.asarray((0.0, 0.0, 0.3), dtype=np.float64)
+    presenter._grip_mat_r = np.eye(4, dtype=np.float64)
+    presenter._aim_mat_r = np.eye(4, dtype=np.float64)
+    presenter._controller_b_button_local = np.asarray(
+        (-0.00672205, 0.01771696, -0.02744452), dtype=np.float64
+    )
+    presenter._controller_b_button_resolved = True
+
+    def endpoint_and_facing():
+        position, size, quaternion = presenter._controller_guide_pose()
+        orientation = xr.Quaternionf(
+            x=quaternion[0], y=quaternion[1], z=quaternion[2], w=quaternion[3]
+        )
+        basis = _xr_quat_to_mat4(orientation)[:3, :3]
+        endpoint_local = np.asarray((
+            (540.0 / 1024.0 - 0.5) * size[0],
+            (0.5 - 300.0 / 768.0) * size[1],
+            0.0,
+        ))
+        endpoint = np.asarray(position) + basis @ endpoint_local
+        button = presenter._controller_b_button_world_position()
+        toward_head = presenter._head_position_w - np.asarray(position)
+        toward_head /= np.linalg.norm(toward_head)
+        return endpoint, button, float(np.dot(basis[:, 2], toward_head))
+
+    initial_endpoint, initial_button, initial_facing = endpoint_and_facing()
+    assert np.linalg.norm(initial_endpoint - initial_button) == pytest.approx(0.006, abs=1e-5)
+    assert initial_facing > 0.99
+
+    angle = math.radians(30.0)
+    rotation = np.asarray((
+        (math.cos(angle), -math.sin(angle), 0.0),
+        (math.sin(angle), math.cos(angle), 0.0),
+        (0.0, 0.0, 1.0),
+    ), dtype=np.float64)
+    presenter._grip_mat_r[:3, :3] = rotation
+    presenter._aim_mat_r[:3, :3] = rotation
+    rotated_endpoint, rotated_button, rotated_facing = endpoint_and_facing()
+
+    assert not np.allclose(initial_button, rotated_button)
+    assert np.linalg.norm(rotated_endpoint - rotated_button) == pytest.approx(0.006, abs=1e-5)
+    assert rotated_facing > 0.99
+
+
+def test_controller_callout_uses_projection_layer_not_quad_layer() -> None:
+    source = (Path(__file__).resolve().parents[1] /
+              "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
+
+    assert "bridge.set_controller_guide_texture(self._controller_callout_rgba)" in source
+    assert "bridge.set_controller_guide(guide_matrix, visible=True)" in source
+    assert 'specs.append(("controller_callouts"' not in source
+    assert 'if self._operation_guide_visible:\n            rgba = build_help_rgba' in source
+
+
+def test_filament_controller_guide_tracks_geometry_and_visibility() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._head_position_w = np.asarray((0.0, 0.0, 0.3), dtype=np.float64)
+    presenter._grip_mat_r = np.eye(4, dtype=np.float64)
+    presenter._controller_b_button_local = np.asarray(
+        (-0.00672205, 0.01771696, -0.02744452), dtype=np.float64
+    )
+    presenter._controller_b_button_resolved = True
+
+    class Bridge:
+        controller_guide_abi_available = True
+
+        def __init__(self):
+            self.calls = []
+
+        def set_controller_guide(self, matrix, *, visible):
+            self.calls.append((np.asarray(matrix).copy(), visible))
+
+    bridge = Bridge()
+    presenter._update_filament_controller_guide(bridge)
+
+    matrix, visible = bridge.calls[-1]
+    assert visible is True
+    assert matrix.shape == (4, 4)
+    assert np.linalg.norm(matrix[:3, 0]) == pytest.approx(0.34)
+    assert np.linalg.norm(matrix[:3, 1]) == pytest.approx(0.255)
+    assert np.dot(matrix[:3, 2], presenter._head_position_w - matrix[:3, 3]) > 0.0
+
+    presenter._head_position_w[2] = 0.401
+    presenter._update_filament_controller_guide(bridge)
+    _, visible = bridge.calls[-1]
+    assert visible is False
 
 
 def test_presenter_defaults_to_capability_gated_zero_copy_path(monkeypatch) -> None:
@@ -418,6 +555,14 @@ def test_quad_layer_uses_runtime_output_size_and_openxr_visibility() -> None:
     assert '_select_swapchain_format(vk, formats, "srgb")' in source
     assert "flip_x=True" not in source
     assert "flip_y=False" in source
+
+
+def test_tool_quad_layer_enables_unpremultiplied_source_alpha() -> None:
+    source = (Path(__file__).resolve().parents[1] /
+              "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
+
+    assert "CompositionLayerFlags.BLEND_TEXTURE_SOURCE_ALPHA_BIT" in source
+    assert "CompositionLayerFlags.UNPREMULTIPLIED_ALPHA_BIT" in source
     assert "format_value if format_value is not None" in source
     assert "CompositionLayerQuad" in source
     assert "EyeVisibility.LEFT" in source

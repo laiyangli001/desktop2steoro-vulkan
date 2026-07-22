@@ -51,6 +51,8 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
         "bridge_scene.h",
         "bridge_controller.cpp",
         "bridge_controller.h",
+        "bridge_controller_guide.cpp",
+        "bridge_controller_guide.h",
         "bridge_laser.cpp",
         "bridge_laser.h",
         "bridge_screen.cpp",
@@ -111,6 +113,14 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "filament_bridge_set_controller_visible" in facade
     assert "renderables.setLayerMask" in source
     assert "filament_bridge_set_controller_laser" in facade
+    assert "filament_bridge_set_controller_guide_texture" in facade
+    assert "filament_bridge_set_controller_guide" in facade
+    assert "D2S Controller Guide" in source
+    assert "Texture::InternalFormat::SRGB8_A8" in source
+    assert ".blending(filament::BlendingMode::TRANSPARENT)" in source
+    assert ".depthWrite(false)" in source
+    assert ".depthCulling(false)" in source
+    assert "bridge_set_renderable_layer(bridge, bridge->controller_guide_entity, 1" in source
     assert "D2S Controller Laser" in source
     assert 'parameter("laser_time"' in source
     assert "materialParams.laser_time * 0.4" in source

@@ -2,6 +2,7 @@
 
 #include "bridge_context.h"
 #include "bridge_controller.h"
+#include "bridge_controller_guide.h"
 #include "bridge_eye.h"
 #include "bridge_laser.h"
 #include "bridge_material.h"
@@ -119,6 +120,17 @@ int filament_bridge_set_controller_laser(
         FilamentBridge* bridge, uint32_t hand,
         const float* matrix16, int visible) {
     return bridge_laser_set(bridge, hand, matrix16, visible);
+}
+
+int filament_bridge_set_controller_guide_texture(
+        FilamentBridge* bridge, const uint8_t* rgba,
+        uint32_t width, uint32_t height) {
+    return bridge_controller_guide_set_texture(bridge, rgba, width, height);
+}
+
+int filament_bridge_set_controller_guide(
+        FilamentBridge* bridge, const float* matrix16, int visible) {
+    return bridge_controller_guide_set(bridge, matrix16, visible);
 }
 
 int filament_bridge_set_scene_exposure(

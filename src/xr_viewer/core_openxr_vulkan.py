@@ -35,7 +35,11 @@ from .core_input_helpers import CoreInputHelpersMixin
 from .core_controller_input import CoreControllerInputMixin
 from .core_controller_pose import CoreControllerPoseMixin
 from .core_controller_ray import CoreControllerRayMixin
-from .controller_models import discover_controller_brands, select_controller_brand
+from .controller_models import (
+    controller_button_local_position,
+    discover_controller_brands,
+    select_controller_brand,
+)
 from .filters import OneEuroFilter3D
 from .xr_math import (
     _mat3_to_quat_xyzw,
@@ -44,6 +48,7 @@ from .xr_math import (
     mat4_to_xr_posef,
 )
 from .overlay_textures import (
+    build_controller_callout_rgba,
     build_cursor_rgba,
     build_fps_overlay_rgba,
     build_help_rgba,
@@ -76,6 +81,7 @@ class OpenXrVulkanConfig:
     # is configured for linear Rec709 output so the target performs one OETF.
     swapchain_color_mode: str = "srgb"
     controller_model: str = "PICO"
+    controller_guide_max_distance: float = 0.4
     filament_bridge_path: str | None = None
     filament_glb_path: str | None = None
     filament_profile_path: str | None = None
@@ -183,6 +189,8 @@ class OpenXrVulkanPresenter(
             raise ValueError("render_scale must be greater than zero")
         if len(self.config.clear_color) != 4:
             raise ValueError("clear_color must contain four components")
+        if self.config.controller_guide_max_distance <= 0:
+            raise ValueError("controller_guide_max_distance must be greater than zero")
 
         self.xr: Any = None
         self.instance: Any = None
@@ -212,6 +220,7 @@ class OpenXrVulkanPresenter(
         self._profile_initial_head: np.ndarray | None = None
         self._profile_space_applied = False
         self._profile_view_name: str | None = None
+        self._head_position_w: np.ndarray | None = None
         self._profile_near_plane = 0.05
         self._profile_far_plane = 1000.0
         self._filament_scene_exposure = self.config.filament_scene_exposure_ev
@@ -236,6 +245,8 @@ class OpenXrVulkanPresenter(
             self._controller_brands,
             self.config.controller_model or os.environ.get("D2S_CONTROLLER_MODEL", "PICO"),
         )
+        self._controller_b_button_local: np.ndarray | None = None
+        self._controller_b_button_resolved = False
         self._controller_inputs = ({}, {})
         self._aim_space_l = None
         self._aim_space_r = None
@@ -281,7 +292,9 @@ class OpenXrVulkanPresenter(
         self._source_frame_wait_logged = False
         self._has_presented_frame = False
         self._last_quad_layers: list[Any] = []
+        self._last_screen_quad_layers: list[Any] = []
         self._overlay_quad_entries: dict[str, dict[str, Any]] = {}
+        self._controller_callout_rgba: np.ndarray | None = None
         # Legacy OpenXR shortcut state is kept in the presenter so both the
         # Vulkan projection path and future Quad Layer overlays read one state.
         self._keyboard_visible = False
@@ -478,6 +491,7 @@ class OpenXrVulkanPresenter(
                                 space=self.reference_space,
                             ),
                         )
+                    self._cache_head_position(views)
                     with self._output_lock:
                         output_frame = self._pending_output
                     # Match the legacy frame gate: runtime rendering readiness
@@ -499,15 +513,14 @@ class OpenXrVulkanPresenter(
                     if layer is not None:
                         layer_structures.append(layer)
                         layer_pointers.append(ctypes.pointer(layer))
-                        if output_frame is not None:
-                            try:
-                                quad_layers = self._render_quad_layers(output_frame)
-                                if quad_layers:
-                                    self._last_quad_layers = quad_layers
+                        try:
+                            self._last_quad_layers = self._render_quad_layers(output_frame)
+                            if output_frame is not None:
                                 self._commit_output_frame(output_frame)
-                            except Exception:
+                        except Exception:
+                            if output_frame is not None:
                                 self._abort_output_frame(output_frame)
-                                raise
+                            raise
                         self._has_presented_frame = True
                         layer_structures.extend(self._last_quad_layers)
                         layer_pointers.extend(
@@ -1003,6 +1016,7 @@ class OpenXrVulkanPresenter(
         self._drop_output_frames()
         self._has_presented_frame = False
         self._last_quad_layers = []
+        self._last_screen_quad_layers = []
         self._source_frame_wait_logged = False
         self._accept_output = False
         self._filament_animation_origin = None
@@ -1376,6 +1390,17 @@ class OpenXrVulkanPresenter(
                     f"laser_abi={getattr(bridge, 'laser_abi_available', False)}",
                     flush=True,
                 )
+            if (
+                getattr(bridge, "controller_guide_abi_available", False)
+                and hasattr(bridge, "set_controller_guide_texture")
+            ):
+                if self._controller_callout_rgba is None:
+                    self._controller_callout_rgba = build_controller_callout_rgba(lang="CN")
+                bridge.set_controller_guide_texture(self._controller_callout_rgba)
+                print(
+                    "Filament controller guide loaded: projection_layer=True",
+                    flush=True,
+                )
             if self._filament_screen is not None:
                 position, width, height, rotation = self._filament_screen
                 bridge.create_screen()
@@ -1407,6 +1432,7 @@ class OpenXrVulkanPresenter(
             raise
 
     def _update_filament_controllers(self, bridge: Any) -> None:
+        self._update_filament_controller_guide(bridge)
         if (
             self._controller_brand is None
             or not getattr(bridge, "controller_abi_available", True)
@@ -1497,6 +1523,22 @@ class OpenXrVulkanPresenter(
                     laser_matrix[:3, 2] = (normal_axis * 0.006).astype(np.float32)
                     laser_matrix[:3, 3] = beam_origin.astype(np.float32)
                     bridge.set_controller_laser(hand, laser_matrix, visible=True)
+    def _update_filament_controller_guide(self, bridge: Any) -> None:
+        if (
+            getattr(bridge, "controller_guide_abi_available", False)
+            and hasattr(bridge, "set_controller_guide")
+        ):
+            geometry = self._controller_guide_geometry()
+            if geometry is None:
+                bridge.set_controller_guide(np.eye(4, dtype=np.float32), visible=False)
+            else:
+                position, size, basis = geometry
+                guide_matrix = np.eye(4, dtype=np.float32)
+                guide_matrix[:3, 0] = (basis[:, 0] * size[0]).astype(np.float32)
+                guide_matrix[:3, 1] = (basis[:, 1] * size[1]).astype(np.float32)
+                guide_matrix[:3, 2] = basis[:, 2].astype(np.float32)
+                guide_matrix[:3, 3] = np.asarray(position, dtype=np.float32)
+                bridge.set_controller_guide(guide_matrix, visible=True)
 
     def _load_filament_profile(self) -> None:
         profile_path = self.config.filament_profile_path
@@ -1882,21 +1924,23 @@ class OpenXrVulkanPresenter(
         # The main virtual screen is rendered in the Projection Layer when
         # the per-eye Filament image path is enabled. Keep this function for
         # controller tools and other 2D overlays only.
-        if output_frame is None:
-            return []
-        if self._filament_screen is None:
-            return []
         layers = self._render_tool_quad_layers()
+        if output_frame is None:
+            return layers + list(self._last_screen_quad_layers)
+        if self._filament_screen is None:
+            self._last_screen_quad_layers = []
+            return layers
         screen_in_projection = self._can_use_filament_screen_image(output_frame)
         if screen_in_projection:
+            self._last_screen_quad_layers = []
             return layers
         width = int(output_frame.left_eye.width)
         height = int(output_frame.left_eye.height)
         self._ensure_quad_swapchains(width, height)
         if len(self._quad_swapchains) < 2:
-            return []
+            return layers
         position, screen_width, screen_height, rotation = self._filament_screen
-        layers = list(layers)
+        screen_layers = []
         for eye_index, eye in enumerate(self._quad_swapchains):
             source = output_frame.left_eye if eye_index == 0 else output_frame.right_eye
             with _acquired_swapchain_image(self.xr, eye) as image_index:
@@ -1908,12 +1952,13 @@ class OpenXrVulkanPresenter(
                     eye.resources[image_index],
                     flip_y=False,
                 )
-            layers.append(OpenXrCompositionBuilder(
+            screen_layers.append(OpenXrCompositionBuilder(
                 self.xr, self.reference_space
             ).quad_layer(
                 eye, position, screen_width, screen_height, rotation, eye_index
             ))
-        return layers
+        self._last_screen_quad_layers = screen_layers
+        return layers + screen_layers
 
     def _render_tool_quad_layers(self) -> list[Any]:
         """Submit legacy keyboard, laser, FPS, aperture and help quads."""
@@ -1950,6 +1995,95 @@ class OpenXrVulkanPresenter(
             specs.append(("aperture", rgba, position, (width * 0.24, height * 0.06), rotation))
         return [self._upload_tool_quad(*spec) for spec in specs]
 
+    def _cache_head_position(self, views: list[Any]) -> None:
+        if len(views) < 2:
+            self._head_position_w = None
+            return
+        eye_positions = [
+            np.asarray(
+                (view.pose.position.x, view.pose.position.y, view.pose.position.z),
+                dtype=np.float64,
+            )
+            for view in views[:2]
+        ]
+        self._head_position_w = (eye_positions[0] + eye_positions[1]) * 0.5
+
+    def _controller_guide_geometry(self):
+        """Return the world-space panel geometry for the Projection Layer guide."""
+        if self._grip_mat_r is None or self._head_position_w is None:
+            return None
+        controller_position = np.asarray(self._grip_mat_r[:3, 3], dtype=np.float64)
+        to_head = np.asarray(self._head_position_w, dtype=np.float64) - controller_position
+        distance = float(np.linalg.norm(to_head))
+        if distance <= 1e-6 or distance > self.config.controller_guide_max_distance:
+            return None
+
+        def normalized(vector):
+            vector = np.asarray(vector, dtype=np.float64)
+            return vector / max(float(np.linalg.norm(vector)), 1e-6)
+
+        button_position = self._controller_b_button_world_position()
+        if button_position is None:
+            button_position = controller_position
+        forward = normalized(np.asarray(self._head_position_w, dtype=np.float64) - button_position)
+        world_up = np.asarray((0.0, 1.0, 0.0), dtype=np.float64)
+        right = normalized(np.cross(world_up, forward))
+        up = normalized(np.cross(forward, right))
+
+        # Keep the Quad head-facing while solving its center from the B button
+        # world position and the callout endpoint's local texture coordinate.
+        endpoint_x = (540.0 / 1024.0 - 0.5) * 0.34
+        endpoint_y = (0.5 - 300.0 / 768.0) * 0.255
+        panel_position = (
+            button_position
+            - right * endpoint_x
+            - up * endpoint_y
+            + forward * 0.006
+        )
+        basis = np.column_stack((right, up, forward))
+        return (
+            tuple(float(value) for value in panel_position),
+            (0.34, 0.255),
+            basis,
+        )
+
+    def _controller_guide_pose(self):
+        """Return the legacy pose representation used by geometry tests."""
+        geometry = self._controller_guide_geometry()
+        if geometry is None:
+            return None
+        position, size, basis = geometry
+        rotation = _mat3_to_quat_xyzw(basis)
+        return (
+            position,
+            size,
+            tuple(float(value) for value in rotation),
+        )
+
+    def _controller_b_button_world_position(self):
+        if self._grip_mat_r is None or self._controller_brand is None:
+            return None
+        if not self._controller_b_button_resolved:
+            resolved = controller_button_local_position(
+                str(self._controller_brand.right_glb), "b_button"
+            )
+            self._controller_b_button_local = (
+                None if resolved is None else np.asarray(resolved, dtype=np.float64)
+            )
+            self._controller_b_button_resolved = True
+        if self._controller_b_button_local is None:
+            return None
+
+        offset = np.eye(4, dtype=np.float64)
+        offset[:3, 3] = np.asarray(self._controller_brand.offset, dtype=np.float64)
+        rotation = euler_to_mat4(
+            0.0, math.radians(self._controller_brand.rotation_deg), 0.0
+        ).astype(np.float64)
+        model_matrix = np.asarray(self._grip_mat_r, dtype=np.float64) @ rotation @ offset
+        local = np.ones(4, dtype=np.float64)
+        local[:3] = self._controller_b_button_local
+        return (model_matrix @ local)[:3]
+
     def _upload_tool_quad(self, key, rgba, position, size, rotation):
         height, width = int(rgba.shape[0]), int(rgba.shape[1])
         entry = self._overlay_quad_entries.get(key)
@@ -1985,6 +2119,10 @@ class OpenXrVulkanPresenter(
         else:
             qx, qy, qz, qw = _euler_degrees_to_quaternion(rotation)
         return self.xr.CompositionLayerQuad(
+            layer_flags=(
+                self.xr.CompositionLayerFlags.BLEND_TEXTURE_SOURCE_ALPHA_BIT
+                | self.xr.CompositionLayerFlags.UNPREMULTIPLIED_ALPHA_BIT
+            ),
             space=self.reference_space,
             eye_visibility=self.xr.EyeVisibility.BOTH,
             sub_image=self.xr.SwapchainSubImage(

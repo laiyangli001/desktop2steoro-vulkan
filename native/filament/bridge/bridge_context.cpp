@@ -1,6 +1,7 @@
 #include "bridge_context.h"
 #include "bridge_internal.h"
 #include "bridge_controller.h"
+#include "bridge_controller_guide.h"
 #include "bridge_eye.h"
 #include "bridge_laser.h"
 #include "bridge_material.h"
@@ -119,6 +120,7 @@ void bridge_context_destroy(FilamentBridge* bridge) {
         bridge_controller_destroy(bridge, controller);
     }
     bridge_laser_destroy(bridge);
+    bridge_controller_guide_destroy(bridge);
     bridge_screen_destroy(bridge);
     for (auto& eye : bridge->eyes) {
         if (eye.renderer && bridge->engine) {

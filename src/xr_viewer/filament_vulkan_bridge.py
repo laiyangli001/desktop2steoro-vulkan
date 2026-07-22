@@ -47,6 +47,7 @@ class FilamentVulkanBridge:
         self._controller_abi_available = False
         self._controller_visibility_abi_available = False
         self._laser_abi_available = False
+        self._controller_guide_abi_available = False
         self._screen_image_abi_available = False
         self._screen_ready_semaphore_abi_available = False
         self._async_submit_abi_available = False
@@ -64,6 +65,10 @@ class FilamentVulkanBridge:
     @property
     def laser_abi_available(self) -> bool:
         return self._laser_abi_available
+
+    @property
+    def controller_guide_abi_available(self) -> bool:
+        return self._controller_guide_abi_available
 
     @property
     def controller_visibility_abi_available(self) -> bool:
@@ -347,6 +352,37 @@ class FilamentVulkanBridge:
             "set_controller_laser",
         )
 
+    def set_controller_guide_texture(self, rgba) -> None:
+        self._ensure_loaded()
+        if not self._controller_guide_abi_available:
+            return
+        if getattr(rgba, "ndim", 0) != 3 or rgba.shape[2] != 4:
+            raise ValueError("controller guide texture must be HxWx4 RGBA")
+        height, width = int(rgba.shape[0]), int(rgba.shape[1])
+        payload = bytes(memoryview(rgba).cast("B"))
+        buffer = ctypes.create_string_buffer(payload)
+        self._check_result(
+            self._library.filament_bridge_set_controller_guide_texture(
+                self._handle, buffer, width, height
+            ),
+            "set_controller_guide_texture",
+        )
+
+    def set_controller_guide(self, matrix, *, visible: bool) -> None:
+        self._ensure_loaded()
+        if not self._controller_guide_abi_available:
+            return
+        values = [float(value) for value in matrix.reshape(-1, order="F")]
+        if len(values) != 16:
+            raise ValueError("controller guide pose must be a 4x4 matrix")
+        array_type = ctypes.c_float * 16
+        self._check_result(
+            self._library.filament_bridge_set_controller_guide(
+                self._handle, array_type(*values), int(bool(visible))
+            ),
+            "set_controller_guide",
+        )
+
     def set_scene_exposure(self, exposure_ev: float) -> None:
         self._ensure_loaded()
         self._check_result(
@@ -545,6 +581,21 @@ class FilamentVulkanBridge:
             ]
             set_controller_laser.restype = ctypes.c_int
             self._laser_abi_available = True
+        guide_texture = getattr(
+            library, "filament_bridge_set_controller_guide_texture", None
+        )
+        guide_pose = getattr(library, "filament_bridge_set_controller_guide", None)
+        if guide_texture is not None and guide_pose is not None:
+            guide_texture.argtypes = [
+                ctypes.c_void_p, ctypes.c_void_p,
+                ctypes.c_uint32, ctypes.c_uint32,
+            ]
+            guide_texture.restype = ctypes.c_int
+            guide_pose.argtypes = [
+                ctypes.c_void_p, ctypes.POINTER(ctypes.c_float), ctypes.c_int
+            ]
+            guide_pose.restype = ctypes.c_int
+            self._controller_guide_abi_available = True
         library.filament_bridge_set_scene_exposure.argtypes = [
             ctypes.c_void_p, ctypes.c_float
         ]

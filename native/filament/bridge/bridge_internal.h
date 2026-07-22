@@ -290,6 +290,15 @@ struct FilamentBridge {
     std::array<utils::Entity, 2> laser_entities{};
     std::array<PreviewScreenVertex, 8> laser_vertices{};
     std::array<uint16_t, 12> laser_indices{};
+    utils::Entity controller_guide_entity;
+    filament::Material* controller_guide_material = nullptr;
+    filament::MaterialInstance* controller_guide_material_instance = nullptr;
+    filament::Texture* controller_guide_texture = nullptr;
+    filament::TextureSampler controller_guide_texture_sampler;
+    filament::VertexBuffer* controller_guide_vertex_buffer = nullptr;
+    filament::IndexBuffer* controller_guide_index_buffer = nullptr;
+    std::array<PreviewScreenVertex, 4> controller_guide_vertices{};
+    std::array<uint16_t, 6> controller_guide_indices{};
     std::array<FilamentEyeTarget, 2> eyes;
     uint32_t active_eye = 0;
     std::vector<uint8_t> glb_bytes;

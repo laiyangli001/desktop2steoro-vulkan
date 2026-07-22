@@ -21,11 +21,23 @@
 - 修复 native 按键动画插值：按钮、Trigger、Grip 和摇杆输入采用旧工程 24Hz 响应平滑，旋转由矩阵逐元素插值改为四元数 SLERP，同时保留平移与缩放插值。
 - Bridge 加载手柄 GLB 时输出逐手动画节点数量、节点名和语义，避免 `_value/_min/_max` 匹配失败后静默运行。
 - 修复彩色激光导致 OpenXR 初始化退出：将材质参数改为 `laser_time`，并按 Filament 约定使用普通参数访问器 `materialParams.laser_time`；sampler 才使用 `materialParams_<name>`。
+- 规范捕捉到渲染的颜色空间路径：OpenXR Projection Layer 严格选择 sRGB swapchain，显示参照的虚拟屏幕和激光使用独立无后处理 LDR View，禁止对 SDR 颜色重复曝光、色调映射或传输函数转换。
+- 修复手柄激光颜色偏淡及流动方向错误：激光改为不透明材质，颜色从手柄根部向远端流动，并绕过场景 ACES 色调映射。
+- 按旧工程恢复手柄照明方式：手柄仅接收跟随眼睛的主光和顶部补光，环境灯与 HDR 反射不参与；灯光位置、颜色和顶部补光比例与旧工程保持一致，并将无单位强度转换为 Filament 坎德拉。
+- 修复手柄初始纹理透明及隐藏恢复后变暗：移除会绕过 glTF 不透明材质合成链路的独立手柄 View，初始加载和 5 秒隐藏/恢复始终使用同一主场景层和专用灯光通道。
+- 修复手柄按键动画完全无响应的根因：`_value`、`_min`、`_max` 节点统一从各自控制器 GLB 查询，不再错误地从环境 GLB 查询；左右手各 9 组动画节点按旧工程契约补齐并去重。
+- 修正右手菜单动画节点名 `RMenu_pressed_value` 为 GLB 中真实存在的 `RMenu_value`；动画节点为空时控制器加载明确失败并报告错误，不再静默显示无动画模型。
+- GitHub Actions 完成 Windows x86_64、Linux x86_64、macOS arm64 Filament Bridge 编译及二进制回写，本地同步至提交 `2aa8bbf`。
+- 新增右手柄 B 键近距导引：手柄距头显 0.4 米内自动显示，仅保留 B 键透明说明框，并从 PICO GLB 的真实 B 键节点计算引导端点。
+- 将 B 键导引由 OpenXR Quad Layer 迁移到 Filament Projection Layer 的无后处理 LDR 层；透明纹理、白色边框和文字不经过场景曝光或色调映射，面板逐帧朝向头部并跟随按键旋转。
 
 ### 验证结果
 
 - Python 编译检查通过。
 - OpenXR/Filament Bridge 定向测试 `53 passed`，完整测试套件 `486 passed`。
+- 最新 OpenXR/Filament 控制器定向回归 `54 passed, 2 warnings`，左右手 GLB 各 9 组 `_value/_min/_max` 节点逐名校验通过。
+- 用户实机验收通过：手柄纹理初始显示不透明，静止隐藏后恢复亮度一致；Trigger、Grip、摇杆及可用实体按键动画均可正常响应。
+- B 键 Projection Layer 导引定向回归 `62 passed, 2 warnings`，Python 编译检查与 Git diff 空白错误检查通过。
 
 ### 未来目标
 
