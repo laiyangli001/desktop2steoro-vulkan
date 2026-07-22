@@ -98,8 +98,9 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "renderables.setLayerMask" in source
     assert "filament_bridge_set_controller_laser" in facade
     assert "D2S Controller Laser" in source
-    assert 'parameter("time"' in source
-    assert "materialParams_time * 0.4" in source
+    assert 'parameter("laser_time"' in source
+    assert "materialParams_laser_time * 0.4" in source
+    assert 'parameter("time"' not in source
     assert "float3(0.0, 0.4, 1.0)" in source
     assert "float3(1.0, 0.0, 0.0)" in source
     assert "std::array<PreviewScreenVertex, 8> laser_vertices" in source

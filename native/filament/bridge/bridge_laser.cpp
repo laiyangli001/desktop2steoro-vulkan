@@ -36,7 +36,7 @@ int bridge_laser_create(FilamentBridge* bridge) {
         void material(inout MaterialInputs material) {
             prepareMaterial(material);
             float2 uv = getUV0();
-            float t = fract(uv.y - materialParams_time * 0.4);
+            float t = fract(uv.y - materialParams_laser_time * 0.4);
             float3 color;
             if (t < 0.167) {
                 color = mix(float3(0.0, 0.4, 1.0), float3(0.0, 1.0, 1.0), t / 0.167);
@@ -58,7 +58,7 @@ int bridge_laser_create(FilamentBridge* bridge) {
     filamat::MaterialBuilder builder;
     builder.name("D2S Controller Laser")
             .material(shader)
-            .parameter("time", filamat::MaterialBuilder::UniformType::FLOAT)
+            .parameter("laser_time", filamat::MaterialBuilder::UniformType::FLOAT)
             .require(filament::VertexAttribute::UV0)
             .shading(filament::Shading::UNLIT)
             .materialDomain(filament::MaterialDomain::SURFACE)
@@ -112,7 +112,7 @@ int bridge_laser_create(FilamentBridge* bridge) {
         bridge_set_error(bridge, "Filament could not create controller laser geometry");
         return 0;
     }
-    bridge->laser_material_instance->setParameter("time", 0.0f);
+    bridge->laser_material_instance->setParameter("laser_time", 0.0f);
     bridge->laser_vertex_buffer->setBufferAt(*bridge->engine, 0,
             filament::VertexBuffer::BufferDescriptor(
                     bridge->laser_vertices.data(),
@@ -160,7 +160,7 @@ int bridge_laser_set(
     const auto now = std::chrono::steady_clock::now().time_since_epoch();
     const float animation_time = static_cast<float>(std::fmod(
             std::chrono::duration<double>(now).count(), 1024.0));
-    bridge->laser_material_instance->setParameter("time", animation_time);
+    bridge->laser_material_instance->setParameter("laser_time", animation_time);
     auto& transforms = bridge->engine->getTransformManager();
     const auto instance = transforms.getInstance(entity);
     if (!instance.isValid()) return 0;
