@@ -96,6 +96,8 @@ FILAMENT_BRIDGE_API int filament_bridge_set_scene_exposure(
         FilamentBridge* bridge, float exposure_ev);
 FILAMENT_BRIDGE_API int filament_bridge_set_skybox_brightness(
         FilamentBridge* bridge, float brightness);
+FILAMENT_BRIDGE_API int filament_bridge_set_passthrough_backdrop(
+        FilamentBridge* bridge, int enabled);
 FILAMENT_BRIDGE_API int filament_bridge_set_fill_light(
         FilamentBridge* bridge,
         float red, float green, float blue,
@@ -107,6 +109,8 @@ FILAMENT_BRIDGE_API int filament_bridge_set_screen(
         float position_x, float position_y, float position_z,
         float width, float height,
         float rotation_x_degrees, float rotation_y_degrees, float rotation_z_degrees);
+FILAMENT_BRIDGE_API int filament_bridge_set_screen_curved(
+        FilamentBridge* bridge, int curved);
 // image is a borrowed Vulkan VkImage owned by the runtime output adapter.
 FILAMENT_BRIDGE_API int filament_bridge_set_screen_image(
         FilamentBridge* bridge, const void* image,

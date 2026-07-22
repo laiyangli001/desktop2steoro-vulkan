@@ -105,6 +105,12 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "bool screen_in_scene = false;" in source
     assert "The sampler is required by the material" in source
     assert "filament_bridge_set_screen_ready_semaphore" in facade
+    assert "filament_bridge_set_screen_curved" in facade
+    assert "kScreenSegments = 48" in source
+    assert "bridge->screen_curved" in source
+    assert "filament_bridge_set_passthrough_backdrop" in facade
+    assert "skybox_entities" in source
+    assert "float4{0.0f, 0.6f, 0.2f, 1.0f}" in source
     assert "pending_ready_semaphore" in source
     assert "screen_texture_cache" in source
     assert "bridge->engine->flushAndWait();" in source

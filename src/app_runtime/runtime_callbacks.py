@@ -8,6 +8,10 @@ class RuntimeCallbacks:
         self.context = context
         self.capture_control = None
         self.capture_session = None
+        self._controller_saved_depth_strength = max(
+            0.0,
+            float(getattr(context.stereo_runtime.stereo_config, "depth_strength", 1.0)),
+        )
 
     def stereo_warmup_key(self, rgb_frame):
         return self.context.stereo_warmup_tracker.key_for_frame(rgb_frame)
@@ -102,6 +106,42 @@ class RuntimeCallbacks:
                 self.queue_clear_nonblocking(self.context.raw_q)
                 self.queue_clear_nonblocking(self.context.runtime_q)
                 print("[Main] OpenXR headset resumed; inference restarted", flush=True)
+
+    def on_openxr_controller_shortcut(self, action: str) -> bool:
+        """Apply renderer-independent depth shortcuts to runtime state."""
+        if action not in {"toggle_stereo", "reset_depth"}:
+            return False
+        snapshot = self.context.openxr_state.runtime_settings_snapshot
+        current = getattr(snapshot, "depth_strength", None)
+        if current is None:
+            current = getattr(
+                self.context.stereo_runtime.stereo_config,
+                "depth_strength",
+                self._controller_saved_depth_strength,
+            )
+        current = max(0.0, float(current))
+        if action == "toggle_stereo":
+            if current > 0.0:
+                self._controller_saved_depth_strength = current
+                target = 0.0
+            else:
+                target = max(0.0, self._controller_saved_depth_strength)
+        else:
+            target = max(
+                0.0,
+                float(getattr(
+                    self.context.stereo_runtime.stereo_config,
+                    "depth_strength",
+                    self._controller_saved_depth_strength,
+                )),
+            )
+            self._controller_saved_depth_strength = target
+        self.update_openxr_runtime_config(depth_strength=target)
+        print(
+            f"[OpenXRViewer] controller shortcut {action}: depth_strength={target:.3f}",
+            flush=True,
+        )
+        return True
 
     def queue_put_latest(self, q, item):
         put_latest(q, item)

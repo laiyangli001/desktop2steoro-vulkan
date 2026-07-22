@@ -413,11 +413,11 @@ def build_controller_callout_rgba(*, font_type=None, lang="CN", size=(2048, 1536
 
     if str(lang).upper() == "CN":
         callouts = (
-            ((600, 210, 850, 330), "B 键", ("长按：显示操作说明",), (540, 300)),
+            ((700, 210, 950, 330), "B 键", ("长按：显示操作说明",), (540, 300)),
         )
     else:
         callouts = (
-            ((600, 210, 850, 330), "B button", ("Hold: show operation guide",), (540, 300)),
+            ((700, 210, 950, 330), "B button", ("Hold: show operation guide",), (540, 300)),
         )
 
     for rect, title, lines, target in callouts:
@@ -439,7 +439,7 @@ def build_controller_callout_rgba(*, font_type=None, lang="CN", size=(2048, 1536
                 fill=body_color,
             )
         edge = (x1, (y0 + y1) // 2) if x1 < 512 else (x0, (y0 + y1) // 2)
-        elbow_x = edge[0] + (34 if edge[0] < 512 else -34)
+        elbow_x = edge[0] + (50 if edge[0] < 512 else -50)
         scaled_edge = point(edge)
         scaled_elbow = point((elbow_x, edge[1]))
         scaled_target = point(target)

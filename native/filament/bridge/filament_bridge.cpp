@@ -143,6 +143,11 @@ int filament_bridge_set_skybox_brightness(
     return bridge_material_set_skybox_brightness(bridge, brightness);
 }
 
+int filament_bridge_set_passthrough_backdrop(
+        FilamentBridge* bridge, int enabled) {
+    return bridge_material_set_passthrough_backdrop(bridge, enabled);
+}
+
 int filament_bridge_set_fill_light(
         FilamentBridge* bridge,
         float red, float green, float blue,
@@ -166,6 +171,10 @@ int filament_bridge_set_screen(
     return bridge_screen_update(
             bridge, position_x, position_y, position_z, width, height,
             rotation_x_degrees, rotation_y_degrees, rotation_z_degrees);
+}
+
+int filament_bridge_set_screen_curved(FilamentBridge* bridge, int curved) {
+    return bridge_screen_set_curved(bridge, curved);
 }
 
 int filament_bridge_set_screen_image(

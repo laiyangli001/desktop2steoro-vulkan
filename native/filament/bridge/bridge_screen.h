@@ -12,6 +12,7 @@ int bridge_screen_update(
         float width, float height,
         float rotation_x_degrees, float rotation_y_degrees,
         float rotation_z_degrees);
+int bridge_screen_set_curved(FilamentBridge* bridge, int curved);
 int bridge_screen_set_image(
         FilamentBridge* bridge, const void* image,
         uint32_t width, uint32_t height, int32_t format);

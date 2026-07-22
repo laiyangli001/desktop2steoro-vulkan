@@ -229,7 +229,7 @@ def test_presenter_validates_configuration() -> None:
 def test_openxr_defaults_to_validated_srgb_projection_target() -> None:
     assert OpenXrVulkanConfig().swapchain_color_mode == "srgb"
     assert OpenXrVulkanConfig().controller_model == "PICO"
-    assert OpenXrVulkanConfig().controller_guide_max_distance == pytest.approx(0.4)
+    assert OpenXrVulkanConfig().controller_guide_max_distance == pytest.approx(0.25)
 
 
 def test_presenter_rejects_non_positive_controller_guide_distance() -> None:
@@ -244,7 +244,8 @@ def test_controller_callout_texture_keeps_controller_center_transparent() -> Non
     assert rgba.dtype == np.uint8
     assert rgba[768, 1024, 3] == 0
     assert tuple(rgba[768, 1024, :3]) == (255, 255, 255)
-    assert tuple(rgba[420, 1400]) == (255, 255, 255, 255)
+    assert tuple(rgba[420, 1500]) == (255, 255, 255, 255)
+    assert rgba[420, 1200, 3] == 0
     assert tuple(rgba[600, 1080]) == (255, 255, 255, 255)
     assert rgba[252, 300, 3] == 0
     assert int(rgba[..., 3].max()) == 255
@@ -254,14 +255,14 @@ def test_controller_guide_pose_hides_beyond_headset_distance() -> None:
     presenter = OpenXrVulkanPresenter()
     presenter._grip_mat_r = np.eye(4, dtype=np.float64)
     presenter._aim_mat_r = np.eye(4, dtype=np.float64)
-    presenter._head_position_w = np.asarray((0.0, 0.0, 0.4), dtype=np.float64)
+    presenter._head_position_w = np.asarray((0.0, 0.0, 0.25), dtype=np.float64)
 
     pose = presenter._controller_guide_pose()
     assert pose is not None
     assert pose[1] == pytest.approx((0.34, 0.255))
     assert np.linalg.norm(np.asarray(pose[2], dtype=np.float64)) == pytest.approx(1.0)
 
-    presenter._head_position_w[2] = 0.401
+    presenter._head_position_w[2] = 0.251
     assert presenter._controller_guide_pose() is None
 
 
@@ -276,7 +277,7 @@ def test_pico_b_button_position_is_resolved_from_glb() -> None:
 
 def test_controller_guide_stays_head_facing_while_endpoint_follows_b_button() -> None:
     presenter = OpenXrVulkanPresenter()
-    presenter._head_position_w = np.asarray((0.0, 0.0, 0.3), dtype=np.float64)
+    presenter._head_position_w = np.asarray((0.0, 0.0, 0.2), dtype=np.float64)
     presenter._grip_mat_r = np.eye(4, dtype=np.float64)
     presenter._aim_mat_r = np.eye(4, dtype=np.float64)
     presenter._controller_b_button_local = np.asarray(
@@ -332,7 +333,7 @@ def test_controller_callout_uses_projection_layer_not_quad_layer() -> None:
 
 def test_filament_controller_guide_tracks_geometry_and_visibility() -> None:
     presenter = OpenXrVulkanPresenter()
-    presenter._head_position_w = np.asarray((0.0, 0.0, 0.3), dtype=np.float64)
+    presenter._head_position_w = np.asarray((0.0, 0.0, 0.2), dtype=np.float64)
     presenter._grip_mat_r = np.eye(4, dtype=np.float64)
     presenter._controller_b_button_local = np.asarray(
         (-0.00672205, 0.01771696, -0.02744452), dtype=np.float64
@@ -358,7 +359,7 @@ def test_filament_controller_guide_tracks_geometry_and_visibility() -> None:
     assert np.linalg.norm(matrix[:3, 1]) == pytest.approx(0.255)
     assert np.dot(matrix[:3, 2], presenter._head_position_w - matrix[:3, 3]) > 0.0
 
-    presenter._head_position_w[2] = 0.401
+    presenter._head_position_w[2] = 0.251
     presenter._update_filament_controller_guide(bridge)
     _, visible = bridge.calls[-1]
     assert visible is False
@@ -534,6 +535,102 @@ def test_vulkan_presenter_exposes_legacy_overlay_shortcut_state() -> None:
     presenter._controller_inputs = ({"x_button": 0.0}, {})
     presenter._handle_controller_shortcuts()
     assert presenter._keyboard_visible is False
+
+
+def test_vulkan_b_long_press_displays_operation_guide() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._frame_now = 1.0
+    presenter._controller_inputs = ({}, {"b_button": 1.0})
+    presenter._handle_controller_shortcuts()
+
+    presenter._frame_now = 2.01
+    presenter._handle_controller_shortcuts()
+
+    assert presenter._operation_guide_visible is True
+    assert presenter._fps_overlay_visible is False
+    assert presenter._aperture_visible is False
+
+
+def test_vulkan_shortcuts_cycle_screen_preset_and_background() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._head_position_w = (0.0, 0.0, 0.0)
+    presenter._filament_screen = (
+        (0.0, 0.0, -16.0),
+        16.0,
+        9.0,
+        (0.0, 0.0, 0.0),
+    )
+
+    presenter._dispatch_controller_shortcut("cycle_screen_preset")
+
+    position, width, height, _rotation = presenter._filament_screen
+    assert position == pytest.approx((0.0, 0.0, -20.0))
+    assert width == pytest.approx(22.0)
+    assert height == pytest.approx(12.375)
+
+    presenter._dispatch_controller_shortcut("toggle_background")
+    assert presenter._filament_skybox_brightness == pytest.approx(0.0)
+    presenter._dispatch_controller_shortcut("toggle_background")
+    assert presenter._filament_skybox_brightness == pytest.approx(1.0)
+
+
+def test_vulkan_shortcut_delegates_runtime_owned_actions() -> None:
+    actions: list[str] = []
+    presenter = OpenXrVulkanPresenter(
+        on_controller_shortcut=lambda action: actions.append(action) or True
+    )
+
+    presenter._dispatch_controller_shortcut("toggle_stereo")
+    presenter._dispatch_controller_shortcut("reset_depth")
+
+    assert actions == ["toggle_stereo", "reset_depth"]
+    assert presenter._unsupported_shortcut_actions == set()
+
+
+def test_vulkan_shortcut_toggles_native_curved_screen() -> None:
+    class Bridge:
+        screen_curved_abi_available = True
+
+        def __init__(self) -> None:
+            self.curved: list[bool] = []
+            self.screens: list[tuple] = []
+
+        def set_screen_curved(self, curved: bool) -> None:
+            self.curved.append(curved)
+
+        def set_screen(self, *screen) -> None:
+            self.screens.append(screen)
+
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_screen = (
+        (0.0, 0.0, -2.0), 2.4, 1.35, (0.0, 0.0, 0.0)
+    )
+    presenter.filament_bridge = Bridge()
+
+    presenter._dispatch_controller_shortcut("toggle_screen_shape")
+    presenter._dispatch_controller_shortcut("toggle_screen_shape")
+
+    assert presenter.filament_bridge.curved == [True, False]
+    assert len(presenter.filament_bridge.screens) == 2
+
+
+def test_vulkan_shortcut_toggles_legacy_green_passthrough_backdrop() -> None:
+    class Bridge:
+        passthrough_backdrop_abi_available = True
+
+        def __init__(self) -> None:
+            self.values: list[bool] = []
+
+        def set_passthrough_backdrop(self, enabled: bool) -> None:
+            self.values.append(enabled)
+
+    presenter = OpenXrVulkanPresenter()
+    presenter.filament_bridge = Bridge()
+
+    presenter._dispatch_controller_shortcut("toggle_passthrough")
+    presenter._dispatch_controller_shortcut("toggle_passthrough")
+
+    assert presenter.filament_bridge.values == [True, False]
 
 
 def test_openxr_frame_gate_waits_for_runtime_output_before_filament() -> None:

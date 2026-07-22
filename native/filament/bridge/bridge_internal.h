@@ -203,6 +203,7 @@ struct MaterialBrightnessEntry {
 struct MaterialBrightnessState {
     std::vector<MaterialBrightnessEntry> scene_materials;
     std::vector<MaterialBrightnessEntry> skybox_materials;
+    std::vector<utils::Entity> skybox_entities;
     float scene_exposure_ev = 0.0f;
     float skybox_brightness = 1.0f;
 };
@@ -274,12 +275,14 @@ struct FilamentBridge {
     filament::Material* screen_material = nullptr;
     filament::MaterialInstance* screen_material_instance = nullptr;
     bool screen_in_scene = false;
+    bool passthrough_backdrop = false;
     filament::Texture* screen_texture = nullptr;
     std::array<filament::Texture*, 2> screen_textures{};
     std::array<std::vector<ScreenTextureSlot>, 2> screen_texture_cache;
     filament::TextureSampler screen_texture_sampler;
     std::vector<PreviewScreenVertex> screen_vertices;
     std::vector<uint16_t> screen_indices;
+    bool screen_curved = false;
     filament::backend::VulkanPlatform::VulkanSharedContext shared_context{};
     MaterialBrightnessState brightness;
     std::array<ControllerAsset, 2> controllers;

@@ -60,6 +60,7 @@ void collect_material_brightness_impl(BridgeType* bridge, bool enable_fill_chann
     auto& renderables = bridge->engine->getRenderableManager();
     bridge->brightness.scene_materials.clear();
     bridge->brightness.skybox_materials.clear();
+    bridge->brightness.skybox_entities.clear();
     const auto* entities = bridge->asset->getRenderableEntities();
     for (size_t index = 0; index < bridge->asset->getRenderableEntityCount(); ++index) {
         const utils::Entity entity = entities[index];
@@ -72,6 +73,7 @@ void collect_material_brightness_impl(BridgeType* bridge, bool enable_fill_chann
             renderables.setPriority(instance, 0);
             renderables.setLightChannel(instance, 0, false);
             renderables.setLightChannel(instance, 1, false);
+            bridge->brightness.skybox_entities.push_back(entity);
         } else if (enable_fill_channel) {
             renderables.setLightChannel(instance, 1, true);
         }
@@ -208,6 +210,31 @@ int bridge_material_set_fill_light(
             .build(*bridge->engine, bridge->controller_top_light);
     bridge->scene->addEntity(bridge->fill_light);
     bridge->scene->addEntity(bridge->controller_top_light);
+    return 1;
+}
+
+int bridge_material_set_passthrough_backdrop(
+        FilamentBridge* bridge, int enabled) {
+    if (!bridge || !bridge->engine) return 0;
+    const bool active = enabled != 0;
+    bridge->passthrough_backdrop = active;
+    auto& renderables = bridge->engine->getRenderableManager();
+    for (const auto entity : bridge->brightness.skybox_entities) {
+        const auto instance = renderables.getInstance(entity);
+        if (instance.isValid()) {
+            renderables.setLayerMask(instance, 0xff, active ? 0x00 : 0x01);
+        }
+    }
+    for (auto& eye : bridge->eyes) {
+        if (!eye.renderer) continue;
+        filament::Renderer::ClearOptions clear_options;
+        clear_options.clearColor = active
+                ? filament::math::float4{0.0f, 0.6f, 0.2f, 1.0f}
+                : filament::math::float4{0.0f, 0.0f, 0.0f, 1.0f};
+        clear_options.clear = true;
+        clear_options.discard = true;
+        eye.renderer->setClearOptions(clear_options);
+    }
     return 1;
 }
 

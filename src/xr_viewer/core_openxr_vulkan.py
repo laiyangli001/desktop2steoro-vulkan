@@ -33,6 +33,7 @@ _OUTPUT_FRAME_UNSET = object()
 from .core_controller_actions import CoreControllerActionsMixin
 from .core_input_helpers import CoreInputHelpersMixin
 from .core_controller_input import CoreControllerInputMixin
+from .core_controller_shortcuts import CoreControllerShortcutsMixin
 from .core_controller_pose import CoreControllerPoseMixin
 from .core_controller_ray import CoreControllerRayMixin
 from .controller_models import (
@@ -81,7 +82,7 @@ class OpenXrVulkanConfig:
     # is configured for linear Rec709 output so the target performs one OETF.
     swapchain_color_mode: str = "srgb"
     controller_model: str = "PICO"
-    controller_guide_max_distance: float = 0.4
+    controller_guide_max_distance: float = 0.25
     filament_bridge_path: str | None = None
     filament_glb_path: str | None = None
     filament_profile_path: str | None = None
@@ -171,6 +172,7 @@ class OpenXrVulkanPresenter(
     CoreControllerPoseMixin,
     CoreControllerRayMixin,
     CoreControllerInputMixin,
+    CoreControllerShortcutsMixin,
     CoreInputHelpersMixin,
 ):
     """OpenXR Vulkan projection-layer presenter with Filament controllers."""
@@ -182,9 +184,11 @@ class OpenXrVulkanPresenter(
         config: OpenXrVulkanConfig | None = None,
         *,
         on_headset_state: Callable[[str], None] | None = None,
+        on_controller_shortcut: Callable[[str], bool | None] | None = None,
     ) -> None:
         self.config = config or OpenXrVulkanConfig()
         self._on_headset_state = on_headset_state
+        self._on_controller_shortcut = on_controller_shortcut
         if self.config.render_scale <= 0:
             raise ValueError("render_scale must be greater than zero")
         if len(self.config.clear_color) != 4:
@@ -232,6 +236,8 @@ class OpenXrVulkanPresenter(
             tuple[float, float, float], float, float, tuple[float, float, float]
         ] | None = None
         self._filament_screen_initial = None
+        self._screen_curved = False
+        self._passthrough_backdrop = False
         # The virtual screen must be rendered as scene geometry so each eye
         # samples its own stereo output. Quad Layer is reserved for 2D tools.
         self._filament_screen_image_enabled = os.environ.get(
@@ -301,7 +307,7 @@ class OpenXrVulkanPresenter(
         self._fps_overlay_visible = False
         self._operation_guide_visible = False
         self._aperture_visible = False
-        self._shortcut_last = {}
+        self._init_controller_shortcuts()
         self._keyboard_width = 1.6
         self._keyboard_height = 0.33
         self._keyboard_keys = []
@@ -330,14 +336,21 @@ class OpenXrVulkanPresenter(
         self._keyboard_position_offset = np.zeros(3, dtype=np.float64)
         self._keyboard_grab_anchor = None
         self._screen_resize_anchor = None
-        self._menu_pressed_last = False
-        self._menu_press_time = 0.0
-        self._menu_long_fired = False
-        self._button_press_time = {"a": 0.0, "b": 0.0, "x": 0.0, "y": 0.0}
-        self._button_long_fired = {"a": False, "b": False, "x": False, "y": False}
-        self._stick_click_last = {"left": False, "right": False}
-        self._stick_press_time = {"left": 0.0, "right": 0.0}
-        self._stick_long_fired = {"left": False, "right": False}
+        self._status_panel_cycle = 0
+        self._hand_panel_cycle = 0
+        self._unsupported_shortcut_actions: set[str] = set()
+        self._shortcut_screen_presets = (
+            ('10" Tablet', 0.30, 0.4),
+            ('27" Monitor', 0.60, 0.6),
+            ('65" TV', 1.44, 2.0),
+            ('100" Projector 1', 2.40, 2.0),
+            ('100" Projector 2', 2.21, 2.5),
+            ('Cinema Giant', 16.0, 16.0),
+            ('1000" IMAX', 22.0, 20.0),
+        )
+        self._shortcut_screen_preset_index = 5
+        self._shortcut_saved_skybox_brightness = self._filament_skybox_brightness
+        self._shortcut_light_levels = (0.0, 0.5, 1.0)
 
     @property
     def initialized(self) -> bool:
@@ -537,79 +550,125 @@ class OpenXrVulkanPresenter(
         self.frame_count += 1
         return not self.exit_requested
 
-    def _handle_controller_shortcuts(self) -> None:
-        """Apply the legacy short/long press state machine to Vulkan state."""
-        left, right = self._controller_inputs
-        now = time.perf_counter()
+    def _set_shortcut_panel(self, name: str | None) -> None:
+        self._fps_overlay_visible = name == "fps"
+        self._operation_guide_visible = name == "guide"
+        self._aperture_visible = name == "aperture"
 
-        def pressed(hand: dict[str, float], name: str) -> bool:
-            return float(hand.get(name, 0.0) or 0.0) > 0.5
-
-        def set_panel(name: str | None) -> None:
-            self._fps_overlay_visible = name == "fps"
-            self._operation_guide_visible = name == "guide"
-            self._aperture_visible = name == "aperture"
-
-        def cycle_panel() -> None:
-            current = (
-                "fps" if self._fps_overlay_visible else
-                "guide" if self._operation_guide_visible else
-                "aperture" if self._aperture_visible else None
+    def _set_shortcut_skybox_brightness(self, brightness: float) -> None:
+        self._filament_skybox_brightness = max(0.0, float(brightness))
+        if self.filament_bridge is not None:
+            self.filament_bridge.set_skybox_brightness(
+                self._filament_skybox_brightness
             )
-            order = [None, "fps", "guide", "aperture"]
-            set_panel(order[(order.index(current) + 1) % len(order)])
 
-        menu_now = pressed(left, "menu_button") or pressed(right, "menu_button")
-        if menu_now and not self._menu_pressed_last:
-            self._menu_press_time = now
-            self._menu_long_fired = False
-        if menu_now and not self._menu_long_fired and now - self._menu_press_time >= 0.6:
-            self._menu_long_fired = True
-            set_panel("aperture")
-        if not menu_now and self._menu_pressed_last and not self._menu_long_fired:
-            cycle_panel()
-        self._menu_pressed_last = menu_now
+    def _cycle_shortcut_screen_preset(self) -> None:
+        if self._filament_screen is None:
+            return
+        self._shortcut_screen_preset_index = (
+            self._shortcut_screen_preset_index + 1
+        ) % len(self._shortcut_screen_presets)
+        _name, width, distance = self._shortcut_screen_presets[
+            self._shortcut_screen_preset_index
+        ]
+        old_position, old_width, old_height, rotation = self._filament_screen
+        head = (
+            np.asarray(self._head_position_w, dtype=np.float64)
+            if self._head_position_w is not None
+            else np.zeros(3, dtype=np.float64)
+        )
+        direction = np.asarray(old_position, dtype=np.float64) - head
+        length = float(np.linalg.norm(direction))
+        if length <= 1e-6:
+            direction = np.asarray((0.0, 0.0, -1.0), dtype=np.float64)
+        else:
+            direction /= length
+        position = head + direction * float(distance)
+        height = float(width) * float(old_height) / max(float(old_width), 1e-6)
+        self._filament_screen = (
+            tuple(float(value) for value in position),
+            float(width),
+            height,
+            rotation,
+        )
+        if self.filament_bridge is not None:
+            self.filament_bridge.set_screen(position, width, height, rotation)
 
-        def button(name: str, value: bool, short_action, long_action=None) -> None:
-            if value and not self._shortcut_last.get(name, False):
-                self._button_press_time[name] = now
-                self._button_long_fired[name] = False
-            if value and not self._button_long_fired[name] and long_action is not None:
-                if now - self._button_press_time[name] >= 1.0:
-                    long_action()
-                    self._button_long_fired[name] = True
-            if not value and self._shortcut_last.get(name, False) and not self._button_long_fired[name]:
-                short_action()
-            self._shortcut_last[name] = value
-
-        def toggle_keyboard() -> None:
+    def _dispatch_controller_shortcut(self, action: str) -> None:
+        """Apply shared shortcut actions to Vulkan-owned presentation state."""
+        if action == "cycle_status_panel":
+            self._status_panel_cycle = (self._status_panel_cycle + 1) % 3
+            self._set_shortcut_panel(
+                (None, "fps", "guide")[self._status_panel_cycle]
+            )
+        elif action == "cycle_hand_panel":
+            self._hand_panel_cycle = (self._hand_panel_cycle + 1) % 2
+            self._set_shortcut_panel("guide" if self._hand_panel_cycle else None)
+        elif action == "toggle_keyboard":
             self._keyboard_visible = not self._keyboard_visible
             self._keyboard_position_offset[:] = 0.0
             self._keyboard_grab_anchor = None
-
-        def reset_screen() -> None:
+        elif action == "reset_screen":
             if self._filament_screen_initial is not None:
                 self._set_filament_screen_pose(
                     self._filament_screen_initial[0], self._filament_screen_initial[3]
                 )
-
-        button("x", pressed(left, "x_button"), toggle_keyboard, lambda: set_panel("fps"))
-        button("a", pressed(right, "a_button"), lambda: set_panel(None if self._operation_guide_visible else "guide"), lambda: set_panel("fps"))
-        button("b", pressed(right, "b_button"), lambda: set_panel(None if self._aperture_visible else "aperture"), lambda: set_panel("aperture"))
-        button("y", pressed(left, "y_button"), reset_screen, cycle_panel)
-
-        for hand_name, hand in (("left", left), ("right", right)):
-            value = pressed(hand, "stick_click")
-            was_down = self._stick_click_last[hand_name]
-            if value and not was_down:
-                self._stick_press_time[hand_name] = now
-                self._stick_long_fired[hand_name] = False
-            if value and not self._stick_long_fired[hand_name] and now - self._stick_press_time[hand_name] >= 1.0:
-                _send_key(0x58 if hand_name == "left" else 0x0D, ctrl=(hand_name == "left"))
-                self._stick_long_fired[hand_name] = True
-            if not value and was_down and not self._stick_long_fired[hand_name]:
-                _send_key(0x43 if hand_name == "left" else 0x56, ctrl=True)
-            self._stick_click_last[hand_name] = value
+        elif action == "cycle_screen_preset":
+            self._cycle_shortcut_screen_preset()
+        elif action == "toggle_screen_shape":
+            bridge = self.filament_bridge
+            if bridge is None or not getattr(
+                bridge, "screen_curved_abi_available", False
+            ):
+                self._unsupported_shortcut_actions.add(action)
+                return
+            self._screen_curved = not self._screen_curved
+            bridge.set_screen_curved(self._screen_curved)
+            if self._filament_screen is not None:
+                bridge.set_screen(*self._filament_screen)
+        elif action == "toggle_background":
+            if self._filament_skybox_brightness > 0.0:
+                self._shortcut_saved_skybox_brightness = (
+                    self._filament_skybox_brightness
+                )
+                self._set_shortcut_skybox_brightness(0.0)
+            else:
+                self._set_shortcut_skybox_brightness(
+                    self._shortcut_saved_skybox_brightness or 1.0
+                )
+        elif action == "cycle_environment_light":
+            current = self._filament_skybox_brightness
+            index = min(
+                range(len(self._shortcut_light_levels)),
+                key=lambda item: abs(self._shortcut_light_levels[item] - current),
+            )
+            self._set_shortcut_skybox_brightness(
+                self._shortcut_light_levels[(index + 1) % len(self._shortcut_light_levels)]
+            )
+        elif action == "toggle_passthrough":
+            bridge = self.filament_bridge
+            if bridge is None or not getattr(
+                bridge, "passthrough_backdrop_abi_available", False
+            ):
+                self._unsupported_shortcut_actions.add(action)
+                return
+            self._passthrough_backdrop = not self._passthrough_backdrop
+            bridge.set_passthrough_backdrop(self._passthrough_backdrop)
+        elif action == "copy":
+            _send_key(0x43, ctrl=True)
+        elif action == "cut":
+            _send_key(0x58, ctrl=True)
+        elif action == "paste":
+            _send_key(0x56, ctrl=True)
+        elif action == "enter":
+            _send_key(0x0D)
+        else:
+            handled = bool(
+                self._on_controller_shortcut
+                and self._on_controller_shortcut(action)
+            )
+            if not handled:
+                self._unsupported_shortcut_actions.add(action)
 
     def _input_deadzone(self) -> float:
         return 0.15

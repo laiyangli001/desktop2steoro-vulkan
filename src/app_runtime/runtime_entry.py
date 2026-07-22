@@ -175,6 +175,7 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
         presenter = OpenXrVulkanPresenter(
             OpenXrVulkanConfig(**filament_config),
             on_headset_state=callbacks.on_openxr_headset_state,
+            on_controller_shortcut=callbacks.on_openxr_controller_shortcut,
         )
         presenter_thread = threading.Thread(
             target=presenter.run_until,

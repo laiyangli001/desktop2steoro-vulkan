@@ -1,6 +1,13 @@
 #include "bridge_screen.h"
 #include "bridge_internal.h"
 
+namespace {
+
+constexpr uint32_t kScreenSegments = 48;
+constexpr float kCurvedHalfAngle = 0.72f;
+
+}  // namespace
+
 void bridge_screen_destroy(FilamentBridge* bridge) {
     if (!bridge || !bridge->engine) return;
     if (bridge->scene && bridge->screen_in_scene && !bridge->screen_entity.isNull()) {
@@ -64,19 +71,40 @@ int bridge_screen_update(
             cy * cr + sy * sp * sr, sr * cp, -sy * cr + cy * sp * sr};
     const filament::math::float3 up{
             -cy * sr + sy * sp * cr, cr * cp, sr * sy + cy * sp * cr};
+    const filament::math::float3 forward = cross(right, up);
     const filament::math::float3 center{position_x, position_y, position_z};
-    const filament::math::float3 half_right = right * (width * 0.5f);
-    const filament::math::float3 half_up = up * (height * 0.5f);
-    bridge->screen_vertices = {
-            {center - half_right - half_up, {0.0f, 0.0f}},
-            {center + half_right - half_up, {1.0f, 0.0f}},
-            {center - half_right + half_up, {0.0f, 1.0f}},
-            {center + half_right + half_up, {1.0f, 1.0f}},
-    };
+    const float half_width = width * 0.5f;
+    const float half_height = height * 0.5f;
+    const float radius = half_width / kCurvedHalfAngle;
+    bridge->screen_vertices.clear();
+    bridge->screen_vertices.reserve((kScreenSegments + 1) * 2);
+    for (uint32_t segment = 0; segment <= kScreenSegments; ++segment) {
+        const float t = static_cast<float>(segment) /
+                static_cast<float>(kScreenSegments);
+        float local_x = width * (t - 0.5f);
+        float local_z = 0.0f;
+        if (bridge->screen_curved) {
+            const float angle = -kCurvedHalfAngle + 2.0f * kCurvedHalfAngle * t;
+            local_x = radius * std::sin(angle);
+            local_z = radius * (1.0f - std::cos(angle));
+        }
+        const filament::math::float3 column_center =
+                center + right * local_x + forward * local_z;
+        bridge->screen_vertices.push_back(
+                {column_center - up * half_height, {t, 0.0f}});
+        bridge->screen_vertices.push_back(
+                {column_center + up * half_height, {t, 1.0f}});
+    }
     bridge->screen_vertex_buffer->setBufferAt(*bridge->engine, 0,
             filament::VertexBuffer::BufferDescriptor(
                     bridge->screen_vertices.data(),
                     bridge->screen_vertices.size() * sizeof(PreviewScreenVertex), nullptr));
+    return 1;
+}
+
+int bridge_screen_set_curved(FilamentBridge* bridge, int curved) {
+    if (!bridge || !bridge->engine || !bridge->screen_vertex_buffer) return 0;
+    bridge->screen_curved = curved != 0;
     return 1;
 }
 
@@ -116,10 +144,21 @@ int bridge_screen_create(FilamentBridge* bridge) {
         return 0;
     }
     bridge->screen_material_instance = bridge->screen_material->createInstance();
-    bridge->screen_vertices.resize(4);
-    bridge->screen_indices = {0, 1, 2, 1, 3, 2};
+    bridge->screen_vertices.resize((kScreenSegments + 1) * 2);
+    bridge->screen_indices.clear();
+    bridge->screen_indices.reserve(kScreenSegments * 6);
+    for (uint16_t segment = 0; segment < kScreenSegments; ++segment) {
+        const uint16_t lower_left = segment * 2;
+        const uint16_t upper_left = lower_left + 1;
+        const uint16_t lower_right = lower_left + 2;
+        const uint16_t upper_right = lower_left + 3;
+        bridge->screen_indices.insert(bridge->screen_indices.end(), {
+                lower_left, lower_right, upper_left,
+                lower_right, upper_right, upper_left});
+    }
     bridge->screen_vertex_buffer = filament::VertexBuffer::Builder()
-            .vertexCount(4).bufferCount(1)
+            .vertexCount(static_cast<uint32_t>(bridge->screen_vertices.size()))
+            .bufferCount(1)
             .attribute(filament::VertexAttribute::POSITION, 0,
                     filament::VertexBuffer::AttributeType::FLOAT3,
                     0, sizeof(PreviewScreenVertex))

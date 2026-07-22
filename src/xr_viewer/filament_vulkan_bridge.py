@@ -49,6 +49,8 @@ class FilamentVulkanBridge:
         self._laser_abi_available = False
         self._controller_guide_abi_available = False
         self._screen_image_abi_available = False
+        self._screen_curved_abi_available = False
+        self._passthrough_backdrop_abi_available = False
         self._screen_ready_semaphore_abi_available = False
         self._async_submit_abi_available = False
         self._configure_abi()
@@ -77,6 +79,14 @@ class FilamentVulkanBridge:
     @property
     def screen_image_abi_available(self) -> bool:
         return self._screen_image_abi_available
+
+    @property
+    def screen_curved_abi_available(self) -> bool:
+        return self._screen_curved_abi_available
+
+    @property
+    def passthrough_backdrop_abi_available(self) -> bool:
+        return self._passthrough_backdrop_abi_available
 
     @property
     def screen_ready_semaphore_abi_available(self) -> bool:
@@ -401,6 +411,19 @@ class FilamentVulkanBridge:
             "set_skybox_brightness",
         )
 
+    def set_passthrough_backdrop(self, enabled: bool) -> None:
+        self._ensure_loaded()
+        if not self._passthrough_backdrop_abi_available:
+            raise FilamentBridgeError(
+                "Filament Bridge passthrough-backdrop ABI is unavailable; rebuild the CI artifact"
+            )
+        self._check_result(
+            self._library.filament_bridge_set_passthrough_backdrop(
+                self._handle, int(bool(enabled))
+            ),
+            "set_passthrough_backdrop",
+        )
+
     def set_fill_light(self, color, intensity: float, direction) -> None:
         self._ensure_loaded()
         self._check_result(
@@ -426,6 +449,19 @@ class FilamentVulkanBridge:
                 *(float(value) for value in (*position, width, height, *rotation_deg)),
             ),
             "set_screen",
+        )
+
+    def set_screen_curved(self, curved: bool) -> None:
+        self._ensure_loaded()
+        if not self._screen_curved_abi_available:
+            raise FilamentBridgeError(
+                "Filament Bridge curved-screen ABI is unavailable; rebuild the CI artifact"
+            )
+        self._check_result(
+            self._library.filament_bridge_set_screen_curved(
+                self._handle, int(bool(curved))
+            ),
+            "set_screen_curved",
         )
 
     def set_screen_image(
@@ -604,6 +640,13 @@ class FilamentVulkanBridge:
             ctypes.c_void_p, ctypes.c_float
         ]
         library.filament_bridge_set_skybox_brightness.restype = ctypes.c_int
+        set_passthrough_backdrop = getattr(
+            library, "filament_bridge_set_passthrough_backdrop", None
+        )
+        if set_passthrough_backdrop is not None:
+            set_passthrough_backdrop.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            set_passthrough_backdrop.restype = ctypes.c_int
+            self._passthrough_backdrop_abi_available = True
         library.filament_bridge_set_fill_light.argtypes = [
             ctypes.c_void_p,
             ctypes.c_float, ctypes.c_float, ctypes.c_float,
@@ -620,6 +663,13 @@ class FilamentVulkanBridge:
             ctypes.c_float, ctypes.c_float, ctypes.c_float,
         ]
         library.filament_bridge_set_screen.restype = ctypes.c_int
+        set_screen_curved = getattr(
+            library, "filament_bridge_set_screen_curved", None
+        )
+        if set_screen_curved is not None:
+            set_screen_curved.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            set_screen_curved.restype = ctypes.c_int
+            self._screen_curved_abi_available = True
         if hasattr(library, "filament_bridge_set_screen_image"):
             library.filament_bridge_set_screen_image.argtypes = [
                 ctypes.c_void_p,

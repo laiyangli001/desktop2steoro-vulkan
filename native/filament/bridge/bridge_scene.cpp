@@ -14,6 +14,7 @@ void bridge_scene_destroy(FilamentBridge* bridge) {
     bridge->asset = nullptr;
     bridge->brightness.scene_materials.clear();
     bridge->brightness.skybox_materials.clear();
+    bridge->brightness.skybox_entities.clear();
     bridge->glb_bytes.clear();
 }
 
