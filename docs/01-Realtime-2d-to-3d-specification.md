@@ -804,7 +804,7 @@ Bridge 源码变更
     -> Linux x86_64:   libfilament_bridge.so
     -> macOS arm64:    libfilament_bridge.dylib
     -> 上传 Actions Artifact 或 GitHub Release
-    -> 下载对应平台产物到 src/xr_viewer/native/
+    -> 下载对应平台产物到 src/xr_viewer/native/<platform>/
     -> Python ctypes 加载并运行
 ```
 

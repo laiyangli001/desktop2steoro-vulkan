@@ -50,14 +50,14 @@ jobs:
             -G 'Visual Studio 17 2022' -A x64 `
             -DFILAMENT_SDK_ROOT="$env:FILAMENT_SDK_ROOT"
           cmake --build native/filament/build/ci-windows --config Release --parallel 2
-          if (-not (Test-Path -LiteralPath 'src/xr_viewer/native/filament_bridge.dll')) {
+          if (-not (Test-Path -LiteralPath 'src/xr_viewer/native/windows/filament_bridge.dll')) {
             throw 'Windows Filament bridge was not produced'
           }
 
       - uses: actions/upload-artifact@v4
         with:
           name: filament-bridge-windows-latest
-          path: src/xr_viewer/native/filament_bridge.dll
+          path: src/xr_viewer/native/windows/filament_bridge.dll
           if-no-files-found: error
 
   build:
@@ -113,12 +113,12 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DFILAMENT_SDK_ROOT="$RUNNER_TEMP/filament-sdk/filament"
           cmake --build native/filament/build/ci --config Release --parallel 2
-          test -f "src/xr_viewer/native/${{ matrix.output }}"
+          test -f "src/xr_viewer/native/${{ matrix.platform }}/${{ matrix.output }}"
 
       - uses: actions/upload-artifact@v4
         with:
           name: filament-bridge-${{ matrix.runner }}
-          path: src/xr_viewer/native/${{ matrix.output }}
+          path: src/xr_viewer/native/${{ matrix.platform }}/${{ matrix.output }}
           if-no-files-found: error
 
   commit-native-binaries:
@@ -136,19 +136,19 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: filament-bridge-windows-latest
-          path: src/xr_viewer/native
+          path: src/xr_viewer/native/windows
 
       - name: Download Linux bridge
         uses: actions/download-artifact@v4
         with:
           name: filament-bridge-ubuntu-latest
-          path: src/xr_viewer/native
+          path: src/xr_viewer/native/linux
 
       - name: Download macOS bridge
         uses: actions/download-artifact@v4
         with:
           name: filament-bridge-macos-14
-          path: src/xr_viewer/native
+          path: src/xr_viewer/native/macos
 
       - name: Commit binaries to main
         env:
@@ -156,14 +156,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -f src/xr_viewer/native/filament_bridge.dll
-          test -f src/xr_viewer/native/libfilament_bridge.so
-          test -f src/xr_viewer/native/libfilament_bridge.dylib
+          test -f src/xr_viewer/native/windows/filament_bridge.dll
+          test -f src/xr_viewer/native/linux/libfilament_bridge.so
+          test -f src/xr_viewer/native/macos/libfilament_bridge.dylib
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/xr_viewer/native/filament_bridge.dll \
-            src/xr_viewer/native/libfilament_bridge.so \
-            src/xr_viewer/native/libfilament_bridge.dylib
+          git add src/xr_viewer/native/windows/filament_bridge.dll \
+            src/xr_viewer/native/linux/libfilament_bridge.so \
+            src/xr_viewer/native/macos/libfilament_bridge.dylib
           if git diff --cached --quiet; then
             echo "Native bridge binaries are already up to date."
             exit 0

@@ -69,7 +69,16 @@ if(NOT D2S_VULKAN_INCLUDE_DIR)
     set(D2S_VULKAN_INCLUDE_DIR "${_vulkan_headers_root}/include")
 endif()
 
-add_library(filament_bridge SHARED filament_bridge.cpp)
+add_library(filament_bridge SHARED
+    filament_bridge.cpp
+    bridge_context.cpp
+    bridge_eye.cpp
+    bridge_scene.cpp
+    bridge_controller.cpp
+    bridge_laser.cpp
+    bridge_screen.cpp
+    bridge_material.cpp
+    preview_bridge.cpp)
 target_compile_features(filament_bridge PRIVATE cxx_std_20)
 target_compile_definitions(filament_bridge PRIVATE FILAMENT_BRIDGE_BUILD=1)
 if(MSVC)
@@ -116,8 +125,19 @@ if(NOT _filament_libraries)
 endif()
 target_link_libraries(filament_bridge PRIVATE ${_filament_libraries})
 
-set(_filament_output_dir "${CMAKE_SOURCE_DIR}/../../../src/xr_viewer/native")
+if(WIN32)
+    set(_filament_output_platform windows)
+elseif(APPLE)
+    set(_filament_output_platform macos)
+elseif(UNIX)
+    set(_filament_output_platform linux)
+endif()
+set(_filament_output_dir
+    "${CMAKE_SOURCE_DIR}/../../../src/xr_viewer/native/${_filament_output_platform}")
+file(MAKE_DIRECTORY "${_filament_output_dir}")
 set_target_properties(filament_bridge PROPERTIES
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN YES
     OUTPUT_NAME filament_bridge
     RUNTIME_OUTPUT_DIRECTORY "${_filament_output_dir}"
     LIBRARY_OUTPUT_DIRECTORY "${_filament_output_dir}")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import re
 from pathlib import Path
 
 import pytest
@@ -19,7 +20,9 @@ def test_vulkan_create_info_has_stable_c_layout() -> None:
 
 
 def test_default_bridge_path_matches_platform() -> None:
-    assert default_bridge_path().name.startswith("filament_bridge")
+    path = default_bridge_path()
+    assert path.parent.name in {"windows", "linux", "macos"}
+    assert path.name.startswith(("filament_bridge", "libfilament_bridge"))
 
 
 def test_pointer_value_accepts_integer_and_c_void_p() -> None:
@@ -32,24 +35,64 @@ def test_missing_bridge_library_is_reported() -> None:
         FilamentVulkanBridge("missing-filament-bridge.dll")
 
 
-def test_native_bridge_keeps_eye_renderer_and_screen_lifetimes_explicit() -> None:
-    source = (Path(__file__).resolve().parents[1] /
-              "native/filament/bridge/filament_bridge.cpp").read_text(
-                  encoding="utf-8"
-              )
+def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
+    bridge_dir = (
+        Path(__file__).resolve().parents[1] / "native/filament/bridge"
+    )
+    module_names = (
+        "bridge_internal.h",
+        "bridge_context.cpp",
+        "bridge_context.h",
+        "bridge_eye.cpp",
+        "bridge_eye.h",
+        "bridge_scene.cpp",
+        "bridge_scene.h",
+        "bridge_controller.cpp",
+        "bridge_controller.h",
+        "bridge_laser.cpp",
+        "bridge_laser.h",
+        "bridge_screen.cpp",
+        "bridge_screen.h",
+        "bridge_material.cpp",
+        "bridge_material.h",
+        "preview_bridge.cpp",
+        "preview_bridge.h",
+    )
+    facade = (bridge_dir / "filament_bridge.cpp").read_text(encoding="utf-8")
+    source = facade + "\n" + "\n".join(
+        (bridge_dir / name).read_text(encoding="utf-8")
+        for name in module_names
+    )
+    cmake = (bridge_dir / "CMakeLists.txt").read_text(encoding="utf-8")
+    public_header = (bridge_dir / "filament_bridge.h").read_text(
+        encoding="utf-8"
+    )
+    abi_pattern = re.compile(
+        r"\b(filament_(?:bridge|preview)_[a-z0-9_]+)\s*\("
+    )
 
+    assert set(abi_pattern.findall(public_header)) == set(
+        abi_pattern.findall(facade)
+    )
+    assert all(
+        not abi_pattern.search((bridge_dir / name).read_text(encoding="utf-8"))
+        for name in module_names
+    )
+    assert "filament::" not in facade
+    assert len(facade.splitlines()) < 400
+    assert all(name in cmake for name in module_names if name.endswith(".cpp"))
     assert "filament::Renderer* renderer = nullptr;" in source
     assert "eye.renderer = bridge->engine->createRenderer();" in source
     assert "bridge->engine->destroy(eye.renderer);" in source
     assert "bool screen_in_scene = false;" in source
     assert "The sampler is required by the material" in source
-    assert "filament_bridge_set_screen_ready_semaphore" in source
+    assert "filament_bridge_set_screen_ready_semaphore" in facade
     assert "pending_ready_semaphore" in source
     assert "screen_texture_cache" in source
     assert "bridge->engine->flushAndWait();" in source
     assert "diagnostic_frame_count < 8" in source
     assert "[FilamentBridge] acquired eye=" in source
-    assert "filament_bridge_set_controller_visible" in source
+    assert "filament_bridge_set_controller_visible" in facade
     assert "renderables.setLayerMask" in source
-    assert "filament_bridge_set_controller_laser" in source
+    assert "filament_bridge_set_controller_laser" in facade
     assert "D2S Controller Laser" in source

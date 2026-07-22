@@ -42,9 +42,12 @@ def _openxr_filament_config(settings: dict) -> dict[str, object]:
     """Resolve the packaged Windows Filament scene for direct OpenXR runs."""
     src_root = Path(__file__).resolve().parents[1]
     platform_bridge = {
-        "Windows": src_root / "xr_viewer" / "native" / "filament_bridge.dll",
-        "Linux": src_root / "xr_viewer" / "native" / "libfilament_bridge.so",
-        "Darwin": src_root / "xr_viewer" / "native" / "libfilament_bridge.dylib",
+        "Windows": src_root / "xr_viewer" / "native" / "windows"
+        / "filament_bridge.dll",
+        "Linux": src_root / "xr_viewer" / "native" / "linux"
+        / "libfilament_bridge.so",
+        "Darwin": src_root / "xr_viewer" / "native" / "macos"
+        / "libfilament_bridge.dylib",
     }.get(platform.system())
     glb_path = src_root / "xr_viewer" / "environments" / "Artemis" / "environment.glb"
     profile_path = src_root / "xr_viewer" / "environments" / "Artemis" / "profile.json"

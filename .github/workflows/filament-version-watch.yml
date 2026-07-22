@@ -39,5 +39,5 @@ jobs:
             exit 0
           fi
 
-          body="A new Filament release is available.\n\n- Current validated SDK: v$current\n- Candidate SDK: v$latest\n- Upstream release: $release_url\n\nBefore merging an upgrade, update native/filament/version.json with the official Windows, Linux, and macOS asset SHA-256 values. The Build Filament Bridge workflow must pass on all three platforms, then refresh the three binaries in src/xr_viewer/native/."
+          body="A new Filament release is available.\n\n- Current validated SDK: v$current\n- Candidate SDK: v$latest\n- Upstream release: $release_url\n\nBefore merging an upgrade, update native/filament/version.json with the official Windows, Linux, and macOS asset SHA-256 values. The Build Filament Bridge workflow must pass on all three platforms, then refresh the binaries in src/xr_viewer/native/windows, linux, and macos."
           gh issue create --repo "$REPOSITORY" --title "$title" --body "$body"

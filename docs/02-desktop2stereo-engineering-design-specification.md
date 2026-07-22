@@ -185,6 +185,12 @@ Desktop2Stereo/
 
 厂商后端通过Python环境锁定文件和运行时capability probe控制。OpenGL Fallback由配置控制，推理Provider不得隐式改变图形后端选择。只有Filament Bridge使用CMake feature option。
 
+### 3.1.1 Vulkan 1.4 Python Binding 未来目标
+
+生产主路径继续使用已锁定的 `vulkan==1.3.275.1` binding，并按 Loader、OpenXR Runtime 和 Physical Device 能力在 Vulkan 1.2 至 1.4 之间协商。未来在独立 `d2s-vulkan-1.4` 分支中，基于固定版本的 Khronos Vulkan 1.4 `vk.xml` 与 Headers 远程生成项目自用 wheel；不得直接依赖浮动 Git master，也不得要求用户本地生成或编译绑定。
+
+该实验分支首先补齐 `VkPhysicalDeviceVulkan14Features`/`VkPhysicalDeviceVulkan14Properties` 查询与显式启用，并保留 1.3 扩展别名和 1.2 最低回退。首批性能验证只覆盖与当前数据面相关的两条路径：`hostImageCopy` 和独立 Transfer Queue 的工具纹理上传。两者必须在相同分辨率、纹理数量和帧率下比较上传延迟、CPU 占用、GPU 队列重叠、显存和帧抖动；只有 Windows/Linux/macOS wheel 可复现、Validation Layer 通过且目标实机存在可重复净收益时，才允许提议合入主路径。
+
 ### 3.2 依赖方向
 
 ```text
@@ -742,12 +748,34 @@ Bridge 接口必须覆盖以下功能域：
 ```text
 功能需求确认
     -> filament_bridge.h C ABI 声明
-    -> filament_bridge.cpp 实现
+    -> filament_bridge.cpp 稳定 ABI 转发
+    -> bridge_*.cpp / preview_bridge.cpp 内部实现
     -> Python ctypes wrapper
     -> Windows/Linux/macOS CI 编译
     -> 单元/集成/头显或预览运行验证
     -> 接口清单标记完成
 ```
+
+原生 Bridge 固定采用以下内部布局，Python 不感知内部文件数量：
+
+```text
+native/filament/bridge/
+  filament_bridge.cpp          # Stable C ABI forwarding only
+  filament_bridge.h            # Stable Python ABI
+  bridge_context.cpp/.h        # Engine, Scene, shared resources
+  bridge_eye.cpp/.h            # Per-eye View, Camera, Swapchain
+  bridge_scene.cpp/.h          # Environment GLB loading
+  bridge_controller.cpp/.h     # Controller models and input animation
+  bridge_laser.cpp/.h          # Laser material and geometry
+  bridge_screen.cpp/.h         # Virtual screen and external VkImage
+  bridge_material.cpp/.h       # Color, exposure, material parameters
+  preview_bridge.cpp/.h        # Desktop preview implementation
+  bridge_internal.h            # Internal shared types
+```
+
+`filament_bridge.h` 是唯一面向 Python 的原生契约。内部模块不得直接导出 C++ 类型；Engine、Scene、GLB、材质、纹理和 Shader 的 ownership 归 `bridge_context`，各功能模块只通过 `bridge_internal.h` 访问共享状态。Linux/macOS 构建默认隐藏内部符号，只有带 `FILAMENT_BRIDGE_API` 的 C ABI 可见。
+
+三平台二进制固定存放在 `src/xr_viewer/native/windows`、`src/xr_viewer/native/linux` 和 `src/xr_viewer/native/macos`；运行时、能力探测、CMake 和 GitHub Actions 必须共用该路径契约，根目录不得保留兼容副本。
 
 接口清单以本节为功能基线，另在实现任务中记录“已实现、待实现、暂不需要、验证证据”。新增能力不得只修改 C++ 而遗漏 Python wrapper、错误处理、CI 或测试；也不得为了所谓完整性导出 Filament 未使用的模板、内部类型、Entity 管理器或逐资源底层 API。
 

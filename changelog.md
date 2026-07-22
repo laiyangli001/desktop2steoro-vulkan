@@ -6,6 +6,10 @@
 
 ### 已实现
 
+- 重构原生 Filament Bridge：`filament_bridge.cpp` 仅保留稳定 C ABI 转发，Python ctypes 接口和 `filament_bridge.h` 不变。
+- 将共享 Engine/Scene、双眼目标、GLB 场景、控制器动画、3D 激光、外部 VkImage 屏幕、材质色彩和桌面预览拆分为独立 `.cpp/.h` 模块，内部共享类型集中到 `bridge_internal.h`。
+- CMake 显式编译各 Bridge 模块，并默认隐藏内部 C++ 符号，防止模块实现意外扩展 Python ABI。
+- 三平台 Bridge 二进制改为分别存放在 `src/xr_viewer/native/windows`、`linux`、`macos`，运行时解析、能力探测、CMake 输出和 GitHub Actions 产物回写使用同一目录契约。
 - 对齐旧工程控制器生命周期：补齐双手上一帧姿态、最后移动时间和移动阈值，修复 Aim 更新因状态未初始化而被静默清空。
 - 增加逐手控制器显隐 ABI：Grip 跟踪有效且 5 秒内有移动时显示，静止超时或跟踪丢失时隐藏模型和激光，恢复移动后立即重新显示。
 - 补齐此前缺失的 native 激光实现：在共享 Filament Projection Layer Scene 中创建双手独立 3D 光束实体，跟随 Aim 负 Z 位姿并与控制器同步显隐。
@@ -17,7 +21,12 @@
 ### 验证结果
 
 - Python 编译检查通过。
-- OpenXR/Filament Bridge 测试 `49 passed`。
+- OpenXR/Filament Bridge 定向测试 `51 passed`，完整测试套件 `484 passed`。
+
+### 未来目标
+
+- 建立独立 `d2s-vulkan-1.4` 实验分支，基于固定版本 Vulkan 1.4 `vk.xml`/Headers 远程生成项目自用 Python binding wheel；生产分支继续保留 Vulkan 1.2/1.3 能力回退。
+- 在 Vulkan 1.4 binding 可用后，对 `hostImageCopy` 与独立 Transfer Queue 的工具纹理上传路径进行同场景基准测试；只有 Validation Layer、三平台 CI 和实机性能数据证明有净收益时才合入主路径。
 
 ## 2026-07-21
 

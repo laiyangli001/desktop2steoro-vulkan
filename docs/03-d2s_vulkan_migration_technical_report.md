@@ -225,6 +225,14 @@ Projection Layer 的运行时屏幕输出现已采用左右眼独立的三帧 Vu
 
 控制器路径已按旧工程生命周期迁移到 Vulkan：Python Presenter 维护逐手 Grip/Aim 跟踪、移动时间、One Euro 位置滤波和四元数方向平滑；Filament Bridge 在共享 Projection Layer Scene 中加载左右手 GLB、更新 profile 校准姿态和按键动画，并通过独立 C ABI 控制模型与 3D 激光实体显隐。静止 5 秒或 Grip 跟踪丢失时隐藏对应手柄和激光，重新移动后恢复；激光不再通过 Quad Layer 模拟。
 
+原生 Bridge 已从单一实现文件拆分为 Context、Eye、Scene、Controller、Laser、Screen、Material 和 Preview 模块。`filament_bridge.cpp` 只保留与 `filament_bridge.h` 一一对应的 C ABI 转发，因此 Python wrapper 无需变化；共享 Engine/Scene 和资源 ownership 仍集中在 `bridge_context`，模块拆分不复制 GLB、材质、纹理或 Shader。CMake 默认隐藏内部 C++ 符号，防止后续功能把内部实现扩展成不稳定 ABI。三平台二进制分别进入 `src/xr_viewer/native/windows`、`linux`、`macos`，不再平铺在 `native` 根目录。
+
+### 5.0.1 Vulkan 1.4 Binding 与传输基准（未来目标）
+
+后续建立独立 `d2s-vulkan-1.4` 实验分支，使用固定 Khronos Vulkan 1.4 Registry 输入在 GitHub Actions 远程生成 Python binding wheel，不改变当前生产环境的 `vulkan==1.3.275.1` 锁定。实验路径查询并显式启用 Vulkan 1.4 feature/property 链，同时保留 Vulkan 1.2/1.3 回退。
+
+首轮只验证 `hostImageCopy` 与独立 Transfer Queue 对 FPS、键盘、帮助面板等 CPU 生成工具纹理的上传收益。CUDA/Vulkan 外部图像主链路不因该实验改回 CPU 上传。合入门槛为三平台 wheel/Bridge CI、Validation Layer、相同场景性能基准和目标实机长稳全部通过；没有可重复净收益时保留现状。
+
 ### 5.1 主图形队列（每帧必须完成）
 
 ```

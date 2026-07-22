@@ -4,10 +4,9 @@ import ctypes
 import io
 import json
 import struct
-import sys
 from pathlib import Path
 
-from .filament_vulkan_bridge import FilamentBridgeError
+from .filament_vulkan_bridge import FilamentBridgeError, default_bridge_path
 
 
 def prepare_glb_for_preview(data: bytes, max_texture_dimension: int = 4096) -> tuple[bytes, int]:
@@ -130,16 +129,7 @@ class FilamentDesktopPreview:
 
     @staticmethod
     def _default_library_path() -> Path:
-        names = {
-            "win32": "filament_bridge.dll",
-            "darwin": "libfilament_bridge.dylib",
-            "linux": "libfilament_bridge.so",
-        }
-        try:
-            name = names[sys.platform]
-        except KeyError as exc:
-            raise FilamentBridgeError(f"unsupported platform: {sys.platform}") from exc
-        return Path(__file__).resolve().parent / "native" / name
+        return default_bridge_path()
 
     def load_glb(self, data: bytes, max_texture_dimension: int = 4096) -> None:
         data, resized_count = prepare_glb_for_preview(data, max_texture_dimension)

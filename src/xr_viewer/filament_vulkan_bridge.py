@@ -21,18 +21,18 @@ class _VulkanCreateInfo(ctypes.Structure):
 
 
 def default_bridge_path() -> Path:
-    names = {
-        "win32": "filament_bridge.dll",
-        "darwin": "libfilament_bridge.dylib",
-        "linux": "libfilament_bridge.so",
+    platforms = {
+        "win32": ("windows", "filament_bridge.dll"),
+        "darwin": ("macos", "libfilament_bridge.dylib"),
+        "linux": ("linux", "libfilament_bridge.so"),
     }
     try:
-        name = names[sys.platform]
+        platform_dir, name = platforms[sys.platform]
     except KeyError as exc:
         raise FilamentBridgeError(
             f"unsupported platform for Filament Bridge: {sys.platform}"
         ) from exc
-    return Path(__file__).resolve().parent / "native" / name
+    return Path(__file__).resolve().parent / "native" / platform_dir / name
 
 
 class FilamentVulkanBridge:

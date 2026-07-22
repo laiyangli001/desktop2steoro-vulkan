@@ -70,13 +70,17 @@ def _probe_openxr_extensions() -> dict[str, object]:
 
 def build_capability_report() -> dict[str, object]:
     src_root = Path(__file__).resolve().parents[1]
-    filament_names = {
-        "win32": "filament_bridge.dll",
-        "darwin": "libfilament_bridge.dylib",
-        "linux": "libfilament_bridge.so",
+    filament_platforms = {
+        "win32": ("windows", "filament_bridge.dll"),
+        "darwin": ("macos", "libfilament_bridge.dylib"),
+        "linux": ("linux", "libfilament_bridge.so"),
     }
-    filament_name = filament_names.get(sys.platform)
-    filament_path = src_root / "xr_viewer" / "native" / filament_name if filament_name else None
+    filament_platform = filament_platforms.get(sys.platform)
+    filament_path = (
+        src_root / "xr_viewer" / "native" / filament_platform[0]
+        / filament_platform[1]
+        if filament_platform else None
+    )
     return {
         "project": "desktop2steoro-vulkan",
         "python": {

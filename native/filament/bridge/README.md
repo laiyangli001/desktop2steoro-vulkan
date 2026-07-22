@@ -14,14 +14,19 @@ independent Filament Renderers, Views, Cameras, and external swapchains. The
 separate Renderers keep Filament frame state isolated while GLB, materials,
 textures, and shader resources remain shared by the Engine.
 
+`filament_bridge.cpp` contains only the stable exported C ABI. Context, eye,
+scene, controller, laser, screen, material, and desktop preview implementation
+live in their matching `bridge_*.cpp` modules; `bridge_internal.h` contains
+shared private types and is never exposed to Python.
+
 Each target platform needs its matching official Filament SDK archive. Configure
 CMake with `FILAMENT_SDK_ROOT` pointing at that extracted archive. The generated
-library is placed in `src/xr_viewer/native` for packaging:
+library is placed in its platform directory for packaging:
 
 ```text
-Windows: filament_bridge.dll
-macOS:   libfilament_bridge.dylib
-Linux:   libfilament_bridge.so
+Windows: src/xr_viewer/native/windows/filament_bridge.dll
+macOS:   src/xr_viewer/native/macos/libfilament_bridge.dylib
+Linux:   src/xr_viewer/native/linux/libfilament_bridge.so
 ```
 
 The C ABI in `filament_bridge.h` is intentionally narrow. Python first creates
@@ -53,6 +58,6 @@ one issue for a newly published version. It never changes runtime binaries.
 
 To upgrade, update that manifest from the official release, then run `Build
 Filament Bridge`. Merge only after all three platform jobs pass; download their
-artifacts into `src/xr_viewer/native` and commit those three libraries together
+artifacts into the matching `src/xr_viewer/native/<platform>` directories and commit those three libraries together
 with the manifest change. Reverting that commit restores the last verified SDK
 and binaries.
