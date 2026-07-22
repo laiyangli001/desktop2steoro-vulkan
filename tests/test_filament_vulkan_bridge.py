@@ -116,6 +116,7 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "filament_bridge_set_controller_guide_texture" in facade
     assert "filament_bridge_set_controller_guide" in facade
     assert "D2S Controller Guide" in source
+    assert "guide.rgb *= guide.a;" in source
     assert "Texture::InternalFormat::SRGB8_A8" in source
     assert ".blending(filament::BlendingMode::TRANSPARENT)" in source
     assert ".depthWrite(false)" in source

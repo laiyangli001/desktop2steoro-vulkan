@@ -43,7 +43,12 @@ int bridge_controller_guide_set_texture(
     const char* shader = R"FILAMENT(
         void material(inout MaterialInputs material) {
             prepareMaterial(material);
-            material.baseColor = texture(materialParams_guideTexture, getUV0());
+            float4 guide = texture(materialParams_guideTexture, getUV0());
+            // Filament's transparent blend mode expects premultiplied alpha.
+            // The source texture deliberately keeps white RGB in transparent
+            // texels for clean filtered edges, so premultiply after sampling.
+            guide.rgb *= guide.a;
+            material.baseColor = guide;
         }
     )FILAMENT";
     filamat::MaterialBuilder::init();

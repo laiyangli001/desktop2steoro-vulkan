@@ -30,6 +30,7 @@
 - GitHub Actions 完成 Windows x86_64、Linux x86_64、macOS arm64 Filament Bridge 编译及二进制回写，本地同步至提交 `2aa8bbf`。
 - 新增右手柄 B 键近距导引：手柄距头显 0.4 米内自动显示，仅保留 B 键透明说明框，并从 PICO GLB 的真实 B 键节点计算引导端点。
 - 将 B 键导引由 OpenXR Quad Layer 迁移到 Filament Projection Layer 的无后处理 LDR 层；透明纹理、白色边框和文字不经过场景曝光或色调映射，面板逐帧朝向头部并跟随按键旋转。
+- 修复 Projection Layer 导引显示成白色大方块：按 Filament `transparent` 材质契约在纹理采样后执行预乘 Alpha，透明区域不再把保留的白色 RGB 直接混入画面。
 
 ### 验证结果
 
