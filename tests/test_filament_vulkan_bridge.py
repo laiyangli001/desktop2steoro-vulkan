@@ -98,6 +98,8 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "return configure_color_pipeline_impl(preview) ? 1 : 0;" in source
     assert "VK_FORMAT_R8G8B8A8_SRGB" in source
     assert "Virtual screen requires VK_FORMAT_R8G8B8A8_SRGB" in source
+    assert "Display-referred screen content bypasses the HDR scene view." in source
+    assert "bridge_set_renderable_layer(bridge, bridge->screen_entity, 1, true);" in source
     assert "bool screen_in_scene = false;" in source
     assert "The sampler is required by the material" in source
     assert "filament_bridge_set_screen_ready_semaphore" in facade

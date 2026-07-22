@@ -84,6 +84,7 @@ FilamentBridge* bridge_context_create(
         eye.view->setChannelDepthClearEnabled(0, false);
         eye.laser_view->setScene(bridge->scene);
         eye.laser_view->setCamera(eye.camera);
+        // Layer 1 contains display-referred screen/UI geometry and lasers.
         eye.laser_view->setVisibleLayers(0xff, 0x02);
         eye.laser_view->setColorGrading(nullptr);
         eye.laser_view->setPostProcessingEnabled(false);

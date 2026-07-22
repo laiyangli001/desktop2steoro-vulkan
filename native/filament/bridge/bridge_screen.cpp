@@ -153,6 +153,8 @@ int bridge_screen_create(FilamentBridge* bridge) {
         bridge_set_error(bridge, "Filament could not create OpenXR screen renderable");
         return 0;
     }
+    // Display-referred screen content bypasses the HDR scene view.
+    bridge_set_renderable_layer(bridge, bridge->screen_entity, 1, false);
     // The sampler is required by the material. Keep the renderable detached
     // until a valid runtime Vulkan image has been imported.
     return 1;
@@ -177,6 +179,7 @@ int bridge_screen_set_image(FilamentBridge* bridge, const void* image,
                     "screenTexture", slot.texture, bridge->screen_texture_sampler);
             if (!bridge->screen_in_scene && !bridge->screen_entity.isNull()) {
                 bridge->scene->addEntity(bridge->screen_entity);
+                bridge_set_renderable_layer(bridge, bridge->screen_entity, 1, true);
                 bridge->screen_in_scene = true;
             }
             return 1;
@@ -204,6 +207,7 @@ int bridge_screen_set_image(FilamentBridge* bridge, const void* image,
             bridge->screen_texture_sampler);
     if (!bridge->screen_in_scene && !bridge->screen_entity.isNull()) {
         bridge->scene->addEntity(bridge->screen_entity);
+        bridge_set_renderable_layer(bridge, bridge->screen_entity, 1, true);
         bridge->screen_in_scene = true;
     }
     return 1;

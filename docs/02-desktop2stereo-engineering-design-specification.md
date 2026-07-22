@@ -584,7 +584,11 @@ class CaptureAdapter(Protocol):
 
 ### 8.3 尺寸与颜色
 
-Capture Adapter 报告真实 `capture_size`、pixel format、transfer function、primaries 和 range。RGB preprocess Compute Pass 负责统一到线性工作色彩空间和 `render_size`。
+Capture Adapter 报告真实 `capture_size`、pixel format、transfer function、primaries、range 和 `color_space`。任何未知色彩空间必须告警并阻止静默推断。SDR sRGB 输入在显示输出路径中保持显示参考语义；RGB preprocess 可以为模型或线性工作 Pass 建立明确的线性副本，但不得在没有声明的情况下对原始显示 RGB 执行 gamma、tone mapping 或曝光。
+
+正式输出契约固定为 `color_space=srgb`、RGBA8、`image_origin=top_left`。OpenXR Projection swapchain 必须使用 Vulkan sRGB 格式，不得回退到 UNORM。Filament 主场景使用线性 Rec.709/D65 和明确配置的 tone mapping；场景曝光必须进入 ColorGrading，不得乘改 glTF 材质颜色。
+
+虚拟屏幕、UI 和手柄激光属于显示参考 LDR 内容：其输入图像必须是 `VK_FORMAT_R8G8B8A8_SRGB`，Filament 只解码一次；它们必须进入关闭后处理的独立 View，不得经过主场景 ACES/其他 tone mapping。默认颜色控制必须为恒等变换，非中性颜色控制只能来自明确的用户配置。
 
 窗口尺寸或 HDR 状态改变时发布 format-change event。资源重建在 Frame Boundary 进行，capture callback 不直接重建 Vulkan 资源。
 
@@ -723,7 +727,11 @@ OpenXR swapchain 的接入必须通过经过验证的 Filament external render t
 
 OpenGL Fallback 直接渲染到 OpenGL OpenXR swapchain 或 OpenGL window framebuffer，不经过 Vulkan、D3D11 或 WGL 跨 API 桥接。Windows/Linux 目标 OpenGL 4.3 及以上；macOS OpenGL 4.1 仅提供基本网格、材质、虚拟屏幕和 UI，不启用依赖 Compute Shader 的效果。
 
-### 11.2.1 Bridge 接口边界与完整性清单
+### 11.2.1 Filament 颜色管线
+
+Filament Bridge 必须将渲染对象按颜色语义分层：HDR 场景层使用带 ColorGrading 的主 View；显示参考屏幕、UI 和激光使用独立的无后处理 View。主 View 不得渲染 LDR 图元，LDR View 不得应用 ACES 或其他场景 tone mapping。`VK_FORMAT_R8G8B8A8_SRGB` 是当前屏幕纹理导入的唯一合法格式；以 UNORM 图像配合 `SRGB8_A8` 采样属于错误，必须拒绝。
+
+### 11.2.2 Bridge 接口边界与完整性清单
 
 Bridge 采用窄 C ABI，按产品功能补充接口，不做 Filament 全量 API 的 Python 化。C++ 内部管理 Engine、Renderer、Scene、View、Camera、AssetLoader、ResourceLoader、Animator、Material 和 Texture 等对象；Python 通过 `ctypes` 使用不透明 handle、标量、矩阵、资源字节和结构化状态。
 
