@@ -610,9 +610,9 @@ class OpenXrVulkanPresenter(
             self._keyboard_grab_anchor = None
         elif action == "reset_screen":
             if self._filament_screen_initial is not None:
-                self._set_filament_screen_pose(
-                    self._filament_screen_initial[0], self._filament_screen_initial[3]
-                )
+                self._filament_screen = self._filament_screen_initial
+                if self.filament_bridge is not None:
+                    self.filament_bridge.set_screen(*self._filament_screen)
         elif action == "cycle_screen_preset":
             self._cycle_shortcut_screen_preset()
         elif action == "toggle_screen_shape":

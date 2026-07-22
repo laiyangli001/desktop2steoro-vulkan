@@ -594,6 +594,19 @@ def test_vulkan_shortcuts_cycle_screen_preset_and_background() -> None:
     assert presenter._filament_skybox_brightness == pytest.approx(1.0)
 
 
+def test_vulkan_reset_screen_restores_initial_size_and_pose() -> None:
+    presenter = OpenXrVulkanPresenter()
+    initial = ((0.0, 0.0, -2.5), 2.4, 1.35, (0.0, 0.0, 0.0))
+    presenter._filament_screen_initial = initial
+    presenter._filament_screen = (
+        (1.0, 0.5, -20.0), 22.0, 12.375, (5.0, 10.0, 0.0)
+    )
+
+    presenter._dispatch_controller_shortcut("reset_screen")
+
+    assert presenter._filament_screen == initial
+
+
 def test_vulkan_shortcut_delegates_runtime_owned_actions() -> None:
     actions: list[str] = []
     presenter = OpenXrVulkanPresenter(
