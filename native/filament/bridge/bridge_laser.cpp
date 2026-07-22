@@ -36,7 +36,7 @@ int bridge_laser_create(FilamentBridge* bridge) {
         void material(inout MaterialInputs material) {
             prepareMaterial(material);
             float2 uv = getUV0();
-            float t = fract(uv.y - materialParams.laser_time * 0.4);
+            float t = fract(uv.y + materialParams.laser_time * 0.4);
             float3 color;
             if (t < 0.167) {
                 color = mix(float3(0.0, 0.4, 1.0), float3(0.0, 1.0, 1.0), t / 0.167);
@@ -64,7 +64,7 @@ int bridge_laser_create(FilamentBridge* bridge) {
             .materialDomain(filament::MaterialDomain::SURFACE)
             .blending(filament::BlendingMode::OPAQUE)
             .culling(filament::backend::CullingMode::NONE)
-            .depthWrite(false)
+            .depthWrite(true)
             .depthCulling(true)
             .targetApi(filamat::MaterialBuilder::TargetApi::ALL)
             .platform(filamat::MaterialBuilder::Platform::ALL);

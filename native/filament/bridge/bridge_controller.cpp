@@ -189,6 +189,47 @@ float bridge_controller_animation_amount(
     return 0.0f;
 }
 
+namespace {
+
+void bridge_controller_add_animation(
+        FilamentBridge* bridge, ControllerAsset& controller,
+        const std::string& value_name, utils::Entity value_entity) {
+    if (!bridge || !bridge->asset || value_entity.isNull()) return;
+    const std::string suffix = "_value";
+    if (value_name.size() <= suffix.size() ||
+            value_name.compare(value_name.size() - suffix.size(), suffix.size(), suffix) != 0) {
+        return;
+    }
+    const std::string prefix = value_name.substr(0, value_name.size() - suffix.size());
+    const auto min_entity = bridge->asset->getFirstEntityByName(
+            (prefix + "_min").c_str());
+    const auto max_entity = bridge->asset->getFirstEntityByName(
+            (prefix + "_max").c_str());
+    const auto semantic = bridge_controller_semantic(value_name);
+    auto& transforms = bridge->engine->getTransformManager();
+    const auto value_instance = transforms.getInstance(value_entity);
+    const auto min_instance = transforms.getInstance(min_entity);
+    const auto max_instance = transforms.getInstance(max_entity);
+    if (semantic.empty() || min_entity.isNull() || max_entity.isNull() ||
+            !value_instance.isValid() || !min_instance.isValid() || !max_instance.isValid()) {
+        return;
+    }
+    if (std::any_of(controller.animations.begin(), controller.animations.end(),
+            [&value_entity](const ControllerAnimation& animation) {
+                return animation.value_entity == value_entity;
+            })) {
+        return;
+    }
+    controller.animations.push_back({
+            value_entity, min_entity, max_entity,
+            transforms.getTransform(value_instance),
+            transforms.getTransform(min_instance),
+            transforms.getTransform(max_instance),
+            semantic, value_name});
+}
+
+}  // namespace
+
 void bridge_controller_update_animations(
         FilamentBridge* bridge, ControllerAsset& controller) {
     if (!controller.asset || !bridge->engine) return;
@@ -244,7 +285,6 @@ int bridge_controller_load(
         if (!instance.isValid()) continue;
         renderables.setLightChannel(instance, 1, true);
     }
-    const auto& transforms = bridge->engine->getTransformManager();
     for (size_t index = 0; index < controller.asset->getEntityCount(); ++index) {
         const auto entity = controller.asset->getEntities()[index];
         const char* raw_name = controller.asset->getName(entity);
@@ -255,26 +295,26 @@ int bridge_controller_load(
                 value_name.compare(value_name.size() - suffix.size(), suffix.size(), suffix) != 0) {
             continue;
         }
-        const std::string prefix = value_name.substr(0, value_name.size() - suffix.size());
-        const auto min_entity = controller.asset->getFirstEntityByName(
-                (prefix + "_min").c_str());
-        const auto max_entity = controller.asset->getFirstEntityByName(
-                (prefix + "_max").c_str());
-        const auto value_instance = transforms.getInstance(entity);
-        const auto min_instance = transforms.getInstance(min_entity);
-        const auto max_instance = transforms.getInstance(max_entity);
-        if (min_entity.isNull() || max_entity.isNull() ||
-                !value_instance.isValid() || !min_instance.isValid() || !max_instance.isValid()) {
-            continue;
+        bridge_controller_add_animation(bridge, controller, value_name, entity);
+    }
+    // Some Filament SDK builds do not expose non-renderable glTF node names through
+    // getEntities(). Keep the legacy controller node contract as a small fallback.
+    if (controller.animations.empty()) {
+        constexpr const char* kControllerValues[] = {
+                "xr_standard_trigger_pressed_value",
+                "xr_standard_squeeze_pressed_value",
+                "xr_standard_thumbstick_pressed_value",
+                "xr_standard_thumbstick_xaxis_pressed_value",
+                "xr_standard_thumbstick_yaxis_pressed_value",
+                "a_button_pressed_value", "b_button_pressed_value",
+                "x_button_pressed_value", "y_button_pressed_value",
+                "LMenu_pressed_value", "RMenu_pressed_value",
+                "LPico_value", "RPico_value",
+        };
+        for (const char* value_name : kControllerValues) {
+            const auto entity = controller.asset->getFirstEntityByName(value_name);
+            bridge_controller_add_animation(bridge, controller, value_name, entity);
         }
-        const std::string semantic = bridge_controller_semantic(value_name);
-        if (semantic.empty()) continue;
-        controller.animations.push_back({
-                entity, min_entity, max_entity,
-                transforms.getTransform(value_instance),
-                transforms.getTransform(min_instance),
-                transforms.getTransform(max_instance),
-                semantic, value_name});
     }
     std::printf("[FilamentBridge] controller loaded hand=%u animations=%zu",
             hand, controller.animations.size());

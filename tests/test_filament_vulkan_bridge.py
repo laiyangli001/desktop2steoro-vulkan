@@ -100,6 +100,9 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "D2S Controller Laser" in source
     assert 'parameter("laser_time"' in source
     assert "materialParams.laser_time * 0.4" in source
+    assert "fract(uv.y + materialParams.laser_time * 0.4)" in source
+    assert ".blending(filament::BlendingMode::OPAQUE)" in source
+    assert ".depthWrite(true)" in source
     assert "materialParams_laser_time" not in source
     assert 'parameter("time"' not in source
     assert "float3(0.0, 0.4, 1.0)" in source
@@ -109,6 +112,8 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "controller_quaternion_slerp" in source
     assert "controller.button_values[5]" in source
     assert "controller loaded hand=%u animations=%zu" in source
+    assert "kControllerValues" in source
+    assert "getFirstEntityByName(value_name)" in source
 
 
 @pytest.mark.parametrize("hand", ("left", "right"))
