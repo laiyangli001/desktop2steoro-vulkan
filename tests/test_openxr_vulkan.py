@@ -6,6 +6,7 @@ import threading
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 import vulkan as vk
 import xr
@@ -275,6 +276,102 @@ def test_presenter_uses_controller_action_mixin_initializer() -> None:
     presenter = OpenXrVulkanPresenter()
     assert hasattr(presenter, "_init_controller_actions")
     assert not hasattr(presenter, "_initialize_controller_actions")
+    assert presenter._LASER_HIDE_AFTER == 5.0
+    assert presenter._laser_prev_mat_l is None
+    assert presenter._laser_prev_mat_r is None
+
+
+def test_filament_controller_lifecycle_hides_each_idle_hand_independently() -> None:
+    class Bridge:
+        controller_abi_available = True
+        controller_visibility_abi_available = True
+        laser_abi_available = True
+
+        def __init__(self) -> None:
+            self.visible = []
+            self.poses = []
+            self.inputs = []
+            self.lasers = []
+
+        def set_controller_visible(self, hand, visible) -> None:
+            self.visible.append((hand, visible))
+
+        def set_controller_pose(self, hand, matrix) -> None:
+            self.poses.append((hand, matrix.copy()))
+
+        def set_controller_inputs(self, hand, **values) -> None:
+            self.inputs.append((hand, values))
+
+        def set_controller_laser(self, hand, matrix, *, visible) -> None:
+            self.lasers.append((hand, matrix.copy(), visible))
+
+    presenter = OpenXrVulkanPresenter()
+    presenter._controller_brand = SimpleNamespace(
+        offset=(0.0, 0.0, 0.0), rotation_deg=0.0
+    )
+    presenter._frame_now = 20.0
+    presenter._laser_last_move_l = 14.9
+    presenter._laser_last_move_r = 19.0
+    presenter._grip_mat_l = np.eye(4, dtype=np.float32)
+    presenter._grip_mat_r = np.eye(4, dtype=np.float32)
+    presenter._aim_mat_l = None
+    presenter._aim_mat_r = None
+    presenter._controller_inputs = ({}, {})
+    bridge = Bridge()
+
+    presenter._update_filament_controllers(bridge)
+
+    assert bridge.visible == [(0, False), (1, True)]
+    assert [hand for hand, _matrix in bridge.poses] == [1]
+    assert [hand for hand, _values in bridge.inputs] == [1]
+    assert [(hand, visible) for hand, _matrix, visible in bridge.lasers] == [
+        (0, False), (1, False)
+    ]
+
+
+def test_active_filament_controller_uses_legacy_laser_calibration() -> None:
+    class Bridge:
+        controller_abi_available = True
+        controller_visibility_abi_available = True
+        laser_abi_available = True
+
+        def __init__(self) -> None:
+            self.laser_matrix = None
+
+        def set_controller_visible(self, hand, visible) -> None:
+            pass
+
+        def set_controller_pose(self, hand, matrix) -> None:
+            pass
+
+        def set_controller_inputs(self, hand, **values) -> None:
+            pass
+
+        def set_controller_laser(self, hand, matrix, *, visible) -> None:
+            if hand == 0 and visible:
+                self.laser_matrix = matrix.copy()
+
+    presenter = OpenXrVulkanPresenter()
+    presenter._controller_brand = SimpleNamespace(
+        offset=(0.0, 0.0, 0.0), rotation_deg=0.0
+    )
+    presenter._frame_now = 20.0
+    presenter._laser_last_move_l = 19.0
+    presenter._laser_last_move_r = 0.0
+    presenter._grip_mat_l = np.eye(4, dtype=np.float32)
+    presenter._grip_mat_r = None
+    presenter._aim_mat_l = np.eye(4, dtype=np.float32)
+    presenter._aim_mat_r = None
+    presenter._controller_inputs = ({}, {})
+    bridge = Bridge()
+
+    presenter._update_filament_controllers(bridge)
+
+    assert bridge.laser_matrix is not None
+    assert np.linalg.norm(bridge.laser_matrix[:3, 0]) == pytest.approx(0.006)
+    assert np.linalg.norm(bridge.laser_matrix[:3, 1]) == pytest.approx(0.4)
+    assert bridge.laser_matrix[1, 3] > 0.0
+    assert bridge.laser_matrix[2, 3] < 0.0
 
 
 def test_vulkan_presenter_exposes_legacy_overlay_shortcut_state() -> None:

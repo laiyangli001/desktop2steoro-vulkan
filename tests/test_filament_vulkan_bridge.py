@@ -49,3 +49,7 @@ def test_native_bridge_keeps_eye_renderer_and_screen_lifetimes_explicit() -> Non
     assert "bridge->engine->flushAndWait();" in source
     assert "diagnostic_frame_count < 8" in source
     assert "[FilamentBridge] acquired eye=" in source
+    assert "filament_bridge_set_controller_visible" in source
+    assert "renderables.setLayerMask" in source
+    assert "filament_bridge_set_controller_laser" in source
+    assert "D2S Controller Laser" in source

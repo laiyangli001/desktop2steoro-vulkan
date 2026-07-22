@@ -45,6 +45,8 @@ class FilamentVulkanBridge:
         except OSError as exc:
             raise FilamentBridgeError(f"unable to load Filament Bridge: {path}") from exc
         self._controller_abi_available = False
+        self._controller_visibility_abi_available = False
+        self._laser_abi_available = False
         self._screen_image_abi_available = False
         self._screen_ready_semaphore_abi_available = False
         self._async_submit_abi_available = False
@@ -58,6 +60,14 @@ class FilamentVulkanBridge:
     @property
     def controller_abi_available(self) -> bool:
         return self._controller_abi_available
+
+    @property
+    def laser_abi_available(self) -> bool:
+        return self._laser_abi_available
+
+    @property
+    def controller_visibility_abi_available(self) -> bool:
+        return self._controller_visibility_abi_available
 
     @property
     def screen_image_abi_available(self) -> bool:
@@ -309,8 +319,22 @@ class FilamentVulkanBridge:
             "set_controller_inputs",
         )
 
+    def set_controller_visible(self, hand: int, visible: bool) -> None:
+        self._ensure_loaded()
+        if not self._controller_visibility_abi_available:
+            return
+        self._ensure_controller_abi()
+        self._check_result(
+            self._library.filament_bridge_set_controller_visible(
+                self._handle, int(hand), int(bool(visible))
+            ),
+            "set_controller_visible",
+        )
+
     def set_controller_laser(self, hand: int, matrix, *, visible: bool) -> None:
         self._ensure_loaded()
+        if not self._laser_abi_available:
+            return
         self._ensure_controller_abi()
         values = [float(value) for value in matrix.reshape(-1, order="F")]
         if int(hand) not in (0, 1) or len(values) != 16:
@@ -486,7 +510,6 @@ class FilamentVulkanBridge:
             "filament_bridge_load_controller",
             "filament_bridge_set_controller_pose",
             "filament_bridge_set_controller_inputs",
-            "filament_bridge_set_controller_laser",
         )
         if all(hasattr(library, name) for name in controller_functions):
             library.filament_bridge_load_controller.argtypes = [
@@ -503,11 +526,25 @@ class FilamentVulkanBridge:
                 ctypes.c_uint32,
             ]
             library.filament_bridge_set_controller_inputs.restype = ctypes.c_int
-            library.filament_bridge_set_controller_laser.argtypes = [
+            self._controller_abi_available = True
+        set_controller_visible = getattr(
+            library, "filament_bridge_set_controller_visible", None
+        )
+        if set_controller_visible is not None:
+            set_controller_visible.argtypes = [
+                ctypes.c_void_p, ctypes.c_uint32, ctypes.c_int
+            ]
+            set_controller_visible.restype = ctypes.c_int
+            self._controller_visibility_abi_available = True
+        set_controller_laser = getattr(
+            library, "filament_bridge_set_controller_laser", None
+        )
+        if set_controller_laser is not None:
+            set_controller_laser.argtypes = [
                 ctypes.c_void_p, ctypes.c_uint32, ctypes.POINTER(ctypes.c_float), ctypes.c_int
             ]
-            library.filament_bridge_set_controller_laser.restype = ctypes.c_int
-            self._controller_abi_available = True
+            set_controller_laser.restype = ctypes.c_int
+            self._laser_abi_available = True
         library.filament_bridge_set_scene_exposure.argtypes = [
             ctypes.c_void_p, ctypes.c_float
         ]

@@ -765,6 +765,8 @@ Bridge 接口必须覆盖以下功能域：
 
 屏幕变换、距离、曲率和可见性由 `SceneFrameState` 提供。交互状态与渲染资源分离，手柄拖动只更新下一帧 transform snapshot。
 
+手柄状态同样由 Python OpenXR Presenter 管理，Bridge 只消费每帧快照。Presenter 必须分别维护左右手 Grip/Aim 有效性、上一帧姿态和最后移动时间；Grip 跟踪无效时立即隐藏对应模型和激光，连续 5 秒无位置或方向变化时自动隐藏，恢复移动后重新显示。激光使用 Aim 负 Z、旧工程标定偏移和稳定滤波，在共享 Filament Scene 的 Projection Layer 中绘制，不得提交为 Quad Layer。模型显隐、激光显隐、按键动画和姿态更新必须逐手独立，任一可选 ABI 缺失不得阻断基础控制器 GLB 加载。
+
 ### 11.5 相机和裁剪面
 
 每帧使用 OpenXR `pose` 和 `fov` 更新 Filament Camera。Near/Far Clip 来自场景配置，并满足 `far > near`。大型 GLB 场景必须通过实际包围盒和头显视觉验证，不能依赖固定 100 m 默认值。
@@ -825,6 +827,8 @@ xrPollEvent
 ### 13.5 Layers
 
 主房间、虚拟屏幕、手柄和默认 Glow 使用 Projection Layer。文字面板、虚拟键盘等独立 UI 可使用 Quad Layer。Layer 数量和顺序由单一 `CompositionBuilder` 生成，模块不能各自调用 `xrEndFrame`。
+
+手柄激光属于与控制器同坐标系的 3D 场景几何体，随左右眼 View 分别投影并接受场景深度测试；它不是平面 UI，不得占用 OpenXR Quad Layer。
 
 ---
 

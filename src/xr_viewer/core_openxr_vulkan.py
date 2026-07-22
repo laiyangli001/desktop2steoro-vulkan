@@ -34,7 +34,9 @@ from .core_controller_actions import CoreControllerActionsMixin
 from .core_input_helpers import CoreInputHelpersMixin
 from .core_controller_input import CoreControllerInputMixin
 from .core_controller_pose import CoreControllerPoseMixin
+from .core_controller_ray import CoreControllerRayMixin
 from .controller_models import discover_controller_brands, select_controller_brand
+from .filters import OneEuroFilter3D
 from .xr_math import (
     _mat3_to_quat_xyzw,
     _xr_quat_to_mat4,
@@ -161,6 +163,7 @@ class OpenXrCompositionBuilder:
 class OpenXrVulkanPresenter(
     CoreControllerActionsMixin,
     CoreControllerPoseMixin,
+    CoreControllerRayMixin,
     CoreControllerInputMixin,
     CoreInputHelpersMixin,
 ):
@@ -244,7 +247,27 @@ class OpenXrVulkanPresenter(
         self._grip_mat_r = None
         self._frame_now = 0.0
         self._filament_animation_origin: float | None = None
-        self._LASER_MOVE_THRESH = 0.005
+        # Keep the controller lifecycle aligned with the legacy renderer:
+        # movement refreshes a per-hand activity timestamp and both the model
+        # and laser are hidden after the idle timeout.
+        controller_now = time.perf_counter()
+        self._laser_last_move_l = controller_now
+        self._laser_last_move_r = controller_now
+        self._laser_prev_mat_l = None
+        self._laser_prev_mat_r = None
+        self._LASER_HIDE_AFTER = 5.0
+        self._LASER_MOVE_THRESH = 0.015
+        self._smooth_ray_origin_l = None
+        self._smooth_ray_origin_r = None
+        self._smooth_ray_quat_l = None
+        self._smooth_ray_quat_r = None
+        self._smooth_ray_fwd_l = None
+        self._smooth_ray_fwd_r = None
+        self._rot_smooth = 0.10
+        self._ray_deadzone_rad = 0.0052
+        self._ray_filter_l = OneEuroFilter3D(8.0, 8.0, 8.0)
+        self._ray_filter_r = OneEuroFilter3D(8.0, 8.0, 8.0)
+        self._last_frame_dt = 1.0 / 90.0
         self._initialized = False
         self._pending_output: VulkanStereoOutputFrame | None = None
         self._displayed_output: VulkanStereoOutputFrame | None = None
@@ -406,7 +429,12 @@ class OpenXrVulkanPresenter(
 
         xr = self.xr
         frame_state = xr.wait_frame(self.session)
+        previous_frame_now = self._frame_now
         self._frame_now = time.perf_counter()
+        if previous_frame_now > 0.0:
+            self._last_frame_dt = max(
+                0.001, min(0.1, self._frame_now - previous_frame_now)
+            )
         if frame_state.should_render:
             self._notify_headset_active()
         else:
@@ -416,6 +444,7 @@ class OpenXrVulkanPresenter(
             self._handle_controller_shortcuts()
             self._update_aim_poses(frame_state.predicted_display_time)
             self._update_grip_poses(frame_state.predicted_display_time)
+            self._smooth_controller_poses()
             self._grip_l_now = bool(self._controller_input(0).get("grip", 0.0) > 0.5)
             self._grip_r_now = bool(self._controller_input(1).get("grip", 0.0) > 0.5)
             self._handle_keyboard_input()
@@ -1342,7 +1371,9 @@ class OpenXrVulkanPresenter(
                 print(
                     "Filament controllers loaded: "
                     f"brand={self._controller_brand.name} "
-                    f"abi={bridge.controller_abi_available}",
+                    f"abi={bridge.controller_abi_available} "
+                    f"visibility_abi={getattr(bridge, 'controller_visibility_abi_available', False)} "
+                    f"laser_abi={getattr(bridge, 'laser_abi_available', False)}",
                     flush=True,
                 )
             if self._filament_screen is not None:
@@ -1393,10 +1424,21 @@ class OpenXrVulkanPresenter(
         for hand, (grip_matrix, aim_matrix) in enumerate(
             zip((self._grip_mat_l, self._grip_mat_r), (self._aim_mat_l, self._aim_mat_r))
         ):
-            pose_matrix = grip_matrix if grip_matrix is not None else aim_matrix
-            if pose_matrix is None:
+            last_move = self._laser_last_move_l if hand == 0 else self._laser_last_move_r
+            active = (
+                grip_matrix is not None
+                and self._frame_now - float(last_move) <= self._LASER_HIDE_AFTER
+            )
+            if getattr(bridge, "controller_visibility_abi_available", False):
+                bridge.set_controller_visible(hand, active)
+            if not active:
+                self._reset_smoothed_ray(hand)
+                if getattr(bridge, "laser_abi_available", False):
+                    bridge.set_controller_laser(
+                        hand, np.eye(4, dtype=np.float32), visible=False
+                    )
                 continue
-            model_matrix = pose_matrix @ rotation @ offset
+            model_matrix = grip_matrix @ rotation @ offset
             bridge.set_controller_pose(hand, model_matrix)
             values = self._controller_input(hand)
             button_mask = 0
@@ -1415,24 +1457,43 @@ class OpenXrVulkanPresenter(
                 joystick_y=values.get("joystick_y", 0.0),
                 button_mask=button_mask,
             )
-            if hasattr(bridge, "set_controller_laser"):
+            if getattr(bridge, "laser_abi_available", False) and hasattr(bridge, "set_controller_laser"):
                 if aim_matrix is None:
                     bridge.set_controller_laser(
                         hand, np.eye(4, dtype=np.float32), visible=False
                     )
                 else:
-                    direction = (-aim_matrix[:3, 2]).astype(np.float64)
+                    smoothed_origin, direction = self._get_smoothed_ray(hand)
+                    if smoothed_origin is None or direction is None:
+                        smoothed_origin = (
+                            grip_matrix[:3, 3] + grip_matrix[:3, 1] * 0.020
+                        ).astype(np.float64)
+                        direction = (-aim_matrix[:3, 2]).astype(np.float64)
                     direction /= max(float(np.linalg.norm(direction)), 1e-8)
-                    beam_origin = aim_matrix[:3, 3].astype(np.float64) + direction * 0.12
-                    reference_up = np.array((0.0, 1.0, 0.0), dtype=np.float64)
-                    if abs(float(np.dot(reference_up, direction))) > 0.96:
-                        reference_up = np.array((1.0, 0.0, 0.0), dtype=np.float64)
-                    right_axis = np.cross(reference_up, direction)
+                    right_axis = aim_matrix[:3, 0].astype(np.float64)
                     right_axis /= max(float(np.linalg.norm(right_axis)), 1e-8)
+                    # Match the legacy controller ray calibration: rotate the
+                    # Aim -Z vector by 12 degrees around local X and start the
+                    # beam just beyond the grip shell.
+                    angle = math.radians(12.0)
+                    direction = (
+                        direction * math.cos(angle)
+                        + np.cross(right_axis, direction) * math.sin(angle)
+                        + right_axis
+                        * float(np.dot(right_axis, direction))
+                        * (1.0 - math.cos(angle))
+                    )
+                    direction /= max(float(np.linalg.norm(direction)), 1e-8)
+                    beam_origin = (
+                        smoothed_origin.astype(np.float64) + direction * 0.11
+                    )
                     normal_axis = np.cross(right_axis, direction)
+                    normal_axis /= max(float(np.linalg.norm(normal_axis)), 1e-8)
+                    right_axis = np.cross(direction, normal_axis)
+                    right_axis /= max(float(np.linalg.norm(right_axis)), 1e-8)
                     laser_matrix = np.eye(4, dtype=np.float32)
-                    laser_matrix[:3, 0] = (right_axis * 0.028).astype(np.float32)
-                    laser_matrix[:3, 1] = (direction * 10.0).astype(np.float32)
+                    laser_matrix[:3, 0] = (right_axis * 0.006).astype(np.float32)
+                    laser_matrix[:3, 1] = (direction * 0.4).astype(np.float32)
                     laser_matrix[:3, 2] = normal_axis.astype(np.float32)
                     laser_matrix[:3, 3] = beam_origin.astype(np.float32)
                     bridge.set_controller_laser(hand, laser_matrix, visible=True)
