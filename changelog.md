@@ -6,6 +6,7 @@
 
 ### 已实现
 
+- 修复非 Windows 测试导入 `_KEYEVENTF_KEYUP` 失败：Windows 输入常量在 no-op 平台分支保持同名导出，GitHub Actions Linux 合规测试可正常收集 OpenXR 测试。
 - 修复实机 `FilamentBridge.end_frame()` access violation：日志确认崩溃来自缺少源图像同步时的运行时 VkImage 直导入屏幕路径；无同步契约时使用旧工程已验证的 Projection Layer 场景加 Quad Layer GPU copy，zero-copy 仅在能力门控通过时启用。
 - 将 Filament 屏幕直采改为能力门控：默认保留 zero-copy 意图，但只有输出帧同时提供左右眼 `cuda_external_semaphore` ready semaphore、Bridge 屏幕图像 ABI 和 semaphore ABI 时才启用；未满足同步契约时自动回退 Quad Layer GPU copy，避免未同步 raw `VkImage` 进入 Filament。
 - 修复 FPS/键盘等工具 Quad Layer 上传崩溃：`VulkanHostImage.upload()` 改用 PyVulkan 映射内存提供的可写 buffer，按 `rowPitch` 写入像素，不再把 cffi 映射对象错误转换为整数指针；菜单键打开 FPS 面板不再触发 `TypeError` 退出 XR 线程。
