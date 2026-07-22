@@ -389,6 +389,9 @@ std::string controller_semantic(std::string name) {
     if (name.find("y_button") != std::string::npos ||
             name.find("ybutton") != std::string::npos) return "y_button";
     if (name.find("menu") != std::string::npos) return "menu_button";
+    if (name.find("photo_button") != std::string::npos ||
+            name.find("home_button") != std::string::npos ||
+            name.find("app_button") != std::string::npos) return "menu_button";
     return {};
 }
 
@@ -415,7 +418,8 @@ float controller_animation_amount(
     if (semantic == "joystick_x") return controller.joystick_x;
     if (semantic == "joystick_y") return controller.joystick_y;
     if (semantic == "joystick") return controller.joystick_x != 0.0f ||
-            controller.joystick_y != 0.0f ? 1.0f : 0.0f;
+            controller.joystick_y != 0.0f ||
+            (controller.button_mask & (1u << 5)) ? 1.0f : 0.0f;
     if (semantic == "a_button") return (controller.button_mask & (1u << 0)) ? 1.0f : 0.0f;
     if (semantic == "b_button") return (controller.button_mask & (1u << 1)) ? 1.0f : 0.0f;
     if (semantic == "x_button") return (controller.button_mask & (1u << 2)) ? 1.0f : 0.0f;

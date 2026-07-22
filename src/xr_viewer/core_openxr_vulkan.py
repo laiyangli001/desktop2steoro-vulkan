@@ -46,6 +46,7 @@ from .overlay_textures import (
     build_fps_overlay_rgba,
     build_help_rgba,
     build_keyboard_rgba,
+    build_laser_rgba,
     build_short_osd_rgba,
 )
 from .windows_input import (
@@ -1405,6 +1406,8 @@ class OpenXrVulkanPresenter(
             ):
                 if values.get(name, 0.0) > 0.5:
                     button_mask |= 1 << bit
+            if values.get("stick_click", 0.0) > 0.5:
+                button_mask |= 1 << 5
             bridge.set_controller_inputs(
                 hand,
                 trigger=values.get("trigger", 0.0),
@@ -1871,10 +1874,25 @@ class OpenXrVulkanPresenter(
         for hand, matrix in enumerate((self._aim_mat_l, self._aim_mat_r)):
             if matrix is None:
                 continue
-            rgba = build_cursor_rgba(32)
-            fwd = matrix[:3, 2].astype(np.float32)
-            beam_pos = matrix[:3, 3].astype(np.float32) + fwd * 0.20
-            specs.append((f"laser_{hand}", rgba, tuple(float(value) for value in beam_pos), (0.025, 0.025), rotation))
+            direction = (-matrix[:3, 2]).astype(np.float64)
+            direction /= max(float(np.linalg.norm(direction)), 1e-8)
+            beam_origin = matrix[:3, 3].astype(np.float64) + direction * 0.12
+            beam_length = 10.0
+            beam_center = beam_origin + direction * (beam_length * 0.5)
+            reference_up = np.array((0.0, 1.0, 0.0), dtype=np.float64)
+            if abs(float(np.dot(reference_up, direction))) > 0.96:
+                reference_up = np.array((1.0, 0.0, 0.0), dtype=np.float64)
+            right_axis = np.cross(reference_up, direction)
+            right_axis /= max(float(np.linalg.norm(right_axis)), 1e-8)
+            normal_axis = np.cross(right_axis, direction)
+            laser_quaternion = tuple(float(value) for value in _mat3_to_quat_xyzw(
+                np.column_stack((right_axis, direction, normal_axis))
+            ))
+            specs.append((
+                f"laser_{hand}", build_laser_rgba(),
+                tuple(float(value) for value in beam_center),
+                (0.012, beam_length), laser_quaternion,
+            ))
         return [self._upload_tool_quad(*spec) for spec in specs]
 
     def _upload_tool_quad(self, key, rgba, position, size, rotation):
@@ -1907,7 +1925,10 @@ class OpenXrVulkanPresenter(
         entry["staging"].upload(rgba)
         with _acquired_swapchain_image(self.xr, _EyeSwapchain(entry["swapchain"], [], width, height, entry["resources"])) as image_index:
             self.vulkan.copy_image(entry["staging"].resource, entry["resources"][image_index])
-        qx, qy, qz, qw = _euler_degrees_to_quaternion(rotation)
+        if len(rotation) == 4:
+            qx, qy, qz, qw = (float(value) for value in rotation)
+        else:
+            qx, qy, qz, qw = _euler_degrees_to_quaternion(rotation)
         return self.xr.CompositionLayerQuad(
             space=self.reference_space,
             eye_visibility=self.xr.EyeVisibility.BOTH,

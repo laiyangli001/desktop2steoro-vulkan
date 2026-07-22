@@ -123,6 +123,20 @@ def build_cursor_rgba(size=64):
     return np.ascontiguousarray(rgba)
 
 
+def build_laser_rgba(width=12, height=256):
+    """Build a transparent vertical beam texture for an OpenXR quad layer."""
+    width = max(4, int(width))
+    height = max(16, int(height))
+    x = np.abs(np.arange(width, dtype=np.float32) - (width - 1) * 0.5)
+    core = np.clip(1.0 - x / max(width * 0.5, 1.0), 0.0, 1.0)
+    rgba = np.zeros((height, width, 4), dtype=np.uint8)
+    rgba[..., 0] = 80
+    rgba[..., 1] = 190
+    rgba[..., 2] = 255
+    rgba[..., 3] = np.maximum(0.0, core[None, :] * 235.0).astype(np.uint8)
+    return np.ascontiguousarray(rgba)
+
+
 def build_short_osd_rgba(lines, font_type=None, *, width=768, height=96):
     img = Image.new("RGBA", (int(width), int(height)), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
