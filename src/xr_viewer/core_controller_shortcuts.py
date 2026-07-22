@@ -121,7 +121,11 @@ class CoreControllerShortcutsMixin:
         a = pressed(right, "a_button")
         b = pressed(right, "b_button")
         right_grip = pressed(right, "grip")
-        normal_ab = not (a and b) and not right_grip
+        normal_ab = (
+            not (a and b)
+            and not right_grip
+            and not bool(getattr(self, "_controller_calibration_mode", False))
+        )
         self._update_short_long_button(
             "a", a, now,
             short_action="toggle_screen_shape",
@@ -141,9 +145,20 @@ class CoreControllerShortcutsMixin:
         )
         self._update_x_shortcuts(pressed(left, "x_button"), now)
 
-        self._update_stick_shortcut(
-            "left", pressed(left, "stick_click"), pressed(left, "grip"), now
+        left_stick = pressed(left, "stick_click")
+        left_stick_reserved = (
+            left_stick
+            and pressed(left, "grip")
+            and bool(getattr(self, "_keyboard_visible", False))
+            and getattr(self, "_grip_target_l", None) == "keyboard"
         )
+        if left_stick_reserved:
+            self._shortcut_last["left_stick"] = True
+            self._shortcut_long_fired["left_stick"] = True
+        else:
+            self._update_stick_shortcut(
+                "left", left_stick, pressed(left, "grip"), now
+            )
         self._update_stick_shortcut(
             "right", pressed(right, "stick_click"), right_grip, now
         )

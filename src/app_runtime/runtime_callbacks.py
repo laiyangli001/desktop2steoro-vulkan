@@ -107,9 +107,13 @@ class RuntimeCallbacks:
                 self.queue_clear_nonblocking(self.context.runtime_q)
                 print("[Main] OpenXR headset resumed; inference restarted", flush=True)
 
-    def on_openxr_controller_shortcut(self, action: str) -> bool:
+    def on_openxr_controller_shortcut(self, action: str, **values) -> bool:
         """Apply renderer-independent depth shortcuts to runtime state."""
-        if action not in {"toggle_stereo", "reset_depth"}:
+        if action not in {
+            "toggle_stereo",
+            "reset_depth",
+            "adjust_depth_strength",
+        }:
             return False
         snapshot = self.context.openxr_state.runtime_settings_snapshot
         current = getattr(snapshot, "depth_strength", None)
@@ -120,7 +124,14 @@ class RuntimeCallbacks:
                 self._controller_saved_depth_strength,
             )
         current = max(0.0, float(current))
-        if action == "toggle_stereo":
+        if action == "adjust_depth_strength":
+            target = max(
+                0.0,
+                min(10.0, current + float(values.get("delta", 0.0))),
+            )
+            if target > 0.0:
+                self._controller_saved_depth_strength = target
+        elif action == "toggle_stereo":
             if current > 0.0:
                 self._controller_saved_depth_strength = current
                 target = 0.0

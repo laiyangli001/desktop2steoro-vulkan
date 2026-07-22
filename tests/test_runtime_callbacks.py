@@ -59,3 +59,19 @@ def test_controller_shortcut_resets_depth_and_rejects_renderer_action() -> None:
         == pytest.approx(0.6)
     )
     assert callbacks.on_openxr_controller_shortcut("toggle_screen_shape") is False
+
+
+def test_controller_shortcut_adjusts_depth_continuously_with_clamp() -> None:
+    callbacks = _callbacks(0.6)
+
+    assert callbacks.on_openxr_controller_shortcut(
+        "adjust_depth_strength", delta=0.25
+    ) is True
+    assert (
+        callbacks.context.openxr_state.runtime_settings_snapshot.depth_strength
+        == pytest.approx(0.85)
+    )
+    callbacks.on_openxr_controller_shortcut(
+        "adjust_depth_strength", delta=-20.0
+    )
+    assert callbacks.context.openxr_state.runtime_settings_snapshot.depth_strength == 0.0

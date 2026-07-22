@@ -29,7 +29,7 @@ def get_controller_help_rows(lang):
             ("右 A 键", "短按", "屏幕曲面/平面切换", False),
             ("右 A 键", "长按 1s", "循环面板模式: 面向头/固定/隐藏", False),
             ("右 B 键", "短按", "切换VDXR绿屏/背景色", False),
-            ("右 B 键", "长按 1s", "重置屏幕方向", False),
+            ("右 B 键", "长按 1s", "显示/隐藏操作指南", False),
             ("", "", "", False),
 
             ("[深度与视觉]", "", "", True),
@@ -138,7 +138,7 @@ def get_controller_help_rows(lang):
             ("Right A button", "Short press", "Toggle curved/flat screen", False),
             ("Right A button", "Long press 1s", "Cycle panel: head-facing/fixed/hidden", False),
             ("Right B button", "Short press", "Toggle VDXR green / background", False),
-            ("Right B button", "Long press 1s", "Reset screen direction", False),
+            ("Right B button", "Long press 1s", "Show/hide operation guide", False),
             ("", "", "", False),
 
             ("[Depth & Visual]", "", "", True),

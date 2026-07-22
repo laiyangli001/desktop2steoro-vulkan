@@ -229,7 +229,7 @@ def test_presenter_validates_configuration() -> None:
 def test_openxr_defaults_to_validated_srgb_projection_target() -> None:
     assert OpenXrVulkanConfig().swapchain_color_mode == "srgb"
     assert OpenXrVulkanConfig().controller_model == "PICO"
-    assert OpenXrVulkanConfig().controller_guide_max_distance == pytest.approx(0.25)
+    assert OpenXrVulkanConfig().controller_guide_max_distance == pytest.approx(0.4)
 
 
 def test_presenter_rejects_non_positive_controller_guide_distance() -> None:
@@ -255,14 +255,14 @@ def test_controller_guide_pose_hides_beyond_headset_distance() -> None:
     presenter = OpenXrVulkanPresenter()
     presenter._grip_mat_r = np.eye(4, dtype=np.float64)
     presenter._aim_mat_r = np.eye(4, dtype=np.float64)
-    presenter._head_position_w = np.asarray((0.0, 0.0, 0.25), dtype=np.float64)
+    presenter._head_position_w = np.asarray((0.0, 0.0, 0.4), dtype=np.float64)
 
     pose = presenter._controller_guide_pose()
     assert pose is not None
     assert pose[1] == pytest.approx((0.34, 0.255))
     assert np.linalg.norm(np.asarray(pose[2], dtype=np.float64)) == pytest.approx(1.0)
 
-    presenter._head_position_w[2] = 0.251
+    presenter._head_position_w[2] = 0.401
     assert presenter._controller_guide_pose() is None
 
 
@@ -379,7 +379,7 @@ def test_filament_controller_guide_tracks_geometry_and_visibility() -> None:
     assert np.linalg.norm(matrix[:3, 1]) == pytest.approx(0.255)
     assert np.dot(matrix[:3, 2], presenter._head_position_w - matrix[:3, 3]) > 0.0
 
-    presenter._head_position_w[2] = 0.251
+    presenter._head_position_w[2] = 0.401
     presenter._update_filament_controller_guide(bridge)
     _, visible = bridge.calls[-1]
     assert visible is False
@@ -607,6 +607,133 @@ def test_vulkan_reset_screen_restores_initial_size_and_pose() -> None:
     assert presenter._filament_screen == initial
 
 
+def test_right_grip_moves_screen_without_resizing_it() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_screen = (
+        (0.0, 0.0, -2.0), 2.4, 1.35, (0.0, 0.0, 0.0)
+    )
+    presenter._aim_mat_r = np.eye(4, dtype=np.float32)
+    presenter._grip_mat_r = np.eye(4, dtype=np.float32)
+    presenter._controller_inputs = ({}, {"grip": 1.0})
+
+    presenter._handle_vulkan_pointer_input()
+    presenter._grip_mat_r[0, 3] = 0.2
+    presenter._handle_vulkan_pointer_input()
+
+    position, width, height, _rotation = presenter._filament_screen
+    assert position == pytest.approx((0.2, 0.0, -2.0))
+    assert width == pytest.approx(2.4)
+    assert height == pytest.approx(1.35)
+
+
+def test_left_grip_rotation_snaps_screen_to_quarter_turn() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_screen = (
+        (0.0, 0.0, -2.0), 2.4, 1.35, (0.0, 0.0, 0.0)
+    )
+    presenter._grip_mat_l = np.eye(4, dtype=np.float32)
+    presenter._grip_rotation_anchor_l = np.eye(3, dtype=np.float64)
+    presenter._screen_rotation_anchor_l = (0.0, 0.0, 0.0)
+    angle = math.radians(100.0)
+    presenter._grip_mat_l[:3, :3] = np.asarray(
+        (
+            (math.cos(angle), -math.sin(angle), 0.0),
+            (math.sin(angle), math.cos(angle), 0.0),
+            (0.0, 0.0, 1.0),
+        ),
+        dtype=np.float32,
+    )
+
+    presenter._apply_grip_screen_rotation(0)
+
+    assert presenter._filament_screen[3] == pytest.approx((0.0, 0.0, 90.0))
+
+
+def test_keyboard_world_position_is_converted_to_screen_relative_offset() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_screen = (
+        (1.0, 2.0, -3.0), 2.4, 1.0, (0.0, 0.0, 0.0)
+    )
+
+    presenter._set_keyboard_world_position((1.5, 1.0, -2.5))
+
+    assert presenter._keyboard_pose_mat4()[:3, 3] == pytest.approx(
+        (1.5, 1.0, -2.5)
+    )
+
+
+def test_continuous_screen_shortcuts_apply_only_while_laser_hits_screen() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_screen = (
+        (0.0, 0.0, -2.0), 2.4, 1.35, (0.0, 0.0, 0.0)
+    )
+    presenter._head_position_w = (0.0, 0.0, 0.0)
+    presenter._aim_mat_l = np.eye(4, dtype=np.float32)
+    presenter._aim_mat_r = np.eye(4, dtype=np.float32)
+
+    presenter._dispatch_controller_shortcut(
+        "rotate_screen", yaw_delta=10.0, pitch_delta=5.0
+    )
+    presenter._dispatch_controller_shortcut(
+        "resize_screen", width_delta=0.6, distance_delta=0.5
+    )
+
+    position, width, _height, rotation = presenter._filament_screen
+    assert rotation == pytest.approx((10.0, 5.0, 0.0))
+    assert width == pytest.approx(3.0)
+    assert np.linalg.norm(np.asarray(position)) == pytest.approx(2.5)
+
+
+def test_controller_brand_switch_and_calibration_save_use_live_profile(
+    tmp_path,
+) -> None:
+    class Bridge:
+        def __init__(self) -> None:
+            self.loaded: list[tuple[int, bytes]] = []
+
+        def load_controller(self, hand: int, data: bytes) -> None:
+            self.loaded.append((hand, data))
+
+    def brand(name: str, marker: bytes):
+        root = tmp_path / name
+        root.mkdir()
+        left = root / "left.glb"
+        right = root / "right.glb"
+        left.write_bytes(marker + b"L")
+        right.write_bytes(marker + b"R")
+        (root / "profile.json").write_text("{}\n", encoding="utf-8")
+        return SimpleNamespace(
+            name=name,
+            root=root,
+            left_glb=left,
+            right_glb=right,
+            offset=(0.0, 0.0, 0.0),
+            rotation_deg=0.0,
+        )
+
+    first = brand("A", b"A")
+    second = brand("B", b"B")
+    presenter = OpenXrVulkanPresenter()
+    presenter._controller_brands = {"A": first, "B": second}
+    presenter._controller_brand = first
+    presenter.filament_bridge = Bridge()
+
+    presenter._dispatch_controller_shortcut("switch_controller_brand")
+    presenter._controller_calibration_offset[:] = (0.1, 0.2, 0.3)
+    presenter._controller_calibration_rotation_deg = 12.5
+    presenter._controller_calibration_mode = True
+    presenter._dispatch_controller_shortcut("save_controller_calibration")
+
+    profile = json.loads((second.root / "profile.json").read_text(encoding="utf-8"))
+    assert presenter._controller_brand is second
+    assert presenter.filament_bridge.loaded == [(0, b"BL"), (1, b"BR")]
+    assert profile["overrides"] == {
+        "model_offset": [0.1, 0.2, 0.3],
+        "model_rotation_deg": 12.5,
+    }
+    assert presenter._controller_calibration_mode is False
+
+
 def test_vulkan_shortcut_delegates_runtime_owned_actions() -> None:
     actions: list[str] = []
     presenter = OpenXrVulkanPresenter(
@@ -768,7 +895,10 @@ def test_filament_profile_view_pose_is_converted_to_glb_local_space(tmp_path) ->
 def test_controller_profile_rotation_uses_local_x_axis() -> None:
     source = (Path(__file__).resolve().parents[1] /
               "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
-    assert "0.0, math.radians(self._controller_brand.rotation_deg), 0.0" in source
+    assert (
+        "0.0, math.radians(self._controller_calibration_rotation_deg), 0.0"
+        in source
+    )
 
 
 def test_quad_profile_rotation_uses_legacy_yaw_pitch_roll_order() -> None:

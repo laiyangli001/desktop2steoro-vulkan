@@ -7,6 +7,8 @@ class ShortcutHost(CoreControllerShortcutsMixin):
     def __init__(self) -> None:
         self._frame_now = 1.0
         self._controller_inputs = ({}, {})
+        self._keyboard_visible = False
+        self._grip_target_l = None
         self.actions: list[str] = []
         self._init_controller_shortcuts()
 
@@ -94,3 +96,16 @@ def test_grip_stick_actions_and_ab_combo_suppress_normal_buttons() -> None:
     host.update(right={})
 
     assert host.actions == ["toggle_stereo", "reset_depth"]
+
+
+def test_keyboard_orbit_stick_click_does_not_toggle_stereo_or_copy() -> None:
+    host = ShortcutHost()
+    host._keyboard_visible = True
+    host._grip_target_l = "keyboard"
+
+    host.update(left={"grip": 1.0, "stick_click": 1.0})
+    host.update(left={"grip": 1.0})
+    host._grip_target_l = None
+    host.update(left={})
+
+    assert host.actions == []

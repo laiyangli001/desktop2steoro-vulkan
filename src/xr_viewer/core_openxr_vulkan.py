@@ -33,6 +33,7 @@ _OUTPUT_FRAME_UNSET = object()
 from .core_controller_actions import CoreControllerActionsMixin
 from .core_input_helpers import CoreInputHelpersMixin
 from .core_controller_input import CoreControllerInputMixin
+from .core_controller_guide_input import CoreControllerGuideInputMixin
 from .core_controller_shortcuts import CoreControllerShortcutsMixin
 from .core_controller_pose import CoreControllerPoseMixin
 from .core_controller_ray import CoreControllerRayMixin
@@ -82,7 +83,7 @@ class OpenXrVulkanConfig:
     # is configured for linear Rec709 output so the target performs one OETF.
     swapchain_color_mode: str = "srgb"
     controller_model: str = "PICO"
-    controller_guide_max_distance: float = 0.25
+    controller_guide_max_distance: float = 0.4
     filament_bridge_path: str | None = None
     filament_glb_path: str | None = None
     filament_profile_path: str | None = None
@@ -172,6 +173,7 @@ class OpenXrVulkanPresenter(
     CoreControllerPoseMixin,
     CoreControllerRayMixin,
     CoreControllerInputMixin,
+    CoreControllerGuideInputMixin,
     CoreControllerShortcutsMixin,
     CoreInputHelpersMixin,
 ):
@@ -184,7 +186,7 @@ class OpenXrVulkanPresenter(
         config: OpenXrVulkanConfig | None = None,
         *,
         on_headset_state: Callable[[str], None] | None = None,
-        on_controller_shortcut: Callable[[str], bool | None] | None = None,
+        on_controller_shortcut: Callable[..., bool | None] | None = None,
     ) -> None:
         self.config = config or OpenXrVulkanConfig()
         self._on_headset_state = on_headset_state
@@ -251,6 +253,14 @@ class OpenXrVulkanPresenter(
             self._controller_brands,
             self.config.controller_model or os.environ.get("D2S_CONTROLLER_MODEL", "PICO"),
         )
+        self._controller_calibration_mode = False
+        self._controller_calibration_offset = np.asarray(
+            self._controller_brand.offset if self._controller_brand else (0.0, 0.0, 0.0),
+            dtype=np.float64,
+        )
+        self._controller_calibration_rotation_deg = float(
+            self._controller_brand.rotation_deg if self._controller_brand else 0.0
+        )
         self._controller_b_button_local: np.ndarray | None = None
         self._controller_b_button_resolved = False
         self._controller_inputs = ({}, {})
@@ -308,6 +318,7 @@ class OpenXrVulkanPresenter(
         self._operation_guide_visible = False
         self._aperture_visible = False
         self._init_controller_shortcuts()
+        self._init_controller_guide_input()
         self._keyboard_width = 1.6
         self._keyboard_height = 0.33
         self._keyboard_keys = []
@@ -334,8 +345,20 @@ class OpenXrVulkanPresenter(
         self._left_grab_anchor = None
         self._right_grab_anchor = None
         self._keyboard_position_offset = np.zeros(3, dtype=np.float64)
+        self._keyboard_rotation_offset = np.zeros(2, dtype=np.float64)
         self._keyboard_grab_anchor = None
         self._screen_resize_anchor = None
+        self._grip_target_l = None
+        self._grip_target_r = None
+        self._grip_rotation_anchor_l = None
+        self._grip_rotation_anchor_r = None
+        self._screen_rotation_anchor_l = None
+        self._screen_rotation_anchor_r = None
+        self._both_grip_anchor = None
+        self._scroll_accum_x = 0.0
+        self._scroll_accum_y = 0.0
+        for direction in ("left", "right", "up", "down"):
+            setattr(self, f"_arrow_{direction}_held", False)
         self._status_panel_cycle = 0
         self._hand_panel_cycle = 0
         self._unsupported_shortcut_actions: set[str] = set()
@@ -467,7 +490,6 @@ class OpenXrVulkanPresenter(
             self._notify_headset_waiting()
         try:
             self._sync_controller_inputs(1.0 / 90.0)
-            self._handle_controller_shortcuts()
             self._update_aim_poses(frame_state.predicted_display_time)
             self._update_grip_poses(frame_state.predicted_display_time)
             self._smooth_controller_poses()
@@ -475,6 +497,8 @@ class OpenXrVulkanPresenter(
             self._grip_r_now = bool(self._controller_input(1).get("grip", 0.0) > 0.5)
             self._handle_keyboard_input()
             self._handle_vulkan_pointer_input()
+            self._handle_controller_shortcuts()
+            self._handle_controller_guide_input(self._last_frame_dt)
         except Exception:
             pass
         xr.begin_frame(self.session)
@@ -594,7 +618,7 @@ class OpenXrVulkanPresenter(
         if self.filament_bridge is not None:
             self.filament_bridge.set_screen(position, width, height, rotation)
 
-    def _dispatch_controller_shortcut(self, action: str) -> None:
+    def _dispatch_controller_shortcut(self, action: str, **values) -> None:
         """Apply shared shortcut actions to Vulkan-owned presentation state."""
         if action == "cycle_status_panel":
             self._status_panel_cycle = (self._status_panel_cycle + 1) % 3
@@ -654,6 +678,57 @@ class OpenXrVulkanPresenter(
                 return
             self._passthrough_backdrop = not self._passthrough_backdrop
             bridge.set_passthrough_backdrop(self._passthrough_backdrop)
+        elif action == "switch_controller_brand":
+            self._switch_shortcut_controller_brand()
+        elif action == "toggle_controller_calibration":
+            self._controller_calibration_mode = not self._controller_calibration_mode
+            print(
+                "[OpenXRViewer] Controller calibration: "
+                f"{'on' if self._controller_calibration_mode else 'off'}",
+                flush=True,
+            )
+        elif action == "adjust_controller_calibration":
+            self._controller_calibration_offset[1] += float(values.get("offset_y", 0.0))
+            self._controller_calibration_offset[2] += float(values.get("offset_z", 0.0))
+            self._controller_calibration_rotation_deg += float(
+                values.get("rotation_deg", 0.0)
+            )
+        elif action == "save_controller_calibration":
+            self._save_shortcut_controller_calibration()
+        elif action == "rotate_screen":
+            if self._screen_ray_hit(self._aim_mat_l) is not None:
+                self._adjust_shortcut_screen_rotation(
+                    float(values.get("yaw_delta", 0.0)),
+                    float(values.get("pitch_delta", 0.0)),
+                )
+        elif action == "resize_screen":
+            if self._screen_ray_hit(self._aim_mat_r) is not None:
+                self._adjust_shortcut_screen_size(
+                    float(values.get("width_delta", 0.0)),
+                    float(values.get("distance_delta", 0.0)),
+                )
+        elif action == "rotate_keyboard":
+            self._keyboard_rotation_offset += np.asarray(
+                (values.get("yaw_delta", 0.0), values.get("pitch_delta", 0.0)),
+                dtype=np.float64,
+            )
+        elif action == "orbit_keyboard":
+            self._keyboard_position_offset[0] += float(values.get("horizontal", 0.0)) * 0.4
+            self._keyboard_position_offset[1] += float(values.get("vertical", 0.0)) * 0.4
+        elif action == "resize_keyboard":
+            self._adjust_shortcut_keyboard(
+                float(values.get("width_delta", 0.0)),
+                float(values.get("distance_delta", 0.0)),
+            )
+        elif action == "arrow_axes":
+            self._send_arrow_impl(float(values.get("horizontal", 0.0)), "left", "right")
+            self._send_arrow_impl(float(values.get("vertical", 0.0)), "up", "down")
+        elif action == "scroll_axes":
+            self._accum_scroll(
+                float(values.get("horizontal", 0.0)),
+                float(values.get("vertical", 0.0)),
+                float(values.get("dt", self._last_frame_dt)),
+            )
         elif action == "copy":
             _send_key(0x43, ctrl=True)
         elif action == "cut":
@@ -665,13 +740,116 @@ class OpenXrVulkanPresenter(
         else:
             handled = bool(
                 self._on_controller_shortcut
-                and self._on_controller_shortcut(action)
+                and self._on_controller_shortcut(action, **values)
             )
             if not handled:
                 self._unsupported_shortcut_actions.add(action)
 
     def _input_deadzone(self) -> float:
         return 0.15
+
+    def _adjust_shortcut_screen_rotation(
+        self, yaw_delta: float, pitch_delta: float
+    ) -> None:
+        if self._filament_screen is None:
+            return
+        position, width, height, rotation = self._filament_screen
+        next_rotation = (
+            float(rotation[0]) + yaw_delta,
+            max(-89.0, min(89.0, float(rotation[1]) + pitch_delta)),
+            float(rotation[2]),
+        )
+        self._filament_screen = (position, width, height, next_rotation)
+        if self.filament_bridge is not None:
+            self.filament_bridge.set_screen(*self._filament_screen)
+
+    def _adjust_shortcut_screen_size(
+        self, width_delta: float, distance_delta: float
+    ) -> None:
+        if self._filament_screen is None:
+            return
+        position, width, height, rotation = self._filament_screen
+        next_width = max(0.3, min(22.0, float(width) + width_delta))
+        next_height = next_width * float(height) / max(float(width), 1e-6)
+        head = np.asarray(
+            self._head_position_w if self._head_position_w is not None else (0, 0, 0),
+            dtype=np.float64,
+        )
+        radial = np.asarray(position, dtype=np.float64) - head
+        distance = max(float(np.linalg.norm(radial)), 1e-6)
+        next_distance = max(0.3, distance + distance_delta)
+        next_position = head + radial / distance * next_distance
+        self._filament_screen = (
+            tuple(float(value) for value in next_position),
+            next_width,
+            next_height,
+            rotation,
+        )
+        if self.filament_bridge is not None:
+            self.filament_bridge.set_screen(*self._filament_screen)
+
+    def _adjust_shortcut_keyboard(
+        self, width_delta: float, distance_delta: float
+    ) -> None:
+        self._keyboard_width = max(0.3, min(4.0, self._keyboard_width + width_delta))
+        pose = self._keyboard_pose_mat4()
+        head = np.asarray(
+            self._head_position_w if self._head_position_w is not None else (0, 0, 0),
+            dtype=np.float64,
+        )
+        radial = pose[:3, 3].astype(np.float64) - head
+        distance = max(float(np.linalg.norm(radial)), 1e-6)
+        self._keyboard_position_offset += radial / distance * distance_delta
+
+    def _switch_shortcut_controller_brand(self) -> None:
+        if not self._controller_brands:
+            return
+        names = sorted(self._controller_brands)
+        current_name = getattr(self._controller_brand, "name", None)
+        index = names.index(current_name) if current_name in names else -1
+        next_brand = self._controller_brands[names[(index + 1) % len(names)]]
+        previous = self._controller_brand
+        bridge = self.filament_bridge
+        try:
+            if bridge is not None and hasattr(bridge, "load_controller"):
+                bridge.load_controller(0, next_brand.left_glb.read_bytes())
+                bridge.load_controller(1, next_brand.right_glb.read_bytes())
+        except Exception:
+            if bridge is not None and previous is not None:
+                bridge.load_controller(0, previous.left_glb.read_bytes())
+                bridge.load_controller(1, previous.right_glb.read_bytes())
+            raise
+        self._controller_brand = next_brand
+        self._controller_calibration_offset = np.asarray(
+            next_brand.offset, dtype=np.float64
+        )
+        self._controller_calibration_rotation_deg = float(next_brand.rotation_deg)
+        self._controller_b_button_local = None
+        self._controller_b_button_resolved = False
+        print(f"[OpenXRViewer] Switched controller: {next_brand.name}", flush=True)
+
+    def _save_shortcut_controller_calibration(self) -> None:
+        brand = self._controller_brand
+        if brand is None:
+            return
+        profile_path = brand.root / "profile.json"
+        try:
+            profile = json.loads(profile_path.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            profile = {}
+        overrides = profile.setdefault("overrides", {})
+        overrides["model_offset"] = [
+            round(float(value), 6) for value in self._controller_calibration_offset
+        ]
+        overrides["model_rotation_deg"] = round(
+            float(self._controller_calibration_rotation_deg), 4
+        )
+        profile_path.write_text(
+            json.dumps(profile, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        self._controller_calibration_mode = False
+        print(f"[OpenXRViewer] Controller calibration saved: {profile_path}", flush=True)
 
     def _pulse_haptic(self, *args, **kwargs) -> None:
         # Haptics are optional in the Vulkan migration; keyboard input remains
@@ -692,7 +870,14 @@ class OpenXrVulkanPresenter(
         position, screen_width, screen_height, rotation = self._filament_screen or (
             (0.0, 1.2, -2.0), 2.4, 1.35, (0.0, 0.0, 0.0)
         )
-        matrix = euler_to_mat4(*(math.radians(float(value)) for value in rotation))
+        keyboard_rotation = (
+            float(rotation[0]) + float(self._keyboard_rotation_offset[0]),
+            float(rotation[1]) + float(self._keyboard_rotation_offset[1]),
+            float(rotation[2]),
+        )
+        matrix = euler_to_mat4(
+            *(math.radians(float(value)) for value in keyboard_rotation)
+        )
         matrix[:3, 3] = np.asarray(
             (position[0], position[1] - screen_height * 0.72, position[2]),
             dtype=np.float64,
@@ -754,6 +939,65 @@ class OpenXrVulkanPresenter(
         if self.filament_bridge is not None:
             self.filament_bridge.set_screen(self._filament_screen[0], width, height, pose_rotation)
 
+    def _set_keyboard_world_position(self, position) -> None:
+        screen_position, _width, screen_height, _rotation = self._filament_screen or (
+            (0.0, 1.2, -2.0),
+            2.4,
+            1.35,
+            (0.0, 0.0, 0.0),
+        )
+        base_position = np.asarray(
+            (
+                screen_position[0],
+                screen_position[1] - screen_height * 0.72,
+                screen_position[2],
+            ),
+            dtype=np.float64,
+        )
+        self._keyboard_position_offset = (
+            np.asarray(position, dtype=np.float64) - base_position
+        )
+
+    @staticmethod
+    def _rotation_delta_euler_degrees(rotation: np.ndarray) -> tuple[float, float, float]:
+        """Convert a relative rotation matrix to the viewer yaw/pitch/roll order."""
+        pitch = math.asin(max(-1.0, min(1.0, -float(rotation[1, 2]))))
+        cos_pitch = math.cos(pitch)
+        if abs(cos_pitch) > 1e-6:
+            yaw = math.atan2(float(rotation[0, 2]), float(rotation[2, 2]))
+            roll = math.atan2(float(rotation[1, 0]), float(rotation[1, 1]))
+        else:
+            yaw = math.atan2(-float(rotation[2, 0]), float(rotation[0, 0]))
+            roll = 0.0
+        return tuple(math.degrees(value) for value in (yaw, pitch, roll))
+
+    def _apply_grip_screen_rotation(self, hand_index: int) -> None:
+        if self._filament_screen is None:
+            return
+        suffix = "l" if hand_index == 0 else "r"
+        grip_matrix = self._grip_mat_l if hand_index == 0 else self._grip_mat_r
+        grip_anchor = getattr(self, f"_grip_rotation_anchor_{suffix}")
+        screen_anchor = getattr(self, f"_screen_rotation_anchor_{suffix}")
+        if grip_matrix is None or grip_anchor is None or screen_anchor is None:
+            return
+        relative = (
+            np.asarray(grip_matrix[:3, :3], dtype=np.float64)
+            @ np.asarray(grip_anchor, dtype=np.float64).T
+        )
+        yaw, pitch, roll = self._rotation_delta_euler_degrees(relative)
+        if hand_index == 0:
+            # The left-hand physical gesture is intentionally stepped to a
+            # quarter turn, matching the operation guide's 90-degree twist.
+            roll = 90.0 * round(roll / 90.0)
+            yaw = 0.0
+            pitch = 0.0
+        rotation = (
+            float(screen_anchor[0]) + yaw,
+            max(-89.0, min(89.0, float(screen_anchor[1]) + pitch)),
+            float(screen_anchor[2]) + roll,
+        )
+        self._set_filament_screen_pose(self._filament_screen[0], rotation)
+
     def _can_use_filament_screen_image(
         self, output_frame: VulkanStereoOutputFrame | None
     ) -> bool:
@@ -789,46 +1033,104 @@ class OpenXrVulkanPresenter(
         hits = (self._screen_ray_hit(self._aim_mat_l), self._screen_ray_hit(self._aim_mat_r))
         left_grip = bool(inputs[0].get("grip", 0.0) > 0.5)
         right_grip = bool(inputs[1].get("grip", 0.0) > 0.5)
-        if left_grip and self._grip_mat_l is not None:
-            grip_position = self._grip_mat_l[:3, 3].astype(np.float64)
-            if self._keyboard_visible and self._keyboard_plane_hit(
-                self._grip_mat_l[:3, 3], -self._grip_mat_l[:3, 2]
-            ) != (None, None):
-                if self._keyboard_grab_anchor is None:
-                    self._keyboard_grab_anchor = self._keyboard_pose_mat4()[:3, 3] - grip_position
-                keyboard_position = grip_position + self._keyboard_grab_anchor
-                screen_position = np.asarray(self._filament_screen[0], dtype=np.float64)
-                self._keyboard_position_offset = keyboard_position - np.asarray(
-                    (screen_position[0], screen_position[1] - self._filament_screen[2] * 0.72, screen_position[2]),
-                    dtype=np.float64,
-                )
-            elif hits[0] is not None:
-                if self._left_grab_anchor is None and self._filament_screen is not None:
-                    self._left_grab_anchor = np.asarray(self._filament_screen[0], dtype=np.float64) - grip_position
-                if self._left_grab_anchor is not None:
-                    self._set_filament_screen_pose(grip_position + self._left_grab_anchor)
-        else:
-            self._left_grab_anchor = None
-            self._keyboard_grab_anchor = None
-        if right_grip and self._grip_mat_r is not None and self._filament_screen is not None:
-            grip_position = self._grip_mat_r[:3, 3].astype(np.float64)
-            if self._screen_resize_anchor is None:
-                self._screen_resize_anchor = (grip_position.copy(), float(self._filament_screen[1]))
-            delta = float(grip_position[0] - self._screen_resize_anchor[0][0])
-            new_width = max(0.3, min(20.0, self._screen_resize_anchor[1] + delta * 1.5))
-            old_position, _old_width, old_height, old_rotation = self._filament_screen
-            self._filament_screen = (
-                old_position,
-                new_width,
-                new_width * float(old_height) / max(float(_old_width), 1e-6),
-                old_rotation,
+        stick_active = (
+            abs(float(inputs[0].get("joystick_x", 0.0))) > self._input_deadzone()
+            or abs(float(inputs[0].get("joystick_y", 0.0))) > self._input_deadzone(),
+            abs(float(inputs[1].get("joystick_x", 0.0))) > self._input_deadzone()
+            or abs(float(inputs[1].get("joystick_y", 0.0))) > self._input_deadzone(),
+        )
+        grip_matrices = (self._grip_mat_l, self._grip_mat_r)
+        aim_matrices = (self._aim_mat_l, self._aim_mat_r)
+        grip_values = (left_grip, right_grip)
+        for index, suffix in enumerate(("l", "r")):
+            target_attr = f"_grip_target_{suffix}"
+            anchor_attr = "_left_grab_anchor" if index == 0 else "_right_grab_anchor"
+            rotation_attr = f"_grip_rotation_anchor_{suffix}"
+            screen_rotation_attr = f"_screen_rotation_anchor_{suffix}"
+            if not grip_values[index]:
+                setattr(self, target_attr, None)
+                setattr(self, anchor_attr, None)
+                setattr(self, rotation_attr, None)
+                setattr(self, screen_rotation_attr, None)
+                continue
+            if getattr(self, target_attr) is None:
+                keyboard_hit = False
+                aim = aim_matrices[index]
+                if self._keyboard_visible and aim is not None:
+                    keyboard_hit = self._keyboard_plane_hit(
+                        aim[:3, 3], -aim[:3, 2]
+                    ) != (None, None)
+                if keyboard_hit:
+                    setattr(self, target_attr, "keyboard")
+                elif hits[index] is not None:
+                    setattr(self, target_attr, "screen")
+
+        both_grips = left_grip and right_grip
+        if both_grips and not any(stick_active) and all(
+            matrix is not None for matrix in grip_matrices
+        ):
+            common_target = (
+                self._grip_target_l
+                if self._grip_target_l == self._grip_target_r
+                else None
             )
-            if self.filament_bridge is not None:
-                self.filament_bridge.set_screen(
-                    old_position, self._filament_screen[1], self._filament_screen[2], old_rotation
-                )
+            center = (
+                grip_matrices[0][:3, 3].astype(np.float64)
+                + grip_matrices[1][:3, 3].astype(np.float64)
+            ) * 0.5
+            if common_target == "screen" and self._filament_screen is not None:
+                if self._both_grip_anchor is None:
+                    self._both_grip_anchor = (
+                        "screen",
+                        np.asarray(self._filament_screen[0], dtype=np.float64) - center,
+                    )
+                self._set_filament_screen_pose(center + self._both_grip_anchor[1])
+            elif common_target == "keyboard":
+                if self._both_grip_anchor is None:
+                    self._both_grip_anchor = (
+                        "keyboard", self._keyboard_pose_mat4()[:3, 3] - center
+                    )
+                keyboard_position = center + self._both_grip_anchor[1]
+                self._set_keyboard_world_position(keyboard_position)
         else:
-            self._screen_resize_anchor = None
+            self._both_grip_anchor = None
+            for index, suffix in enumerate(("l", "r")):
+                if not grip_values[index] or grip_matrices[index] is None:
+                    continue
+                anchor_attr = "_left_grab_anchor" if index == 0 else "_right_grab_anchor"
+                rotation_attr = f"_grip_rotation_anchor_{suffix}"
+                screen_rotation_attr = f"_screen_rotation_anchor_{suffix}"
+                if stick_active[index]:
+                    setattr(self, anchor_attr, None)
+                    setattr(self, rotation_attr, None)
+                    continue
+                grip_position = grip_matrices[index][:3, 3].astype(np.float64)
+                target = getattr(self, f"_grip_target_{suffix}")
+                if target == "keyboard":
+                    anchor = getattr(self, anchor_attr)
+                    if anchor is None:
+                        anchor = self._keyboard_pose_mat4()[:3, 3] - grip_position
+                        setattr(self, anchor_attr, anchor)
+                    self._set_keyboard_world_position(grip_position + anchor)
+                elif target == "screen" and self._filament_screen is not None:
+                    anchor = getattr(self, anchor_attr)
+                    if anchor is None:
+                        anchor = np.asarray(
+                            self._filament_screen[0], dtype=np.float64
+                        ) - grip_position
+                        setattr(self, anchor_attr, anchor)
+                        setattr(
+                            self,
+                            rotation_attr,
+                            grip_matrices[index][:3, :3].astype(np.float64).copy(),
+                        )
+                        setattr(
+                            self,
+                            screen_rotation_attr,
+                            tuple(self._filament_screen[3]),
+                        )
+                    self._set_filament_screen_pose(grip_position + anchor)
+                    self._apply_grip_screen_rotation(index)
         for name, hand, hit, down_flag, up_flag in (
             ("left", inputs[0], hits[0], _MOUSEEVENTF_RIGHTDOWN, _MOUSEEVENTF_RIGHTUP),
             ("right", inputs[1], hits[1], _MOUSEEVENTF_LEFTDOWN, _MOUSEEVENTF_LEFTUP),
@@ -1500,11 +1802,13 @@ class OpenXrVulkanPresenter(
         ):
             return
         offset = np.eye(4, dtype=np.float32)
-        offset[:3, 3] = np.asarray(self._controller_brand.offset, dtype=np.float32)
+        offset[:3, 3] = np.asarray(
+            self._controller_calibration_offset, dtype=np.float32
+        )
         # Controller profiles use the legacy model calibration convention:
         # model_rotation_deg is a rotation around the local X axis.
         rotation = euler_to_mat4(
-            0.0, math.radians(self._controller_brand.rotation_deg), 0.0
+            0.0, math.radians(self._controller_calibration_rotation_deg), 0.0
         ).astype(np.float32)
         for hand, (grip_matrix, aim_matrix) in enumerate(
             zip((self._grip_mat_l, self._grip_mat_r), (self._aim_mat_l, self._aim_mat_r))
@@ -2134,9 +2438,11 @@ class OpenXrVulkanPresenter(
             return None
 
         offset = np.eye(4, dtype=np.float64)
-        offset[:3, 3] = np.asarray(self._controller_brand.offset, dtype=np.float64)
+        offset[:3, 3] = np.asarray(
+            self._controller_calibration_offset, dtype=np.float64
+        )
         rotation = euler_to_mat4(
-            0.0, math.radians(self._controller_brand.rotation_deg), 0.0
+            0.0, math.radians(self._controller_calibration_rotation_deg), 0.0
         ).astype(np.float64)
         model_matrix = np.asarray(self._grip_mat_r, dtype=np.float64) @ rotation @ offset
         local = np.ones(4, dtype=np.float64)
