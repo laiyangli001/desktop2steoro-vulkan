@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -224,6 +225,7 @@ struct ControllerAnimation {
     filament::math::mat4f min_transform;
     filament::math::mat4f max_transform;
     std::string semantic;
+    std::string value_name;
 };
 
 struct ControllerAsset {
@@ -235,6 +237,9 @@ struct ControllerAsset {
     float joystick_x = 0.0f;
     float joystick_y = 0.0f;
     uint32_t button_mask = 0;
+    std::array<float, 6> button_values{};
+    std::chrono::steady_clock::time_point last_input_time{};
+    bool input_initialized = false;
     bool visible = true;
 };
 
@@ -281,8 +286,8 @@ struct FilamentBridge {
     filament::VertexBuffer* laser_vertex_buffer = nullptr;
     filament::IndexBuffer* laser_index_buffer = nullptr;
     std::array<utils::Entity, 2> laser_entities{};
-    std::array<PreviewScreenVertex, 4> laser_vertices{};
-    std::array<uint16_t, 6> laser_indices{};
+    std::array<PreviewScreenVertex, 8> laser_vertices{};
+    std::array<uint16_t, 12> laser_indices{};
     std::array<FilamentEyeTarget, 2> eyes;
     uint32_t active_eye = 0;
     std::vector<uint8_t> glb_bytes;

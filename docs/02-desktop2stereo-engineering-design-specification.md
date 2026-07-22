@@ -793,7 +793,7 @@ native/filament/bridge/
 
 屏幕变换、距离、曲率和可见性由 `SceneFrameState` 提供。交互状态与渲染资源分离，手柄拖动只更新下一帧 transform snapshot。
 
-手柄状态同样由 Python OpenXR Presenter 管理，Bridge 只消费每帧快照。Presenter 必须分别维护左右手 Grip/Aim 有效性、上一帧姿态和最后移动时间；Grip 跟踪无效时立即隐藏对应模型和激光，连续 5 秒无位置或方向变化时自动隐藏，恢复移动后重新显示。激光使用 Aim 负 Z、旧工程标定偏移和稳定滤波，在共享 Filament Scene 的 Projection Layer 中绘制，不得提交为 Quad Layer。模型显隐、激光显隐、按键动画和姿态更新必须逐手独立，任一可选 ABI 缺失不得阻断基础控制器 GLB 加载。
+手柄状态同样由 Python OpenXR Presenter 管理，Bridge 只消费每帧快照。Presenter 必须分别维护左右手 Grip/Aim 有效性、上一帧姿态和最后移动时间；Grip 跟踪无效时立即隐藏对应模型和激光，连续 5 秒无位置或方向变化时自动隐藏，恢复移动后重新显示。激光使用 Aim 负 Z、旧工程标定偏移和稳定滤波，在共享 Filament Scene 的 Projection Layer 中绘制，不得提交为 Quad Layer；视觉契约为两张交叉锥形面和沿射线方向流动的蓝至红循环渐变。模型显隐、激光显隐、按键动画和姿态更新必须逐手独立；按键动画使用 GLB `_value/_min/_max` 节点、输入平滑和四元数旋转插值，任一可选 ABI 缺失不得阻断基础控制器 GLB 加载。
 
 ### 11.5 相机和裁剪面
 

@@ -1,6 +1,8 @@
 #include "bridge_laser.h"
 #include "bridge_internal.h"
 
+#include <chrono>
+
 void bridge_laser_destroy(FilamentBridge* bridge) {
     if (!bridge || !bridge->engine) return;
     for (auto& entity : bridge->laser_entities) {
@@ -34,20 +36,33 @@ int bridge_laser_create(FilamentBridge* bridge) {
         void material(inout MaterialInputs material) {
             prepareMaterial(material);
             float2 uv = getUV0();
-            float edge = smoothstep(0.0, 0.18, uv.x) *
-                    smoothstep(0.0, 0.18, 1.0 - uv.x);
-            float fade = 1.0 - smoothstep(0.72, 1.0, uv.y);
-            material.baseColor = float4(0.08, 0.62, 1.0, edge * fade * 0.9);
+            float t = fract(uv.y - materialParams_time * 0.4);
+            float3 color;
+            if (t < 0.167) {
+                color = mix(float3(0.0, 0.4, 1.0), float3(0.0, 1.0, 1.0), t / 0.167);
+            } else if (t < 0.333) {
+                color = mix(float3(0.0, 1.0, 1.0), float3(0.0, 1.0, 0.0), (t - 0.167) / 0.166);
+            } else if (t < 0.5) {
+                color = mix(float3(0.0, 1.0, 0.0), float3(1.0, 1.0, 0.0), (t - 0.333) / 0.167);
+            } else if (t < 0.667) {
+                color = mix(float3(1.0, 1.0, 0.0), float3(1.0, 0.5, 0.0), (t - 0.5) / 0.167);
+            } else if (t < 0.833) {
+                color = mix(float3(1.0, 0.5, 0.0), float3(1.0, 0.0, 0.0), (t - 0.667) / 0.166);
+            } else {
+                color = mix(float3(1.0, 0.0, 0.0), float3(0.0, 0.4, 1.0), (t - 0.833) / 0.167);
+            }
+            material.baseColor = float4(color, 1.0);
         }
     )FILAMENT";
     filamat::MaterialBuilder::init();
     filamat::MaterialBuilder builder;
     builder.name("D2S Controller Laser")
             .material(shader)
+            .parameter("time", filamat::MaterialBuilder::UniformType::FLOAT)
             .require(filament::VertexAttribute::UV0)
             .shading(filament::Shading::UNLIT)
             .materialDomain(filament::MaterialDomain::SURFACE)
-            .blending(filament::BlendingMode::TRANSPARENT)
+            .blending(filament::BlendingMode::OPAQUE)
             .culling(filament::backend::CullingMode::NONE)
             .depthWrite(false)
             .depthCulling(true)
@@ -66,13 +81,18 @@ int bridge_laser_create(FilamentBridge* bridge) {
         return 0;
     }
     bridge->laser_material_instance = bridge->laser_material->createInstance();
+    constexpr float kTipHalfWidthRatio = 1.0f / 6.0f;
     bridge->laser_vertices = {{
             {{-0.5f, 0.0f, 0.0f}, {0.0f, 0.0f}},
             {{ 0.5f, 0.0f, 0.0f}, {1.0f, 0.0f}},
-            {{-0.5f, 1.0f, 0.0f}, {0.0f, 1.0f}},
-            {{ 0.5f, 1.0f, 0.0f}, {1.0f, 1.0f}},
+            {{-kTipHalfWidthRatio, 1.0f, 0.0f}, {0.0f, 1.0f}},
+            {{ kTipHalfWidthRatio, 1.0f, 0.0f}, {1.0f, 1.0f}},
+            {{0.0f, 0.0f, -0.5f}, {0.0f, 0.0f}},
+            {{0.0f, 0.0f,  0.5f}, {1.0f, 0.0f}},
+            {{0.0f, 1.0f, -kTipHalfWidthRatio}, {0.0f, 1.0f}},
+            {{0.0f, 1.0f,  kTipHalfWidthRatio}, {1.0f, 1.0f}},
     }};
-    bridge->laser_indices = {{0, 1, 2, 1, 3, 2}};
+    bridge->laser_indices = {{0, 1, 2, 1, 3, 2, 4, 5, 6, 5, 7, 6}};
     bridge->laser_vertex_buffer = filament::VertexBuffer::Builder()
             .vertexCount(static_cast<uint32_t>(bridge->laser_vertices.size()))
             .bufferCount(1)
@@ -92,6 +112,7 @@ int bridge_laser_create(FilamentBridge* bridge) {
         bridge_set_error(bridge, "Filament could not create controller laser geometry");
         return 0;
     }
+    bridge->laser_material_instance->setParameter("time", 0.0f);
     bridge->laser_vertex_buffer->setBufferAt(*bridge->engine, 0,
             filament::VertexBuffer::BufferDescriptor(
                     bridge->laser_vertices.data(),
@@ -136,6 +157,10 @@ int bridge_laser_set(
         return 1;
     }
     if (!matrix16) return 0;
+    const auto now = std::chrono::steady_clock::now().time_since_epoch();
+    const float animation_time = static_cast<float>(std::fmod(
+            std::chrono::duration<double>(now).count(), 1024.0));
+    bridge->laser_material_instance->setParameter("time", animation_time);
     auto& transforms = bridge->engine->getTransformManager();
     const auto instance = transforms.getInstance(entity);
     if (!instance.isValid()) return 0;

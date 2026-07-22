@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import ctypes
+import json
 import re
+import struct
 from pathlib import Path
 
 import pytest
@@ -96,3 +98,40 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "renderables.setLayerMask" in source
     assert "filament_bridge_set_controller_laser" in facade
     assert "D2S Controller Laser" in source
+    assert 'parameter("time"' in source
+    assert "materialParams_time * 0.4" in source
+    assert "float3(0.0, 0.4, 1.0)" in source
+    assert "float3(1.0, 0.0, 0.0)" in source
+    assert "std::array<PreviewScreenVertex, 8> laser_vertices" in source
+    assert "std::array<uint16_t, 12> laser_indices" in source
+    assert "controller_quaternion_slerp" in source
+    assert "controller.button_values[5]" in source
+    assert "controller loaded hand=%u animations=%zu" in source
+
+
+@pytest.mark.parametrize("hand", ("left", "right"))
+def test_pico_controller_glb_exposes_legacy_animation_triplets(hand: str) -> None:
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "src/xr_viewer/controllers/PICO"
+        / f"{hand}.glb"
+    )
+    payload = path.read_bytes()
+    assert payload[:4] == b"glTF"
+    json_length, json_type = struct.unpack_from("<II", payload, 12)
+    assert json_type == 0x4E4F534A
+    document = json.loads(
+        payload[20 : 20 + json_length].decode("utf-8").rstrip("\x00 ")
+    )
+    names = {str(node.get("name") or "") for node in document["nodes"]}
+    value_names = {name for name in names if name.endswith("_value")}
+
+    assert value_names
+    assert all(
+        value_name.removesuffix("_value") + suffix in names
+        for value_name in value_names
+        for suffix in ("_min", "_max")
+    )
+    assert any("trigger_pressed_value" in name for name in value_names)
+    assert any("squeeze_pressed_value" in name for name in value_names)
+    assert any("thumbstick_pressed_value" in name for name in value_names)

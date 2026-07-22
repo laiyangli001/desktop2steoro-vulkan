@@ -1494,7 +1494,7 @@ class OpenXrVulkanPresenter(
                     laser_matrix = np.eye(4, dtype=np.float32)
                     laser_matrix[:3, 0] = (right_axis * 0.006).astype(np.float32)
                     laser_matrix[:3, 1] = (direction * 0.4).astype(np.float32)
-                    laser_matrix[:3, 2] = normal_axis.astype(np.float32)
+                    laser_matrix[:3, 2] = (normal_axis * 0.006).astype(np.float32)
                     laser_matrix[:3, 3] = beam_origin.astype(np.float32)
                     bridge.set_controller_laser(hand, laser_matrix, visible=True)
 

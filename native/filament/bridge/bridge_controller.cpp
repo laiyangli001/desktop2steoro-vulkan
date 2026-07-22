@@ -41,6 +41,95 @@ std::string bridge_controller_semantic(std::string name) {
     return {};
 }
 
+namespace {
+
+struct ControllerQuaternion {
+    float x;
+    float y;
+    float z;
+    float w;
+};
+
+ControllerQuaternion controller_quaternion_from_matrix(
+        const filament::math::mat4f& matrix) {
+    const auto component = [&matrix](int row, int column) {
+        const float x = matrix[column][0];
+        const float y = matrix[column][1];
+        const float z = matrix[column][2];
+        const float length = std::sqrt(x * x + y * y + z * z);
+        return length > 1.0e-8f ? matrix[column][row] / length : (row == column ? 1.0f : 0.0f);
+    };
+    const float m00 = component(0, 0);
+    const float m01 = component(0, 1);
+    const float m02 = component(0, 2);
+    const float m10 = component(1, 0);
+    const float m11 = component(1, 1);
+    const float m12 = component(1, 2);
+    const float m20 = component(2, 0);
+    const float m21 = component(2, 1);
+    const float m22 = component(2, 2);
+    ControllerQuaternion result{};
+    const float trace = m00 + m11 + m22;
+    if (trace > 0.0f) {
+        const float scale = std::sqrt(trace + 1.0f) * 2.0f;
+        result = {(m21 - m12) / scale, (m02 - m20) / scale,
+                (m10 - m01) / scale, 0.25f * scale};
+    } else if (m00 > m11 && m00 > m22) {
+        const float scale = std::sqrt(1.0f + m00 - m11 - m22) * 2.0f;
+        result = {0.25f * scale, (m01 + m10) / scale,
+                (m02 + m20) / scale, (m21 - m12) / scale};
+    } else if (m11 > m22) {
+        const float scale = std::sqrt(1.0f + m11 - m00 - m22) * 2.0f;
+        result = {(m01 + m10) / scale, 0.25f * scale,
+                (m12 + m21) / scale, (m02 - m20) / scale};
+    } else {
+        const float scale = std::sqrt(1.0f + m22 - m00 - m11) * 2.0f;
+        result = {(m02 + m20) / scale, (m12 + m21) / scale,
+                0.25f * scale, (m10 - m01) / scale};
+    }
+    const float length = std::sqrt(result.x * result.x + result.y * result.y +
+            result.z * result.z + result.w * result.w);
+    if (length > 1.0e-8f) {
+        result.x /= length;
+        result.y /= length;
+        result.z /= length;
+        result.w /= length;
+    }
+    return result;
+}
+
+ControllerQuaternion controller_quaternion_slerp(
+        ControllerQuaternion first, ControllerQuaternion second, float amount) {
+    float dot = first.x * second.x + first.y * second.y +
+            first.z * second.z + first.w * second.w;
+    if (dot < 0.0f) {
+        second = {-second.x, -second.y, -second.z, -second.w};
+        dot = -dot;
+    }
+    if (dot > 0.9995f) {
+        ControllerQuaternion result{
+                first.x + amount * (second.x - first.x),
+                first.y + amount * (second.y - first.y),
+                first.z + amount * (second.z - first.z),
+                first.w + amount * (second.w - first.w)};
+        const float length = std::sqrt(result.x * result.x + result.y * result.y +
+                result.z * result.z + result.w * result.w);
+        return {result.x / length, result.y / length, result.z / length, result.w / length};
+    }
+    const float theta_zero = std::acos(std::clamp(dot, -1.0f, 1.0f));
+    const float theta = theta_zero * amount;
+    const float sin_theta_zero = std::sin(theta_zero);
+    const float second_scale = std::sin(theta) / sin_theta_zero;
+    const float first_scale = std::cos(theta) - dot * second_scale;
+    return {
+            first.x * first_scale + second.x * second_scale,
+            first.y * first_scale + second.y * second_scale,
+            first.z * first_scale + second.z * second_scale,
+            first.w * first_scale + second.w * second_scale};
+}
+
+}  // namespace
+
 filament::math::mat4f bridge_controller_interpolate_transform(
         const filament::math::mat4f& value,
         const filament::math::mat4f& minimum,
@@ -49,11 +138,38 @@ filament::math::mat4f bridge_controller_interpolate_transform(
     const float t = std::clamp(std::abs(amount), 0.0f, 1.0f);
     const auto& target = amount < 0.0f ? minimum : maximum;
     filament::math::mat4f result = value;
-    for (int column = 0; column < 4; ++column) {
-        for (int row = 0; row < 4; ++row) {
-            result[column][row] = value[column][row] +
-                    (target[column][row] - value[column][row]) * t;
+    const auto rotation = controller_quaternion_slerp(
+            controller_quaternion_from_matrix(value),
+            controller_quaternion_from_matrix(target), t);
+    const float xx = rotation.x * rotation.x;
+    const float yy = rotation.y * rotation.y;
+    const float zz = rotation.z * rotation.z;
+    const float xy = rotation.x * rotation.y;
+    const float xz = rotation.x * rotation.z;
+    const float yz = rotation.y * rotation.z;
+    const float wx = rotation.w * rotation.x;
+    const float wy = rotation.w * rotation.y;
+    const float wz = rotation.w * rotation.z;
+    const float rotation_rows[3][3] = {
+            {1.0f - 2.0f * (yy + zz), 2.0f * (xy - wz), 2.0f * (xz + wy)},
+            {2.0f * (xy + wz), 1.0f - 2.0f * (xx + zz), 2.0f * (yz - wx)},
+            {2.0f * (xz - wy), 2.0f * (yz + wx), 1.0f - 2.0f * (xx + yy)}};
+    for (int column = 0; column < 3; ++column) {
+        const auto column_length = [](const filament::math::mat4f& matrix, int index) {
+            const float x = matrix[index][0];
+            const float y = matrix[index][1];
+            const float z = matrix[index][2];
+            return std::sqrt(x * x + y * y + z * z);
+        };
+        const float value_scale = column_length(value, column);
+        const float target_scale = column_length(target, column);
+        const float scale = value_scale + (target_scale - value_scale) * t;
+        for (int row = 0; row < 3; ++row) {
+            result[column][row] = rotation_rows[row][column] * scale;
         }
+    }
+    for (int row = 0; row < 3; ++row) {
+        result[3][row] = value[3][row] + (target[3][row] - value[3][row]) * t;
     }
     return result;
 }
@@ -64,14 +180,12 @@ float bridge_controller_animation_amount(
     if (semantic == "grip") return controller.grip;
     if (semantic == "joystick_x") return controller.joystick_x;
     if (semantic == "joystick_y") return controller.joystick_y;
-    if (semantic == "joystick") return controller.joystick_x != 0.0f ||
-            controller.joystick_y != 0.0f ||
-            (controller.button_mask & (1u << 5)) ? 1.0f : 0.0f;
-    if (semantic == "a_button") return (controller.button_mask & (1u << 0)) ? 1.0f : 0.0f;
-    if (semantic == "b_button") return (controller.button_mask & (1u << 1)) ? 1.0f : 0.0f;
-    if (semantic == "x_button") return (controller.button_mask & (1u << 2)) ? 1.0f : 0.0f;
-    if (semantic == "y_button") return (controller.button_mask & (1u << 3)) ? 1.0f : 0.0f;
-    if (semantic == "menu_button") return (controller.button_mask & (1u << 4)) ? 1.0f : 0.0f;
+    if (semantic == "joystick") return controller.button_values[5];
+    if (semantic == "a_button") return controller.button_values[0];
+    if (semantic == "b_button") return controller.button_values[1];
+    if (semantic == "x_button") return controller.button_values[2];
+    if (semantic == "y_button") return controller.button_values[3];
+    if (semantic == "menu_button") return controller.button_values[4];
     return 0.0f;
 }
 
@@ -160,8 +274,15 @@ int bridge_controller_load(
                 transforms.getTransform(value_instance),
                 transforms.getTransform(min_instance),
                 transforms.getTransform(max_instance),
-                semantic});
+                semantic, value_name});
     }
+    std::printf("[FilamentBridge] controller loaded hand=%u animations=%zu",
+            hand, controller.animations.size());
+    for (const auto& animation : controller.animations) {
+        std::printf(" %s:%s", animation.value_name.c_str(), animation.semantic.c_str());
+    }
+    std::printf("\n");
+    std::fflush(stdout);
     controller.asset->releaseSourceData();
     controller.bytes.clear();
     bridge->engine->flushAndWait();
@@ -193,11 +314,30 @@ int bridge_controller_set_inputs(
         uint32_t button_mask) {
     if (!bridge || hand > 1 || !bridge->controllers[hand].asset) return 0;
     auto& controller = bridge->controllers[hand];
-    controller.trigger = std::clamp(trigger, 0.0f, 1.0f);
-    controller.grip = std::clamp(grip, 0.0f, 1.0f);
-    controller.joystick_x = std::clamp(joystick_x, -1.0f, 1.0f);
-    controller.joystick_y = std::clamp(joystick_y, -1.0f, 1.0f);
+    const auto now = std::chrono::steady_clock::now();
+    float alpha = 1.0f;
+    if (controller.input_initialized) {
+        const float delta_seconds = std::clamp(
+                std::chrono::duration<float>(now - controller.last_input_time).count(),
+                0.0f, 0.05f);
+        alpha = std::min(1.0f, delta_seconds * 24.0f);
+    }
+    controller.last_input_time = now;
+    controller.input_initialized = true;
+    const auto smooth = [alpha](float current, float target) {
+        return current + (target - current) * alpha;
+    };
+    controller.trigger = smooth(controller.trigger, std::clamp(trigger, 0.0f, 1.0f));
+    controller.grip = smooth(controller.grip, std::clamp(grip, 0.0f, 1.0f));
+    controller.joystick_x = smooth(
+            controller.joystick_x, std::clamp(joystick_x, -1.0f, 1.0f));
+    controller.joystick_y = smooth(
+            controller.joystick_y, std::clamp(joystick_y, -1.0f, 1.0f));
     controller.button_mask = button_mask;
+    for (uint32_t bit = 0; bit < controller.button_values.size(); ++bit) {
+        const float target = (button_mask & (1u << bit)) ? 1.0f : 0.0f;
+        controller.button_values[bit] = smooth(controller.button_values[bit], target);
+    }
     bridge_controller_update_animations(bridge, controller);
     return 1;
 }

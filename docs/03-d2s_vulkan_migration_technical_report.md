@@ -223,7 +223,7 @@ Projection Layer 的运行时屏幕输出现已采用左右眼独立的三帧 Vu
 
 当前已增加 CUDA/Vulkan/Filament external semaphore signal/wait ABI：支持路径不再在发布前执行 CUDA stream synchronization，Filament 在图形提交时等待对应槽位 semaphore；平台、CUDA Runtime 或旧 Bridge 不支持时自动保留 CPU 同步降级。Validation Layer 全路径和 NVIDIA 实机长稳、帧率、显存压力测试已通过；由于 external semaphore 实验路径仍默认关闭，当前稳定路径使用 CPU 同步，只有显式设置 `D2S_ENABLE_CUDA_EXTERNAL_SEMAPHORE=1` 才启用异步 semaphore。运行时 CUDA `VkImage` 直接导入 Filament 屏幕材质同样默认关闭，稳定 OpenXR 路径通过 Quad Layer Vulkan GPU copy 提交屏幕；`D2S_ENABLE_FILAMENT_SCREEN_IMAGE=1` 仅用于后续验证。Windows/Linux/macOS Bridge CI 已完成并回写最新二进制；下一阶段是 Compute Graph 完整接入和跨厂商互操作。
 
-控制器路径已按旧工程生命周期迁移到 Vulkan：Python Presenter 维护逐手 Grip/Aim 跟踪、移动时间、One Euro 位置滤波和四元数方向平滑；Filament Bridge 在共享 Projection Layer Scene 中加载左右手 GLB、更新 profile 校准姿态和按键动画，并通过独立 C ABI 控制模型与 3D 激光实体显隐。静止 5 秒或 Grip 跟踪丢失时隐藏对应手柄和激光，重新移动后恢复；激光不再通过 Quad Layer 模拟。
+控制器路径已按旧工程生命周期迁移到 Vulkan：Python Presenter 维护逐手 Grip/Aim 跟踪、移动时间、One Euro 位置滤波和四元数方向平滑；Filament Bridge 在共享 Projection Layer Scene 中加载左右手 GLB、更新 profile 校准姿态和按键动画，并通过独立 C ABI 控制模型与 3D 激光实体显隐。按键动画按 GLB `_value/_min/_max` 层级匹配，使用输入平滑、平移/缩放插值和四元数 SLERP；加载日志列出逐手动画节点与语义。静止 5 秒或 Grip 跟踪丢失时隐藏对应手柄和激光，重新移动后恢复；激光不再通过 Quad Layer 模拟，并恢复旧工程两张交叉锥形面及动态蓝至红彩虹渐变。
 
 原生 Bridge 已从单一实现文件拆分为 Context、Eye、Scene、Controller、Laser、Screen、Material 和 Preview 模块。`filament_bridge.cpp` 只保留与 `filament_bridge.h` 一一对应的 C ABI 转发，因此 Python wrapper 无需变化；共享 Engine/Scene 和资源 ownership 仍集中在 `bridge_context`，模块拆分不复制 GLB、材质、纹理或 Shader。CMake 默认隐藏内部 C++ 符号，防止后续功能把内部实现扩展成不稳定 ABI。三平台二进制分别进入 `src/xr_viewer/native/windows`、`linux`、`macos`，不再平铺在 `native` 根目录。
 

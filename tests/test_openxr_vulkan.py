@@ -370,6 +370,7 @@ def test_active_filament_controller_uses_legacy_laser_calibration() -> None:
     assert bridge.laser_matrix is not None
     assert np.linalg.norm(bridge.laser_matrix[:3, 0]) == pytest.approx(0.006)
     assert np.linalg.norm(bridge.laser_matrix[:3, 1]) == pytest.approx(0.4)
+    assert np.linalg.norm(bridge.laser_matrix[:3, 2]) == pytest.approx(0.006)
     assert bridge.laser_matrix[1, 3] > 0.0
     assert bridge.laser_matrix[2, 3] < 0.0
 
