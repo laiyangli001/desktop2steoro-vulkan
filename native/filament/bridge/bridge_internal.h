@@ -210,6 +210,7 @@ struct MaterialBrightnessState {
 struct FilamentEyeTarget {
     filament::Renderer* renderer = nullptr;
     filament::View* view = nullptr;
+    filament::View* laser_view = nullptr;
     filament::Camera* camera = nullptr;
     filament::ColorGrading* color_grading = nullptr;
     filament::SwapChain* swapchain = nullptr;
@@ -324,3 +325,6 @@ struct FilamentPreview {
 void bridge_set_error(FilamentBridge* bridge, const char* message);
 void bridge_set_renderable_visible(
         FilamentBridge* bridge, utils::Entity entity, bool visible);
+void bridge_set_renderable_layer(
+        FilamentBridge* bridge, utils::Entity entity,
+        uint8_t layer, bool visible);

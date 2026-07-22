@@ -15,11 +15,18 @@ void bridge_set_error(FilamentBridge* bridge, const char* message) {
 
 void bridge_set_renderable_visible(
         FilamentBridge* bridge, utils::Entity entity, bool visible) {
+    bridge_set_renderable_layer(bridge, entity, 0, visible);
+}
+
+void bridge_set_renderable_layer(
+        FilamentBridge* bridge, utils::Entity entity,
+        uint8_t layer, bool visible) {
     if (!bridge || !bridge->engine || entity.isNull()) return;
     auto& renderables = bridge->engine->getRenderableManager();
     const auto instance = renderables.getInstance(entity);
     if (!instance.isValid()) return;
-    renderables.setLayerMask(instance, 0xff, visible ? 0x01 : 0x00);
+    const uint8_t layer_mask = static_cast<uint8_t>(1u << layer);
+    renderables.setLayerMask(instance, 0xff, visible ? layer_mask : 0x00);
 }
 
 FilamentBridge* bridge_context_create(
@@ -60,9 +67,10 @@ FilamentBridge* bridge_context_create(
     for (auto& eye : bridge->eyes) {
         eye.renderer = bridge->engine->createRenderer();
         eye.view = bridge->engine->createView();
+        eye.laser_view = bridge->engine->createView();
         eye.camera = bridge->engine->createCamera(
                 utils::EntityManager::get().create());
-        if (!eye.renderer || !eye.view || !eye.camera) {
+        if (!eye.renderer || !eye.view || !eye.laser_view || !eye.camera) {
             bridge_set_error(bridge.get(), "Filament Vulkan eye resource creation failed");
             return bridge.release();
         }
@@ -72,6 +80,14 @@ FilamentBridge* bridge_context_create(
                 filament::math::float3{0.0f, 1.0f, 0.0f});
         eye.view->setScene(bridge->scene);
         eye.view->setCamera(eye.camera);
+        eye.view->setVisibleLayers(0xff, 0x01);
+        eye.view->setChannelDepthClearEnabled(0, false);
+        eye.laser_view->setScene(bridge->scene);
+        eye.laser_view->setCamera(eye.camera);
+        eye.laser_view->setVisibleLayers(0xff, 0x02);
+        eye.laser_view->setColorGrading(nullptr);
+        eye.laser_view->setPostProcessingEnabled(false);
+        eye.laser_view->setChannelDepthClearEnabled(0, false);
     }
     bridge_eye_activate(bridge.get(), 0);
     for (auto& eye : bridge->eyes) {
@@ -113,6 +129,9 @@ void bridge_context_destroy(FilamentBridge* bridge) {
         if (eye.color_grading && bridge->engine) {
             if (eye.view) eye.view->setColorGrading(nullptr);
             bridge->engine->destroy(eye.color_grading);
+        }
+        if (eye.laser_view && bridge->engine) {
+            bridge->engine->destroy(eye.laser_view);
         }
         if (eye.view && bridge->engine) {
             bridge->engine->destroy(eye.view);

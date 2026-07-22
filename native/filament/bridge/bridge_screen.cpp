@@ -162,9 +162,9 @@ int bridge_screen_set_image(FilamentBridge* bridge, const void* image,
         uint32_t width, uint32_t height, int32_t format) {
     if (!bridge || !bridge->engine || !bridge->screen_material_instance ||
             !image || width == 0 || height == 0) return 0;
-    if (format != VK_FORMAT_R8G8B8A8_UNORM &&
-            format != VK_FORMAT_R8G8B8A8_SRGB) {
-        bridge_set_error(bridge, "Unsupported virtual screen Vulkan image format");
+    if (format != VK_FORMAT_R8G8B8A8_SRGB) {
+        bridge_set_error(bridge,
+                "Virtual screen requires VK_FORMAT_R8G8B8A8_SRGB");
         return 0;
     }
     const uint32_t eye_index = bridge->active_eye;

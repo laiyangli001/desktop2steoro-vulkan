@@ -76,6 +76,7 @@ int bridge_eye_create_target_swapchain(
             0.05,
             1000.0);
     eye.view->setViewport(filament::Viewport{0, 0, width, height});
+    eye.laser_view->setViewport(filament::Viewport{0, 0, width, height});
     bridge_eye_activate(bridge, eye_index);
     return 1;
 }
@@ -161,6 +162,7 @@ int bridge_eye_begin_frame(FilamentBridge* bridge) {
         std::fflush(stderr);
     }
     bridge->renderer->render(bridge->view);
+    bridge->renderer->render(bridge->eyes[bridge->active_eye].laser_view);
     return bridge->frame_active ? 1 : 0;
 }
 

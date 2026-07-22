@@ -86,6 +86,18 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "filament::Renderer* renderer = nullptr;" in source
     assert "eye.renderer = bridge->engine->createRenderer();" in source
     assert "bridge->engine->destroy(eye.renderer);" in source
+    assert "filament::View* laser_view = nullptr;" in source
+    assert "eye.laser_view = bridge->engine->createView();" in source
+    assert "eye.view->setVisibleLayers(0xff, 0x01);" in source
+    assert "eye.laser_view->setVisibleLayers(0xff, 0x02);" in source
+    assert "eye.laser_view->setPostProcessingEnabled(false);" in source
+    assert "bridge->renderer->render(bridge->eyes[bridge->active_eye].laser_view);" in source
+    assert "bridge_set_renderable_layer" in source
+    assert ".exposure(target->brightness.scene_exposure_ev)" in source
+    assert "scene_factor" not in source
+    assert "return configure_color_pipeline_impl(preview) ? 1 : 0;" in source
+    assert "VK_FORMAT_R8G8B8A8_SRGB" in source
+    assert "Virtual screen requires VK_FORMAT_R8G8B8A8_SRGB" in source
     assert "bool screen_in_scene = false;" in source
     assert "The sampler is required by the material" in source
     assert "filament_bridge_set_screen_ready_semaphore" in facade

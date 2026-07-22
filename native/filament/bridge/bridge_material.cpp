@@ -1,13 +1,16 @@
 #include "bridge_material.h"
 #include "bridge_internal.h"
+#include "bridge_eye.h"
 
 template<typename Target>
 bool configure_color_pipeline_impl(Target* target) {
     if (!target || !target->engine || !target->view) {
         return false;
     }
+    auto* previous = target->color_grading;
     target->color_grading = filament::ColorGrading::Builder()
             .toneMapping(filament::ColorGrading::ToneMapping::ACES_LEGACY)
+            .exposure(target->brightness.scene_exposure_ev)
             // Keep the projection target in sRGB format and let its target
             // conversion perform the single sRGB OETF at store time.
             .outputColorSpace(filament::color::Rec709 - filament::color::Linear - filament::color::D65)
@@ -17,6 +20,9 @@ bool configure_color_pipeline_impl(Target* target) {
     }
     target->view->setColorGrading(target->color_grading);
     target->view->setPostProcessingEnabled(true);
+    if (previous) {
+        target->engine->destroy(previous);
+    }
     return true;
 }
 
@@ -32,14 +38,6 @@ bool is_skybox_name(const char* name) {
 template<typename BridgeType>
 void apply_material_brightness_impl(BridgeType* bridge) {
     if (!bridge || !bridge->engine) return;
-    const float scene_factor = std::exp2(bridge->brightness.scene_exposure_ev);
-    for (const auto& entry : bridge->brightness.scene_materials) {
-        if (!entry.material) continue;
-        const auto& base = entry.base_color_factor;
-        entry.material->setParameter("baseColorFactor", filament::math::float4{
-                base.x * scene_factor, base.y * scene_factor,
-                base.z * scene_factor, base.w});
-    }
     const float skybox_factor = bridge->brightness.skybox_brightness;
     for (const auto& entry : bridge->brightness.skybox_materials) {
         if (!entry.material) continue;
@@ -89,8 +87,7 @@ int preview_material_set_scene_exposure(FilamentPreview* preview, float exposure
         return 0;
     }
     preview->brightness.scene_exposure_ev = std::clamp(exposure_ev, -8.0f, 8.0f);
-    bridge_material_apply_brightness(preview);
-    return 1;
+    return configure_color_pipeline_impl(preview) ? 1 : 0;
 }
 
 int preview_material_set_fill_light(
@@ -132,7 +129,19 @@ int preview_material_set_skybox_brightness(FilamentPreview* preview, float brigh
 int bridge_material_set_scene_exposure(FilamentBridge* bridge, float exposure_ev) {
     if (!bridge || !std::isfinite(exposure_ev)) return 0;
     bridge->brightness.scene_exposure_ev = std::clamp(exposure_ev, -8.0f, 8.0f);
-    apply_material_brightness_impl(bridge);
+    const uint32_t active_eye = bridge->active_eye;
+    for (uint32_t eye_index = 0; eye_index < bridge->eyes.size(); ++eye_index) {
+        auto& eye = bridge->eyes[eye_index];
+        if (!eye.view) continue;
+        bridge_eye_activate(bridge, eye_index);
+        bridge->color_grading = eye.color_grading;
+        if (!configure_color_pipeline_impl(bridge)) {
+            bridge_eye_activate(bridge, active_eye);
+            return 0;
+        }
+        eye.color_grading = bridge->color_grading;
+    }
+    bridge_eye_activate(bridge, active_eye);
     return 1;
 }
 

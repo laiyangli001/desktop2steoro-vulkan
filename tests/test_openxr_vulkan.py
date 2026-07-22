@@ -181,19 +181,21 @@ def test_swapchain_format_prefers_srgb() -> None:
         VK_FORMAT_B8G8R8A8_UNORM=44,
     )
     assert _select_swapchain_format(vk, [44, 50, 43]) == 43
-    assert _select_swapchain_format(vk, [44]) == 44
+    with pytest.raises(OpenXrVulkanUnavailableError, match="no sRGB"):
+        _select_swapchain_format(vk, [44])
     with pytest.raises(OpenXrVulkanUnavailableError):
         _select_swapchain_format(vk, [])
 
 
-def test_swapchain_format_unorm_mode_prefers_unorm_for_ab_test() -> None:
+def test_swapchain_format_rejects_linear_unorm_mode() -> None:
     vk = SimpleNamespace(
         VK_FORMAT_R8G8B8A8_SRGB=43,
         VK_FORMAT_B8G8R8A8_SRGB=50,
         VK_FORMAT_R8G8B8A8_UNORM=37,
         VK_FORMAT_B8G8R8A8_UNORM=44,
     )
-    assert _select_swapchain_format(vk, [43, 44], "unorm") == 44
+    with pytest.raises(ValueError, match="must use sRGB"):
+        _select_swapchain_format(vk, [43, 44], "unorm")
     assert _select_swapchain_format(vk, [43, 44], "srgb") == 43
     assert _select_swapchain_format(vk, [43, 44], "auto") == 43
 
@@ -205,7 +207,7 @@ def test_swapchain_color_mode_rejects_unknown_value() -> None:
         VK_FORMAT_R8G8B8A8_UNORM=37,
         VK_FORMAT_B8G8R8A8_UNORM=44,
     )
-    with pytest.raises(ValueError, match="srgb, unorm, or auto"):
+    with pytest.raises(ValueError, match="must use sRGB"):
         _select_swapchain_format(vk, [43, 44], "linear")
 
 

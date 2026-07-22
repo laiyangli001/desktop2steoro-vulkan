@@ -2137,24 +2137,25 @@ def _select_swapchain_format(
     vk: Any, available_formats: list[int], color_mode: str = "srgb"
 ) -> int:
     mode = str(color_mode or "srgb").strip().lower()
-    if mode not in {"srgb", "unorm", "auto"}:
-        raise ValueError("OpenXR swapchain color mode must be srgb, unorm, or auto")
+    if mode not in {"srgb", "auto"}:
+        raise ValueError(
+            "OpenXR projection swapchain must use sRGB; "
+            "linear UNORM output is not supported"
+        )
 
     srgb = (
         vk.VK_FORMAT_R8G8B8A8_SRGB,
         vk.VK_FORMAT_B8G8R8A8_SRGB,
     )
-    unorm = (
-        vk.VK_FORMAT_R8G8B8A8_UNORM,
-        vk.VK_FORMAT_B8G8R8A8_UNORM,
-    )
-    if mode == "unorm":
-        preferred = unorm + srgb
-    else:
-        preferred = srgb + unorm
+    preferred = srgb
     for candidate in preferred:
         if int(candidate) in available_formats:
             return int(candidate)
+    if available_formats:
+        raise OpenXrVulkanUnavailableError(
+            "OpenXR runtime exposes no sRGB projection swapchain format; "
+            "refusing a color-space-changing UNORM fallback"
+        )
     if not available_formats:
         raise OpenXrVulkanUnavailableError(
             "OpenXR runtime returned no swapchain formats"
