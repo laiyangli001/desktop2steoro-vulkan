@@ -81,8 +81,8 @@ class OpenXrVulkanConfig:
     filament_profile_path: str | None = None
     filament_scene_exposure_ev: float = 0.0
     filament_skybox_brightness: float = 1.0
-    filament_fill_light_color: tuple[float, float, float] = (1.0, 0.88, 0.78)
-    filament_fill_light_intensity: float = 300.0
+    filament_fill_light_color: tuple[float, float, float] = (0.55, 0.55, 0.58)
+    filament_fill_light_intensity: float = 1.0
     filament_fill_light_direction: tuple[float, float, float] = (-0.35, -1.0, -0.55)
     openxr_no_headset_retry_interval: float = 3.0
     openxr_standby_retry_interval: float = 3.0
@@ -1569,12 +1569,10 @@ class OpenXrVulkanPresenter(
         self._filament_skybox_brightness = float(
             profile.get("preview_skybox_brightness", self._filament_skybox_brightness)
         )
-        fill_color = profile.get(
-            "preview_fill_light_color", self._filament_fill_light_color
-        )
-        fill_direction = profile.get(
-            "preview_fill_light_direction", self._filament_fill_light_direction
-        )
+        # Match the legacy controller renderer: a unit-less head light follows
+        # the eye, while the Filament bridge supplies the fixed top fill.
+        fill_color = profile.get("env_head_light_color", self._filament_fill_light_color)
+        fill_direction = self._filament_fill_light_direction
         if isinstance(fill_color, (list, tuple)) and len(fill_color) >= 3:
             self._filament_fill_light_color = tuple(
                 float(value) for value in fill_color[:3]
@@ -1584,9 +1582,7 @@ class OpenXrVulkanPresenter(
                 float(value) for value in fill_direction[:3]
             )
         self._filament_fill_light_intensity = float(
-            profile.get(
-                "preview_fill_light_intensity", self._filament_fill_light_intensity
-            )
+            profile.get("controller_head_light_intensity", 1.0)
         )
         screen = profile.get("screen")
         if isinstance(screen, dict):

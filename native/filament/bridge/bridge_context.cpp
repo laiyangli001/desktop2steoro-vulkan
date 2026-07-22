@@ -67,10 +67,14 @@ FilamentBridge* bridge_context_create(
     for (auto& eye : bridge->eyes) {
         eye.renderer = bridge->engine->createRenderer();
         eye.view = bridge->engine->createView();
+        eye.controller_view = bridge->engine->createView();
         eye.laser_view = bridge->engine->createView();
         eye.camera = bridge->engine->createCamera(
                 utils::EntityManager::get().create());
-        if (!eye.renderer || !eye.view || !eye.laser_view || !eye.camera) {
+        eye.controller_camera = bridge->engine->createCamera(
+                utils::EntityManager::get().create());
+        if (!eye.renderer || !eye.view || !eye.controller_view ||
+                !eye.laser_view || !eye.camera || !eye.controller_camera) {
             bridge_set_error(bridge.get(), "Filament Vulkan eye resource creation failed");
             return bridge.release();
         }
@@ -78,10 +82,23 @@ FilamentBridge* bridge_context_create(
                 filament::math::float3{0.0f, 0.0f, 3.0f},
                 filament::math::float3{0.0f, 0.0f, 0.0f},
                 filament::math::float3{0.0f, 1.0f, 0.0f});
+        eye.controller_camera->lookAt(
+                filament::math::float3{0.0f, 0.0f, 3.0f},
+                filament::math::float3{0.0f, 0.0f, 0.0f},
+                filament::math::float3{0.0f, 1.0f, 0.0f});
+        // Match the legacy unit-less controller shader without changing the
+        // physically exposed environment camera.
+        eye.controller_camera->setExposure(1.0f);
         eye.view->setScene(bridge->scene);
         eye.view->setCamera(eye.camera);
         eye.view->setVisibleLayers(0xff, 0x01);
         eye.view->setChannelDepthClearEnabled(0, false);
+        eye.controller_view->setScene(bridge->scene);
+        eye.controller_view->setCamera(eye.controller_camera);
+        eye.controller_view->setVisibleLayers(0xff, 0x04);
+        eye.controller_view->setColorGrading(nullptr);
+        eye.controller_view->setPostProcessingEnabled(false);
+        eye.controller_view->setChannelDepthClearEnabled(0, false);
         eye.laser_view->setScene(bridge->scene);
         eye.laser_view->setCamera(eye.camera);
         // Layer 1 contains display-referred screen/UI geometry and lasers.
@@ -134,15 +151,24 @@ void bridge_context_destroy(FilamentBridge* bridge) {
         if (eye.laser_view && bridge->engine) {
             bridge->engine->destroy(eye.laser_view);
         }
+        if (eye.controller_view && bridge->engine) {
+            bridge->engine->destroy(eye.controller_view);
+        }
         if (eye.view && bridge->engine) {
             bridge->engine->destroy(eye.view);
         }
         if (eye.camera && bridge->engine) {
             bridge->engine->destroy(eye.camera->getEntity());
         }
+        if (eye.controller_camera && bridge->engine) {
+            bridge->engine->destroy(eye.controller_camera->getEntity());
+        }
     }
     if (!bridge->fill_light.isNull() && bridge->engine) {
         bridge->engine->destroy(bridge->fill_light);
+    }
+    if (!bridge->controller_top_light.isNull() && bridge->engine) {
+        bridge->engine->destroy(bridge->controller_top_light);
     }
     if (bridge->scene && bridge->engine) {
         bridge->engine->destroy(bridge->scene);

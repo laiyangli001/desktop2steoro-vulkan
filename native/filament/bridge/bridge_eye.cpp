@@ -1,5 +1,6 @@
 #include "bridge_eye.h"
 #include "bridge_internal.h"
+#include "bridge_material.h"
 
 void bridge_eye_activate(FilamentBridge* bridge, uint32_t eye_index) {
     if (!bridge || eye_index >= bridge->eyes.size()) return;
@@ -76,6 +77,7 @@ int bridge_eye_create_target_swapchain(
             0.05,
             1000.0);
     eye.view->setViewport(filament::Viewport{0, 0, width, height});
+    eye.controller_view->setViewport(filament::Viewport{0, 0, width, height});
     eye.laser_view->setViewport(filament::Viewport{0, 0, width, height});
     bridge_eye_activate(bridge, eye_index);
     return 1;
@@ -115,6 +117,12 @@ int bridge_eye_set_camera_look_at(
             filament::math::float3{eye_x, eye_y, eye_z},
             filament::math::float3{center_x, center_y, center_z},
             filament::math::float3{up_x, up_y, up_z});
+    auto* controller_camera = bridge->eyes[bridge->active_eye].controller_camera;
+    controller_camera->lookAt(
+            filament::math::float3{eye_x, eye_y, eye_z},
+            filament::math::float3{center_x, center_y, center_z},
+            filament::math::float3{up_x, up_y, up_z});
+    bridge_material_update_controller_lights(bridge, eye_x, eye_y, eye_z);
     return 1;
 }
 
@@ -128,6 +136,8 @@ int bridge_eye_set_camera_projection(
     }
     bridge->camera->setProjection(
             vertical_fov_degrees, aspect, near_plane, far_plane);
+    bridge->eyes[bridge->active_eye].controller_camera->setProjection(
+            vertical_fov_degrees, aspect, near_plane, far_plane);
     return 1;
 }
 
@@ -140,6 +150,9 @@ int bridge_eye_set_camera_projection_frustum(
         return 0;
     }
     bridge->camera->setProjection(
+            filament::Camera::Projection::PERSPECTIVE,
+            left, right, bottom, top, near_plane, far_plane);
+    bridge->eyes[bridge->active_eye].controller_camera->setProjection(
             filament::Camera::Projection::PERSPECTIVE,
             left, right, bottom, top, near_plane, far_plane);
     return 1;
@@ -162,6 +175,7 @@ int bridge_eye_begin_frame(FilamentBridge* bridge) {
         std::fflush(stderr);
     }
     bridge->renderer->render(bridge->view);
+    bridge->renderer->render(bridge->eyes[bridge->active_eye].controller_view);
     bridge->renderer->render(bridge->eyes[bridge->active_eye].laser_view);
     return bridge->frame_active ? 1 : 0;
 }

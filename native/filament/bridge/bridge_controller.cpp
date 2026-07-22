@@ -283,9 +283,10 @@ int bridge_controller_load(
         const auto entity = controller.asset->getRenderableEntities()[index];
         const auto instance = renderables.getInstance(entity);
         if (!instance.isValid()) continue;
-        // Keep controller lighting physically bounded and isolated from scene lights.
+        // Match the legacy controller pass: only eye-following head/top lights apply.
         renderables.setLightChannel(instance, 0, false);
         renderables.setLightChannel(instance, 1, true);
+        renderables.setLayerMask(instance, 0xff, 0x04);
         for (size_t primitive = 0; primitive < renderables.getPrimitiveCount(instance); ++primitive) {
             auto* material = renderables.getMaterialInstanceAt(instance, primitive);
             if (!material) continue;

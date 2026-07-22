@@ -38,7 +38,8 @@ int bridge_scene_load_glb(FilamentBridge* bridge, const uint8_t* bytes, uint32_t
     }
     bridge->scene->addEntities(
             bridge->asset->getEntities(), bridge->asset->getEntityCount());
-    bridge_material_collect_brightness(bridge, true);
+    // The legacy controller head/top lights are isolated from environment geometry.
+    bridge_material_collect_brightness(bridge, false);
     bridge->asset->releaseSourceData();
     bridge->engine->flushAndWait();
     bridge->glb_bytes.clear();

@@ -210,8 +210,10 @@ struct MaterialBrightnessState {
 struct FilamentEyeTarget {
     filament::Renderer* renderer = nullptr;
     filament::View* view = nullptr;
+    filament::View* controller_view = nullptr;
     filament::View* laser_view = nullptr;
     filament::Camera* camera = nullptr;
+    filament::Camera* controller_camera = nullptr;
     filament::ColorGrading* color_grading = nullptr;
     filament::SwapChain* swapchain = nullptr;
     OpenXrVulkanPlatform::ExternalSwapChain* external_swapchain = nullptr;
@@ -267,6 +269,7 @@ struct FilamentBridge {
     OpenXrVulkanPlatform::ExternalSwapChain* external_swapchain = nullptr;
     OpenXrVulkanPlatform* platform = nullptr;
     utils::Entity fill_light;
+    utils::Entity controller_top_light;
     utils::Entity screen_entity;
     filament::VertexBuffer* screen_vertex_buffer = nullptr;
     filament::IndexBuffer* screen_index_buffer = nullptr;

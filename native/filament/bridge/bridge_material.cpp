@@ -169,17 +169,55 @@ int bridge_material_set_fill_light(
         bridge->engine->destroy(bridge->fill_light);
         bridge->fill_light = {};
     }
+    if (!bridge->controller_top_light.isNull()) {
+        bridge->scene->remove(bridge->controller_top_light);
+        bridge->engine->destroy(bridge->controller_top_light);
+        bridge->controller_top_light = {};
+    }
+    (void)direction_x;
+    (void)direction_y;
+    (void)direction_z;
     bridge->fill_light = utils::EntityManager::get().create();
-    filament::LightManager::Builder(filament::LightManager::Type::DIRECTIONAL)
+    filament::LightManager::Builder(filament::LightManager::Type::POINT)
             .color(filament::LinearColor{red, green, blue})
-            .intensity(intensity)
-            .direction({direction_x, direction_y, direction_z})
+            .intensityCandela(intensity)
+            .position({0.0f, 0.05f, 0.0f})
+            .falloff(2.0f)
             .lightChannel(0, false)
             .lightChannel(1, true)
             .castShadows(false)
             .build(*bridge->engine, bridge->fill_light);
+    bridge->controller_top_light = utils::EntityManager::get().create();
+    filament::LightManager::Builder(filament::LightManager::Type::POINT)
+            .color(filament::LinearColor{0.95f, 0.97f, 1.0f})
+            .intensityCandela(0.55f * intensity)
+            .position({0.0f, 0.45f, -0.18f})
+            .falloff(2.0f)
+            .lightChannel(0, false)
+            .lightChannel(1, true)
+            .castShadows(false)
+            .build(*bridge->engine, bridge->controller_top_light);
     bridge->scene->addEntity(bridge->fill_light);
+    bridge->scene->addEntity(bridge->controller_top_light);
     return 1;
+}
+
+void bridge_material_update_controller_lights(
+        FilamentBridge* bridge, float eye_x, float eye_y, float eye_z) {
+    if (!bridge || !bridge->engine) return;
+    auto& lights = bridge->engine->getLightManager();
+    if (!bridge->fill_light.isNull()) {
+        const auto instance = lights.getInstance(bridge->fill_light);
+        if (instance.isValid()) {
+            lights.setPosition(instance, {eye_x, eye_y + 0.05f, eye_z});
+        }
+    }
+    if (!bridge->controller_top_light.isNull()) {
+        const auto instance = lights.getInstance(bridge->controller_top_light);
+        if (instance.isValid()) {
+            lights.setPosition(instance, {eye_x, eye_y + 0.45f, eye_z - 0.18f});
+        }
+    }
 }
 
 bool bridge_material_configure_color_pipeline(FilamentBridge* bridge) {
