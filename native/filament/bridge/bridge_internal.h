@@ -330,7 +330,7 @@ struct FilamentPreview {
     filament::MaterialInstance* screen_material_instance = nullptr;
     std::vector<PreviewScreenVertex> screen_vertices;
     std::vector<uint16_t> screen_indices;
-    MaterialBrightnessState brightness{ {}, {}, 2.0f, 1.0f };
+    MaterialBrightnessState brightness{ {}, {}, {}, 2.0f, 1.0f };
     std::vector<uint8_t> glb_bytes;
     std::string last_error;
 };

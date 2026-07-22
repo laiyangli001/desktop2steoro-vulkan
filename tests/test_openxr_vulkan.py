@@ -275,6 +275,26 @@ def test_pico_b_button_position_is_resolved_from_glb() -> None:
     assert position == pytest.approx((-0.00672205, 0.01771696, -0.02744452))
 
 
+def test_controller_button_position_does_not_require_opengl_renderer(
+    monkeypatch,
+) -> None:
+    import builtins
+
+    path = (Path(__file__).resolve().parents[1] /
+            "src/xr_viewer/controllers/PICO/right.glb")
+    original_import = builtins.__import__
+
+    def reject_moderngl(name, *args, **kwargs):
+        if name == "moderngl":
+            raise ModuleNotFoundError("moderngl intentionally unavailable")
+        return original_import(name, *args, **kwargs)
+
+    controller_button_local_position.cache_clear()
+    monkeypatch.setattr(builtins, "__import__", reject_moderngl)
+
+    assert controller_button_local_position(str(path), "b_button") is not None
+
+
 def test_controller_guide_stays_head_facing_while_endpoint_follows_b_button() -> None:
     presenter = OpenXrVulkanPresenter()
     presenter._head_position_w = np.asarray((0.0, 0.0, 0.2), dtype=np.float64)
