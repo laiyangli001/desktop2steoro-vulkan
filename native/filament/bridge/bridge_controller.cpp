@@ -37,7 +37,7 @@ std::string bridge_controller_semantic(std::string name) {
     if (name.find("photo_button") != std::string::npos ||
             name.find("home_button") != std::string::npos ||
             name.find("app_button") != std::string::npos ||
-            name.find("pico") != std::string::npos) return "menu_button";
+            name.find("pico") != std::string::npos) return "home_button";
     return {};
 }
 
@@ -186,6 +186,7 @@ float bridge_controller_animation_amount(
     if (semantic == "x_button") return controller.button_values[2];
     if (semantic == "y_button") return controller.button_values[3];
     if (semantic == "menu_button") return controller.button_values[4];
+    if (semantic == "home_button") return 0.0f;
     return 0.0f;
 }
 
@@ -194,16 +195,16 @@ namespace {
 void bridge_controller_add_animation(
         FilamentBridge* bridge, ControllerAsset& controller,
         const std::string& value_name, utils::Entity value_entity) {
-    if (!bridge || !bridge->asset || value_entity.isNull()) return;
+    if (!bridge || !controller.asset || value_entity.isNull()) return;
     const std::string suffix = "_value";
     if (value_name.size() <= suffix.size() ||
             value_name.compare(value_name.size() - suffix.size(), suffix.size(), suffix) != 0) {
         return;
     }
     const std::string prefix = value_name.substr(0, value_name.size() - suffix.size());
-    const auto min_entity = bridge->asset->getFirstEntityByName(
+    const auto min_entity = controller.asset->getFirstEntityByName(
             (prefix + "_min").c_str());
-    const auto max_entity = bridge->asset->getFirstEntityByName(
+    const auto max_entity = controller.asset->getFirstEntityByName(
             (prefix + "_max").c_str());
     const auto semantic = bridge_controller_semantic(value_name);
     auto& transforms = bridge->engine->getTransformManager();
@@ -312,24 +313,28 @@ int bridge_controller_load(
         }
         bridge_controller_add_animation(bridge, controller, value_name, entity);
     }
-    // Some Filament SDK builds do not expose non-renderable glTF node names through
-    // getEntities(). Keep the legacy controller node contract as a small fallback.
+    // Always complete discovery from the legacy node contract. Some Filament
+    // SDK builds omit non-renderable nodes from getEntities(), and others may
+    // expose only a subset. bridge_controller_add_animation deduplicates them.
+    constexpr const char* kControllerValues[] = {
+            "xr_standard_trigger_pressed_value",
+            "xr_standard_squeeze_pressed_value",
+            "xr_standard_thumbstick_pressed_value",
+            "xr_standard_thumbstick_xaxis_pressed_value",
+            "xr_standard_thumbstick_yaxis_pressed_value",
+            "a_button_pressed_value", "b_button_pressed_value",
+            "x_button_pressed_value", "y_button_pressed_value",
+            "LMenu_pressed_value", "RMenu_value",
+            "LPico_value", "RPico_value",
+    };
+    for (const char* value_name : kControllerValues) {
+        const auto entity = controller.asset->getFirstEntityByName(value_name);
+        bridge_controller_add_animation(bridge, controller, value_name, entity);
+    }
     if (controller.animations.empty()) {
-        constexpr const char* kControllerValues[] = {
-                "xr_standard_trigger_pressed_value",
-                "xr_standard_squeeze_pressed_value",
-                "xr_standard_thumbstick_pressed_value",
-                "xr_standard_thumbstick_xaxis_pressed_value",
-                "xr_standard_thumbstick_yaxis_pressed_value",
-                "a_button_pressed_value", "b_button_pressed_value",
-                "x_button_pressed_value", "y_button_pressed_value",
-                "LMenu_pressed_value", "RMenu_pressed_value",
-                "LPico_value", "RPico_value",
-        };
-        for (const char* value_name : kControllerValues) {
-            const auto entity = controller.asset->getFirstEntityByName(value_name);
-            bridge_controller_add_animation(bridge, controller, value_name, entity);
-        }
+        bridge_controller_destroy(bridge, controller);
+        bridge_set_error(bridge, "Controller GLB exposes no _value/_min/_max animation triplets");
+        return 0;
     }
     std::printf("[FilamentBridge] controller loaded hand=%u animations=%zu",
             hand, controller.animations.size());

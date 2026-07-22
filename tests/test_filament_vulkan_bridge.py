@@ -128,6 +128,13 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "controller loaded hand=%u animations=%zu" in source
     assert "kControllerValues" in source
     assert "getFirstEntityByName(value_name)" in source
+    assert "if (!bridge || !controller.asset || value_entity.isNull())" in source
+    assert "controller.asset->getFirstEntityByName" in source
+    assert "bridge->asset->getFirstEntityByName" not in (
+        bridge_dir / "bridge_controller.cpp"
+    ).read_text(encoding="utf-8")
+    assert "if (controller.animations.empty())" in source
+    assert "Controller GLB exposes no _value/_min/_max animation triplets" in source
     assert "renderables.setLightChannel(instance, 0, false);" in source
     assert "renderables.setLayerMask(instance, 0xff, 0x01);" in source
     assert "bridge_set_renderable_visible(bridge, entity, next_visible);" in source
@@ -176,6 +183,7 @@ def test_pico_controller_glb_exposes_legacy_animation_triplets(hand: str) -> Non
     value_names = {name for name in names if name.endswith("_value")}
 
     assert value_names
+    assert len(value_names) == 9
     assert all(
         value_name.removesuffix("_value") + suffix in names
         for value_name in value_names
@@ -184,3 +192,8 @@ def test_pico_controller_glb_exposes_legacy_animation_triplets(hand: str) -> Non
     assert any("trigger_pressed_value" in name for name in value_names)
     assert any("squeeze_pressed_value" in name for name in value_names)
     assert any("thumbstick_pressed_value" in name for name in value_names)
+    bridge_source = (
+        Path(__file__).resolve().parents[1]
+        / "native/filament/bridge/bridge_controller.cpp"
+    ).read_text(encoding="utf-8")
+    assert all(f'"{value_name}"' in bridge_source for value_name in value_names)
