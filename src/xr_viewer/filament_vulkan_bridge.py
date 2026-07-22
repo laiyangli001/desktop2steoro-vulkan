@@ -309,6 +309,20 @@ class FilamentVulkanBridge:
             "set_controller_inputs",
         )
 
+    def set_controller_laser(self, hand: int, matrix, *, visible: bool) -> None:
+        self._ensure_loaded()
+        self._ensure_controller_abi()
+        values = [float(value) for value in matrix.reshape(-1, order="F")]
+        if int(hand) not in (0, 1) or len(values) != 16:
+            raise ValueError("controller laser matrix must be 4x4")
+        array_type = ctypes.c_float * 16
+        self._check_result(
+            self._library.filament_bridge_set_controller_laser(
+                self._handle, int(hand), array_type(*values), int(bool(visible))
+            ),
+            "set_controller_laser",
+        )
+
     def set_scene_exposure(self, exposure_ev: float) -> None:
         self._ensure_loaded()
         self._check_result(
@@ -472,6 +486,7 @@ class FilamentVulkanBridge:
             "filament_bridge_load_controller",
             "filament_bridge_set_controller_pose",
             "filament_bridge_set_controller_inputs",
+            "filament_bridge_set_controller_laser",
         )
         if all(hasattr(library, name) for name in controller_functions):
             library.filament_bridge_load_controller.argtypes = [
@@ -488,6 +503,10 @@ class FilamentVulkanBridge:
                 ctypes.c_uint32,
             ]
             library.filament_bridge_set_controller_inputs.restype = ctypes.c_int
+            library.filament_bridge_set_controller_laser.argtypes = [
+                ctypes.c_void_p, ctypes.c_uint32, ctypes.POINTER(ctypes.c_float), ctypes.c_int
+            ]
+            library.filament_bridge_set_controller_laser.restype = ctypes.c_int
             self._controller_abi_available = True
         library.filament_bridge_set_scene_exposure.argtypes = [
             ctypes.c_void_p, ctypes.c_float

@@ -46,7 +46,6 @@ from .overlay_textures import (
     build_fps_overlay_rgba,
     build_help_rgba,
     build_keyboard_rgba,
-    build_laser_rgba,
     build_short_osd_rgba,
 )
 from .windows_input import (
@@ -1416,6 +1415,27 @@ class OpenXrVulkanPresenter(
                 joystick_y=values.get("joystick_y", 0.0),
                 button_mask=button_mask,
             )
+            if hasattr(bridge, "set_controller_laser"):
+                if aim_matrix is None:
+                    bridge.set_controller_laser(
+                        hand, np.eye(4, dtype=np.float32), visible=False
+                    )
+                else:
+                    direction = (-aim_matrix[:3, 2]).astype(np.float64)
+                    direction /= max(float(np.linalg.norm(direction)), 1e-8)
+                    beam_origin = aim_matrix[:3, 3].astype(np.float64) + direction * 0.12
+                    reference_up = np.array((0.0, 1.0, 0.0), dtype=np.float64)
+                    if abs(float(np.dot(reference_up, direction))) > 0.96:
+                        reference_up = np.array((1.0, 0.0, 0.0), dtype=np.float64)
+                    right_axis = np.cross(reference_up, direction)
+                    right_axis /= max(float(np.linalg.norm(right_axis)), 1e-8)
+                    normal_axis = np.cross(right_axis, direction)
+                    laser_matrix = np.eye(4, dtype=np.float32)
+                    laser_matrix[:3, 0] = (right_axis * 0.028).astype(np.float32)
+                    laser_matrix[:3, 1] = (direction * 10.0).astype(np.float32)
+                    laser_matrix[:3, 2] = normal_axis.astype(np.float32)
+                    laser_matrix[:3, 3] = beam_origin.astype(np.float32)
+                    bridge.set_controller_laser(hand, laser_matrix, visible=True)
 
     def _load_filament_profile(self) -> None:
         profile_path = self.config.filament_profile_path
@@ -1871,28 +1891,6 @@ class OpenXrVulkanPresenter(
         if self._aperture_visible:
             rgba = build_short_osd_rgba(("Aperture", "B: close"), width=384, height=64)
             specs.append(("aperture", rgba, position, (width * 0.24, height * 0.06), rotation))
-        for hand, matrix in enumerate((self._aim_mat_l, self._aim_mat_r)):
-            if matrix is None:
-                continue
-            direction = (-matrix[:3, 2]).astype(np.float64)
-            direction /= max(float(np.linalg.norm(direction)), 1e-8)
-            beam_origin = matrix[:3, 3].astype(np.float64) + direction * 0.12
-            beam_length = 10.0
-            beam_center = beam_origin + direction * (beam_length * 0.5)
-            reference_up = np.array((0.0, 1.0, 0.0), dtype=np.float64)
-            if abs(float(np.dot(reference_up, direction))) > 0.96:
-                reference_up = np.array((1.0, 0.0, 0.0), dtype=np.float64)
-            right_axis = np.cross(reference_up, direction)
-            right_axis /= max(float(np.linalg.norm(right_axis)), 1e-8)
-            normal_axis = np.cross(right_axis, direction)
-            laser_quaternion = tuple(float(value) for value in _mat3_to_quat_xyzw(
-                np.column_stack((right_axis, direction, normal_axis))
-            ))
-            specs.append((
-                f"laser_{hand}", build_laser_rgba(),
-                tuple(float(value) for value in beam_center),
-                (0.028, beam_length), laser_quaternion,
-            ))
         return [self._upload_tool_quad(*spec) for spec in specs]
 
     def _upload_tool_quad(self, key, rgba, position, size, rotation):

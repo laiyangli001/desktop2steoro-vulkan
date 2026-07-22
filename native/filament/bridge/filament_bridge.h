@@ -81,6 +81,9 @@ FILAMENT_BRIDGE_API int filament_bridge_set_controller_inputs(
         float trigger, float grip,
         float joystick_x, float joystick_y,
         uint32_t button_mask);
+FILAMENT_BRIDGE_API int filament_bridge_set_controller_laser(
+        FilamentBridge* bridge, uint32_t hand,
+        const float* matrix16, int visible);
 
 FILAMENT_BRIDGE_API int filament_bridge_set_scene_exposure(
         FilamentBridge* bridge, float exposure_ev);

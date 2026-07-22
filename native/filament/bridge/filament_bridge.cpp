@@ -397,16 +397,17 @@ std::string controller_semantic(std::string name) {
 }
 
 filament::math::mat4f interpolate_controller_transform(
+        const filament::math::mat4f& value,
         const filament::math::mat4f& minimum,
         const filament::math::mat4f& maximum,
         float amount) {
     const float t = std::clamp(std::abs(amount), 0.0f, 1.0f);
     const auto& target = amount < 0.0f ? minimum : maximum;
-    filament::math::mat4f result = target;
+    filament::math::mat4f result = value;
     for (int column = 0; column < 4; ++column) {
         for (int row = 0; row < 4; ++row) {
-            result[column][row] = minimum[column][row] +
-                    (target[column][row] - minimum[column][row]) * t;
+            result[column][row] = value[column][row] +
+                    (target[column][row] - value[column][row]) * t;
         }
     }
     return result;
@@ -439,7 +440,10 @@ void update_controller_animations(
         transforms.setTransform(
                 transforms.getInstance(animation.value_entity),
                 interpolate_controller_transform(
-                        animation.min_transform, animation.max_transform, amount));
+                        animation.value_transform,
+                        animation.min_transform,
+                        animation.max_transform,
+                        amount));
     }
 }
 
