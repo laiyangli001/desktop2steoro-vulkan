@@ -286,7 +286,8 @@ int bridge_controller_load(
         // Match the legacy controller pass: only eye-following head/top lights apply.
         renderables.setLightChannel(instance, 0, false);
         renderables.setLightChannel(instance, 1, true);
-        renderables.setLayerMask(instance, 0xff, 0x04);
+        // Keep initial load and hide/show restoration on the same opaque scene layer.
+        renderables.setLayerMask(instance, 0xff, 0x01);
         for (size_t primitive = 0; primitive < renderables.getPrimitiveCount(instance); ++primitive) {
             auto* material = renderables.getMaterialInstanceAt(instance, primitive);
             if (!material) continue;

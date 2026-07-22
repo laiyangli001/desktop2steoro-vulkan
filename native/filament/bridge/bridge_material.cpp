@@ -2,6 +2,12 @@
 #include "bridge_internal.h"
 #include "bridge_eye.h"
 
+namespace {
+
+constexpr float kLegacyControllerCandelaScale = 10000.0f;
+
+}  // namespace
+
 template<typename Target>
 bool configure_color_pipeline_impl(Target* target) {
     if (!target || !target->engine || !target->view) {
@@ -180,7 +186,9 @@ int bridge_material_set_fill_light(
     bridge->fill_light = utils::EntityManager::get().create();
     filament::LightManager::Builder(filament::LightManager::Type::POINT)
             .color(filament::LinearColor{red, green, blue})
-            .intensityCandela(intensity)
+            // Convert the legacy unit-less head-light level for Filament's
+            // daylight-exposed main camera without altering scene exposure.
+            .intensityCandela(intensity * kLegacyControllerCandelaScale)
             .position({0.0f, 0.05f, 0.0f})
             .falloff(2.0f)
             .lightChannel(0, false)
@@ -190,7 +198,8 @@ int bridge_material_set_fill_light(
     bridge->controller_top_light = utils::EntityManager::get().create();
     filament::LightManager::Builder(filament::LightManager::Type::POINT)
             .color(filament::LinearColor{0.95f, 0.97f, 1.0f})
-            .intensityCandela(0.55f * intensity)
+            .intensityCandela(
+                    0.55f * intensity * kLegacyControllerCandelaScale)
             .position({0.0f, 0.45f, -0.18f})
             .falloff(2.0f)
             .lightChannel(0, false)

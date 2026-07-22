@@ -87,16 +87,11 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "eye.renderer = bridge->engine->createRenderer();" in source
     assert "bridge->engine->destroy(eye.renderer);" in source
     assert "filament::View* laser_view = nullptr;" in source
-    assert "filament::View* controller_view = nullptr;" in source
-    assert "filament::Camera* controller_camera = nullptr;" in source
     assert "eye.laser_view = bridge->engine->createView();" in source
     assert "eye.view->setVisibleLayers(0xff, 0x01);" in source
-    assert "eye.controller_view->setVisibleLayers(0xff, 0x04);" in source
-    assert "eye.controller_camera->setExposure(1.0f);" in source
     assert "eye.laser_view->setVisibleLayers(0xff, 0x02);" in source
     assert "eye.laser_view->setPostProcessingEnabled(false);" in source
     assert "bridge->renderer->render(bridge->eyes[bridge->active_eye].laser_view);" in source
-    assert "bridge->renderer->render(bridge->eyes[bridge->active_eye].controller_view);" in source
     assert "bridge_set_renderable_layer" in source
     assert ".exposure(target->brightness.scene_exposure_ev)" in source
     assert "scene_factor" not in source
@@ -134,10 +129,12 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "kControllerValues" in source
     assert "getFirstEntityByName(value_name)" in source
     assert "renderables.setLightChannel(instance, 0, false);" in source
-    assert "renderables.setLayerMask(instance, 0xff, 0x04);" in source
+    assert "renderables.setLayerMask(instance, 0xff, 0x01);" in source
+    assert "bridge_set_renderable_visible(bridge, entity, next_visible);" in source
     assert "LightManager::Type::POINT" in source
-    assert ".intensityCandela(intensity)" in source
-    assert ".intensityCandela(0.55f * intensity)" in source
+    assert "kLegacyControllerCandelaScale = 10000.0f" in source
+    assert ".intensityCandela(intensity * kLegacyControllerCandelaScale)" in source
+    assert "0.55f * intensity * kLegacyControllerCandelaScale" in source
     assert "eye_y + 0.05f" in source
     assert "eye_y + 0.45f" in source
     assert "eye_z - 0.18f" in source
