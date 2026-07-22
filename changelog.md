@@ -6,6 +6,8 @@
 
 ### 已实现
 
+- 修复实机控制器按键动画未更新：识别 PICO `LPico/RPico` 节点别名，并让 Bridge 的每帧动画刷新同时更新控制器 `_pressed_value` 节点。
+- 提高 Vulkan 激光在头显中的可见性：沿旧工程 Aim 负 Z 射线保持 Quad Layer 提交，但扩大纹理采样核心和光束宽度，避免细光束在实际角分辨率下消失。
 - 修复非 Windows 测试导入 `_KEYEVENTF_KEYUP` 失败：Windows 输入常量在 no-op 平台分支保持同名导出，GitHub Actions Linux 合规测试可正常收集 OpenXR 测试。
 - 补齐 GitHub Actions OpenXR 测试依赖 `Pillow`，确保工具 Quad Layer 纹理模块在 Linux 合规环境可导入。
 - 修复实机 `FilamentBridge.end_frame()` access violation：日志确认崩溃来自缺少源图像同步时的运行时 VkImage 直导入屏幕路径；无同步契约时使用旧工程已验证的 Projection Layer 场景加 Quad Layer GPU copy，zero-copy 仅在能力门控通过时启用。

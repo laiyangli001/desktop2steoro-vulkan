@@ -123,7 +123,7 @@ def build_cursor_rgba(size=64):
     return np.ascontiguousarray(rgba)
 
 
-def build_laser_rgba(width=12, height=256):
+def build_laser_rgba(width=64, height=512):
     """Build a transparent vertical beam texture for an OpenXR quad layer."""
     width = max(4, int(width))
     height = max(16, int(height))
@@ -133,7 +133,7 @@ def build_laser_rgba(width=12, height=256):
     rgba[..., 0] = 80
     rgba[..., 1] = 190
     rgba[..., 2] = 255
-    rgba[..., 3] = np.maximum(0.0, core[None, :] * 235.0).astype(np.uint8)
+    rgba[..., 3] = np.maximum(0.0, core[None, :] * 255.0).astype(np.uint8)
     return np.ascontiguousarray(rgba)
 
 

@@ -391,7 +391,8 @@ std::string controller_semantic(std::string name) {
     if (name.find("menu") != std::string::npos) return "menu_button";
     if (name.find("photo_button") != std::string::npos ||
             name.find("home_button") != std::string::npos ||
-            name.find("app_button") != std::string::npos) return "menu_button";
+            name.find("app_button") != std::string::npos ||
+            name.find("pico") != std::string::npos) return "menu_button";
     return {};
 }
 
@@ -1335,7 +1336,11 @@ int filament_bridge_set_controller_inputs(
 }
 
 int filament_bridge_apply_animations(FilamentBridge* bridge, double time_seconds) {
-    if (!bridge || !bridge->asset) return 0;
+    if (!bridge) return 0;
+    for (auto& controller : bridge->controllers) {
+        update_controller_animations(bridge, controller);
+    }
+    if (!bridge->asset) return 1;
     auto* animator = bridge->asset->getInstance()->getAnimator();
     if (!animator) return 1;
     const size_t count = animator->getAnimationCount();

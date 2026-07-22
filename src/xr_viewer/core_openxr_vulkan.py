@@ -1891,7 +1891,7 @@ class OpenXrVulkanPresenter(
             specs.append((
                 f"laser_{hand}", build_laser_rgba(),
                 tuple(float(value) for value in beam_center),
-                (0.012, beam_length), laser_quaternion,
+                (0.028, beam_length), laser_quaternion,
             ))
         return [self._upload_tool_quad(*spec) for spec in specs]
 
