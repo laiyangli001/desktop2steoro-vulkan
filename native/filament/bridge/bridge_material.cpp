@@ -16,7 +16,7 @@ bool configure_color_pipeline_impl(Target* target) {
     }
     auto* previous = target->color_grading;
     target->color_grading = filament::ColorGrading::Builder()
-            .toneMapping(filament::ColorGrading::ToneMapping::ACES_LEGACY)
+            .toneMapping(filament::ColorGrading::ToneMapping::LINEAR)
             .exposure(target->brightness.scene_exposure_ev)
             // Keep the projection target in sRGB format and let its target
             // conversion perform the single sRGB OETF at store time.

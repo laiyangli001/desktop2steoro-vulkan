@@ -38,7 +38,6 @@
 #include <gltfio/Animator.h>
 #include <gltfio/AssetLoader.h>
 #include <gltfio/FilamentAsset.h>
-#include <gltfio/FilamentInstance.h>
 #include <gltfio/MaterialProvider.h>
 #include <gltfio/ResourceLoader.h>
 #include <gltfio/TextureProvider.h>
@@ -213,7 +212,6 @@ struct MaterialBrightnessState {
 struct FilamentEyeTarget {
     filament::Renderer* renderer = nullptr;
     filament::View* view = nullptr;
-    filament::View* laser_view = nullptr;
     filament::Camera* camera = nullptr;
     filament::ColorGrading* color_grading = nullptr;
     filament::SwapChain* swapchain = nullptr;
@@ -234,7 +232,6 @@ struct ControllerAnimation {
 
 struct ControllerAsset {
     filament::gltfio::FilamentAsset* asset = nullptr;
-    std::array<filament::gltfio::FilamentInstance*, 2> instances{};
     std::vector<uint8_t> bytes;
     std::vector<ControllerAnimation> animations;
     float trigger = 0.0f;
@@ -294,8 +291,6 @@ struct FilamentBridge {
     filament::backend::VulkanPlatform::VulkanSharedContext shared_context{};
     MaterialBrightnessState brightness;
     std::array<ControllerAsset, 2> controllers;
-    filament::Material* controller_occlusion_material = nullptr;
-    filament::MaterialInstance* controller_occlusion_material_instance = nullptr;
     filament::Material* laser_material = nullptr;
     filament::MaterialInstance* laser_material_instance = nullptr;
     filament::VertexBuffer* laser_vertex_buffer = nullptr;

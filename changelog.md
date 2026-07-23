@@ -6,6 +6,9 @@
 
 ### 已实现
 
+- 重构 Filament 控制器激光路径：删除独立 LDR 激光 View、重复 controller asset 和深度遮挡副本；GLB、手柄 PBR、屏幕/UI 与激光现在在一个主 View 中共享同一 Scene 和深度缓冲。手柄外壳写入深度后，激光以深度测试自然被遮挡。
+- 主场景 ColorGrading 改为 `ToneMapping::LINEAR`，不再应用 ACES；保留后处理以在最终 sRGB 输出目标进行唯一一次编码，避免将线性工作空间和最终 transfer function 混为一处。
+
 - 修复 Vulkan 手柄模型近乎纯黑：对照 WebXR Input Profiles 官方 Viewer，Bridge 不再覆盖控制器 GLB 的原始 `roughnessFactor` 和 `specularColorFactor`；新增向后兼容环境光 C ABI，将旧工程环境 profile 的 `env_ambient_color` 作为 Filament SH irradiance 接入，同时保留跟随头部主光和顶部补光。
 - 调整 Vulkan OpenXR 启动顺序：同步完成模型与推理后端加载，首帧推理、立体合成和 shape-dependent warmup 发布就绪信号后，才创建 OpenXR Vulkan/Filament presenter。
 - 输出消费者在 presenter 初始化完成前不再取走 `runtime_q` 中的首帧，避免图形启动期间丢弃已经预热完成的第一个可提交结果。
