@@ -24,6 +24,7 @@
 - 恢复此前只创建但未消费的摇杆、触控板和 Quest thumbrest 触摸状态；触摸通过现有 `button_mask` 第 6 位穿过冻结 C ABI，驱动 touched 节点及触摸轴动画，不新增或改签名。
 - 修正手柄激光遮挡方案、透明外壳及连续帧几何残影回归：撤销在两个 View 提交之间临时替换同一 Renderable 材质的异步不安全实现；控制器 GLB 改用 Filament instanced asset，主实例永久保留原始 PBR 材质并只进入 HDR 主 View，独立遮挡实例共享纹理、材质资源和顶点缓冲，但永久绑定 `colorWrite=false`、`depthWrite=true` 的深度材质并只进入激光 View。两实例同步姿态、按键动画和显隐，不再逐帧修改材质绑定。
 - 修复原生 GLB 加载导致的 Filament 线程归属崩溃：撤销将 Filament Engine/AssetLoader 放入独立 `FilamentNativeLoader` 的方案；Filament Engine、GLB 资源、控制器、屏幕和眼睛渲染统一由 Presenter 线程拥有，避免 `This thread has not been adopted` 和跨线程 Vulkan 生命周期错误。原生 GLB 阶段日志保留用于定位 `createAsset`、`loadResources` 和 `flushAndWait`。
+- 启动 Presenter 线程命令队列重构：输出消费者不再跨线程直接修改 Presenter 的待显示帧，而是投递 `submit_output` 命令，由 Presenter 在帧边界消费；队列覆盖和 Presenter 关闭时都会释放未消费的输出槽位，Filament C ABI 调用继续保持 Presenter 线程归属。
 
 ### 验证结果
 

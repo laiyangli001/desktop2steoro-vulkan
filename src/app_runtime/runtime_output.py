@@ -157,11 +157,7 @@ class CudaVulkanOutputAdapter:
         ]
         external_semaphore_requested = bool(
             self._external_semaphore_requested()
-            and getattr(
-                getattr(self.presenter, "filament_bridge", None),
-                "screen_ready_semaphore_abi_available",
-                False,
-            )
+            and getattr(self.presenter, "screen_ready_semaphore_available", False)
         )
         try:
             if not external_semaphore_requested:
@@ -207,10 +203,9 @@ class CudaVulkanOutputAdapter:
             self.importer.copy_tensor(right, self.right_slot)
             left_ready = None
             right_ready = None
-            bridge = getattr(self.presenter, "filament_bridge", None)
             use_external_semaphore = bool(
                 self.external_semaphore_enabled
-                and getattr(bridge, "screen_ready_semaphore_abi_available", False)
+                and getattr(self.presenter, "screen_ready_semaphore_available", False)
             )
             if use_external_semaphore:
                 left_ready = self.left_ready_semaphores[slot_index]

@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.util
+from concurrent.futures import Future, ThreadPoolExecutor
 import importlib
 import json
 import math
 import os
+import queue
 import sys
 import threading
 import time
@@ -239,6 +241,7 @@ class OpenXrVulkanPresenter(
         self._filament_screen_light_intensity = (
             self.config.filament_screen_light_intensity
         )
+        self._screen_ready_semaphore_abi_available = False
         self._controller_hdr_lighting = False
         self._last_filament_screen_light = None
         self._filament_fill_light_color = self.config.filament_fill_light_color
@@ -306,6 +309,8 @@ class OpenXrVulkanPresenter(
         self._ray_filter_r = OneEuroFilter3D(8.0, 8.0, 8.0)
         self._last_frame_dt = 1.0 / 90.0
         self._initialized = False
+        self._presenter_thread_id: int | None = None
+        self._presenter_commands: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=2)
         self._pending_output: VulkanStereoOutputFrame | None = None
         self._displayed_output: VulkanStereoOutputFrame | None = None
         self._rendering_output: VulkanStereoOutputFrame | None = None
@@ -393,6 +398,10 @@ class OpenXrVulkanPresenter(
     def output_ready(self) -> bool:
         """Report readiness after the presenter-owned Filament Engine is ready."""
         return self._initialized
+
+    @property
+    def screen_ready_semaphore_available(self) -> bool:
+        return self._screen_ready_semaphore_abi_available
 
     def _controller_ambient_light_color(self) -> tuple[float, float, float]:
         multiplier = max(
@@ -497,6 +506,7 @@ class OpenXrVulkanPresenter(
 
     def run_frame(self) -> bool:
         self._ensure_initialized()
+        self._drain_presenter_commands()
         self.poll_events()
         if self.exit_requested:
             return False
@@ -1247,6 +1257,7 @@ class OpenXrVulkanPresenter(
 
     def run_until(self, shutdown_event: Any) -> int:
         """Run the XR frame loop until the application shutdown event is set."""
+        self._presenter_thread_id = threading.get_ident()
         retry_count = 0
         try:
             while not shutdown_event.is_set() and not self.exit_requested:
@@ -1445,6 +1456,8 @@ class OpenXrVulkanPresenter(
         self.swapchain_format = None
         self._graphics_binding = None
         self._initialized = False
+        self._screen_ready_semaphore_abi_available = False
+        self._clear_presenter_commands()
         self._drop_output_frames()
         self._has_presented_frame = False
         self._last_quad_layers = []
@@ -1731,11 +1744,52 @@ class OpenXrVulkanPresenter(
             raise TypeError("OpenXR Vulkan output requires VulkanImageResource eyes")
         if frame.left_eye.context is not self.vulkan or frame.right_eye.context is not self.vulkan:
             raise ValueError("OpenXR output images belong to a different Vulkan context")
+        if (
+            self._presenter_thread_id is not None
+            and threading.get_ident() != self._presenter_thread_id
+        ):
+            self._enqueue_presenter_command("submit_output", frame)
+            return
+        self._submit_output_on_presenter(frame)
+
+    def _submit_output_on_presenter(self, frame: VulkanStereoOutputFrame) -> None:
         with self._output_lock:
             previous = self._pending_output
             self._pending_output = frame
         if previous is not None and previous is not frame:
             self._release_output_frame(previous)
+
+    def _enqueue_presenter_command(self, kind: str, payload: Any) -> None:
+        command = (str(kind), payload)
+        while True:
+            try:
+                self._presenter_commands.put_nowait(command)
+                return
+            except queue.Full:
+                try:
+                    old_kind, old_payload = self._presenter_commands.get_nowait()
+                except queue.Empty:
+                    continue
+                if old_kind == "submit_output":
+                    self._release_output_frame(old_payload)
+
+    def _drain_presenter_commands(self) -> None:
+        while True:
+            try:
+                kind, payload = self._presenter_commands.get_nowait()
+            except queue.Empty:
+                return
+            if kind == "submit_output":
+                self._submit_output_on_presenter(payload)
+
+    def _clear_presenter_commands(self) -> None:
+        while True:
+            try:
+                kind, payload = self._presenter_commands.get_nowait()
+            except queue.Empty:
+                return
+            if kind == "submit_output":
+                self._release_output_frame(payload)
 
     @staticmethod
     def _release_output_frame(frame: VulkanStereoOutputFrame | None) -> None:
@@ -1788,6 +1842,7 @@ class OpenXrVulkanPresenter(
         from .filament_vulkan_bridge import FilamentVulkanBridge
 
         bridge = FilamentVulkanBridge(bridge_path)
+        file_reader, asset_reads = self._start_filament_file_reads()
         try:
             bridge.create(
                 instance=self.vulkan.instance,
@@ -1806,14 +1861,14 @@ class OpenXrVulkanPresenter(
                 )
             glb_path = self.config.filament_glb_path
             if glb_path:
-                bridge.load_glb(Path(glb_path).read_bytes())
+                bridge.load_glb(asset_reads["environment"].result())
             if (
                 self._controller_brand is not None
                 and getattr(bridge, "controller_abi_available", True)
                 and hasattr(bridge, "load_controller")
             ):
-                bridge.load_controller(0, self._controller_brand.left_glb.read_bytes())
-                bridge.load_controller(1, self._controller_brand.right_glb.read_bytes())
+                bridge.load_controller(0, asset_reads["controller_left"].result())
+                bridge.load_controller(1, asset_reads["controller_right"].result())
                 print(
                     "Filament controllers loaded: "
                     f"brand={self._controller_brand.name} "
@@ -1864,11 +1919,35 @@ class OpenXrVulkanPresenter(
                 self._filament_fill_light_intensity,
                 self._filament_fill_light_direction,
             )
+            self._screen_ready_semaphore_abi_available = bool(
+                getattr(bridge, "screen_ready_semaphore_abi_available", False)
+            )
             self.filament_bridge = bridge
         except Exception:
             bridge.close()
             self.filament_bridge = None
             raise
+        finally:
+            file_reader.shutdown(wait=True)
+
+    def _start_filament_file_reads(
+        self,
+    ) -> tuple[ThreadPoolExecutor, dict[str, Future[bytes]]]:
+        """Read assets off-thread without moving any Filament work off-owner."""
+        executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="FilamentFileIO")
+        reads: dict[str, Future[bytes]] = {}
+        if self.config.filament_glb_path:
+            reads["environment"] = executor.submit(
+                Path(self.config.filament_glb_path).read_bytes
+            )
+        if self._controller_brand is not None:
+            reads["controller_left"] = executor.submit(
+                self._controller_brand.left_glb.read_bytes
+            )
+            reads["controller_right"] = executor.submit(
+                self._controller_brand.right_glb.read_bytes
+            )
+        return executor, reads
 
     def _update_filament_controllers(self, bridge: Any) -> None:
         self._update_filament_controller_guide(bridge)

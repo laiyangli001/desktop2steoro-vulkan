@@ -25,6 +25,7 @@ from viewer.vulkan_context import (
     unpack_vulkan_version,
     _find_queue_families,
 )
+from viewer.vulkan_resources import VulkanImageResource
 from xr_viewer.core_openxr_vulkan import (
     OpenXrCompositionBuilder,
     OpenXrVulkanConfig,
@@ -1114,6 +1115,50 @@ def test_presenter_rejects_output_while_headset_is_waiting() -> None:
     presenter.session_running = True
     with pytest.raises(TypeError, match="VulkanImageResource"):
         presenter.submit_output(SimpleNamespace(left_eye=None, right_eye=None))
+
+
+def test_presenter_queues_output_from_non_owner_thread() -> None:
+    presenter = OpenXrVulkanPresenter()
+    context = object()
+    resource = VulkanImageResource(
+        context=context,
+        image="image-left",
+        view=None,
+        width=8,
+        height=8,
+        format=43,
+        layout=0,
+        access_mask=0,
+        stage_mask=0,
+        queue_family_index=0,
+    )
+    other_resource = VulkanImageResource(
+        context=context,
+        image="image-right",
+        view=None,
+        width=8,
+        height=8,
+        format=43,
+        layout=0,
+        access_mask=0,
+        stage_mask=0,
+        queue_family_index=0,
+    )
+    presenter.vulkan = context
+    presenter.session_running = True
+    presenter._accept_output = True
+    presenter._presenter_thread_id = threading.get_ident() + 1
+    frame = SimpleNamespace(
+        left_eye=resource,
+        right_eye=other_resource,
+        metadata={},
+    )
+
+    presenter.submit_output(frame)
+
+    assert presenter._pending_output is None
+    presenter._drain_presenter_commands()
+    assert presenter._pending_output is frame
 
 
 def test_filament_bridge_binds_each_openxr_eye(monkeypatch) -> None:

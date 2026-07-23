@@ -213,10 +213,11 @@ def test_screen_light_is_independent_from_environment_hdr_mode() -> None:
 
 def test_artemis_controller_lighting_matches_legacy_head_light() -> None:
     root = Path(__file__).resolve().parents[1]
+    profile_path = root / "src/xr_viewer/environments/3D_Artemis/profile.json"
+    if not profile_path.is_file():
+        profile_path = root / "src/xr_viewer/environments/Artemis/profile.json"
     profile = json.loads(
-        (root / "src/xr_viewer/environments/Artemis/profile.json").read_text(
-            encoding="utf-8"
-        )
+        profile_path.read_text(encoding="utf-8")
     )
     assert profile["env_head_light_color"] == [0.45, 0.45, 0.48]
     assert profile["env_ambient_color"] == [0.06, 0.05, 0.05]
