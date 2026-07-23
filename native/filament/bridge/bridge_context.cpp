@@ -69,9 +69,11 @@ FilamentBridge* bridge_context_create(
         eye.renderer = bridge->engine->createRenderer();
         eye.view = bridge->engine->createView();
         eye.laser_view = bridge->engine->createView();
+        eye.display_view = bridge->engine->createView();
         eye.camera = bridge->engine->createCamera(
                 utils::EntityManager::get().create());
-        if (!eye.renderer || !eye.view || !eye.laser_view || !eye.camera) {
+        if (!eye.renderer || !eye.view || !eye.laser_view ||
+                !eye.display_view || !eye.camera) {
             bridge_set_error(bridge.get(), "Filament Vulkan eye resource creation failed");
             return bridge.release();
         }
@@ -85,11 +87,18 @@ FilamentBridge* bridge_context_create(
         eye.view->setChannelDepthClearEnabled(0, false);
         eye.laser_view->setScene(bridge->scene);
         eye.laser_view->setCamera(eye.camera);
-        // Layer 1 contains display-referred screen/UI geometry and lasers.
-        eye.laser_view->setVisibleLayers(0xff, 0x02);
+        // Layer 2 keeps controllers and lasers in one depth-tested pass.
+        eye.laser_view->setVisibleLayers(0xff, 0x04);
         eye.laser_view->setColorGrading(nullptr);
         eye.laser_view->setPostProcessingEnabled(false);
         eye.laser_view->setChannelDepthClearEnabled(0, false);
+        eye.display_view->setScene(bridge->scene);
+        eye.display_view->setCamera(eye.camera);
+        // Layer 1 contains display-referred screen and guide geometry.
+        eye.display_view->setVisibleLayers(0xff, 0x02);
+        eye.display_view->setColorGrading(nullptr);
+        eye.display_view->setPostProcessingEnabled(false);
+        eye.display_view->setChannelDepthClearEnabled(0, false);
     }
     bridge_eye_activate(bridge.get(), 0);
     for (auto& eye : bridge->eyes) {
@@ -132,6 +141,9 @@ void bridge_context_destroy(FilamentBridge* bridge) {
         if (eye.color_grading && bridge->engine) {
             if (eye.view) eye.view->setColorGrading(nullptr);
             bridge->engine->destroy(eye.color_grading);
+        }
+        if (eye.display_view && bridge->engine) {
+            bridge->engine->destroy(eye.display_view);
         }
         if (eye.laser_view && bridge->engine) {
             bridge->engine->destroy(eye.laser_view);

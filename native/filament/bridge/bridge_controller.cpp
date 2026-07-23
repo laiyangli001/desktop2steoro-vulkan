@@ -304,8 +304,9 @@ int bridge_controller_load(
         // Match the legacy controller pass: only eye-following head/top lights apply.
         renderables.setLightChannel(instance, 0, false);
         renderables.setLightChannel(instance, 1, true);
-        // Keep initial load and hide/show restoration on the same opaque scene layer.
-        renderables.setLayerMask(instance, 0xff, 0x01);
+        // Share layer 2 with lasers so the controller shell participates in
+        // the same depth-tested overlay pass and occludes the beam root.
+        renderables.setLayerMask(instance, 0xff, 0x04);
     }
     for (size_t index = 0; index < controller.asset->getEntityCount(); ++index) {
         const auto entity = controller.asset->getEntities()[index];
@@ -424,7 +425,7 @@ int bridge_controller_set_visible(
     for (size_t index = 0;
             index < controller.asset->getRenderableEntityCount(); ++index) {
         const auto entity = controller.asset->getRenderableEntities()[index];
-        bridge_set_renderable_visible(bridge, entity, next_visible);
+        bridge_set_renderable_layer(bridge, entity, 2, next_visible);
     }
     controller.visible = next_visible;
     return 1;

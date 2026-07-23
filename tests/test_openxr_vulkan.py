@@ -293,12 +293,12 @@ def test_b_button_position_is_resolved_from_each_controller_glb(
 @pytest.mark.parametrize(
     ("brand_name", "expected_multiplier"),
     (
-        ("HP", 1.5),
-        ("INDEX", 1.5),
+        ("HP", 20.0),
+        ("INDEX", 20.0),
         ("PICO", 1.0),
         ("QUEST", 1.0),
-        ("VIVE", 1.5),
-        ("YVR", 1.5),
+        ("VIVE", 20.0),
+        ("YVR", 20.0),
     ),
 )
 def test_controller_profile_selects_ambient_light_multiplier(

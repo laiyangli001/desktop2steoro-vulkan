@@ -213,6 +213,7 @@ struct FilamentEyeTarget {
     filament::Renderer* renderer = nullptr;
     filament::View* view = nullptr;
     filament::View* laser_view = nullptr;
+    filament::View* display_view = nullptr;
     filament::Camera* camera = nullptr;
     filament::ColorGrading* color_grading = nullptr;
     filament::SwapChain* swapchain = nullptr;
