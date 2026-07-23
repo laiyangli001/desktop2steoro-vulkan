@@ -735,7 +735,7 @@ OpenGL Fallback 直接渲染到 OpenGL OpenXR swapchain 或 OpenGL window frameb
 
 ### 11.2.1 Filament 颜色管线
 
-Filament Bridge 必须将 GLB、原始 PBR 手柄、显示参考屏幕/UI 和激光放入同一个主 View，使控制器与激光共享 Scene 和深度缓冲。手柄使用原始 PBR 材质并写深度；激光使用不透明、`depthWrite=true`、`depthCulling=true` 的材质和控制器相同的 layer，因此外壳在几何上遮挡激光。单 View 每个 OpenXR 帧必须清理 channel 0 深度；仅多 View 同帧合成时才允许关闭该清理，且不得把该设置跨帧保留。主 View 使用 ColorGrading `LINEAR` tone mapping，不应用 ACES/其他场景曲线；保留后处理仅用于最终目标的单次 sRGB 编码。AssetLoader 只加载一个 controller asset，不得为遮挡创建副本、修改同一 Renderable 的材质绑定或在帧内切换 View。`VK_FORMAT_R8G8B8A8_SRGB` 是当前屏幕纹理导入的唯一合法格式；以 UNORM 图像配合 `SRGB8_A8` 采样属于错误，必须拒绝。
+Filament Bridge 必须将 GLB、原始 PBR 手柄、显示参考屏幕/UI 和激光放入同一个主 View，使控制器与激光共享 Scene 和深度缓冲。手柄使用原始 PBR 材质并写深度；激光使用不透明、`depthWrite=true`、`depthCulling=true` 的材质和控制器相同的 layer，因此外壳在几何上遮挡激光。单 View 每个 OpenXR 帧必须清理 channel 0 深度；仅多 View 同帧合成时才允许关闭该清理，且不得把该设置跨帧保留。每只眼的 Renderer 还必须在创建时显式设置 `ClearOptions.clear=true`、黑色 clear color 和 `discard=true`，因为 Filament 默认不清理颜色，而 OpenXR 外部 swapchain 图像的上一帧内容不得保留。主 View 使用 ColorGrading `LINEAR` tone mapping，不应用 ACES/其他场景曲线；保留后处理仅用于最终目标的单次 sRGB 编码。AssetLoader 只加载一个 controller asset，不得为遮挡创建副本、修改同一 Renderable 的材质绑定或在帧内切换 View。`VK_FORMAT_R8G8B8A8_SRGB` 是当前屏幕纹理导入的唯一合法格式；以 UNORM 图像配合 `SRGB8_A8` 采样属于错误，必须拒绝。
 
 ### 11.2.2 Bridge 接口边界与完整性清单
 

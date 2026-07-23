@@ -74,6 +74,14 @@ FilamentBridge* bridge_context_create(
             bridge_set_error(bridge.get(), "Filament Vulkan eye resource creation failed");
             return bridge.release();
         }
+        // Renderer::ClearOptions defaults to clear=false. OpenXR supplies an
+        // external image ring whose previous color content is undefined for
+        // the next frame, so every eye renderer must clear it explicitly.
+        filament::Renderer::ClearOptions clear_options;
+        clear_options.clearColor = filament::math::double4{0.0, 0.0, 0.0, 1.0};
+        clear_options.clear = true;
+        clear_options.discard = true;
+        eye.renderer->setClearOptions(clear_options);
         eye.camera->lookAt(
                 filament::math::float3{0.0f, 0.0f, 3.0f},
                 filament::math::float3{0.0f, 0.0f, 0.0f},
