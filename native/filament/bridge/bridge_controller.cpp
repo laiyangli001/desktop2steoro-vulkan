@@ -289,17 +289,6 @@ int bridge_controller_load(
         renderables.setLightChannel(instance, 1, true);
         // Keep initial load and hide/show restoration on the same opaque scene layer.
         renderables.setLayerMask(instance, 0xff, 0x01);
-        for (size_t primitive = 0; primitive < renderables.getPrimitiveCount(instance); ++primitive) {
-            auto* material = renderables.getMaterialInstanceAt(instance, primitive);
-            if (!material) continue;
-            if (material->getMaterial()->hasParameter("specularColorFactor")) {
-                material->setParameter(
-                        "specularColorFactor", filament::math::float3{1.0f, 1.0f, 1.0f});
-            }
-            if (material->getMaterial()->hasParameter("roughnessFactor")) {
-                material->setParameter("roughnessFactor", 0.4f);
-            }
-        }
     }
     for (size_t index = 0; index < controller.asset->getEntityCount(); ++index) {
         const auto entity = controller.asset->getEntities()[index];

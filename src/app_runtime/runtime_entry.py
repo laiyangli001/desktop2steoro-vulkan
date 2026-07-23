@@ -83,6 +83,30 @@ def _queue_clear(queue) -> None:
             return
 
 
+def _wait_for_runtime_ready(
+    ready_event: threading.Event,
+    pipeline_thread: threading.Thread,
+) -> bool:
+    print(
+        "[Main] Waiting for inference load, first frame, and stereo warmup "
+        "before OpenXR initialization...",
+        flush=True,
+    )
+    while not shutdown_event.is_set():
+        if ready_event.wait(0.05):
+            print(
+                "[Main] Inference pipeline ready; starting OpenXR "
+                "Vulkan/Filament initialization",
+                flush=True,
+            )
+            return True
+        if not pipeline_thread.is_alive():
+            raise RuntimeError(
+                "Stereo pipeline stopped before inference startup completed"
+            )
+    return False
+
+
 def run_processing_runtime(*, max_seconds: float | None = None) -> int:
     """Run capture, inference, and pipeline threads until shutdown is requested."""
 
@@ -107,6 +131,7 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
         convergence=CONVERGENCE,
     )
     callbacks = RuntimeCallbacks(context)
+    runtime_ready_event = threading.Event()
 
     if str(RUN_MODE).strip().lower() == "openxr":
         # Keep source inference alive during the headset wake-up grace period.
@@ -150,6 +175,7 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
         apply_stereo_hot_reload_if_needed=callbacks.apply_stereo_hot_reload_if_needed,
         warmup_stereo_once_for_frame=callbacks.warmup_stereo_once_for_frame,
         log_fast_plus_fused_runtime_state=callbacks.log_fast_plus_fused_runtime_state,
+        runtime_ready_event=runtime_ready_event,
     )
 
     capture_thread = threading.Thread(
@@ -159,6 +185,9 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
         daemon=True,
     )
     pipeline = RuntimePipelineLoop(pipeline_context)
+    print("[Main] Loading inference runtime before capture and OpenXR...", flush=True)
+    pipeline.prepare()
+    print("[Main] Inference runtime loaded", flush=True)
     pipeline_thread = threading.Thread(
         target=pipeline.run,
         name="VulkanStereoPipeline",
@@ -168,44 +197,52 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
     presenter_thread = None
     output_consumer = None
     output_thread = None
-    if str(RUN_MODE).strip().lower() == "openxr":
-        from xr_viewer.core_openxr_vulkan import OpenXrVulkanConfig, OpenXrVulkanPresenter
-
-        filament_config = _openxr_filament_config(settings)
-        presenter = OpenXrVulkanPresenter(
-            OpenXrVulkanConfig(**filament_config),
-            on_headset_state=callbacks.on_openxr_headset_state,
-            on_controller_shortcut=callbacks.on_openxr_controller_shortcut,
-        )
-        presenter_thread = threading.Thread(
-            target=presenter.run_until,
-            args=(shutdown_event,),
-            name="VulkanOpenXRPresenter",
-            daemon=True,
-        )
-        presenter_thread.start()
-        output_consumer = VulkanRuntimeOutputConsumer(
-            runtime_q=context.runtime_q,
-            shutdown_event=shutdown_event,
-            source_stat_inc=callbacks.source_stat_inc,
-            sink=presenter,
-            gpu_adapter=CudaVulkanOutputAdapter(presenter),
-        )
-        output_thread = threading.Thread(
-            target=output_consumer.run,
-            name="VulkanOutputConsumer",
-            daemon=True,
-        )
-        output_thread.start()
     capture_thread.start()
     pipeline_thread.start()
-    print(
-        f"Desktop2Stereo Vulkan runtime started: mode={RUN_MODE} device={DEVICE_INFO}",
-        flush=True,
-    )
-
-    deadline = None if max_seconds is None else time.monotonic() + max(0.0, max_seconds)
     try:
+        if str(RUN_MODE).strip().lower() == "openxr":
+            if not _wait_for_runtime_ready(runtime_ready_event, pipeline_thread):
+                return 0
+            from xr_viewer.core_openxr_vulkan import (
+                OpenXrVulkanConfig,
+                OpenXrVulkanPresenter,
+            )
+
+            filament_config = _openxr_filament_config(settings)
+            presenter = OpenXrVulkanPresenter(
+                OpenXrVulkanConfig(**filament_config),
+                on_headset_state=callbacks.on_openxr_headset_state,
+                on_controller_shortcut=callbacks.on_openxr_controller_shortcut,
+            )
+            presenter_thread = threading.Thread(
+                target=presenter.run_until,
+                args=(shutdown_event,),
+                name="VulkanOpenXRPresenter",
+                daemon=True,
+            )
+            presenter_thread.start()
+            output_consumer = VulkanRuntimeOutputConsumer(
+                runtime_q=context.runtime_q,
+                shutdown_event=shutdown_event,
+                source_stat_inc=callbacks.source_stat_inc,
+                sink=presenter,
+                gpu_adapter=CudaVulkanOutputAdapter(presenter),
+            )
+            output_thread = threading.Thread(
+                target=output_consumer.run,
+                name="VulkanOutputConsumer",
+                daemon=True,
+            )
+            output_thread.start()
+        print(
+            f"Desktop2Stereo Vulkan runtime started: mode={RUN_MODE} device={DEVICE_INFO}",
+            flush=True,
+        )
+        deadline = (
+            None
+            if max_seconds is None
+            else time.monotonic() + max(0.0, max_seconds)
+        )
         while not shutdown_event.is_set():
             if deadline is not None and time.monotonic() >= deadline:
                 break

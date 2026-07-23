@@ -271,20 +271,20 @@ Any state -> Failed
 
 ```text
 1. Parse and validate RuntimeConfig.
-2. Probe OpenXR runtime and platform capabilities.
+2. Probe OpenXR runtime and platform capabilities without creating a formal XR Session.
 3. Select Vulkan main path or OpenGL Fallback before creating graphics resources.
-4. Vulkan path creates XrInstance requirements, Vulkan Instance/Device, queues and allocators.
-5. OpenGL path creates the platform OpenGL context and reduced capability set.
-6. Create the matching OpenXR Session/swapchains or non-XR presenter.
-7. Initialize the selected Scene Renderer and scene resources.
-8. Vulkan path creates Stereo/Effects Compute Graph resources; OpenGL path validates a GPU stereo input source.
-9. Initialize Inference Adapter and backend-specific interop slots.
-10. Initialize Capture Adapter.
-11. Warm up the selected inference and graphics pipelines.
-12. Enter Ready, then start capture and presentation.
+4. Prepare model artifacts and initialize the Inference Adapter; TensorRT engine build or model download must finish here.
+5. Start Capture Adapter only after inference loading succeeds and obtain the first real frame shape.
+6. Execute the first inference/stereo result and shape-dependent kernel warmup, then publish `runtime_ready_event` together with the first renderable output.
+7. Vulkan OpenXR path may now create XrInstance requirements, Vulkan Instance/Device, queues, Session and swapchains.
+8. Initialize Filament Engine, Scene Renderer, scene resources and persistent output slots.
+9. Preserve a renderable latest-frame output until the presenter reports initialized; the consumer must not dequeue and discard it during graphics startup, while the bounded producer queue may replace it with a newer completed frame.
+10. Enter Ready and start presentation. OpenXR pose/controller frames continue independently after startup and may reuse the last-good screen image.
 ```
 
-推理 engine 构建或模型下载必须发生在 Capture 启动前。运行时不得边捕获边编译 TensorRT engine。
+推理 engine 构建或模型下载必须发生在 Capture 启动前。运行时不得边捕获边编译 TensorRT engine，也不得在推理加载和首帧 shape-dependent warmup 完成前创建正式 OpenXR Session、Vulkan Device 或 Filament Engine。
+
+Vulkan/OpenXR 本身没有等价于神经网络推理的通用“跑空数据 warmup”。本项目的图形预热定义为启动阶段完成 Device/队列、OpenXR swapchain、Filament 材质与资源、持久化输出槽的创建；实际 graphics pipeline 的首次提交发生在首个有效 XR frame，必须遵循 OpenXR `wait/begin/end` 帧协议，禁止脱离 Session 伪造提交。
 
 ### 4.5 Graphics Backend 选择
 
@@ -587,6 +587,10 @@ class CaptureAdapter(Protocol):
 Capture Adapter 报告真实 `capture_size`、pixel format、transfer function、primaries、range 和 `color_space`。任何未知色彩空间必须告警并阻止静默推断。SDR sRGB 输入在显示输出路径中保持显示参考语义；RGB preprocess 可以为模型或线性工作 Pass 建立明确的线性副本，但不得在没有声明的情况下对原始显示 RGB 执行 gamma、tone mapping 或曝光。
 
 正式输出契约固定为 `color_space=srgb`、RGBA8、`image_origin=top_left`。OpenXR Projection swapchain 必须使用 Vulkan sRGB 格式，不得回退到 UNORM。Filament 主场景使用线性 Rec.709/D65 和明确配置的 tone mapping；场景曝光必须进入 ColorGrading，不得乘改 glTF 材质颜色。
+
+手柄 GLB 的加载和材质处理以 WebXR Input Profiles 官方 Viewer 为基准：模型加载后必须保留 glTF 原始 PBR 参数和纹理，不得在 Bridge 中统一覆盖 roughness、specular、metallic 或 base color。环境光按 profile 分成两种模式：`controller_hdr_lighting=false` 的 3D 房间模型使用旧工程校准的 `env_ambient_color`、跟随头部主光和顶部补光；`controller_hdr_lighting=true` 的 HDR 图片环境必须使用与当前 HDR 匹配的预过滤 reflection cubemap 和 irradiance。当前 Bridge 已完成房间 profile 的 SH irradiance 与直接补光，HDR 模式暂时明确记录为 `hdr_ibl_pending_profile_fallback`，不得伪报为完整 IBL；后续应由三平台 CI 预生成 Filament 可加载的 KTX IBL 资源并通过稳定 C ABI 接入。
+
+虚拟屏幕光与上述环境模式正交，HDR 开关不得关闭或控制屏幕光。运行时每 250 ms 在 CUDA 流上异步下采样左右眼显示用 sRGB 图像，按标准 sRGB EOTF 转为线性平均色；颜色继续沿用旧工程的 `82%` 屏幕采样色与 `18%` profile 中性色混合。Filament 在屏幕中心创建只作用于控制器 light channel 1 的无阴影前向聚光源，方向跟随屏幕法线、衰减距离使用屏幕对角线，并由 `screen_light_intensity` 控制强度。该补充采样不得阻塞输出路径，失败时必须保留 last-good 屏幕光颜色。
 
 虚拟屏幕、UI 和手柄激光属于显示参考 LDR 内容：其输入图像必须是 `VK_FORMAT_R8G8B8A8_SRGB`，Filament 只解码一次；它们必须进入关闭后处理的独立 View，不得经过主场景 ACES/其他 tone mapping。默认颜色控制必须为恒等变换，非中性颜色控制只能来自明确的用户配置。
 

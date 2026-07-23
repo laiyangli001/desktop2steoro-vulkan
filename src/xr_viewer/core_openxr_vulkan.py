@@ -89,6 +89,9 @@ class OpenXrVulkanConfig:
     filament_profile_path: str | None = None
     filament_scene_exposure_ev: float = 0.0
     filament_skybox_brightness: float = 1.0
+    filament_ambient_light_color: tuple[float, float, float] = (0.14, 0.13, 0.15)
+    filament_screen_light_color: tuple[float, float, float] = (0.92, 0.96, 1.0)
+    filament_screen_light_intensity: float = 3.5
     filament_fill_light_color: tuple[float, float, float] = (0.55, 0.55, 0.58)
     filament_fill_light_intensity: float = 1.0
     filament_fill_light_direction: tuple[float, float, float] = (-0.35, -1.0, -0.55)
@@ -231,6 +234,13 @@ class OpenXrVulkanPresenter(
         self._profile_far_plane = 1000.0
         self._filament_scene_exposure = self.config.filament_scene_exposure_ev
         self._filament_skybox_brightness = self.config.filament_skybox_brightness
+        self._filament_ambient_light_color = self.config.filament_ambient_light_color
+        self._filament_screen_light_color = self.config.filament_screen_light_color
+        self._filament_screen_light_intensity = (
+            self.config.filament_screen_light_intensity
+        )
+        self._controller_hdr_lighting = False
+        self._last_filament_screen_light = None
         self._filament_fill_light_color = self.config.filament_fill_light_color
         self._filament_fill_light_intensity = self.config.filament_fill_light_intensity
         self._filament_fill_light_direction = self.config.filament_fill_light_direction
@@ -1026,6 +1036,34 @@ class OpenXrVulkanPresenter(
             and metadata.get("vulkan_ready_semaphore_right")
         )
 
+    def _update_filament_screen_light(
+        self, bridge: Any, output_frame: VulkanStereoOutputFrame | None
+    ) -> None:
+        if (
+            self._filament_screen is None
+            or not hasattr(bridge, "set_screen_light")
+        ):
+            return
+        neutral = np.asarray(self._filament_screen_light_color, dtype=np.float64)
+        color = neutral
+        if output_frame is not None:
+            sample = (output_frame.metadata or {}).get("screen_light_linear_rgb")
+            if isinstance(sample, (list, tuple)) and len(sample) >= 3:
+                sampled = np.asarray(sample[:3], dtype=np.float64)
+                if np.all(np.isfinite(sampled)):
+                    # Match the legacy shader's 18% neutral bias while the
+                    # sampled screen remains the dominant light color.
+                    color = sampled * 0.82 + neutral * 0.18
+        color = np.clip(color, 0.0, 8.0)
+        state = (
+            *(round(float(value), 4) for value in color),
+            round(float(self._filament_screen_light_intensity), 4),
+        )
+        if state == self._last_filament_screen_light:
+            return
+        bridge.set_screen_light(color, self._filament_screen_light_intensity)
+        self._last_filament_screen_light = state
+
     def _handle_vulkan_pointer_input(self) -> None:
         """Reuse legacy trigger hold/drag semantics for the Vulkan screen."""
         now = time.perf_counter()
@@ -1766,6 +1804,11 @@ class OpenXrVulkanPresenter(
                 position, width, height, rotation = self._filament_screen
                 bridge.create_screen()
                 bridge.set_screen(position, width, height, rotation)
+                if hasattr(bridge, "set_screen_light"):
+                    bridge.set_screen_light(
+                        self._filament_screen_light_color,
+                        self._filament_screen_light_intensity,
+                    )
                 print(
                     "Filament screen loaded: "
                     f"position={position} size={width:.3f}x{height:.3f} "
@@ -1781,6 +1824,8 @@ class OpenXrVulkanPresenter(
                 )
             bridge.set_scene_exposure(self._filament_scene_exposure)
             bridge.set_skybox_brightness(self._filament_skybox_brightness)
+            if hasattr(bridge, "set_ambient_light"):
+                bridge.set_ambient_light(self._filament_ambient_light_color)
             bridge.set_fill_light(
                 self._filament_fill_light_color,
                 self._filament_fill_light_intensity,
@@ -1974,6 +2019,13 @@ class OpenXrVulkanPresenter(
         self._filament_skybox_brightness = float(
             profile.get("preview_skybox_brightness", self._filament_skybox_brightness)
         )
+        ambient_color = profile.get(
+            "env_ambient_color", self._filament_ambient_light_color
+        )
+        if isinstance(ambient_color, (list, tuple)) and len(ambient_color) >= 3:
+            self._filament_ambient_light_color = tuple(
+                max(0.0, float(value)) for value in ambient_color[:3]
+            )
         # Match the legacy controller renderer: a unit-less head light follows
         # the eye, while the Filament bridge supplies the fixed top fill.
         fill_color = profile.get("env_head_light_color", self._filament_fill_light_color)
@@ -1988,6 +2040,18 @@ class OpenXrVulkanPresenter(
             )
         self._filament_fill_light_intensity = float(
             profile.get("controller_head_light_intensity", 1.0)
+        )
+        self._controller_hdr_lighting = bool(
+            profile.get("controller_hdr_lighting", False)
+        )
+        self._filament_screen_light_intensity = max(
+            0.0,
+            float(
+                profile.get(
+                    "screen_light_intensity",
+                    self._filament_screen_light_intensity,
+                )
+            ),
         )
         screen = profile.get("screen")
         if isinstance(screen, dict):
@@ -2013,6 +2077,17 @@ class OpenXrVulkanPresenter(
             f"Loaded Filament profile view: {self._profile_view_name} "
             f"world_position={world_position_vec.tolist()} glb_position={glb_position.tolist()} "
             f"rotation_rad={rotation_rad}",
+            flush=True,
+        )
+        environment_lighting = (
+            "hdr_ibl_pending_profile_fallback"
+            if self._controller_hdr_lighting
+            else "room_profile"
+        )
+        print(
+            "Filament controller lighting: "
+            f"environment={environment_lighting} "
+            f"screen_light=always intensity={self._filament_screen_light_intensity:.3f}",
             flush=True,
         )
 
@@ -2119,6 +2194,13 @@ class OpenXrVulkanPresenter(
                     xr.SwapchainImageWaitInfo(timeout=xr.INFINITE_DURATION),
                 )
             screen_image_projection = self._can_use_filament_screen_image(output_frame)
+            if self.filament_bridge is not None:
+                self._update_filament_screen_light(
+                    self.filament_bridge,
+                    output_frame
+                    if isinstance(output_frame, VulkanStereoOutputFrame)
+                    else None,
+                )
             for eye_index, (eye, image_index) in enumerate(acquired_images):
                 if self.filament_bridge is not None:
                     bridge = self.filament_bridge

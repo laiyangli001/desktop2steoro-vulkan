@@ -40,6 +40,69 @@ class CudaVulkanOutputAdapter:
         self._lease_condition = threading.Condition()
         self._active_leases: dict[int, int] = {}
         self._closed = False
+        self._screen_light_rgb = (0.18, 0.18, 0.18)
+        self._screen_light_pending = None
+        self._screen_light_last_submit = 0.0
+
+    def _update_screen_light_sample(self, left, right) -> None:
+        """Asynchronously reduce display sRGB eyes to one linear screen color."""
+        pending = self._screen_light_pending
+        if pending is not None:
+            host, event = pending
+            if event.query():
+                values = host.tolist()
+                self._screen_light_rgb = tuple(
+                    max(0.0, min(8.0, float(value))) for value in values[:3]
+                )
+                self._screen_light_pending = None
+
+        now = time.monotonic()
+        if (
+            self._screen_light_pending is not None
+            or now - self._screen_light_last_submit < 0.25
+        ):
+            return
+        try:
+            import torch
+
+            if (
+                not isinstance(left, torch.Tensor)
+                or not isinstance(right, torch.Tensor)
+                or not left.is_cuda
+                or not right.is_cuda
+                or left.ndim != 3
+                or right.ndim != 3
+                or left.shape[-1] < 3
+                or right.shape[-1] < 3
+            ):
+                return
+            row_step = max(1, int(left.shape[0]) // 32)
+            column_step = max(1, int(left.shape[1]) // 32)
+            sampled = torch.cat(
+                (
+                    left[::row_step, ::column_step, :3].reshape(-1, 3),
+                    right[::row_step, ::column_step, :3].reshape(-1, 3),
+                ),
+                dim=0,
+            ).to(dtype=torch.float32)
+            if left.dtype == torch.uint8:
+                sampled = sampled / 255.0
+            sampled = sampled.clamp(0.0, 1.0)
+            linear = torch.where(
+                sampled <= 0.04045,
+                sampled / 12.92,
+                ((sampled + 0.055) / 1.055).pow(2.4),
+            )
+            rgb = linear.mean(dim=0)
+            host = torch.empty(3, dtype=torch.float32, pin_memory=True)
+            host.copy_(rgb, non_blocking=True)
+            event = torch.cuda.Event()
+            event.record(torch.cuda.current_stream(left.device))
+            self._screen_light_pending = (host, event)
+            self._screen_light_last_submit = now
+        except Exception:
+            # Screen illumination is supplemental and must never break output.
+            self._screen_light_pending = None
 
     @staticmethod
     def _tensor_extent(tensor):
@@ -139,6 +202,7 @@ class CudaVulkanOutputAdapter:
         self.left_slot = self.left_slots[slot_index]
         self.right_slot = self.right_slots[slot_index]
         try:
+            self._update_screen_light_sample(left, right)
             self.importer.copy_tensor(left, self.left_slot)
             self.importer.copy_tensor(right, self.right_slot)
             left_ready = None
@@ -181,6 +245,7 @@ class CudaVulkanOutputAdapter:
                     right_ready.semaphore if right_ready is not None else None
                 ),
                 "_vulkan_output_release": self.release_frame,
+                "screen_light_linear_rgb": self._screen_light_rgb,
             },
             color_space="srgb",
             image_origin="top_left",
@@ -208,6 +273,7 @@ class CudaVulkanOutputAdapter:
         self.left_slot = None
         self.right_slot = None
         self._extent = None
+        self._screen_light_pending = None
 
 
 class VulkanRuntimeOutputConsumer:
@@ -294,6 +360,12 @@ class VulkanRuntimeOutputConsumer:
 
     def run(self) -> None:
         while not self.shutdown_event.is_set():
+            if self.sink is not None and not bool(
+                getattr(self.sink, "initialized", True)
+            ):
+                self.source_stat_inc("runtime_output_waiting_for_openxr")
+                self.shutdown_event.wait(0.01)
+                continue
             item = self._take_latest()
             if item is None:
                 continue
@@ -302,10 +374,6 @@ class VulkanRuntimeOutputConsumer:
                 continue
             if self.sink is None:
                 self.source_stat_inc("runtime_output_no_sink")
-                self._release_frame(frame)
-                continue
-            if not bool(getattr(self.sink, "initialized", True)):
-                self.source_stat_inc("runtime_output_waiting_for_openxr")
                 self._release_frame(frame)
                 continue
             try:

@@ -1,6 +1,27 @@
+import queue
+import threading
 from types import SimpleNamespace
 
 from stereo_runtime.pipeline import RuntimePipelineLoop, _enable_openxr_depth_cuda_graph_if_needed
+
+
+def test_publish_runtime_item_marks_inference_pipeline_ready():
+    ready = threading.Event()
+    runtime_q = queue.Queue(maxsize=1)
+    loop = object.__new__(RuntimePipelineLoop)
+    loop.context = SimpleNamespace(
+        runtime_q=runtime_q,
+        runtime_ready_event=ready,
+        queue_put_latest=lambda q, item: q.put_nowait(item),
+        breakdown_inc=lambda *args, **kwargs: None,
+        breakdown_add_time=lambda *args, **kwargs: None,
+        source_stat_inc=lambda *args, **kwargs: None,
+    )
+
+    loop._publish_runtime_item((object(), 1.0, 0.01, 0.02, None))
+
+    assert ready.is_set()
+    assert runtime_q.qsize() == 1
 
 
 def test_pipeline_rebuilds_provider_after_consecutive_failures(monkeypatch):

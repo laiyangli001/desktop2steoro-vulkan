@@ -50,7 +50,9 @@ class FilamentVulkanBridge:
         self._controller_guide_abi_available = False
         self._screen_image_abi_available = False
         self._screen_curved_abi_available = False
+        self._screen_light_abi_available = False
         self._passthrough_backdrop_abi_available = False
+        self._ambient_light_abi_available = False
         self._screen_ready_semaphore_abi_available = False
         self._async_submit_abi_available = False
         self._configure_abi()
@@ -434,6 +436,17 @@ class FilamentVulkanBridge:
             "set_fill_light",
         )
 
+    def set_ambient_light(self, color) -> None:
+        self._ensure_loaded()
+        if not self._ambient_light_abi_available:
+            return
+        self._check_result(
+            self._library.filament_bridge_set_ambient_light(
+                self._handle, *(float(value) for value in color)
+            ),
+            "set_ambient_light",
+        )
+
     def create_screen(self) -> None:
         self._ensure_loaded()
         self._check_result(
@@ -462,6 +475,19 @@ class FilamentVulkanBridge:
                 self._handle, int(bool(curved))
             ),
             "set_screen_curved",
+        )
+
+    def set_screen_light(self, color, intensity: float) -> None:
+        self._ensure_loaded()
+        if not self._screen_light_abi_available:
+            return
+        self._check_result(
+            self._library.filament_bridge_set_screen_light(
+                self._handle,
+                *(float(value) for value in color),
+                float(intensity),
+            ),
+            "set_screen_light",
         )
 
     def set_screen_image(
@@ -647,6 +673,15 @@ class FilamentVulkanBridge:
             set_passthrough_backdrop.argtypes = [ctypes.c_void_p, ctypes.c_int]
             set_passthrough_backdrop.restype = ctypes.c_int
             self._passthrough_backdrop_abi_available = True
+        set_ambient_light = getattr(
+            library, "filament_bridge_set_ambient_light", None
+        )
+        if set_ambient_light is not None:
+            set_ambient_light.argtypes = [
+                ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_float
+            ]
+            set_ambient_light.restype = ctypes.c_int
+            self._ambient_light_abi_available = True
         library.filament_bridge_set_fill_light.argtypes = [
             ctypes.c_void_p,
             ctypes.c_float, ctypes.c_float, ctypes.c_float,
@@ -670,6 +705,17 @@ class FilamentVulkanBridge:
             set_screen_curved.argtypes = [ctypes.c_void_p, ctypes.c_int]
             set_screen_curved.restype = ctypes.c_int
             self._screen_curved_abi_available = True
+        set_screen_light = getattr(
+            library, "filament_bridge_set_screen_light", None
+        )
+        if set_screen_light is not None:
+            set_screen_light.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_float, ctypes.c_float, ctypes.c_float,
+                ctypes.c_float,
+            ]
+            set_screen_light.restype = ctypes.c_int
+            self._screen_light_abi_available = True
         if hasattr(library, "filament_bridge_set_screen_image"):
             library.filament_bridge_set_screen_image.argtypes = [
                 ctypes.c_void_p,

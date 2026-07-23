@@ -5,6 +5,7 @@
 namespace {
 
 constexpr float kLegacyControllerCandelaScale = 10000.0f;
+constexpr float kLegacyAmbientLux = 30000.0f;
 
 }  // namespace
 
@@ -157,6 +158,31 @@ int bridge_material_set_skybox_brightness(FilamentBridge* bridge, float brightne
     if (!bridge || !std::isfinite(brightness) || brightness < 0.0f) return 0;
     bridge->brightness.skybox_brightness = std::min(brightness, 16.0f);
     apply_material_brightness_impl(bridge);
+    return 1;
+}
+
+int bridge_material_set_ambient_light(
+        FilamentBridge* bridge, float red, float green, float blue) {
+    if (!bridge || !bridge->engine || !bridge->scene ||
+            !std::isfinite(red) || !std::isfinite(green) || !std::isfinite(blue) ||
+            red < 0.0f || green < 0.0f || blue < 0.0f) {
+        return 0;
+    }
+    filament::IndirectLight* next = nullptr;
+    if (red > 0.0f || green > 0.0f || blue > 0.0f) {
+        const filament::math::float3 irradiance[] = {{red, green, blue}};
+        next = filament::IndirectLight::Builder()
+                .irradiance(1, irradiance)
+                .intensity(kLegacyAmbientLux)
+                .build(*bridge->engine);
+        if (!next) return 0;
+    }
+    auto* previous = bridge->indirect_light;
+    bridge->scene->setIndirectLight(next);
+    bridge->indirect_light = next;
+    if (previous) {
+        bridge->engine->destroy(previous);
+    }
     return 1;
 }
 

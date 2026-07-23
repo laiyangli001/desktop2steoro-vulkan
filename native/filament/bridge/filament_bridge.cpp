@@ -148,6 +148,11 @@ int filament_bridge_set_passthrough_backdrop(
     return bridge_material_set_passthrough_backdrop(bridge, enabled);
 }
 
+int filament_bridge_set_ambient_light(
+        FilamentBridge* bridge, float red, float green, float blue) {
+    return bridge_material_set_ambient_light(bridge, red, green, blue);
+}
+
 int filament_bridge_set_fill_light(
         FilamentBridge* bridge,
         float red, float green, float blue,
@@ -175,6 +180,12 @@ int filament_bridge_set_screen(
 
 int filament_bridge_set_screen_curved(FilamentBridge* bridge, int curved) {
     return bridge_screen_set_curved(bridge, curved);
+}
+
+int filament_bridge_set_screen_light(
+        FilamentBridge* bridge,
+        float red, float green, float blue, float intensity) {
+    return bridge_screen_set_light(bridge, red, green, blue, intensity);
 }
 
 int filament_bridge_set_screen_image(

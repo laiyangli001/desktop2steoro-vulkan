@@ -249,6 +249,7 @@ def build_runtime_pipeline_context(
     apply_stereo_hot_reload_if_needed,
     warmup_stereo_once_for_frame,
     log_fast_plus_fused_runtime_state,
+    runtime_ready_event=None,
 ):
     return RuntimePipelineContext(
         shutdown_event=shutdown_event,
@@ -280,6 +281,7 @@ def build_runtime_pipeline_context(
         apply_stereo_hot_reload_if_needed=apply_stereo_hot_reload_if_needed,
         warmup_stereo_once_for_frame=warmup_stereo_once_for_frame,
         log_fast_plus_fused_runtime_state=log_fast_plus_fused_runtime_state,
+        runtime_ready_event=runtime_ready_event,
         application_runtime_target=getattr(app_context, "application_runtime_target", None),
         output_transport=getattr(app_context, "output_transport", None),
         settings_update_q=app_context.settings_update_q,

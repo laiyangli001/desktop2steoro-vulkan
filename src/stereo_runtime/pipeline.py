@@ -61,6 +61,7 @@ class RuntimePipelineContext:
     apply_stereo_hot_reload_if_needed: Callable[[], None]
     warmup_stereo_once_for_frame: Callable[[object], None]
     log_fast_plus_fused_runtime_state: Callable[[object], None]
+    runtime_ready_event: object | None = None
     application_runtime_target: str | None = None
     output_transport: str | None = None
     settings_update_q: object | None = None
@@ -609,6 +610,9 @@ class RuntimePipelineLoop:
         except Exception:
             runtime_q_was_full = False
         ctx.queue_put_latest(ctx.runtime_q, (runtime_result, capture_start_time))
+        ready_event = getattr(ctx, "runtime_ready_event", None)
+        if ready_event is not None:
+            ready_event.set()
         if runtime_q_was_full:
             ctx.breakdown_inc("runtime_overwrite")
             ctx.source_stat_inc("runtime_overwrite")

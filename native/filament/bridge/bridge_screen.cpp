@@ -5,6 +5,7 @@ namespace {
 
 constexpr uint32_t kScreenSegments = 48;
 constexpr float kCurvedHalfAngle = 0.72f;
+constexpr float kLegacyScreenCandelaScale = 1200.0f;
 
 }  // namespace
 
@@ -73,6 +74,19 @@ int bridge_screen_update(
             -cy * sr + sy * sp * cr, cr * cp, sr * sy + cy * sp * cr};
     const filament::math::float3 forward = cross(right, up);
     const filament::math::float3 center{position_x, position_y, position_z};
+    bridge->screen_light_position = center;
+    bridge->screen_light_direction = -forward;
+    bridge->screen_light_falloff =
+            std::max(std::sqrt(width * width + height * height), 0.5f);
+    if (!bridge->screen_light.isNull()) {
+        auto& lights = bridge->engine->getLightManager();
+        const auto instance = lights.getInstance(bridge->screen_light);
+        if (instance.isValid()) {
+            lights.setPosition(instance, center);
+            lights.setDirection(instance, bridge->screen_light_direction);
+            lights.setFalloff(instance, bridge->screen_light_falloff);
+        }
+    }
     const float half_width = width * 0.5f;
     const float half_height = height * 0.5f;
     const float radius = half_width / kCurvedHalfAngle;
@@ -105,6 +119,60 @@ int bridge_screen_update(
 int bridge_screen_set_curved(FilamentBridge* bridge, int curved) {
     if (!bridge || !bridge->engine || !bridge->screen_vertex_buffer) return 0;
     bridge->screen_curved = curved != 0;
+    return 1;
+}
+
+int bridge_screen_set_light(
+        FilamentBridge* bridge,
+        float red, float green, float blue, float intensity) {
+    if (!bridge || !bridge->engine || !bridge->scene ||
+            !std::isfinite(red) || !std::isfinite(green) ||
+            !std::isfinite(blue) || !std::isfinite(intensity) ||
+            red < 0.0f || green < 0.0f || blue < 0.0f || intensity < 0.0f) {
+        return 0;
+    }
+    if (intensity == 0.0f || (red == 0.0f && green == 0.0f && blue == 0.0f)) {
+        if (!bridge->screen_light.isNull()) {
+            bridge->scene->remove(bridge->screen_light);
+            bridge->engine->destroy(bridge->screen_light);
+            bridge->screen_light = {};
+        }
+        return 1;
+    }
+    if (!bridge->screen_light.isNull()) {
+        auto& lights = bridge->engine->getLightManager();
+        const auto instance = lights.getInstance(bridge->screen_light);
+        if (instance.isValid()) {
+            lights.setColor(instance, filament::LinearColor{red, green, blue});
+            lights.setIntensityCandela(
+                    instance, intensity * kLegacyScreenCandelaScale);
+            return 1;
+        }
+        bridge->scene->remove(bridge->screen_light);
+        bridge->engine->destroy(bridge->screen_light);
+        bridge->screen_light = {};
+    }
+    bridge->screen_light = utils::EntityManager::get().create();
+    filament::LightManager::Builder(filament::LightManager::Type::FOCUSED_SPOT)
+            .color(filament::LinearColor{red, green, blue})
+            .intensityCandela(intensity * kLegacyScreenCandelaScale)
+            .position(bridge->screen_light_position)
+            .direction(bridge->screen_light_direction)
+            .falloff(bridge->screen_light_falloff)
+            .spotLightCone(1.25f, 1.50f)
+            .lightChannel(0, false)
+            .lightChannel(1, true)
+            .castShadows(false)
+            .build(*bridge->engine, bridge->screen_light);
+    const auto instance = bridge->engine->getLightManager().getInstance(
+            bridge->screen_light);
+    if (!instance.isValid()) {
+        utils::EntityManager::get().destroy(bridge->screen_light);
+        bridge->screen_light = {};
+        bridge_set_error(bridge, "Filament could not create virtual screen light");
+        return 0;
+    }
+    bridge->scene->addEntity(bridge->screen_light);
     return 1;
 }
 

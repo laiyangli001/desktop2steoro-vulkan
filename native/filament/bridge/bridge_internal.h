@@ -20,6 +20,7 @@
 #include <filament/ColorSpace.h>
 #include <filament/Engine.h>
 #include <filament/IndexBuffer.h>
+#include <filament/IndirectLight.h>
 #include <filament/LightManager.h>
 #include <filament/Material.h>
 #include <filament/MaterialInstance.h>
@@ -269,6 +270,11 @@ struct FilamentBridge {
     OpenXrVulkanPlatform* platform = nullptr;
     utils::Entity fill_light;
     utils::Entity controller_top_light;
+    filament::IndirectLight* indirect_light = nullptr;
+    utils::Entity screen_light;
+    filament::math::float3 screen_light_position{0.0f, 0.0f, 0.0f};
+    filament::math::float3 screen_light_direction{0.0f, 0.0f, -1.0f};
+    float screen_light_falloff = 2.0f;
     utils::Entity screen_entity;
     filament::VertexBuffer* screen_vertex_buffer = nullptr;
     filament::IndexBuffer* screen_index_buffer = nullptr;

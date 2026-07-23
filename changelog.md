@@ -2,6 +2,28 @@
 
 本文件记录项目重大更新和每日工作收尾。新记录按日期倒序追加；每个工作日结束时更新“已实现”“验证结果”“未决事项”和“下一项内容”。
 
+## 2026-07-23
+
+### 已实现
+
+- 修复 Vulkan 手柄模型近乎纯黑：对照 WebXR Input Profiles 官方 Viewer，Bridge 不再覆盖控制器 GLB 的原始 `roughnessFactor` 和 `specularColorFactor`；新增向后兼容环境光 C ABI，将旧工程环境 profile 的 `env_ambient_color` 作为 Filament SH irradiance 接入，同时保留跟随头部主光和顶部补光。
+- 调整 Vulkan OpenXR 启动顺序：同步完成模型与推理后端加载，首帧推理、立体合成和 shape-dependent warmup 发布就绪信号后，才创建 OpenXR Vulkan/Filament presenter。
+- 输出消费者在 presenter 初始化完成前不再取走 `runtime_q` 中的首帧，避免图形启动期间丢弃已经预热完成的第一个可提交结果。
+- 明确 Vulkan/OpenXR 图形预热契约：启动期预创建 Device、队列、swapchain、Filament 材质/资源和持久化输出槽；首个 graphics pipeline 提交仍在合法 OpenXR frame loop 内完成。
+- 按旧工程恢复独立屏幕光叠加：运行时在线性空间异步提取双眼虚拟屏幕平均色，保持旧版 `82%` 屏幕色与 `18%` 中性色混合，并由屏幕中心、法线和对角线衰减驱动只照亮控制器通道的 Filament 聚光源。
+- 将屏幕光与 `controller_hdr_lighting` 完全解耦：3D 房间模式继续使用 profile ambient/head/top light，HDR 模式在真实预过滤 IBL 接入前明确使用 profile 回退，两个模式都始终保留屏幕光。
+
+### 验证结果
+
+- 启动顺序、pipeline 就绪事件、输出首帧门控与 OpenXR 定向回归 `81 passed, 2 warnings`。
+- 手柄环境光、独立屏幕光、异步屏幕颜色采样和输出首帧定向回归 `13 passed, 2 warnings`。
+- 完整测试套件 `526 passed, 6 warnings`，requirements-matrix 合规检查 53 项通过；待三平台 Bridge CI 和 OpenXR 实机亮度验收。
+
+### 未决事项
+
+- HDR 图片环境尚缺与源 HDR 匹配的预过滤 reflection cubemap 与 irradiance KTX 接入；当前日志为 `hdr_ibl_pending_profile_fallback`，不会将 profile 回退误报为完整 IBL。
+- 新增的环境光和屏幕光 C ABI 需要提交后由 GitHub Actions 完成 Windows、Linux、macOS 三平台 Bridge 远程构建，再下载产物进行实机亮度 A/B。
+
 ## 2026-07-22
 
 ### 已实现

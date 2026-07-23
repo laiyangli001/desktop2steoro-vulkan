@@ -17,6 +17,8 @@ int bridge_material_set_skybox_brightness(
         FilamentBridge* bridge, float brightness);
 int bridge_material_set_passthrough_backdrop(
         FilamentBridge* bridge, int enabled);
+int bridge_material_set_ambient_light(
+        FilamentBridge* bridge, float red, float green, float blue);
 int bridge_material_set_fill_light(
         FilamentBridge* bridge,
         float red, float green, float blue, float intensity,

@@ -162,8 +162,36 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "eye_y + 0.05f" in source
     assert "eye_y + 0.45f" in source
     assert "eye_z - 0.18f" in source
-    assert '"specularColorFactor"' in source
-    assert '"roughnessFactor", 0.4f' in source
+    assert '"specularColorFactor"' not in source
+    assert '"roughnessFactor", 0.4f' not in source
+    assert "filament::IndirectLight::Builder()" in source
+    assert ".irradiance(1, irradiance)" in source
+    assert ".intensity(kLegacyAmbientLux)" in source
+    assert "filament_bridge_set_ambient_light" in facade
+    assert "filament_bridge_set_screen_light" in facade
+    assert "LightManager::Type::FOCUSED_SPOT" in source
+    assert "bridge->screen_light_direction = -forward;" in source
+    assert "std::sqrt(width * width + height * height)" in source
+    assert "lights.setColor(instance" in source
+    assert "lights.setIntensityCandela(" in source
+    assert ".lightChannel(0, false)" in source
+    assert ".lightChannel(1, true)" in source
+
+
+def test_screen_light_is_independent_from_environment_hdr_mode() -> None:
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "src/xr_viewer/core_openxr_vulkan.py").read_text(
+        encoding="utf-8"
+    )
+    method = source.split("    def _update_filament_screen_light(", 1)[1].split(
+        "\n    def ", 1
+    )[0]
+
+    assert "screen_light_linear_rgb" in method
+    assert "sampled * 0.82 + neutral * 0.18" in method
+    assert "_controller_hdr_lighting" not in method
+    assert "screen_light=always" in source
+    assert "hdr_ibl_pending_profile_fallback" in source
 
 
 def test_artemis_controller_lighting_matches_legacy_head_light() -> None:
@@ -174,12 +202,15 @@ def test_artemis_controller_lighting_matches_legacy_head_light() -> None:
         )
     )
     assert profile["env_head_light_color"] == [0.45, 0.45, 0.48]
+    assert profile["env_ambient_color"] == [0.06, 0.05, 0.05]
     assert profile["preview_exposure"] == 0.0
     config = (root / "src/xr_viewer/core_openxr_vulkan.py").read_text(
         encoding="utf-8"
     )
     assert "filament_fill_light_intensity: float = 1.0" in config
     assert 'profile.get("env_head_light_color"' in config
+    assert '"env_ambient_color", self._filament_ambient_light_color' in config
+    assert "bridge.set_ambient_light(self._filament_ambient_light_color)" in config
 
 
 @pytest.mark.parametrize("hand", ("left", "right"))
