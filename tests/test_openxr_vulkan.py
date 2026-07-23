@@ -1017,6 +1017,17 @@ def test_default_filament_profile_creates_identity_view_and_screen(tmp_path) -> 
     )
 
 
+def test_packaged_default_profile_uses_neutral_filament_exposure() -> None:
+    profile_path = (
+        Path(__file__).resolve().parents[1]
+        / "src/xr_viewer/environments/Default/profile.json"
+    )
+    profile = json.loads(profile_path.read_text(encoding="utf-8"))
+
+    assert profile["glb"] is None
+    assert profile["preview_exposure"] == 0.0
+
+
 def test_controller_profile_rotation_uses_local_x_axis() -> None:
     source = (Path(__file__).resolve().parents[1] /
               "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")

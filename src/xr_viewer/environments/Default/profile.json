@@ -11,6 +11,7 @@
   "screen_quality_filter": false,
   "screen_quality_sharpness": 0.35,
   "screen_quality_oversample": 1.0,
+  "preview_exposure": 0.0,
   "xr_quad_layer_debug_offset": 0.0,
   "xr_quad_layer_stereo_boost": 1.0,
   "glow_mode": "veil",
