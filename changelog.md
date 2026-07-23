@@ -25,7 +25,7 @@
 - 完整测试套件 `526 passed, 6 warnings`，requirements-matrix 合规检查 53 项通过；待三平台 Bridge CI 和 OpenXR 实机亮度验收。
 - 六品牌 B 键动画枢轴、引导几何、品牌环境光倍率及切换后立即刷新定向回归 `20 passed, 2 warnings`；完整测试套件 `539 passed, 6 warnings`。
 - 控制器动画三元组、touch 输入链和稳定 C ABI 定向回归累计 `100 passed, 2 warnings`；完整测试套件 `551 passed, 6 warnings`，requirements-matrix 合规检查 53 项通过。
-- 上一版“手柄/激光同一彩色 View”以及后续“同一 Renderable 临时换深度材质”方案均经实机判定无效：前者不能正确遮挡且会改变外壳合成，后者与 Filament 异步命令消费竞争并造成场景/手柄连续帧残影。现已统一替换为资源共享、Renderable 独立、材质绑定持久不变的双实例遮挡结构，待三平台 Bridge CI 与头显遮挡验收。
+- 上一版“手柄/激光同一彩色 View”以及后续“同一 Renderable 临时换深度材质”方案均经实机判定无效：前者不能正确遮挡且会改变外壳合成，后者与 Filament 异步命令消费竞争并造成场景/手柄连续帧残影。现已统一替换为资源共享、Renderable 独立、材质绑定持久不变的双实例遮挡结构；本地完整回归 `550 passed, 1 deselected, 6 warnings`，排除项仅为工作区 Artemis 目录改名导致的旧路径测试；三平台 Bridge CI `29991685595` 全部通过，自动二进制提交 `af11576` 已拉取，Windows DLL SHA256 为 `7D27C6E2298192C72A0B1718CD6BDC979757E45D3AB0865A9ADD38089815CF3A`，待头显遮挡验收。
 
 ### 未决事项
 
