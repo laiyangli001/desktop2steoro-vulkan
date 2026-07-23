@@ -95,6 +95,7 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "display_view" not in source
     assert "eye.laser_view = bridge->engine->createView();" not in source
     assert "eye.view->setVisibleLayers(0xff, 0x03);" in source
+    assert "eye.view->setChannelDepthClearEnabled(0, true);" in source
     assert "bridge->renderer->render(bridge->view);" in source
     assert "bridge_controller_set_occlusion_materials" not in source
     assert "bridge_controller_create_occlusion_material" not in source

@@ -81,7 +81,10 @@ FilamentBridge* bridge_context_create(
         eye.view->setScene(bridge->scene);
         eye.view->setCamera(eye.camera);
         eye.view->setVisibleLayers(0xff, 0x03);
-        eye.view->setChannelDepthClearEnabled(0, false);
+        // There is only one View per eye. The old false setting was required
+        // to retain depth between the former scene and laser Views; retaining
+        // it here leaks external OpenXR depth across frames and creates trails.
+        eye.view->setChannelDepthClearEnabled(0, true);
     }
     bridge_eye_activate(bridge.get(), 0);
     for (auto& eye : bridge->eyes) {

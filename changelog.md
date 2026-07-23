@@ -6,6 +6,7 @@
 
 ### 已实现
 
+- 修复单 View 重构后 OpenXR 画面跨帧残影：删除原“主 View 与激光 View 同帧共享深度”遗留的 `setChannelDepthClearEnabled(0, false)`，单 View 现在每帧清理 channel 0 深度；此前设置会让外部 OpenXR swapchain 的深度跨帧保留，导致场景、屏幕和激光连续叠加。
 - 重构 Filament 控制器激光路径：删除独立 LDR 激光 View、重复 controller asset 和深度遮挡副本；GLB、手柄 PBR、屏幕/UI 与激光现在在一个主 View 中共享同一 Scene 和深度缓冲。手柄外壳写入深度后，激光以深度测试自然被遮挡。
 - 主场景 ColorGrading 改为 `ToneMapping::LINEAR`，不再应用 ACES；保留后处理以在最终 sRGB 输出目标进行唯一一次编码，避免将线性工作空间和最终 transfer function 混为一处。
 
