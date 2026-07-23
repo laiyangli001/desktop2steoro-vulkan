@@ -9,8 +9,16 @@
     0,
     0
   ],
-  "_bounds_center": [-1.15, 99, -0.65],
-  "_bounds_size": [198, 198, 198],
+  "_bounds_center": [
+    -1.15,
+    99,
+    -0.65
+  ],
+  "_bounds_size": [
+    198,
+    198,
+    198
+  ],
   "_bounds_radius": 171.47,
   "model_rotation_deg": [
     0.0,
@@ -102,10 +110,15 @@
   "view_poses": [
     {
       "name": "Center View",
-      "x": -1,
-      "y": 169,
-      "z": -1,
-      "angle": 0
+      "x": -0.5159,
+      "y": 101.1852,
+      "z": -0.1379,
+      "angle": -176.52,
+      "rotation_deg": [
+        -176.52,
+        1.2,
+        0.0
+      ]
     },
     {
       "name": "Front View",
@@ -136,12 +149,12 @@
     "allow_controller_move": true,
     "width": 90.5689,
     "position": [
-      -25,
-      57,
-      -903
+      -4.8329,
+      107.2972,
+      58.9607
     ],
     "rotation_deg": [
-      -180,
+      -180.0,
       0.0,
       0.0
     ],
