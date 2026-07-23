@@ -306,9 +306,6 @@ class OpenXrVulkanPresenter(
         self._ray_filter_r = OneEuroFilter3D(8.0, 8.0, 8.0)
         self._last_frame_dt = 1.0 / 90.0
         self._initialized = False
-        self._filament_init_done = threading.Event()
-        self._filament_init_error: BaseException | None = None
-        self._filament_init_thread: threading.Thread | None = None
         self._pending_output: VulkanStereoOutputFrame | None = None
         self._displayed_output: VulkanStereoOutputFrame | None = None
         self._rendering_output: VulkanStereoOutputFrame | None = None
@@ -394,10 +391,8 @@ class OpenXrVulkanPresenter(
 
     @property
     def output_ready(self) -> bool:
-        """Report readiness only after the native Filament scene is complete."""
-        return self._initialized and self._filament_init_done.is_set() and (
-            self._filament_init_error is None
-        )
+        """Report readiness after the presenter-owned Filament Engine is ready."""
+        return self._initialized
 
     def _controller_ambient_light_color(self) -> tuple[float, float, float]:
         multiplier = max(
@@ -456,7 +451,11 @@ class OpenXrVulkanPresenter(
             self._xr_space = self.reference_space
             self._init_controller_actions()
             self._load_filament_profile()
-            self._start_filament_bridge_initialization()
+            # Filament Engine and all resources remain owned by the Presenter
+            # thread. Filament rejects rendering from a thread that was not
+            # adopted by its JobSystem, so native GLB loading cannot migrate
+            # the Engine to a background thread.
+            self._initialize_filament_bridges()
             self._initialized = True
         except Exception:
             self.close()
@@ -505,13 +504,6 @@ class OpenXrVulkanPresenter(
             self._notify_headset_waiting()
             time.sleep(0.01)
             return True
-
-        # Keep event polling alive, but do not enter an OpenXR frame while the
-        # native Filament loader uses the same Vulkan device and queue. OpenXR
-        # frame calls may touch runtime-owned Vulkan synchronization internally.
-        if not self._ensure_filament_initialization():
-            time.sleep(0.01)
-            return not self.exit_requested
 
         xr = self.xr
         frame_state = xr.wait_frame(self.session)
@@ -1372,10 +1364,6 @@ class OpenXrVulkanPresenter(
         print("[OpenXRViewer] Headset detected; source inference resumed", flush=True)
 
     def close(self) -> None:
-        filament_thread = self._filament_init_thread
-        if filament_thread is not None and filament_thread is not threading.current_thread():
-            filament_thread.join()
-        self._filament_init_thread = None
         xr = self.xr
         if self.vulkan is not None:
             try:
@@ -1457,7 +1445,6 @@ class OpenXrVulkanPresenter(
         self.swapchain_format = None
         self._graphics_binding = None
         self._initialized = False
-        self._filament_init_done.set()
         self._drop_output_frames()
         self._has_presented_frame = False
         self._last_quad_layers = []
@@ -1882,37 +1869,6 @@ class OpenXrVulkanPresenter(
             bridge.close()
             self.filament_bridge = None
             raise
-
-    def _start_filament_bridge_initialization(self) -> None:
-        """Load the native scene while OpenXR completes its first frame setup."""
-        self._filament_init_done.clear()
-        self._filament_init_error = None
-        self._filament_init_thread = threading.Thread(
-            target=self._run_filament_bridge_initialization,
-            name="FilamentNativeLoader",
-            daemon=True,
-        )
-        self._filament_init_thread.start()
-
-    def _run_filament_bridge_initialization(self) -> None:
-        try:
-            self._initialize_filament_bridges()
-        except BaseException as exc:
-            self._filament_init_error = exc
-            print(
-                "[OpenXRViewer] Native Filament initialization failed: "
-                f"{type(exc).__name__}: {exc}",
-                flush=True,
-            )
-        finally:
-            self._filament_init_done.set()
-
-    def _ensure_filament_initialization(self) -> bool:
-        if not self._filament_init_done.is_set():
-            return False
-        if self._filament_init_error is not None:
-            raise self._filament_init_error
-        return True
 
     def _update_filament_controllers(self, bridge: Any) -> None:
         self._update_filament_controller_guide(bridge)
