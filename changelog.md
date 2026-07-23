@@ -30,6 +30,7 @@
 - 收紧 Presenter 命令队列边界：OpenXR 输出消费者现在只投递原始推理结果，CUDA 到 Vulkan 图像导入、external semaphore、屏幕光采样、输出槽位租约和 Filament 提交统一在 Presenter 线程执行；非 Vulkan sink 保留兼容转换路径。
 - 修复首帧后画面冻结：Presenter 每个 XR tick 只转换命令队列中最新的一条原始结果，避免一次 tick 连续耗尽 Vulkan 输出 ring 后在槽位租约上等待自身完成下一帧释放。
 - 修复桌面预览拖影：Preview Bridge 现在显式清理每帧颜色和 channel 0 深度；此前只有 OpenXR eye renderer 设置了 ClearOptions，桌面交换链会保留上一帧的模型和网格。
+- 调整桌面预览移动速度：默认为 `1.0 m/s`，按住 `Shift` 加速到 `5.0 m/s`，按住 `Ctrl` 降速到 `0.5 m/s`；VIEW 向下移动改用 `Alt`，避免与 Shift 加速冲突。
 
 ### 验证结果
 

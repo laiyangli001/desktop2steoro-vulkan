@@ -18,7 +18,9 @@ import numpy as np
 
 APP_DIR = Path(__file__).resolve().parents[1]
 ENVIRONMENTS_DIR = APP_DIR / "xr_viewer" / "environments"
-PREVIEW_FINE_MOVE_SPEED_MPS = 1.0
+PREVIEW_MOVE_SPEED_MPS = 1.0
+PREVIEW_FAST_MOVE_SPEED_MPS = 5.0
+PREVIEW_SLOW_MOVE_SPEED_MPS = 0.5
 sys.path.insert(0, str(APP_DIR))
 os.chdir(APP_DIR)
 warnings.filterwarnings(
@@ -269,7 +271,7 @@ def main():
         print("--center-view is ignored by the Filament preview; use VIEW controls to adjust the profile seat.")
     view_rot_deg = [_normalize_angle_deg(value) for value in _pose_rotation_deg(view_pose, [0.0, 0.0, 0.0])]
     view_rot = [math.radians(v) for v in view_rot_deg]
-    speed, size_speed = 1.0, 0.8
+    speed, size_speed = PREVIEW_MOVE_SPEED_MPS, 0.8
     rot_speed = 45.0
     saved_flash = 0.0
     exposure_key_cooldown = 0.0
@@ -285,13 +287,18 @@ def main():
     print("Preview animations: all embedded GLB animations enabled")
     print(f"Preview color: exposure={preview_exposure:.2f}EV skybox={skybox_brightness:.2f} fill={fill_light_intensity:.0f}")
     print(f"Preview navigation: move_speed={speed:.2f}m/s size_speed={size_speed:.2f}m/s")
-    print(f"Preview fine mode: hold Ctrl for {PREVIEW_FINE_MOVE_SPEED_MPS:.2f}m/s movement/size adjustment")
+    print(
+        f"Preview speed: default={PREVIEW_MOVE_SPEED_MPS:.1f}m/s, "
+        f"Shift={PREVIEW_FAST_MOVE_SPEED_MPS:.1f}m/s, "
+        f"Ctrl={PREVIEW_SLOW_MOVE_SPEED_MPS:.1f}m/s"
+    )
     print("Controls:")
     print("  Tab: switch edit target SCREEN/VIEW")
     print("  SCREEN: Arrow=screen X/Y, PageUp/PageDown=screen Z, +/-=width")
     print("  GLOBAL: [ / ]=seat exposure down/up, , / .=skybox brightness down/up")
     print("  SCREEN: 1=27in monitor, 2=65in TV, 3=100in projector, 4=cinema")
-    print("  VIEW:   A/D=seat X, Up/Down or Space/LeftShift=seat Y, W/S=seat Z")
+    print("  VIEW:   A/D=seat X, Up/Down or Space/Alt=seat Y, W/S=seat Z")
+    print("  SPEED:  Shift=5m/s, Ctrl=0.5m/s, default=1m/s")
     print("  Mouse:  hold right button and drag to rotate VIEW yaw/pitch")
     print("  Both:   Q/E=yaw, T/G=pitch, Z/C=roll")
     print("  P: save profile, R: reload profile, Esc: exit")
@@ -365,9 +372,15 @@ def main():
         changed_screen = False
         changed_view = False
 
-        fine_mode = ctrl_down()
-        active_move_speed = PREVIEW_FINE_MOVE_SPEED_MPS if fine_mode else speed
-        active_size_speed = PREVIEW_FINE_MOVE_SPEED_MPS if fine_mode else size_speed
+        shift_down = key_down(glfw.KEY_LEFT_SHIFT) or key_down(glfw.KEY_RIGHT_SHIFT)
+        ctrl_down_now = ctrl_down()
+        if ctrl_down_now:
+            active_move_speed = PREVIEW_SLOW_MOVE_SPEED_MPS
+        elif shift_down:
+            active_move_speed = PREVIEW_FAST_MOVE_SPEED_MPS
+        else:
+            active_move_speed = speed
+        active_size_speed = PREVIEW_SLOW_MOVE_SPEED_MPS if ctrl_down_now else size_speed
         step = active_move_speed * dt
         rstep = rot_speed * dt
 
@@ -427,7 +440,7 @@ def main():
                 view_pos = (np.array(view_pos) + right * step).tolist(); changed_view = True
             if key_down(glfw.KEY_SPACE) or key_down(glfw.KEY_UP):
                 view_pos[1] += step; changed_view = True
-            if key_down(glfw.KEY_LEFT_SHIFT) or key_down(glfw.KEY_RIGHT_SHIFT) or key_down(glfw.KEY_DOWN):
+            if key_down(glfw.KEY_LEFT_ALT) or key_down(glfw.KEY_RIGHT_ALT) or key_down(glfw.KEY_DOWN):
                 view_pos[1] -= step; changed_view = True
             if key_down(glfw.KEY_Q):
                 view_rot_deg[0] += rstep; changed_view = True
@@ -472,7 +485,7 @@ def main():
             view_rot_deg = [_normalize_angle_deg(value) for value in _pose_rotation_deg(view_pose, [0.0, 0.0, 0.0])]
             view_rot = [math.radians(v) for v in view_rot_deg]
             animation_start_time = glfw.get_time()
-            speed, size_speed = 1.0, 0.8
+            speed, size_speed = PREVIEW_MOVE_SPEED_MPS, 0.8
             skybox_brightness = float(profile.get("preview_skybox_brightness", 1.0))
             preview.set_skybox_brightness(skybox_brightness)
             screen_width = float(screen.get("width", 2.4))
