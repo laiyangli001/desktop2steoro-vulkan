@@ -20,6 +20,7 @@ class ControllerBrand:
     offset: tuple[float, float, float]
     rotation_deg: float
     profile_id: str
+    ambient_light_multiplier: float
 
 
 def _vector3(value, default=(0.0, 0.0, 0.0)) -> tuple[float, float, float]:
@@ -59,6 +60,9 @@ def discover_controller_brands(root: str | Path) -> dict[str, ControllerBrand]:
             profile_id=str(profile.get("profileId", directory.name))
             if isinstance(profile, dict)
             else directory.name,
+            ambient_light_multiplier=max(
+                0.0, float(overrides.get("ambient_light_multiplier", 1.0))
+            ),
         )
     return result
 
@@ -149,14 +153,36 @@ def controller_button_local_position(glb_path: str, button: str) -> tuple[float,
     except (OSError, ValueError, TypeError, RecursionError):
         return None
 
-    semantic = str(button).strip().lower()
-    candidates = []
+    semantic = str(button).strip().lower().replace("-", "_").replace(" ", "_")
+    preferred_names = (
+        f"{semantic}_pressed_value",
+        f"{semantic}_value",
+        semantic,
+        f"right_{semantic}",
+        f"{semantic}_mesh",
+        f"{semantic}_pressed_min",
+        f"{semantic}_min",
+    )
+    rank_by_name = {name: rank for rank, name in enumerate(preferred_names)}
+    candidates: list[tuple[int, int]] = []
     for index, node in enumerate(document.get("nodes", [])):
-        name = str(node.get("name") or "").strip().lower()
-        if name in {semantic, f"right_{semantic}", f"{semantic}_mesh"} or name.endswith(f"_{semantic}"):
-            if not any(marker in name for marker in ("_min", "_max", "_value")):
-                candidates.append(index)
+        name = (
+            str(node.get("name") or "")
+            .strip()
+            .lower()
+            .replace("-", "_")
+            .replace(" ", "_")
+        )
+        rank = rank_by_name.get(name)
+        if rank is None:
+            for suffix_rank, suffix in enumerate(preferred_names):
+                if name.endswith(f"_{suffix}"):
+                    rank = len(preferred_names) + suffix_rank
+                    break
+        if rank is not None:
+            candidates.append((rank, index))
     if not candidates:
         return None
-    position = world_matrices[candidates[0]][:3, 3]
+    _rank, selected_index = min(candidates)
+    position = world_matrices[selected_index][:3, 3]
     return tuple(float(value) for value in position)

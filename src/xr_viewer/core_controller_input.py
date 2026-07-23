@@ -74,8 +74,24 @@ class CoreControllerInputMixin:
         right = values("/user/hand/right", False)
         left["stick_click"] = 1.0 if self._read_bool_action(self._act_left_stick_click, "/user/hand/left") else 0.0
         right["stick_click"] = 1.0 if self._read_bool_action(self._act_right_stick_click, "/user/hand/right") else 0.0
-        left.update({"joystick_x": lx, "joystick_y": ly, "touchpad_x": lx, "touchpad_y": ly})
-        right.update({"joystick_x": rx, "joystick_y": ry, "touchpad_x": rx, "touchpad_y": ry})
+        left_touched = self._read_bool_action(self._act_left_stick_touch, "/user/hand/left")
+        right_touched = self._read_bool_action(self._act_right_stick_touch, "/user/hand/right")
+        left.update({
+            "joystick_x": lx,
+            "joystick_y": ly,
+            "joystick_touched": 1.0 if left_touched else 0.0,
+            "touchpad_x": lx,
+            "touchpad_y": ly,
+            "touchpad_touched": 1.0 if left_touched else 0.0,
+        })
+        right.update({
+            "joystick_x": rx,
+            "joystick_y": ry,
+            "joystick_touched": 1.0 if right_touched else 0.0,
+            "touchpad_x": rx,
+            "touchpad_y": ry,
+            "touchpad_touched": 1.0 if right_touched else 0.0,
+        })
         self._controller_inputs = (left, right)
 
     def _controller_input(self, hand: int) -> dict[str, float]:

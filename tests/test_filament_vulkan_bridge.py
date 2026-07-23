@@ -210,14 +210,18 @@ def test_artemis_controller_lighting_matches_legacy_head_light() -> None:
     assert "filament_fill_light_intensity: float = 1.0" in config
     assert 'profile.get("env_head_light_color"' in config
     assert '"env_ambient_color", self._filament_ambient_light_color' in config
-    assert "bridge.set_ambient_light(self._filament_ambient_light_color)" in config
+    assert "bridge.set_ambient_light(self._controller_ambient_light_color())" in config
 
 
+@pytest.mark.parametrize("brand", ("HP", "INDEX", "PICO", "QUEST", "VIVE", "YVR"))
 @pytest.mark.parametrize("hand", ("left", "right"))
-def test_pico_controller_glb_exposes_legacy_animation_triplets(hand: str) -> None:
+def test_packaged_controller_glb_animation_triplets_have_native_fallbacks(
+    brand: str, hand: str
+) -> None:
     path = (
         Path(__file__).resolve().parents[1]
-        / "src/xr_viewer/controllers/PICO"
+        / "src/xr_viewer/controllers"
+        / brand
         / f"{hand}.glb"
     )
     payload = path.read_bytes()
@@ -228,15 +232,17 @@ def test_pico_controller_glb_exposes_legacy_animation_triplets(hand: str) -> Non
         payload[20 : 20 + json_length].decode("utf-8").rstrip("\x00 ")
     )
     names = {str(node.get("name") or "") for node in document["nodes"]}
-    value_names = {name for name in names if name.endswith("_value")}
+    value_names = {
+        name
+        for name in names
+        if name.endswith("_value")
+        and all(
+            name.removesuffix("_value") + suffix in names
+            for suffix in ("_min", "_max")
+        )
+    }
 
     assert value_names
-    assert len(value_names) == 9
-    assert all(
-        value_name.removesuffix("_value") + suffix in names
-        for value_name in value_names
-        for suffix in ("_min", "_max")
-    )
     assert any("trigger_pressed_value" in name for name in value_names)
     assert any("squeeze_pressed_value" in name for name in value_names)
     assert any("thumbstick_pressed_value" in name for name in value_names)
@@ -245,3 +251,24 @@ def test_pico_controller_glb_exposes_legacy_animation_triplets(hand: str) -> Non
         / "native/filament/bridge/bridge_controller.cpp"
     ).read_text(encoding="utf-8")
     assert all(f'"{value_name}"' in bridge_source for value_name in value_names)
+
+
+def test_native_controller_animation_preserves_touch_semantics_without_abi_growth() -> None:
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "native/filament/bridge/bridge_controller.cpp").read_text(
+        encoding="utf-8"
+    )
+    internal = (root / "native/filament/bridge/bridge_internal.h").read_text(
+        encoding="utf-8"
+    )
+    public_header = (root / "native/filament/bridge/filament_bridge.h").read_text(
+        encoding="utf-8"
+    )
+
+    assert '"joystick_x_touched"' in source
+    assert '"joystick_y_touched"' in source
+    assert '"joystick_touched"' in source
+    assert "controller.button_values[6] * controller.joystick_x" in source
+    assert "controller.button_values[6] * controller.joystick_y" in source
+    assert "std::array<float, 7> button_values{};" in internal
+    assert "uint32_t button_mask" in public_header

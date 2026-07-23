@@ -196,6 +196,8 @@ class CoreControllerActionsMixin:
                 ("/user/hand/right/input/thumbstick/click",  self._act_right_stick_click),
                 ("/user/hand/left/input/thumbstick/touch",   self._act_left_stick_touch),
                 ("/user/hand/right/input/thumbstick/touch",  self._act_right_stick_touch),
+                ("/user/hand/left/input/thumbrest/touch",    self._act_left_stick_touch),
+                ("/user/hand/right/input/thumbrest/touch",   self._act_right_stick_touch),
                 ("/user/hand/left/input/menu/click",         self._act_menu_btn),
                 ("/user/hand/left/input/squeeze/value",      self._act_left_grip),
                 ("/user/hand/right/input/squeeze/value",     self._act_right_grip),

@@ -266,13 +266,97 @@ def test_controller_guide_pose_hides_beyond_headset_distance() -> None:
     assert presenter._controller_guide_pose() is None
 
 
-def test_pico_b_button_position_is_resolved_from_glb() -> None:
-    path = (Path(__file__).resolve().parents[1] /
-            "src/xr_viewer/controllers/PICO/right.glb")
+@pytest.mark.parametrize(
+    ("brand_name", "expected"),
+    (
+        ("HP", (-0.0235, 0.012129, -0.035076)),
+        ("INDEX", (-0.021801, -0.001037, -0.051047)),
+        ("PICO", (-0.00672205, 0.01771696, -0.02744452)),
+        ("QUEST", (-0.0128, 0.001141, -0.028491)),
+        ("VIVE", (-0.021922, 0.00029, -0.041995)),
+        ("YVR", (-0.022195, 0.008466, -0.007238)),
+    ),
+)
+def test_b_button_position_is_resolved_from_each_controller_glb(
+    brand_name: str, expected: tuple[float, float, float]
+) -> None:
+    path = (
+        Path(__file__).resolve().parents[1]
+        / f"src/xr_viewer/controllers/{brand_name}/right.glb"
+    )
 
     position = controller_button_local_position(str(path), "b_button")
 
-    assert position == pytest.approx((-0.00672205, 0.01771696, -0.02744452))
+    assert position == pytest.approx(expected, abs=1e-6)
+
+
+@pytest.mark.parametrize(
+    ("brand_name", "expected_multiplier"),
+    (
+        ("HP", 1.5),
+        ("INDEX", 1.5),
+        ("PICO", 1.0),
+        ("QUEST", 1.0),
+        ("VIVE", 1.5),
+        ("YVR", 1.5),
+    ),
+)
+def test_controller_profile_selects_ambient_light_multiplier(
+    brand_name: str, expected_multiplier: float
+) -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._controller_brand = presenter._controller_brands[brand_name]
+    presenter._filament_ambient_light_color = (0.06, 0.05, 0.05)
+
+    assert presenter._controller_brand.ambient_light_multiplier == pytest.approx(
+        expected_multiplier
+    )
+    assert presenter._controller_ambient_light_color() == pytest.approx(
+        tuple(value * expected_multiplier for value in (0.06, 0.05, 0.05))
+    )
+
+
+def test_controller_brand_switch_recalculates_b_button_anchor() -> None:
+    presenter = OpenXrVulkanPresenter()
+    previous_brand = presenter._controller_brand
+    presenter._controller_b_button_local = np.asarray(
+        (99.0, 99.0, 99.0), dtype=np.float64
+    )
+    presenter._controller_b_button_resolved = True
+
+    presenter._switch_shortcut_controller_brand()
+
+    assert presenter._controller_brand is not previous_brand
+    expected = controller_button_local_position(
+        str(presenter._controller_brand.right_glb), "b_button"
+    )
+    assert presenter._controller_b_button_resolved is True
+    assert presenter._controller_b_button_local == pytest.approx(expected)
+
+
+def test_controller_brand_switch_refreshes_ambient_light() -> None:
+    class Bridge:
+        def __init__(self) -> None:
+            self.ambient_colors: list[tuple[float, float, float]] = []
+
+        def load_controller(self, _hand: int, _data: bytes) -> None:
+            pass
+
+        def set_ambient_light(self, color) -> None:
+            self.ambient_colors.append(tuple(color))
+
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_ambient_light_color = (0.06, 0.05, 0.05)
+    presenter._controller_brand = presenter._controller_brands["QUEST"]
+    presenter.filament_bridge = Bridge()
+
+    presenter._switch_shortcut_controller_brand()
+
+    assert presenter._controller_brand.name == "VIVE"
+    assert len(presenter.filament_bridge.ambient_colors) == 1
+    assert presenter.filament_bridge.ambient_colors[0] == pytest.approx(
+        (0.09, 0.075, 0.075)
+    )
 
 
 def test_controller_button_position_does_not_require_opengl_renderer(
@@ -476,7 +560,7 @@ def test_filament_controller_lifecycle_hides_each_idle_hand_independently() -> N
     presenter._grip_mat_r = np.eye(4, dtype=np.float32)
     presenter._aim_mat_l = None
     presenter._aim_mat_r = None
-    presenter._controller_inputs = ({}, {})
+    presenter._controller_inputs = ({}, {"joystick_touched": 1.0})
     bridge = Bridge()
 
     presenter._update_filament_controllers(bridge)
@@ -484,9 +568,27 @@ def test_filament_controller_lifecycle_hides_each_idle_hand_independently() -> N
     assert bridge.visible == [(0, False), (1, True)]
     assert [hand for hand, _matrix in bridge.poses] == [1]
     assert [hand for hand, _values in bridge.inputs] == [1]
+    assert bridge.inputs[0][1]["button_mask"] == 1 << 6
     assert [(hand, visible) for hand, _matrix, visible in bridge.lasers] == [
         (0, False), (1, False)
     ]
+
+
+def test_controller_touch_actions_cover_thumbstick_trackpad_and_thumbrest() -> None:
+    root = Path(__file__).resolve().parents[1]
+    actions = (root / "src/xr_viewer/core_controller_actions.py").read_text(
+        encoding="utf-8"
+    )
+    inputs = (root / "src/xr_viewer/core_controller_input.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "/input/thumbstick/touch" in actions
+    assert "/input/trackpad/touch" in actions
+    assert "/input/thumbrest/touch" in actions
+    assert 'left["stick_click"]' in inputs
+    assert '"joystick_touched": 1.0 if left_touched else 0.0' in inputs
+    assert '"touchpad_touched": 1.0 if right_touched else 0.0' in inputs
 
 
 def test_active_filament_controller_uses_legacy_laser_calibration() -> None:

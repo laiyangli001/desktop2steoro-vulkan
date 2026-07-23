@@ -15,6 +15,15 @@ void bridge_controller_destroy(FilamentBridge* bridge, ControllerAsset& controll
 std::string bridge_controller_semantic(std::string name) {
     std::transform(name.begin(), name.end(), name.begin(),
             [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
+    const bool touched = name.find("touched") != std::string::npos ||
+            name.find("thumbrest") != std::string::npos;
+    if (touched && (name.find("thumbstick_xaxis") != std::string::npos ||
+            name.find("touchpad_xaxis") != std::string::npos)) return "joystick_x_touched";
+    if (touched && (name.find("thumbstick_yaxis") != std::string::npos ||
+            name.find("touchpad_yaxis") != std::string::npos)) return "joystick_y_touched";
+    if (touched && (name.find("thumbstick") != std::string::npos ||
+            name.find("touchpad") != std::string::npos ||
+            name.find("thumbrest") != std::string::npos)) return "joystick_touched";
     if (name.find("thumbstick_xaxis") != std::string::npos ||
             name.find("touchpad_xaxis") != std::string::npos) return "joystick_x";
     if (name.find("thumbstick_yaxis") != std::string::npos ||
@@ -36,6 +45,7 @@ std::string bridge_controller_semantic(std::string name) {
     if (name.find("menu") != std::string::npos) return "menu_button";
     if (name.find("photo_button") != std::string::npos ||
             name.find("home_button") != std::string::npos ||
+            name.find("homebutton") != std::string::npos ||
             name.find("app_button") != std::string::npos ||
             name.find("pico") != std::string::npos) return "home_button";
     return {};
@@ -181,6 +191,13 @@ float bridge_controller_animation_amount(
     if (semantic == "joystick_x") return controller.joystick_x;
     if (semantic == "joystick_y") return controller.joystick_y;
     if (semantic == "joystick") return controller.button_values[5];
+    if (semantic == "joystick_x_touched") {
+        return controller.button_values[6] * controller.joystick_x;
+    }
+    if (semantic == "joystick_y_touched") {
+        return controller.button_values[6] * controller.joystick_y;
+    }
+    if (semantic == "joystick_touched") return controller.button_values[6];
     if (semantic == "a_button") return controller.button_values[0];
     if (semantic == "b_button") return controller.button_values[1];
     if (semantic == "x_button") return controller.button_values[2];
@@ -311,10 +328,16 @@ int bridge_controller_load(
             "xr_standard_thumbstick_pressed_value",
             "xr_standard_thumbstick_xaxis_pressed_value",
             "xr_standard_thumbstick_yaxis_pressed_value",
+            "xr_standard_touchpad_pressed_value",
+            "xr_standard_touchpad_xaxis_pressed_value",
+            "xr_standard_touchpad_yaxis_pressed_value",
+            "xr_standard_touchpad_xaxis_touched_value",
+            "xr_standard_touchpad_yaxis_touched_value",
+            "thumbrest_pressed_value",
             "a_button_pressed_value", "b_button_pressed_value",
             "x_button_pressed_value", "y_button_pressed_value",
-            "LMenu_pressed_value", "RMenu_value",
-            "LPico_value", "RPico_value",
+            "LMenu_pressed_value", "RMenu_value", "menu_pressed_value",
+            "HomeButton_pressed_value", "LPico_value", "RPico_value",
     };
     for (const char* value_name : kControllerValues) {
         const auto entity = controller.asset->getFirstEntityByName(value_name);

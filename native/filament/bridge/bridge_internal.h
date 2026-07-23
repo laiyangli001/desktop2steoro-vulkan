@@ -240,7 +240,7 @@ struct ControllerAsset {
     float joystick_x = 0.0f;
     float joystick_y = 0.0f;
     uint32_t button_mask = 0;
-    std::array<float, 6> button_values{};
+    std::array<float, 7> button_values{};
     std::chrono::steady_clock::time_point last_input_time{};
     bool input_initialized = false;
     bool visible = true;

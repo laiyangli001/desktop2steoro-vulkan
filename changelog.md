@@ -12,12 +12,18 @@
 - 明确 Vulkan/OpenXR 图形预热契约：启动期预创建 Device、队列、swapchain、Filament 材质/资源和持久化输出槽；首个 graphics pipeline 提交仍在合法 OpenXR frame loop 内完成。
 - 按旧工程恢复独立屏幕光叠加：运行时在线性空间异步提取双眼虚拟屏幕平均色，保持旧版 `82%` 屏幕色与 `18%` 中性色混合，并由屏幕中心、法线和对角线衰减驱动只照亮控制器通道的 Filament 聚光源。
 - 将屏幕光与 `controller_hdr_lighting` 完全解耦：3D 房间模式继续使用 profile ambient/head/top light，HDR 模式在真实预过滤 IBL 接入前明确使用 profile 回退，两个模式都始终保留屏幕光。
+- 修复更换手柄模型后 B 键引导端点错位：统一从当前右手柄 GLB 的 `b_button_pressed_value` 动画枢轴解析局部锚点，覆盖 HP、Index、PICO、Quest、Vive 和 YVR；品牌切换后立即清除缓存、重新计算并记录锚点，再应用当前 profile 校正和 Grip 世界变换。
+- 增加手柄品牌级环境光补偿：HP、Valve Index、Vive 和 YVR 暗色模型通过各自 `profile.json` 使用 `1.5x` 环境间接光，PICO/Quest 保持 `1.0x`；启动加载和运行时切换模型都会立即刷新倍率，屏幕光、直接补光及 GLB 原始材质不变。
+- 补齐控制器 GLB 动画三元组的等价 native 实现：`_value/_min/_max` 节点不再依赖 Filament `getEntities()` 是否枚举非渲染节点，Bridge 回退表覆盖六品牌全部完整三元组，并继续使用平移/缩放插值与四元数 SLERP。
+- 恢复此前只创建但未消费的摇杆、触控板和 Quest thumbrest 触摸状态；触摸通过现有 `button_mask` 第 6 位穿过冻结 C ABI，驱动 touched 节点及触摸轴动画，不新增或改签名。
 
 ### 验证结果
 
 - 启动顺序、pipeline 就绪事件、输出首帧门控与 OpenXR 定向回归 `81 passed, 2 warnings`。
 - 手柄环境光、独立屏幕光、异步屏幕颜色采样和输出首帧定向回归 `13 passed, 2 warnings`。
 - 完整测试套件 `526 passed, 6 warnings`，requirements-matrix 合规检查 53 项通过；待三平台 Bridge CI 和 OpenXR 实机亮度验收。
+- 六品牌 B 键动画枢轴、引导几何、品牌环境光倍率及切换后立即刷新定向回归 `20 passed, 2 warnings`；完整测试套件 `539 passed, 6 warnings`。
+- 控制器动画三元组、touch 输入链和稳定 C ABI 定向回归累计 `100 passed, 2 warnings`；完整测试套件 `551 passed, 6 warnings`，requirements-matrix 合规检查 53 项通过。
 
 ### 未决事项
 

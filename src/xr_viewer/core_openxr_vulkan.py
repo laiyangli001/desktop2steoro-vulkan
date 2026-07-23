@@ -389,6 +389,16 @@ class OpenXrVulkanPresenter(
     def initialized(self) -> bool:
         return self._initialized
 
+    def _controller_ambient_light_color(self) -> tuple[float, float, float]:
+        multiplier = max(
+            0.0,
+            float(getattr(self._controller_brand, "ambient_light_multiplier", 1.0)),
+        )
+        return tuple(
+            float(component) * multiplier
+            for component in self._filament_ambient_light_color
+        )
+
     def initialize(self) -> None:
         if self._initialized:
             return
@@ -834,9 +844,23 @@ class OpenXrVulkanPresenter(
             next_brand.offset, dtype=np.float64
         )
         self._controller_calibration_rotation_deg = float(next_brand.rotation_deg)
-        self._controller_b_button_local = None
-        self._controller_b_button_resolved = False
-        print(f"[OpenXRViewer] Switched controller: {next_brand.name}", flush=True)
+        ambient_multiplier = float(
+            getattr(next_brand, "ambient_light_multiplier", 1.0)
+        )
+        if bridge is not None and hasattr(bridge, "set_ambient_light"):
+            bridge.set_ambient_light(self._controller_ambient_light_color())
+        anchor = self._resolve_controller_b_button_local(force=True)
+        anchor_text = (
+            "unresolved"
+            if anchor is None
+            else ", ".join(f"{value:.6f}" for value in anchor)
+        )
+        print(
+            f"[OpenXRViewer] Switched controller: {next_brand.name}; "
+            f"ambient_multiplier={ambient_multiplier:.2f}; "
+            f"B-button anchor=({anchor_text})",
+            flush=True,
+        )
 
     def _save_shortcut_controller_calibration(self) -> None:
         brand = self._controller_brand
@@ -1825,7 +1849,7 @@ class OpenXrVulkanPresenter(
             bridge.set_scene_exposure(self._filament_scene_exposure)
             bridge.set_skybox_brightness(self._filament_skybox_brightness)
             if hasattr(bridge, "set_ambient_light"):
-                bridge.set_ambient_light(self._filament_ambient_light_color)
+                bridge.set_ambient_light(self._controller_ambient_light_color())
             bridge.set_fill_light(
                 self._filament_fill_light_color,
                 self._filament_fill_light_intensity,
@@ -1883,6 +1907,12 @@ class OpenXrVulkanPresenter(
                     button_mask |= 1 << bit
             if values.get("stick_click", 0.0) > 0.5:
                 button_mask |= 1 << 5
+            if max(
+                values.get("joystick_touched", 0.0),
+                values.get("touchpad_touched", 0.0),
+            ) > 0.5:
+                # Keep the frozen C ABI: bit 6 carries the shared WebXR touch state.
+                button_mask |= 1 << 6
             bridge.set_controller_inputs(
                 hand,
                 trigger=values.get("trigger", 0.0),
@@ -2505,8 +2535,16 @@ class OpenXrVulkanPresenter(
             tuple(float(value) for value in rotation),
         )
 
-    def _controller_b_button_world_position(self):
-        if self._grip_mat_r is None or self._controller_brand is None:
+    def _resolve_controller_b_button_local(
+        self, *, force: bool = False
+    ) -> np.ndarray | None:
+        if force:
+            controller_button_local_position.cache_clear()
+            self._controller_b_button_local = None
+            self._controller_b_button_resolved = False
+        if self._controller_brand is None:
+            self._controller_b_button_local = None
+            self._controller_b_button_resolved = True
             return None
         if not self._controller_b_button_resolved:
             resolved = controller_button_local_position(
@@ -2516,7 +2554,13 @@ class OpenXrVulkanPresenter(
                 None if resolved is None else np.asarray(resolved, dtype=np.float64)
             )
             self._controller_b_button_resolved = True
-        if self._controller_b_button_local is None:
+        return self._controller_b_button_local
+
+    def _controller_b_button_world_position(self):
+        if self._grip_mat_r is None:
+            return None
+        button_local = self._resolve_controller_b_button_local()
+        if button_local is None:
             return None
 
         offset = np.eye(4, dtype=np.float64)
@@ -2528,7 +2572,7 @@ class OpenXrVulkanPresenter(
         ).astype(np.float64)
         model_matrix = np.asarray(self._grip_mat_r, dtype=np.float64) @ rotation @ offset
         local = np.ones(4, dtype=np.float64)
-        local[:3] = self._controller_b_button_local
+        local[:3] = button_local
         return (model_matrix @ local)[:3]
 
     def _upload_tool_quad(self, key, rgba, position, size, rotation):
