@@ -1,14 +1,17 @@
 {
   "display_name": {
-    "EN": "Artemis",
-    "CN": "阿特弥斯"
+    "EN": "3D_Home",
+    "CN": "3D_空中的家"
   },
   "glb": "environment.glb",
   "model_position": [
     0.0,
-    843,
+    0,
     0
   ],
+  "_bounds_center": [-1.15, 99, -0.65],
+  "_bounds_size": [198, 198, 198],
+  "_bounds_radius": 171.47,
   "model_rotation_deg": [
     0.0,
     0.0,
@@ -21,8 +24,7 @@
   ],
   "skybox": {
     "nodes": [
-      "Model_Artemis__SkyBox",
-      "Model_Artemis__SkyBox_hybrid_pbr"
+      "Models_Home2__Skybox360"
     ],
     "force_opaque": true,
     "double_sided": true
@@ -47,7 +49,7 @@
   ],
   "xr_render_scale": 1.0,
   "xr_projection_near": 0.1,
-  "xr_projection_far": 20000.0,
+  "xr_projection_far": 2000.0,
   "screen_quality_filter": false,
   "screen_quality_sharpness": 0.35,
   "screen_quality_oversample": 1.0,
@@ -96,37 +98,37 @@
       ]
     }
   ],
-  "view_pose_index": 1,
+  "view_pose_index": 0,
   "view_poses": [
     {
-      "name": "Bridge Approach",
-      "x": 0.0,
-      "y": 110.0,
-      "z": -650.0,
-      "angle": 0.0
+      "name": "Center View",
+      "x": -1,
+      "y": 169,
+      "z": -1,
+      "angle": 0
     },
     {
-      "name": "Model Center",
-      "x": -24.5209,
-      "y": 900.768,
-      "z": -961.2054,
-      "angle": 179.04,
+      "name": "Front View",
+      "x": -1,
+      "y": 169,
+      "z": 274,
+      "angle": 180,
       "rotation_deg": [
-        179.04,
-        3.04,
-        0.0
+        180,
+        0,
+        0
       ]
     },
     {
-      "name": "Wide Overview",
-      "x": 0.0,
-      "y": 1550.0,
-      "z": -3600.0,
-      "angle": 0.0,
+      "name": "Overview",
+      "x": -1,
+      "y": 408,
+      "z": 377,
+      "angle": 180,
       "rotation_deg": [
-        0.0,
-        -18.0,
-        0.0
+        180,
+        -22,
+        0
       ]
     }
   ],

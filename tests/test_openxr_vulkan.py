@@ -994,6 +994,28 @@ def test_filament_profile_view_pose_is_converted_to_glb_local_space(tmp_path) ->
     assert presenter._profile_head_transform[:3, 3].tolist() == [-24.0, 57.0, -961.0]
 
 
+def test_default_filament_profile_creates_identity_view_and_screen(tmp_path) -> None:
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_text(
+        json.dumps({"glb": None, "screen_light_intensity": 3.5}),
+        encoding="utf-8",
+    )
+    presenter = OpenXrVulkanPresenter(
+        OpenXrVulkanConfig(filament_profile_path=str(profile_path))
+    )
+
+    presenter._load_filament_profile()
+
+    assert presenter._profile_view_name == "Default"
+    assert presenter._profile_head_transform == pytest.approx(np.eye(4))
+    assert presenter._filament_screen == (
+        (0.0, 0.0, -2.0),
+        2.4,
+        1.35,
+        (0.0, 0.0, 0.0),
+    )
+
+
 def test_controller_profile_rotation_uses_local_x_axis() -> None:
     source = (Path(__file__).resolve().parents[1] /
               "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")

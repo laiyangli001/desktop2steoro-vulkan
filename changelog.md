@@ -6,6 +6,7 @@
 
 ### 已实现
 
+- 修复 OpenXR 环境选择仍硬编码旧 `Artemis` 目录的问题：运行时现在按 `settings.yaml` 的 `Environment Model` 解析环境目录，并读取所选 `profile.json` 的 `glb` 字段；所选目录、profile 或 GLB 无效时记录具体原因并回退 `Default`。`Default` 的 `glb: null` 被视为合法无房间环境，并使用旧版默认的 `2.4m x 1.35m`、距离 `2.0m` 虚拟屏幕，不再静默进入无房间且无屏幕的黑场。
 - 修复 OpenXR 单 View 颜色跨帧叠加：Filament `Renderer::ClearOptions` 默认 `clear=false`，此前只在绿色透视背景快捷键切换时才初始化，普通外部 swapchain 渲染会保留上一帧颜色。Bridge 现在为每只眼在创建时固定设置黑色 clear color、`clear=true` 和 `discard=true`。
 - 修复单 View 重构后 OpenXR 画面跨帧残影：删除原“主 View 与激光 View 同帧共享深度”遗留的 `setChannelDepthClearEnabled(0, false)`，单 View 现在每帧清理 channel 0 深度；此前设置会让外部 OpenXR swapchain 的深度跨帧保留，导致场景、屏幕和激光连续叠加。
 - 重构 Filament 控制器激光路径：删除独立 LDR 激光 View、重复 controller asset 和深度遮挡副本；GLB、手柄 PBR、屏幕/UI 与激光现在在一个主 View 中共享同一 Scene 和深度缓冲。手柄外壳写入深度后，激光以深度测试自然被遮挡。
@@ -22,6 +23,7 @@
 - 补齐控制器 GLB 动画三元组的等价 native 实现：`_value/_min/_max` 节点不再依赖 Filament `getEntities()` 是否枚举非渲染节点，Bridge 回退表覆盖六品牌全部完整三元组，并继续使用平移/缩放插值与四元数 SLERP。
 - 恢复此前只创建但未消费的摇杆、触控板和 Quest thumbrest 触摸状态；触摸通过现有 `button_mask` 第 6 位穿过冻结 C ABI，驱动 touched 节点及触摸轴动画，不新增或改签名。
 - 修正手柄激光遮挡方案、透明外壳及连续帧几何残影回归：撤销在两个 View 提交之间临时替换同一 Renderable 材质的异步不安全实现；控制器 GLB 改用 Filament instanced asset，主实例永久保留原始 PBR 材质并只进入 HDR 主 View，独立遮挡实例共享纹理、材质资源和顶点缓冲，但永久绑定 `colorWrite=false`、`depthWrite=true` 的深度材质并只进入激光 View。两实例同步姿态、按键动画和显隐，不再逐帧修改材质绑定。
+- 修复原始环境 GLB 加载期间的 OpenXR/Vulkan 生命周期竞争：OpenXR 会话初始化与原生 `FilamentNativeLoader` 并行推进，但输出消费、眼睛提交和 Bridge 销毁都受加载完成事件保护；加载失败会回传到 Presenter 线程，关闭时先等待原生加载线程再释放 Vulkan/Filament 句柄。
 
 ### 验证结果
 

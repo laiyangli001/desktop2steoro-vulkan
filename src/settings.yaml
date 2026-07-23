@@ -535,7 +535,7 @@ Stereo Mix: null
 CRF: 20
 Audio Delay: -0.15
 Controller Model: PICO
-Environment Model: Default
+Environment Model: 3D_Artemis
 Lossless Scaling Support: false
 Capture Tool: WindowsCaptureCUDA
 Fill 16:9: true

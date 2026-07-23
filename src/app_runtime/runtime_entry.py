@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import platform
 import threading
@@ -38,8 +39,59 @@ from .runtime_context import (
 from .runtime_output import CudaVulkanOutputAdapter, VulkanRuntimeOutputConsumer
 
 
+def _resolve_filament_environment_paths(
+    settings: dict,
+    src_root: Path,
+) -> tuple[Path | None, Path | None]:
+    environment_name = str(settings.get("Environment Model", "")).strip()
+    selected_name = (
+        "Default"
+        if not environment_name or environment_name.lower() == "none"
+        else environment_name
+    )
+    environments_root = src_root / "xr_viewer" / "environments"
+
+    def resolve(name: str) -> tuple[Path | None, Path]:
+        room_dir = environments_root / name
+        profile_path = room_dir / "profile.json"
+        if not profile_path.is_file():
+            raise FileNotFoundError(
+                f"OpenXR environment profile not found: {profile_path}"
+            )
+        try:
+            profile = json.loads(profile_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(
+                f"OpenXR environment profile is invalid: {profile_path}"
+            ) from exc
+        if not isinstance(profile, dict):
+            raise ValueError(
+                f"OpenXR environment profile root must be an object: {profile_path}"
+            )
+
+        glb_value = profile.get("glb", "environment.glb")
+        if glb_value in (None, "", False):
+            return None, profile_path
+        glb_path = room_dir / str(glb_value)
+        if not glb_path.is_file():
+            raise FileNotFoundError(f"OpenXR environment GLB not found: {glb_path}")
+        return glb_path, profile_path
+
+    try:
+        return resolve(selected_name)
+    except (FileNotFoundError, ValueError) as exc:
+        if selected_name.lower() == "default":
+            raise
+        print(
+            f"[OpenXRViewer] Environment '{selected_name}' unavailable: {exc}; "
+            "falling back to Default",
+            flush=True,
+        )
+        return resolve("Default")
+
+
 def _openxr_filament_config(settings: dict) -> dict[str, object]:
-    """Resolve the packaged Windows Filament scene for direct OpenXR runs."""
+    """Resolve the selected packaged Filament scene for direct OpenXR runs."""
     src_root = Path(__file__).resolve().parents[1]
     platform_bridge = {
         "Windows": src_root / "xr_viewer" / "native" / "windows"
@@ -49,8 +101,10 @@ def _openxr_filament_config(settings: dict) -> dict[str, object]:
         "Darwin": src_root / "xr_viewer" / "native" / "macos"
         / "libfilament_bridge.dylib",
     }.get(platform.system())
-    glb_path = src_root / "xr_viewer" / "environments" / "Artemis" / "environment.glb"
-    profile_path = src_root / "xr_viewer" / "environments" / "Artemis" / "profile.json"
+    glb_path, profile_path = _resolve_filament_environment_paths(
+        settings,
+        src_root,
+    )
 
     bridge_path = os.environ.get("D2S_FILAMENT_BRIDGE") or (
         str(platform_bridge) if platform_bridge and platform_bridge.is_file() else None
@@ -63,9 +117,11 @@ def _openxr_filament_config(settings: dict) -> dict[str, object]:
         ).strip().lower(),
         "controller_model": str(settings.get("Controller Model", "PICO")),
         "filament_bridge_path": bridge_path,
-        "filament_glb_path": configured_glb or (str(glb_path) if glb_path.is_file() else None),
+        "filament_glb_path": configured_glb or (
+            str(glb_path) if glb_path is not None else None
+        ),
         "filament_profile_path": configured_profile
-        or (str(profile_path) if profile_path.is_file() else None),
+        or (str(profile_path) if profile_path is not None else None),
         "filament_scene_exposure_ev": float(
             settings.get("Filament Scene Exposure", 2.0)
         ),

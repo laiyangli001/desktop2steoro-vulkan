@@ -2,7 +2,7 @@
 setlocal
 
 set "ROOM=%~1"
-if "%ROOM%"=="" set "ROOM=Artemis"
+if "%ROOM%"=="" set "ROOM=3D_Home"
 
 set "SCRIPT_DIR=%~dp0"
 set "APP_DIR=%SCRIPT_DIR%.."

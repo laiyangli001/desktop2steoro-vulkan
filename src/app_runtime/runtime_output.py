@@ -360,12 +360,14 @@ class VulkanRuntimeOutputConsumer:
 
     def run(self) -> None:
         while not self.shutdown_event.is_set():
-            if self.sink is not None and not bool(
-                getattr(self.sink, "initialized", True)
-            ):
-                self.source_stat_inc("runtime_output_waiting_for_openxr")
-                self.shutdown_event.wait(0.01)
-                continue
+            if self.sink is not None:
+                ready = getattr(self.sink, "output_ready", None)
+                if ready is None:
+                    ready = getattr(self.sink, "initialized", True)
+                if not bool(ready):
+                    self.source_stat_inc("runtime_output_waiting_for_openxr")
+                    self.shutdown_event.wait(0.01)
+                    continue
             item = self._take_latest()
             if item is None:
                 continue
