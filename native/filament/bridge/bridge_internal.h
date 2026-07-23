@@ -38,6 +38,7 @@
 #include <gltfio/Animator.h>
 #include <gltfio/AssetLoader.h>
 #include <gltfio/FilamentAsset.h>
+#include <gltfio/FilamentInstance.h>
 #include <gltfio/MaterialProvider.h>
 #include <gltfio/ResourceLoader.h>
 #include <gltfio/TextureProvider.h>
@@ -231,16 +232,11 @@ struct ControllerAnimation {
     std::string value_name;
 };
 
-struct ControllerPrimitiveMaterials {
-    utils::Entity entity;
-    std::vector<const filament::MaterialInstance*> originals;
-};
-
 struct ControllerAsset {
     filament::gltfio::FilamentAsset* asset = nullptr;
+    std::array<filament::gltfio::FilamentInstance*, 2> instances{};
     std::vector<uint8_t> bytes;
     std::vector<ControllerAnimation> animations;
-    std::vector<ControllerPrimitiveMaterials> primitive_materials;
     float trigger = 0.0f;
     float grip = 0.0f;
     float joystick_x = 0.0f;

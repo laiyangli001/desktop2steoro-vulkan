@@ -16,7 +16,7 @@
 - 增加手柄品牌级环境光补偿：HP、Valve Index、Vive 和 YVR 暗色模型通过各自 `profile.json` 使用 `20.0x` 环境间接光，PICO/Quest 保持 `1.0x`；启动加载和运行时切换模型都会立即刷新倍率，屏幕光、直接补光及 GLB 原始材质不变。
 - 补齐控制器 GLB 动画三元组的等价 native 实现：`_value/_min/_max` 节点不再依赖 Filament `getEntities()` 是否枚举非渲染节点，Bridge 回退表覆盖六品牌全部完整三元组，并继续使用平移/缩放插值与四元数 SLERP。
 - 恢复此前只创建但未消费的摇杆、触控板和 Quest thumbrest 触摸状态；触摸通过现有 `button_mask` 第 6 位穿过冻结 C ABI，驱动 touched 节点及触摸轴动画，不新增或改签名。
-- 修正手柄激光遮挡方案及透明外壳回归：撤销将手柄 PBR 本体移入无后处理 View 的错误实现；手柄继续由 HDR 主 View 使用 GLB 原始材质输出，激光 View 复用手柄几何并临时绑定 `colorWrite=false`、`depthWrite=true` 的深度材质，提交后立即恢复原材质，使外壳只遮挡光束、不改变颜色或透明度。
+- 修正手柄激光遮挡方案、透明外壳及连续帧几何残影回归：撤销在两个 View 提交之间临时替换同一 Renderable 材质的异步不安全实现；控制器 GLB 改用 Filament instanced asset，主实例永久保留原始 PBR 材质并只进入 HDR 主 View，独立遮挡实例共享纹理、材质资源和顶点缓冲，但永久绑定 `colorWrite=false`、`depthWrite=true` 的深度材质并只进入激光 View。两实例同步姿态、按键动画和显隐，不再逐帧修改材质绑定。
 
 ### 验证结果
 
@@ -25,7 +25,7 @@
 - 完整测试套件 `526 passed, 6 warnings`，requirements-matrix 合规检查 53 项通过；待三平台 Bridge CI 和 OpenXR 实机亮度验收。
 - 六品牌 B 键动画枢轴、引导几何、品牌环境光倍率及切换后立即刷新定向回归 `20 passed, 2 warnings`；完整测试套件 `539 passed, 6 warnings`。
 - 控制器动画三元组、touch 输入链和稳定 C ABI 定向回归累计 `100 passed, 2 warnings`；完整测试套件 `551 passed, 6 warnings`，requirements-matrix 合规检查 53 项通过。
-- 上一版“手柄/激光同一彩色 View”方案经实机确认未能遮挡激光且导致外壳透明，已判定无效并移除；新的深度专用遮挡材质方案定向回归 `20 passed, 2 warnings`，完整测试套件 `551 passed, 6 warnings`，待三平台 Bridge CI 与头显遮挡验收。
+- 上一版“手柄/激光同一彩色 View”以及后续“同一 Renderable 临时换深度材质”方案均经实机判定无效：前者不能正确遮挡且会改变外壳合成，后者与 Filament 异步命令消费竞争并造成场景/手柄连续帧残影。现已统一替换为资源共享、Renderable 独立、材质绑定持久不变的双实例遮挡结构，待三平台 Bridge CI 与头显遮挡验收。
 
 ### 未决事项
 

@@ -1,5 +1,4 @@
 #include "bridge_eye.h"
-#include "bridge_controller.h"
 #include "bridge_internal.h"
 #include "bridge_material.h"
 
@@ -165,9 +164,7 @@ int bridge_eye_begin_frame(FilamentBridge* bridge) {
         std::fflush(stderr);
     }
     bridge->renderer->render(bridge->view);
-    bridge_controller_set_occlusion_materials(bridge, true);
     bridge->renderer->render(bridge->eyes[bridge->active_eye].laser_view);
-    bridge_controller_set_occlusion_materials(bridge, false);
     return bridge->frame_active ? 1 : 0;
 }
 

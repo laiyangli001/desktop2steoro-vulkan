@@ -57,27 +57,6 @@ void bridge_controller_destroy_occlusion_material(FilamentBridge* bridge) {
     }
 }
 
-void bridge_controller_set_occlusion_materials(
-        FilamentBridge* bridge, bool enabled) {
-    if (!bridge || !bridge->engine ||
-            !bridge->controller_occlusion_material_instance) return;
-    auto& renderables = bridge->engine->getRenderableManager();
-    for (auto& controller : bridge->controllers) {
-        for (auto& materials : controller.primitive_materials) {
-            const auto instance = renderables.getInstance(materials.entity);
-            if (!instance.isValid()) continue;
-            for (size_t primitive = 0; primitive < materials.originals.size(); ++primitive) {
-                const auto* material = enabled
-                        ? bridge->controller_occlusion_material_instance
-                        : materials.originals[primitive];
-                if (material) {
-                    renderables.setMaterialInstanceAt(instance, primitive, material);
-                }
-            }
-        }
-    }
-}
-
 void bridge_controller_destroy(FilamentBridge* bridge, ControllerAsset& controller) {
     if (controller.asset && bridge->scene) {
         bridge->scene->removeEntities(
@@ -286,20 +265,35 @@ float bridge_controller_animation_amount(
 
 namespace {
 
+utils::Entity bridge_controller_find_instance_entity(
+        const ControllerAsset& controller,
+        const filament::gltfio::FilamentInstance* controller_instance,
+        const std::string& name) {
+    if (!controller.asset || !controller_instance) return {};
+    const auto* entities = controller_instance->getEntities();
+    for (size_t index = 0; index < controller_instance->getEntityCount(); ++index) {
+        const auto entity = entities[index];
+        const char* raw_name = controller.asset->getName(entity);
+        if (raw_name && name == raw_name) return entity;
+    }
+    return {};
+}
+
 void bridge_controller_add_animation(
         FilamentBridge* bridge, ControllerAsset& controller,
+        filament::gltfio::FilamentInstance* controller_instance,
         const std::string& value_name, utils::Entity value_entity) {
-    if (!bridge || !controller.asset || value_entity.isNull()) return;
+    if (!bridge || !controller.asset || !controller_instance || value_entity.isNull()) return;
     const std::string suffix = "_value";
     if (value_name.size() <= suffix.size() ||
             value_name.compare(value_name.size() - suffix.size(), suffix.size(), suffix) != 0) {
         return;
     }
     const std::string prefix = value_name.substr(0, value_name.size() - suffix.size());
-    const auto min_entity = controller.asset->getFirstEntityByName(
-            (prefix + "_min").c_str());
-    const auto max_entity = controller.asset->getFirstEntityByName(
-            (prefix + "_max").c_str());
+    const auto min_entity = bridge_controller_find_instance_entity(
+            controller, controller_instance, prefix + "_min");
+    const auto max_entity = bridge_controller_find_instance_entity(
+            controller, controller_instance, prefix + "_max");
     const auto semantic = bridge_controller_semantic(value_name);
     auto& transforms = bridge->engine->getTransformManager();
     const auto value_instance = transforms.getInstance(value_entity);
@@ -346,17 +340,19 @@ int bridge_controller_load(
         FilamentBridge* bridge, uint32_t hand,
         const uint8_t* bytes, uint32_t byte_count) {
     if (!bridge || !bridge->engine || !bridge->asset_loader ||
+            !bridge->controller_occlusion_material_instance ||
             hand > 1 || !bytes || !byte_count) {
         return 0;
     }
     auto& controller = bridge->controllers[hand];
     bridge_controller_destroy(bridge, controller);
     controller.bytes.assign(bytes, bytes + byte_count);
-    controller.asset = bridge->asset_loader->createAsset(
-            controller.bytes.data(), byte_count);
-    if (!controller.asset) {
-        bridge_set_error(bridge, "Filament could not parse controller GLB");
-        controller = {};
+    controller.asset = bridge->asset_loader->createInstancedAsset(
+            controller.bytes.data(), byte_count,
+            controller.instances.data(), controller.instances.size());
+    if (!controller.asset || !controller.instances[0] || !controller.instances[1]) {
+        bridge_controller_destroy(bridge, controller);
+        bridge_set_error(bridge, "Filament could not create controller render instances");
         return 0;
     }
     filament::gltfio::ResourceConfiguration config{bridge->engine, nullptr, true};
@@ -370,43 +366,55 @@ int bridge_controller_load(
     }
     bridge->scene->addEntities(
             controller.asset->getEntities(), controller.asset->getEntityCount());
-    // Controllers are runtime overlays lit by the shared fill-light channel.
-    // Without this channel assignment their PBR materials receive no light
-    // because the environment asset owns the default channel routing.
+    // The primary and occlusion instances share glTF textures, materials, and
+    // vertex buffers, but own independent Renderable components. Their material
+    // bindings never change after loading, so Filament's asynchronous backend
+    // cannot observe a mid-frame PBR/depth-material swap.
     auto& renderables = bridge->engine->getRenderableManager();
-    for (size_t index = 0; index < controller.asset->getRenderableEntityCount(); ++index) {
-        const auto entity = controller.asset->getRenderableEntities()[index];
-        const auto instance = renderables.getInstance(entity);
-        if (!instance.isValid()) continue;
-        // Match the legacy controller pass: only eye-following head/top lights apply.
-        renderables.setLightChannel(instance, 0, false);
-        renderables.setLightChannel(instance, 1, true);
-        // Layer 0 keeps the original PBR shell in the HDR scene. Layer 1 reuses
-        // the geometry with a depth-only material while the laser pass renders.
-        renderables.setLayerMask(instance, 0xff, 0x03);
-        controller.primitive_materials.push_back({entity, {}});
-        auto& originals = controller.primitive_materials.back().originals;
-        const size_t primitive_count = renderables.getPrimitiveCount(instance);
-        originals.reserve(primitive_count);
-        for (size_t primitive = 0; primitive < primitive_count; ++primitive) {
-            originals.push_back(renderables.getMaterialInstanceAt(instance, primitive));
+    for (size_t instance_index = 0; instance_index < controller.instances.size();
+            ++instance_index) {
+        auto* controller_instance = controller.instances[instance_index];
+        const bool occlusion_instance = instance_index == 1;
+        const uint8_t layer_mask = occlusion_instance ? 0x02 : 0x01;
+        const auto* entities = controller_instance->getEntities();
+        for (size_t entity_index = 0;
+                entity_index < controller_instance->getEntityCount(); ++entity_index) {
+            const auto entity = entities[entity_index];
+            const auto instance = renderables.getInstance(entity);
+            if (!instance.isValid()) continue;
+            renderables.setLightChannel(instance, 0, false);
+            renderables.setLightChannel(instance, 1, !occlusion_instance);
+            renderables.setLayerMask(instance, 0xff, layer_mask);
+            if (occlusion_instance) {
+                const size_t primitive_count = renderables.getPrimitiveCount(instance);
+                for (size_t primitive = 0; primitive < primitive_count; ++primitive) {
+                    renderables.setMaterialInstanceAt(
+                            instance, primitive,
+                            bridge->controller_occlusion_material_instance);
+                }
+            }
         }
     }
-    for (size_t index = 0; index < controller.asset->getEntityCount(); ++index) {
-        const auto entity = controller.asset->getEntities()[index];
-        const char* raw_name = controller.asset->getName(entity);
-        if (!raw_name) continue;
-        const std::string value_name(raw_name);
-        const std::string suffix = "_value";
-        if (value_name.size() <= suffix.size() ||
-                value_name.compare(value_name.size() - suffix.size(), suffix.size(), suffix) != 0) {
-            continue;
+    for (auto* controller_instance : controller.instances) {
+        const auto* entities = controller_instance->getEntities();
+        for (size_t index = 0; index < controller_instance->getEntityCount(); ++index) {
+            const auto entity = entities[index];
+            const char* raw_name = controller.asset->getName(entity);
+            if (!raw_name) continue;
+            const std::string value_name(raw_name);
+            const std::string suffix = "_value";
+            if (value_name.size() <= suffix.size() ||
+                    value_name.compare(value_name.size() - suffix.size(), suffix.size(), suffix) != 0) {
+                continue;
+            }
+            bridge_controller_add_animation(
+                    bridge, controller, controller_instance, value_name, entity);
         }
-        bridge_controller_add_animation(bridge, controller, value_name, entity);
     }
     // Always complete discovery from the legacy node contract. Some Filament
     // SDK builds omit non-renderable nodes from getEntities(), and others may
-    // expose only a subset. bridge_controller_add_animation deduplicates them.
+    // expose only a subset. The lookup stays within each instance so animation
+    // transforms never cross from the PBR controller to the occlusion copy.
     constexpr const char* kControllerValues[] = {
             "xr_standard_trigger_pressed_value",
             "xr_standard_squeeze_pressed_value",
@@ -424,9 +432,13 @@ int bridge_controller_load(
             "LMenu_pressed_value", "RMenu_value", "menu_pressed_value",
             "HomeButton_pressed_value", "LPico_value", "RPico_value",
     };
-    for (const char* value_name : kControllerValues) {
-        const auto entity = controller.asset->getFirstEntityByName(value_name);
-        bridge_controller_add_animation(bridge, controller, value_name, entity);
+    for (auto* controller_instance : controller.instances) {
+        for (const char* value_name : kControllerValues) {
+            const auto entity = bridge_controller_find_instance_entity(
+                    controller, controller_instance, value_name);
+            bridge_controller_add_animation(
+                    bridge, controller, controller_instance, value_name, entity);
+        }
     }
     if (controller.animations.empty()) {
         bridge_controller_destroy(bridge, controller);
@@ -507,12 +519,20 @@ int bridge_controller_set_visible(
     const bool next_visible = visible != 0;
     if (controller.visible == next_visible) return 1;
     auto& renderables = bridge->engine->getRenderableManager();
-    for (size_t index = 0;
-            index < controller.asset->getRenderableEntityCount(); ++index) {
-        const auto entity = controller.asset->getRenderableEntities()[index];
-        const auto instance = renderables.getInstance(entity);
-        if (!instance.isValid()) continue;
-        renderables.setLayerMask(instance, 0xff, next_visible ? 0x03 : 0x00);
+    for (size_t instance_index = 0; instance_index < controller.instances.size();
+            ++instance_index) {
+        const uint8_t layer_mask = next_visible
+                ? (instance_index == 1 ? 0x02 : 0x01)
+                : 0x00;
+        const auto* entities = controller.instances[instance_index]->getEntities();
+        for (size_t entity_index = 0;
+                entity_index < controller.instances[instance_index]->getEntityCount();
+                ++entity_index) {
+            const auto entity = entities[entity_index];
+            const auto instance = renderables.getInstance(entity);
+            if (!instance.isValid()) continue;
+            renderables.setLayerMask(instance, 0xff, layer_mask);
+        }
     }
     controller.visible = next_visible;
     return 1;

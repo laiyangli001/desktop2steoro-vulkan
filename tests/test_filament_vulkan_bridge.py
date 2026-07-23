@@ -63,6 +63,9 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
         "preview_bridge.h",
     )
     facade = (bridge_dir / "filament_bridge.cpp").read_text(encoding="utf-8")
+    controller_source = (bridge_dir / "bridge_controller.cpp").read_text(
+        encoding="utf-8"
+    )
     source = facade + "\n" + "\n".join(
         (bridge_dir / name).read_text(encoding="utf-8")
         for name in module_names
@@ -95,11 +98,12 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "eye.laser_view->setVisibleLayers(0xff, 0x02);" in source
     assert "eye.laser_view->setPostProcessingEnabled(false);" in source
     assert "bridge->renderer->render(bridge->eyes[bridge->active_eye].laser_view);" in source
-    assert "bridge_controller_set_occlusion_materials(bridge, true);" in source
-    assert "bridge_controller_set_occlusion_materials(bridge, false);" in source
+    assert "bridge_controller_set_occlusion_materials" not in source
     assert ".colorWrite(false)" in source
-    assert "renderables.getMaterialInstanceAt" in source
+    assert "renderables.getMaterialInstanceAt" not in controller_source
     assert "renderables.setMaterialInstanceAt" in source
+    assert "createInstancedAsset" in source
+    assert "std::array<filament::gltfio::FilamentInstance*, 2> instances{};" in source
     assert "bridge_set_renderable_layer" in source
     assert ".exposure(target->brightness.scene_exposure_ev)" in source
     assert "scene_factor" not in source
@@ -150,17 +154,18 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "controller.button_values[5]" in source
     assert "controller loaded hand=%u animations=%zu" in source
     assert "kControllerValues" in source
-    assert "getFirstEntityByName(value_name)" in source
-    assert "if (!bridge || !controller.asset || value_entity.isNull())" in source
-    assert "controller.asset->getFirstEntityByName" in source
+    assert "bridge_controller_find_instance_entity" in source
+    assert "if (!bridge || !controller.asset || !controller_instance || value_entity.isNull())" in source
+    assert "controller.asset->getFirstEntityByName" not in source
     assert "bridge->asset->getFirstEntityByName" not in (
         bridge_dir / "bridge_controller.cpp"
     ).read_text(encoding="utf-8")
     assert "if (controller.animations.empty())" in source
     assert "Controller GLB exposes no _value/_min/_max animation triplets" in source
     assert "renderables.setLightChannel(instance, 0, false);" in source
-    assert "renderables.setLayerMask(instance, 0xff, 0x03);" in source
-    assert "next_visible ? 0x03 : 0x00" in source
+    assert "const uint8_t layer_mask = occlusion_instance ? 0x02 : 0x01;" in source
+    assert "? (instance_index == 1 ? 0x02 : 0x01)" in source
+    assert "renderables.setLayerMask(instance, 0xff, 0x03);" not in source
     assert "bridge_set_renderable_layer(bridge, entity, 1, true);" in source
     assert "LightManager::Type::POINT" in source
     assert "kLegacyControllerCandelaScale = 10000.0f" in source
