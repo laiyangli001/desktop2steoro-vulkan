@@ -366,6 +366,19 @@ class VulkanRuntimeOutputConsumer:
             item = self._take_latest()
             if item is None:
                 continue
+            try:
+                runtime_result, capture_timestamp = item
+            except (TypeError, ValueError):
+                self.source_stat_inc("runtime_output_invalid_item")
+                continue
+            submit_runtime_result = getattr(self.sink, "submit_runtime_result", None)
+            if callable(submit_runtime_result):
+                submit_runtime_result(
+                    runtime_result,
+                    float(capture_timestamp or time.monotonic()),
+                )
+                self.source_stat_inc("runtime_output_frames")
+                continue
             frame = self._to_output_frame(item)
             if frame is None:
                 continue

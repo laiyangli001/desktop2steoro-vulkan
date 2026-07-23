@@ -311,6 +311,8 @@ class OpenXrVulkanPresenter(
         self._initialized = False
         self._presenter_thread_id: int | None = None
         self._presenter_commands: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=2)
+        self._output_adapter: Any | None = None
+        self._next_output_frame_id = 0
         self._pending_output: VulkanStereoOutputFrame | None = None
         self._displayed_output: VulkanStereoOutputFrame | None = None
         self._rendering_output: VulkanStereoOutputFrame | None = None
@@ -1382,6 +1384,13 @@ class OpenXrVulkanPresenter(
             except Exception:
                 pass
 
+        if self._output_adapter is not None:
+            try:
+                self._output_adapter.close()
+            except Exception:
+                pass
+            self._output_adapter = None
+
         self._drop_output_frames()
 
         if self.filament_bridge is not None:
@@ -1469,6 +1478,7 @@ class OpenXrVulkanPresenter(
         self._profile_space_applied = False
         self._reference_space_type = None
         self._presenter_thread_id = None
+        self._next_output_frame_id = 0
 
     def __enter__(self) -> "OpenXrVulkanPresenter":
         self.initialize()
@@ -1753,6 +1763,63 @@ class OpenXrVulkanPresenter(
             return
         self._submit_output_on_presenter(frame)
 
+    def submit_runtime_result(self, runtime_result: Any, timestamp: float) -> None:
+        """Marshal raw inference output to the Presenter-owned Vulkan path."""
+
+        if not self._accept_output or not self.session_running:
+            return
+        payload = (runtime_result, float(timestamp))
+        if (
+            self._presenter_thread_id is not None
+            and threading.get_ident() != self._presenter_thread_id
+        ):
+            self._enqueue_presenter_command("submit_runtime_result", payload)
+            return
+        self._submit_runtime_result_on_presenter(*payload)
+
+    def _submit_runtime_result_on_presenter(
+        self, runtime_result: Any, timestamp: float
+    ) -> None:
+        """Convert and publish inference output while owning the Vulkan context."""
+
+        if self._output_adapter is None:
+            from app_runtime.runtime_output import CudaVulkanOutputAdapter
+
+            self._output_adapter = CudaVulkanOutputAdapter(self)
+        try:
+            left_eye = getattr(runtime_result, "left_eye", None)
+            right_eye = getattr(runtime_result, "right_eye", None)
+            if not isinstance(left_eye, VulkanImageResource) or not isinstance(
+                right_eye, VulkanImageResource
+            ):
+                frame = self._output_adapter.convert(
+                    runtime_result,
+                    frame_id=self._next_output_frame_id,
+                    timestamp=timestamp,
+                )
+            else:
+                debug_info = dict(getattr(runtime_result, "debug_info", None) or {})
+                frame = VulkanStereoOutputFrame(
+                    frame_id=self._next_output_frame_id,
+                    timestamp=timestamp,
+                    left_eye=left_eye,
+                    right_eye=right_eye,
+                    sbs=getattr(runtime_result, "sbs", None),
+                    ready_timeline=getattr(runtime_result, "ready_timeline", None),
+                    metadata=debug_info,
+                    color_space=str(debug_info.get("output_color_space", "srgb")),
+                    image_origin=str(debug_info.get("output_image_origin", "top_left")),
+                )
+            self._next_output_frame_id += 1
+        except Exception as exc:
+            print(
+                f"[OpenXRViewer] Runtime output conversion failed: "
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            return
+        self._submit_output_on_presenter(frame)
+
     def _submit_output_on_presenter(self, frame: VulkanStereoOutputFrame) -> None:
         with self._output_lock:
             previous = self._pending_output
@@ -1782,6 +1849,8 @@ class OpenXrVulkanPresenter(
                 return
             if kind == "submit_output":
                 self._submit_output_on_presenter(payload)
+            elif kind == "submit_runtime_result":
+                self._submit_runtime_result_on_presenter(*payload)
 
     def _clear_presenter_commands(self) -> None:
         while True:
@@ -1791,6 +1860,8 @@ class OpenXrVulkanPresenter(
                 return
             if kind == "submit_output":
                 self._release_output_frame(payload)
+            elif kind == "submit_runtime_result":
+                continue
 
     @staticmethod
     def _release_output_frame(frame: VulkanStereoOutputFrame | None) -> None:

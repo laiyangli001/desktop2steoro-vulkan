@@ -836,6 +836,8 @@ Downsample -> Horizontal Blur -> Vertical Blur -> Glow
 
 `OpenXrPresenter` 负责 XrInstance、System、Session、Space、Action、Swapchain、事件和 Composition Layer。它不执行深度推理或立体算法。
 
+Presenter 线程同时拥有 Vulkan context、Filament Engine/Scene/资源和输出图像环。Capture、Inference 与文件读取线程不得直接调用 Filament C ABI，也不得操作 Presenter 的 Vulkan 资源。运行时结果通过有界命令队列交给 Presenter；Presenter 在 OpenXR 帧边界消费命令，完成 CUDA/Vulkan 图像导入、外部同步、屏幕材质绑定和 Projection Layer 提交。队列只保留有限的新帧，覆盖或关闭时释放对应输出槽位，避免跨线程释放仍被 Filament 采样的图像。
+
 ### 13.2 Vulkan Session 创建
 
 必须通过 `xrGetVulkanGraphicsRequirements2KHR`、`xrCreateVulkanInstanceKHR`/等效规范路径和 `XrGraphicsBindingVulkan2KHR` 建立 Session。Physical Device 选择服从 OpenXR Runtime 要求。

@@ -77,3 +77,36 @@ def test_consumer_preserves_first_frame_until_openxr_is_initialized():
 
     assert runtime_q.qsize() == 1
     assert "runtime_output_waiting_for_openxr" in stats
+
+
+def test_consumer_dispatches_raw_result_to_presenter_without_local_conversion():
+    runtime_q = queue.Queue(maxsize=1)
+    shutdown = threading.Event()
+    calls = []
+    stats = []
+    runtime_result = SimpleNamespace(left_eye="cuda-left", right_eye="cuda-right")
+
+    class PresenterSink:
+        output_ready = True
+
+        def submit_runtime_result(self, result, timestamp):
+            calls.append((result, timestamp))
+
+    runtime_q.put((runtime_result, 3.5))
+    consumer = VulkanRuntimeOutputConsumer(
+        runtime_q=runtime_q,
+        shutdown_event=shutdown,
+        source_stat_inc=lambda name, amount=1, **values: stats.append(name),
+        sink=PresenterSink(),
+    )
+    worker = threading.Thread(target=consumer.run)
+    worker.start()
+    deadline = time.monotonic() + 1.0
+    while not calls:
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+    shutdown.set()
+    worker.join(timeout=1.0)
+
+    assert calls == [(runtime_result, 3.5)]
+    assert "runtime_output_frames" in stats

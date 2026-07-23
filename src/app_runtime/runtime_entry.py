@@ -36,7 +36,7 @@ from .runtime_context import (
     build_runtime_pipeline_context,
     create_runtime_context,
 )
-from .runtime_output import CudaVulkanOutputAdapter, VulkanRuntimeOutputConsumer
+from .runtime_output import VulkanRuntimeOutputConsumer
 
 
 def _resolve_filament_environment_paths(
@@ -282,7 +282,6 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
                 shutdown_event=shutdown_event,
                 source_stat_inc=callbacks.source_stat_inc,
                 sink=presenter,
-                gpu_adapter=CudaVulkanOutputAdapter(presenter),
             )
             output_thread = threading.Thread(
                 target=output_consumer.run,

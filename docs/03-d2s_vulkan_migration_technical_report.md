@@ -221,6 +221,8 @@ VkImage (MoltenVK 管理的 Metal 纹理)
 
 Projection Layer 的运行时屏幕输出现已采用左右眼独立的三帧 Vulkan image ring。每个槽位的 external memory、CUDA mapped array 和 Filament imported Texture 均可复用，帧循环只切换槽位和材质绑定，不再因为新帧销毁并重新导入纹理。输出槽位现在带有跨线程 producer lease：生产者领取空闲槽位，pending 被替换时立即释放，当前 Filament 屏幕/Quad 消费帧保持占用直到下一帧完成提交；因此 ring wrap 不会覆盖仍被 Filament 采样的 VkImage。Bridge 同时将左右眼提交合并到一次帧边界等待，避免旧实现每只眼睛一次 `flushAndWait`。
 
+输出线程边界已进一步收紧：`VulkanRuntimeOutputConsumer` 只从推理队列取出最新原始结果并投递 `submit_runtime_result` 命令，不再创建、导入或释放 Vulkan 输出图像。CUDA 到 Vulkan 的 image ring、external semaphore、屏幕光采样和输出槽位 lease 全部由 Presenter 线程执行；非 Vulkan sink 仍保留原兼容转换路径。这样后台线程只负责捕捉、文件读取和推理，Filament/Vulkan 资源的创建、使用和销毁集中在同一线程。
+
 当前已增加 CUDA/Vulkan/Filament external semaphore signal/wait ABI：支持路径不再在发布前执行 CUDA stream synchronization，Filament 在图形提交时等待对应槽位 semaphore；平台、CUDA Runtime 或旧 Bridge 不支持时自动保留 CPU 同步降级。Validation Layer 全路径和 NVIDIA 实机长稳、帧率、显存压力测试已通过；由于 external semaphore 实验路径仍默认关闭，当前稳定路径使用 CPU 同步，只有显式设置 `D2S_ENABLE_CUDA_EXTERNAL_SEMAPHORE=1` 才启用异步 semaphore。运行时 CUDA `VkImage` 直接导入 Filament 屏幕材质同样默认关闭，稳定 OpenXR 路径通过 Quad Layer Vulkan GPU copy 提交屏幕；`D2S_ENABLE_FILAMENT_SCREEN_IMAGE=1` 仅用于后续验证。Windows/Linux/macOS Bridge CI 已完成并回写最新二进制；下一阶段是 Compute Graph 完整接入和跨厂商互操作。
 
 控制器路径已按旧工程生命周期迁移到 Vulkan：Python Presenter 维护逐手 Grip/Aim 跟踪、移动时间、One Euro 位置滤波和四元数方向平滑；Filament Bridge 在共享 Projection Layer Scene 中加载左右手 GLB、更新 profile 校准姿态和按键动画，并通过独立 C ABI 控制模型与 3D 激光实体显隐。按键动画按 GLB `_value/_min/_max` 层级匹配，使用输入平滑、平移/缩放插值和四元数 SLERP；加载日志列出逐手动画节点与语义。静止 5 秒或 Grip 跟踪丢失时隐藏对应手柄和激光，重新移动后恢复；激光不再通过 Quad Layer 模拟，并恢复旧工程两张交叉锥形面及动态蓝至红彩虹渐变。

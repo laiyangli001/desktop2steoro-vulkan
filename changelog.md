@@ -27,6 +27,7 @@
 - 启动 Presenter 线程命令队列重构：输出消费者不再跨线程直接修改 Presenter 的待显示帧，而是投递 `submit_output` 命令，由 Presenter 在帧边界消费；队列覆盖和 Presenter 关闭时都会释放未消费的输出槽位，Filament C ABI 调用继续保持 Presenter 线程归属。
 - 为 `FilamentVulkanBridge` 增加 owner 线程绑定：创建、渲染、资源操作和销毁都会在 Python ABI 层校验 Presenter 线程，未来任何跨线程调用会立即得到明确错误，而不是触发 native `This thread has not been adopted`。
 - 修复运行时关闭竞态：主线程不再以 2 秒超时抢先调用 Presenter `close()`，先等待 `run_until` 在 owner 线程完成 Filament/Vulkan 释放，再执行无副作用兜底关闭。
+- 收紧 Presenter 命令队列边界：OpenXR 输出消费者现在只投递原始推理结果，CUDA 到 Vulkan 图像导入、external semaphore、屏幕光采样、输出槽位租约和 Filament 提交统一在 Presenter 线程执行；非 Vulkan sink 保留兼容转换路径。
 
 ### 验证结果
 
@@ -35,6 +36,7 @@
 - 完整测试套件 `526 passed, 6 warnings`，requirements-matrix 合规检查 53 项通过；待三平台 Bridge CI 和 OpenXR 实机亮度验收。
 - 六品牌 B 键动画枢轴、引导几何、品牌环境光倍率及切换后立即刷新定向回归 `20 passed, 2 warnings`；完整测试套件 `539 passed, 6 warnings`。
 - 控制器动画三元组、touch 输入链和稳定 C ABI 定向回归累计 `100 passed, 2 warnings`；完整测试套件 `551 passed, 6 warnings`，requirements-matrix 合规检查 53 项通过。
+- Presenter 原始输出命令队列及线程归属回归 `90 passed, 2 warnings`；Python `py_compile`、`git diff --check`通过。
 - 上一版“手柄/激光同一彩色 View”以及后续“同一 Renderable 临时换深度材质”方案均经实机判定无效：前者不能正确遮挡且会改变外壳合成，后者与 Filament 异步命令消费竞争并造成场景/手柄连续帧残影。现已统一替换为资源共享、Renderable 独立、材质绑定持久不变的双实例遮挡结构；本地完整回归 `550 passed, 1 deselected, 6 warnings`，排除项仅为工作区 Artemis 目录改名导致的旧路径测试；三平台 Bridge CI `29991685595` 全部通过，自动二进制提交 `af11576` 已拉取，Windows DLL SHA256 为 `7D27C6E2298192C72A0B1718CD6BDC979757E45D3AB0865A9ADD38089815CF3A`，待头显遮挡验收。
 
 ### 未决事项

@@ -1161,6 +1161,30 @@ def test_presenter_queues_output_from_non_owner_thread() -> None:
     assert presenter._pending_output is frame
 
 
+def test_presenter_submits_raw_runtime_result_on_owner_thread() -> None:
+    presenter = OpenXrVulkanPresenter()
+    context = object()
+    left = VulkanImageResource(
+        context=context, image="left", view=None, width=8, height=8, format=43,
+        layout=0, access_mask=0, stage_mask=0, queue_family_index=0,
+    )
+    right = VulkanImageResource(
+        context=context, image="right", view=None, width=8, height=8, format=43,
+        layout=0, access_mask=0, stage_mask=0, queue_family_index=0,
+    )
+    presenter.vulkan = context
+    presenter.session_running = True
+    presenter._accept_output = True
+    presenter._presenter_thread_id = threading.get_ident()
+
+    presenter.submit_runtime_result(
+        SimpleNamespace(left_eye=left, right_eye=right), 1.0
+    )
+
+    assert presenter._pending_output is not None
+    assert presenter._pending_output.left_eye is left
+
+
 def test_filament_bridge_binds_each_openxr_eye(monkeypatch) -> None:
     calls: list[tuple[str, object]] = []
 
