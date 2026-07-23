@@ -213,7 +213,6 @@ struct FilamentEyeTarget {
     filament::Renderer* renderer = nullptr;
     filament::View* view = nullptr;
     filament::View* laser_view = nullptr;
-    filament::View* display_view = nullptr;
     filament::Camera* camera = nullptr;
     filament::ColorGrading* color_grading = nullptr;
     filament::SwapChain* swapchain = nullptr;
@@ -232,10 +231,16 @@ struct ControllerAnimation {
     std::string value_name;
 };
 
+struct ControllerPrimitiveMaterials {
+    utils::Entity entity;
+    std::vector<const filament::MaterialInstance*> originals;
+};
+
 struct ControllerAsset {
     filament::gltfio::FilamentAsset* asset = nullptr;
     std::vector<uint8_t> bytes;
     std::vector<ControllerAnimation> animations;
+    std::vector<ControllerPrimitiveMaterials> primitive_materials;
     float trigger = 0.0f;
     float grip = 0.0f;
     float joystick_x = 0.0f;
@@ -293,6 +298,8 @@ struct FilamentBridge {
     filament::backend::VulkanPlatform::VulkanSharedContext shared_context{};
     MaterialBrightnessState brightness;
     std::array<ControllerAsset, 2> controllers;
+    filament::Material* controller_occlusion_material = nullptr;
+    filament::MaterialInstance* controller_occlusion_material_instance = nullptr;
     filament::Material* laser_material = nullptr;
     filament::MaterialInstance* laser_material_instance = nullptr;
     filament::VertexBuffer* laser_vertex_buffer = nullptr;

@@ -5,6 +5,10 @@
 struct ControllerAsset;
 struct FilamentBridge;
 
+int bridge_controller_create_occlusion_material(FilamentBridge* bridge);
+void bridge_controller_destroy_occlusion_material(FilamentBridge* bridge);
+void bridge_controller_set_occlusion_materials(
+        FilamentBridge* bridge, bool enabled);
 void bridge_controller_destroy(
         FilamentBridge* bridge, ControllerAsset& controller);
 void bridge_controller_update_animations(

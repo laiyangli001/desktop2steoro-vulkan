@@ -89,16 +89,17 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "eye.renderer = bridge->engine->createRenderer();" in source
     assert "bridge->engine->destroy(eye.renderer);" in source
     assert "filament::View* laser_view = nullptr;" in source
-    assert "filament::View* display_view = nullptr;" in source
+    assert "display_view" not in source
     assert "eye.laser_view = bridge->engine->createView();" in source
-    assert "eye.display_view = bridge->engine->createView();" in source
     assert "eye.view->setVisibleLayers(0xff, 0x01);" in source
-    assert "eye.laser_view->setVisibleLayers(0xff, 0x04);" in source
-    assert "eye.display_view->setVisibleLayers(0xff, 0x02);" in source
+    assert "eye.laser_view->setVisibleLayers(0xff, 0x02);" in source
     assert "eye.laser_view->setPostProcessingEnabled(false);" in source
-    assert "eye.display_view->setPostProcessingEnabled(false);" in source
     assert "bridge->renderer->render(bridge->eyes[bridge->active_eye].laser_view);" in source
-    assert "bridge->renderer->render(bridge->eyes[bridge->active_eye].display_view);" in source
+    assert "bridge_controller_set_occlusion_materials(bridge, true);" in source
+    assert "bridge_controller_set_occlusion_materials(bridge, false);" in source
+    assert ".colorWrite(false)" in source
+    assert "renderables.getMaterialInstanceAt" in source
+    assert "renderables.setMaterialInstanceAt" in source
     assert "bridge_set_renderable_layer" in source
     assert ".exposure(target->brightness.scene_exposure_ev)" in source
     assert "scene_factor" not in source
@@ -158,9 +159,9 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "if (controller.animations.empty())" in source
     assert "Controller GLB exposes no _value/_min/_max animation triplets" in source
     assert "renderables.setLightChannel(instance, 0, false);" in source
-    assert "renderables.setLayerMask(instance, 0xff, 0x04);" in source
-    assert "bridge_set_renderable_layer(bridge, entity, 2, next_visible);" in source
-    assert "bridge_set_renderable_layer(bridge, entity, 2, true);" in source
+    assert "renderables.setLayerMask(instance, 0xff, 0x03);" in source
+    assert "next_visible ? 0x03 : 0x00" in source
+    assert "bridge_set_renderable_layer(bridge, entity, 1, true);" in source
     assert "LightManager::Type::POINT" in source
     assert "kLegacyControllerCandelaScale = 10000.0f" in source
     assert ".intensityCandela(intensity * kLegacyControllerCandelaScale)" in source

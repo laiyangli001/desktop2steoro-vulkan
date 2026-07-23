@@ -141,7 +141,7 @@ int bridge_laser_create(FilamentBridge* bridge) {
             return 0;
         }
         bridge->scene->addEntity(entity);
-        bridge_set_renderable_layer(bridge, entity, 2, false);
+        bridge_set_renderable_layer(bridge, entity, 1, false);
     }
     return 1;
 }
@@ -153,7 +153,7 @@ int bridge_laser_set(
             bridge->laser_entities[hand].isNull()) return 0;
     const auto entity = bridge->laser_entities[hand];
     if (!visible) {
-        bridge_set_renderable_layer(bridge, entity, 2, false);
+        bridge_set_renderable_layer(bridge, entity, 1, false);
         return 1;
     }
     if (!matrix16) return 0;
@@ -170,6 +170,6 @@ int bridge_laser_set(
             matrix16[8], matrix16[9], matrix16[10], matrix16[11],
             matrix16[12], matrix16[13], matrix16[14], matrix16[15]);
     transforms.setTransform(instance, matrix);
-    bridge_set_renderable_layer(bridge, entity, 2, true);
+    bridge_set_renderable_layer(bridge, entity, 1, true);
     return 1;
 }

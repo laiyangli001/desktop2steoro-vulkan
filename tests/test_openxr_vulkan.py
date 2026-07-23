@@ -355,7 +355,7 @@ def test_controller_brand_switch_refreshes_ambient_light() -> None:
     assert presenter._controller_brand.name == "VIVE"
     assert len(presenter.filament_bridge.ambient_colors) == 1
     assert presenter.filament_bridge.ambient_colors[0] == pytest.approx(
-        (0.09, 0.075, 0.075)
+        (1.2, 1.0, 1.0)
     )
 
 

@@ -1,6 +1,83 @@
 #include "bridge_controller.h"
 #include "bridge_internal.h"
 
+int bridge_controller_create_occlusion_material(FilamentBridge* bridge) {
+    if (!bridge || !bridge->engine) return 0;
+    bridge_controller_destroy_occlusion_material(bridge);
+    const char* shader = R"FILAMENT(
+        void material(inout MaterialInputs material) {
+            prepareMaterial(material);
+            material.baseColor = float4(0.0);
+        }
+    )FILAMENT";
+    filamat::MaterialBuilder::init();
+    filamat::MaterialBuilder builder;
+    builder.name("D2S Controller Depth Occluder")
+            .material(shader)
+            .shading(filament::Shading::UNLIT)
+            .materialDomain(filament::MaterialDomain::SURFACE)
+            .blending(filament::BlendingMode::OPAQUE)
+            .culling(filament::backend::CullingMode::NONE)
+            .colorWrite(false)
+            .depthWrite(true)
+            .depthCulling(true)
+            .targetApi(filamat::MaterialBuilder::TargetApi::ALL)
+            .platform(filamat::MaterialBuilder::Platform::ALL);
+    const filamat::Package package = builder.build(bridge->engine->getJobSystem());
+    if (!package.isValid()) {
+        bridge_set_error(bridge, "Filament could not build controller depth occluder material");
+        return 0;
+    }
+    bridge->controller_occlusion_material = filament::Material::Builder()
+            .package(package.getData(), package.getSize())
+            .build(*bridge->engine);
+    if (!bridge->controller_occlusion_material) {
+        bridge_set_error(bridge, "Filament could not create controller depth occluder material");
+        return 0;
+    }
+    bridge->controller_occlusion_material_instance =
+            bridge->controller_occlusion_material->createInstance();
+    if (!bridge->controller_occlusion_material_instance) {
+        bridge_set_error(bridge, "Filament could not instantiate controller depth occluder material");
+        bridge_controller_destroy_occlusion_material(bridge);
+        return 0;
+    }
+    return 1;
+}
+
+void bridge_controller_destroy_occlusion_material(FilamentBridge* bridge) {
+    if (!bridge || !bridge->engine) return;
+    if (bridge->controller_occlusion_material_instance) {
+        bridge->engine->destroy(bridge->controller_occlusion_material_instance);
+        bridge->controller_occlusion_material_instance = nullptr;
+    }
+    if (bridge->controller_occlusion_material) {
+        bridge->engine->destroy(bridge->controller_occlusion_material);
+        bridge->controller_occlusion_material = nullptr;
+    }
+}
+
+void bridge_controller_set_occlusion_materials(
+        FilamentBridge* bridge, bool enabled) {
+    if (!bridge || !bridge->engine ||
+            !bridge->controller_occlusion_material_instance) return;
+    auto& renderables = bridge->engine->getRenderableManager();
+    for (auto& controller : bridge->controllers) {
+        for (auto& materials : controller.primitive_materials) {
+            const auto instance = renderables.getInstance(materials.entity);
+            if (!instance.isValid()) continue;
+            for (size_t primitive = 0; primitive < materials.originals.size(); ++primitive) {
+                const auto* material = enabled
+                        ? bridge->controller_occlusion_material_instance
+                        : materials.originals[primitive];
+                if (material) {
+                    renderables.setMaterialInstanceAt(instance, primitive, material);
+                }
+            }
+        }
+    }
+}
+
 void bridge_controller_destroy(FilamentBridge* bridge, ControllerAsset& controller) {
     if (controller.asset && bridge->scene) {
         bridge->scene->removeEntities(
@@ -304,9 +381,16 @@ int bridge_controller_load(
         // Match the legacy controller pass: only eye-following head/top lights apply.
         renderables.setLightChannel(instance, 0, false);
         renderables.setLightChannel(instance, 1, true);
-        // Share layer 2 with lasers so the controller shell participates in
-        // the same depth-tested overlay pass and occludes the beam root.
-        renderables.setLayerMask(instance, 0xff, 0x04);
+        // Layer 0 keeps the original PBR shell in the HDR scene. Layer 1 reuses
+        // the geometry with a depth-only material while the laser pass renders.
+        renderables.setLayerMask(instance, 0xff, 0x03);
+        controller.primitive_materials.push_back({entity, {}});
+        auto& originals = controller.primitive_materials.back().originals;
+        const size_t primitive_count = renderables.getPrimitiveCount(instance);
+        originals.reserve(primitive_count);
+        for (size_t primitive = 0; primitive < primitive_count; ++primitive) {
+            originals.push_back(renderables.getMaterialInstanceAt(instance, primitive));
+        }
     }
     for (size_t index = 0; index < controller.asset->getEntityCount(); ++index) {
         const auto entity = controller.asset->getEntities()[index];
@@ -422,10 +506,13 @@ int bridge_controller_set_visible(
     auto& controller = bridge->controllers[hand];
     const bool next_visible = visible != 0;
     if (controller.visible == next_visible) return 1;
+    auto& renderables = bridge->engine->getRenderableManager();
     for (size_t index = 0;
             index < controller.asset->getRenderableEntityCount(); ++index) {
         const auto entity = controller.asset->getRenderableEntities()[index];
-        bridge_set_renderable_layer(bridge, entity, 2, next_visible);
+        const auto instance = renderables.getInstance(entity);
+        if (!instance.isValid()) continue;
+        renderables.setLayerMask(instance, 0xff, next_visible ? 0x03 : 0x00);
     }
     controller.visible = next_visible;
     return 1;
