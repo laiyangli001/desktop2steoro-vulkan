@@ -1185,6 +1185,22 @@ def test_presenter_submits_raw_runtime_result_on_owner_thread() -> None:
     assert presenter._pending_output.left_eye is left
 
 
+def test_presenter_drains_only_latest_raw_runtime_result(monkeypatch) -> None:
+    presenter = OpenXrVulkanPresenter()
+    calls = []
+    monkeypatch.setattr(
+        presenter,
+        "_submit_runtime_result_on_presenter",
+        lambda result, timestamp: calls.append((result, timestamp)),
+    )
+    presenter._presenter_commands.put(("submit_runtime_result", ("old", 1.0)))
+    presenter._presenter_commands.put(("submit_runtime_result", ("new", 2.0)))
+
+    presenter._drain_presenter_commands()
+
+    assert calls == [("new", 2.0)]
+
+
 def test_filament_bridge_binds_each_openxr_eye(monkeypatch) -> None:
     calls: list[tuple[str, object]] = []
 

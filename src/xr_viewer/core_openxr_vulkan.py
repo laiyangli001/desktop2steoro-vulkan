@@ -1842,15 +1842,22 @@ class OpenXrVulkanPresenter(
                     self._release_output_frame(old_payload)
 
     def _drain_presenter_commands(self) -> None:
+        latest_runtime_result = None
         while True:
             try:
                 kind, payload = self._presenter_commands.get_nowait()
             except queue.Empty:
-                return
+                break
             if kind == "submit_output":
                 self._submit_output_on_presenter(payload)
             elif kind == "submit_runtime_result":
-                self._submit_runtime_result_on_presenter(*payload)
+                # Convert at most one raw result per XR tick. Processing a
+                # burst here can exhaust the output ring before the previous
+                # frame reaches commit/release, causing the owner thread to
+                # wait on its own slot lease indefinitely.
+                latest_runtime_result = payload
+        if latest_runtime_result is not None:
+            self._submit_runtime_result_on_presenter(*latest_runtime_result)
 
     def _clear_presenter_commands(self) -> None:
         while True:

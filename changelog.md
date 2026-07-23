@@ -28,6 +28,7 @@
 - 为 `FilamentVulkanBridge` 增加 owner 线程绑定：创建、渲染、资源操作和销毁都会在 Python ABI 层校验 Presenter 线程，未来任何跨线程调用会立即得到明确错误，而不是触发 native `This thread has not been adopted`。
 - 修复运行时关闭竞态：主线程不再以 2 秒超时抢先调用 Presenter `close()`，先等待 `run_until` 在 owner 线程完成 Filament/Vulkan 释放，再执行无副作用兜底关闭。
 - 收紧 Presenter 命令队列边界：OpenXR 输出消费者现在只投递原始推理结果，CUDA 到 Vulkan 图像导入、external semaphore、屏幕光采样、输出槽位租约和 Filament 提交统一在 Presenter 线程执行；非 Vulkan sink 保留兼容转换路径。
+- 修复首帧后画面冻结：Presenter 每个 XR tick 只转换命令队列中最新的一条原始结果，避免一次 tick 连续耗尽 Vulkan 输出 ring 后在槽位租约上等待自身完成下一帧释放。
 
 ### 验证结果
 
