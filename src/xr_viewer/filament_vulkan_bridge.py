@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import sys
+import threading
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -57,6 +58,7 @@ class FilamentVulkanBridge:
         self._async_submit_abi_available = False
         self._configure_abi()
         self._handle: ctypes.c_void_p | None = None
+        self._owner_thread_id: int | None = None
 
     @property
     def handle(self) -> int:
@@ -112,7 +114,9 @@ class FilamentVulkanBridge:
         queue_index: int = 0,
     ) -> None:
         if self.loaded:
+            self._ensure_owner_thread()
             return
+        self._owner_thread_id = threading.get_ident()
         info = _VulkanCreateInfo(
             instance=_as_pointer_value(instance),
             physical_device=_as_pointer_value(physical_device),
@@ -528,8 +532,10 @@ class FilamentVulkanBridge:
 
     def close(self) -> None:
         if self._handle is not None:
+            self._ensure_owner_thread()
             self._library.filament_bridge_destroy(self._handle)
             self._handle = None
+        self._owner_thread_id = None
 
     def __enter__(self) -> "FilamentVulkanBridge":
         return self
@@ -748,6 +754,16 @@ class FilamentVulkanBridge:
     def _ensure_loaded(self) -> None:
         if not self.loaded:
             raise FilamentBridgeError("Filament Bridge is not initialized")
+        self._ensure_owner_thread()
+
+    def _ensure_owner_thread(self) -> None:
+        if (
+            self._owner_thread_id is not None
+            and threading.get_ident() != self._owner_thread_id
+        ):
+            raise FilamentBridgeError(
+                "Filament Bridge C ABI must run on its Presenter owner thread"
+            )
 
     def _raise_if_error(self) -> None:
         message = self._last_error()

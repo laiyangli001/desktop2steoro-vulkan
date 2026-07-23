@@ -4,6 +4,7 @@ import ctypes
 import json
 import re
 import struct
+import threading
 from pathlib import Path
 
 import pytest
@@ -35,6 +36,15 @@ def test_pointer_value_accepts_integer_and_c_void_p() -> None:
 def test_missing_bridge_library_is_reported() -> None:
     with pytest.raises(FilamentBridgeError, match="unable to load"):
         FilamentVulkanBridge("missing-filament-bridge.dll")
+
+
+def test_bridge_rejects_c_abi_calls_from_non_owner_thread() -> None:
+    bridge = object.__new__(FilamentVulkanBridge)
+    bridge._handle = ctypes.c_void_p(1)
+    bridge._owner_thread_id = threading.get_ident() + 1
+
+    with pytest.raises(FilamentBridgeError, match="Presenter owner thread"):
+        bridge._ensure_loaded()
 
 
 def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
