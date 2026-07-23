@@ -317,7 +317,9 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
         if output_consumer is not None:
             output_consumer.close()
         if presenter_thread is not None:
-            presenter_thread.join(timeout=2.0)
+            # run_until owns Filament/Vulkan teardown on the Presenter thread.
+            # Do not let the main thread race that teardown after a timeout.
+            presenter_thread.join()
         if presenter is not None:
             presenter.close()
         close = getattr(context.stereo_runtime, "close", None)

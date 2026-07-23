@@ -26,6 +26,7 @@
 - 修复原生 GLB 加载导致的 Filament 线程归属崩溃：撤销将 Filament Engine/AssetLoader 放入独立 `FilamentNativeLoader` 的方案；Filament Engine、GLB 资源、控制器、屏幕和眼睛渲染统一由 Presenter 线程拥有，避免 `This thread has not been adopted` 和跨线程 Vulkan 生命周期错误。原生 GLB 阶段日志保留用于定位 `createAsset`、`loadResources` 和 `flushAndWait`。
 - 启动 Presenter 线程命令队列重构：输出消费者不再跨线程直接修改 Presenter 的待显示帧，而是投递 `submit_output` 命令，由 Presenter 在帧边界消费；队列覆盖和 Presenter 关闭时都会释放未消费的输出槽位，Filament C ABI 调用继续保持 Presenter 线程归属。
 - 为 `FilamentVulkanBridge` 增加 owner 线程绑定：创建、渲染、资源操作和销毁都会在 Python ABI 层校验 Presenter 线程，未来任何跨线程调用会立即得到明确错误，而不是触发 native `This thread has not been adopted`。
+- 修复运行时关闭竞态：主线程不再以 2 秒超时抢先调用 Presenter `close()`，先等待 `run_until` 在 owner 线程完成 Filament/Vulkan 释放，再执行无副作用兜底关闭。
 
 ### 验证结果
 

@@ -1468,6 +1468,7 @@ class OpenXrVulkanPresenter(
         self._profile_initial_head = None
         self._profile_space_applied = False
         self._reference_space_type = None
+        self._presenter_thread_id = None
 
     def __enter__(self) -> "OpenXrVulkanPresenter":
         self.initialize()
