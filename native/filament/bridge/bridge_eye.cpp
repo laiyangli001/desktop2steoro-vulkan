@@ -2,6 +2,21 @@
 #include "bridge_internal.h"
 #include "bridge_material.h"
 
+#include <type_traits>
+
+namespace {
+
+template <typename T>
+const void* semaphore_handle_as_void(T handle) {
+    if constexpr (std::is_pointer_v<T>) {
+        return reinterpret_cast<const void*>(handle);
+    } else {
+        return reinterpret_cast<const void*>(static_cast<uintptr_t>(handle));
+    }
+}
+
+} // namespace
+
 void bridge_eye_activate(FilamentBridge* bridge, uint32_t eye_index) {
     if (!bridge || eye_index >= bridge->eyes.size()) return;
     auto& eye = bridge->eyes[eye_index];
@@ -203,6 +218,6 @@ int bridge_eye_get_finished_semaphore(
     if (!bridge || !semaphore || !bridge->external_swapchain) return 0;
     const VkSemaphore finished = bridge->external_swapchain->last_finished_drawing;
     if (finished == VK_NULL_HANDLE) return 0;
-    *semaphore = reinterpret_cast<const void*>(static_cast<uintptr_t>(finished));
+    *semaphore = semaphore_handle_as_void(finished);
     return 1;
 }
