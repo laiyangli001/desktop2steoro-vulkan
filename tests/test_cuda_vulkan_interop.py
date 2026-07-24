@@ -6,13 +6,24 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from app_runtime.runtime_output import CudaVulkanOutputAdapter
+from app_runtime.gpu_producer import (
+    GpuProducerAdapter,
+    GpuProducerUnavailableError,
+    _ADAPTER_FACTORIES,
+    create_gpu_producer_adapter,
+)
+from app_runtime.runtime_output import (
+    CudaVulkanOutputAdapter,
+    RocmVulkanOutputAdapter,
+)
 from viewer.cuda_vulkan_interop import (
+    _ExternalSemaphoreWaitParams,
     _ExternalSemaphoreSignalParams,
     _SemaphoreSignalParams,
 )
 from viewer.vulkan_context import VulkanContext, VulkanContextConfig
 from viewer.vulkan_resources import VulkanExportableImage
+from viewer.vulkan_resources import VulkanImageResource
 
 
 def test_cuda_external_semaphore_signal_params_match_runtime_abi() -> None:
@@ -26,6 +37,9 @@ def test_cuda_external_semaphore_signal_params_match_runtime_abi() -> None:
     assert _ExternalSemaphoreSignalParams.params.offset == 0
     assert _ExternalSemaphoreSignalParams.flags.offset == 72
     assert ctypes.sizeof(_ExternalSemaphoreSignalParams) == 144
+    assert _ExternalSemaphoreWaitParams.params.offset == 0
+    assert _ExternalSemaphoreWaitParams.flags.offset == 72
+    assert ctypes.sizeof(_ExternalSemaphoreWaitParams) == 144
 
 
 def test_cuda_external_semaphore_requires_explicit_opt_in(monkeypatch) -> None:
@@ -33,6 +47,35 @@ def test_cuda_external_semaphore_requires_explicit_opt_in(monkeypatch) -> None:
     assert not CudaVulkanOutputAdapter._external_semaphore_requested()
     monkeypatch.setenv("D2S_ENABLE_CUDA_EXTERNAL_SEMAPHORE", "1")
     assert CudaVulkanOutputAdapter._external_semaphore_requested()
+
+
+def test_rocm_external_semaphore_is_capability_gated_by_default(monkeypatch) -> None:
+    monkeypatch.delenv("D2S_ENABLE_ROCM_EXTERNAL_SEMAPHORE", raising=False)
+    assert RocmVulkanOutputAdapter._external_semaphore_requested()
+    monkeypatch.setenv("D2S_ENABLE_ROCM_EXTERNAL_SEMAPHORE", "0")
+    assert not RocmVulkanOutputAdapter._external_semaphore_requested()
+
+
+def test_cuda_output_adapter_implements_backend_neutral_gpu_contract() -> None:
+    adapter = CudaVulkanOutputAdapter.__new__(CudaVulkanOutputAdapter)
+    assert isinstance(adapter, GpuProducerAdapter)
+    assert adapter.backend_name == "cuda"
+    assert adapter.output_sync_mode == "gpu_synchronized"
+    assert adapter.external_semaphore_sync_mode == "gpu_external_semaphore"
+
+
+def test_gpu_producer_factory_selects_cuda_without_importing_vendor_api() -> None:
+    adapter = create_gpu_producer_adapter(SimpleNamespace(), backend="cuda")
+    assert isinstance(adapter, CudaVulkanOutputAdapter)
+
+
+def test_gpu_producer_factory_rejects_unregistered_backend() -> None:
+    assert _ADAPTER_FACTORIES["rocm"] is RocmVulkanOutputAdapter
+
+
+def test_gpu_producer_factory_reports_unknown_backend() -> None:
+    with pytest.raises(GpuProducerUnavailableError, match="unknown"):
+        create_gpu_producer_adapter(SimpleNamespace(), backend="unknown")
 
 
 def test_vulkan_output_slot_waits_for_consumer_release() -> None:
@@ -54,6 +97,38 @@ def test_vulkan_output_slot_waits_for_consumer_release() -> None:
     worker.join(timeout=1.0)
     assert claimed.is_set()
     adapter.release_frame(11)
+
+
+def test_output_contract_publishes_actual_source_layout_and_queue_family() -> None:
+    vk = SimpleNamespace(
+        VK_IMAGE_LAYOUT_GENERAL=1,
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL=2,
+    )
+    state = SimpleNamespace(layout=1, queue_family_index=4)
+    context = SimpleNamespace(
+        vk=vk,
+        image_state=lambda _image: state,
+    )
+    resource = VulkanImageResource(
+        context=context,
+        image=object(),
+        view=None,
+        width=2,
+        height=2,
+        format=37,
+        layout=1,
+        access_mask=0,
+        stage_mask=0,
+        queue_family_index=4,
+    )
+
+    contract = GpuProducerAdapter.source_image_contract(resource)
+    assert contract == {"layout": "general", "queue_family": 4}
+
+    state.layout = 2
+    assert CudaVulkanOutputAdapter._source_image_contract(resource)["layout"] == (
+        "shader_read_only_optimal"
+    )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA GPU is unavailable")

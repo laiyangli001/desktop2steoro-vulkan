@@ -55,6 +55,7 @@ class FilamentVulkanBridge:
         self._passthrough_backdrop_abi_available = False
         self._ambient_light_abi_available = False
         self._screen_ready_semaphore_abi_available = False
+        self._finished_drawing_semaphore_abi_available = False
         self._async_submit_abi_available = False
         self._configure_abi()
         self._handle: ctypes.c_void_p | None = None
@@ -521,6 +522,22 @@ class FilamentVulkanBridge:
             "set_screen_ready_semaphore",
         )
 
+    @property
+    def finished_drawing_semaphore_abi_available(self) -> bool:
+        return self._finished_drawing_semaphore_abi_available
+
+    def get_finished_drawing_semaphore(self) -> int | None:
+        self._ensure_loaded()
+        if not self._finished_drawing_semaphore_abi_available:
+            return None
+        output = ctypes.c_void_p()
+        result = self._library.filament_bridge_get_finished_drawing_semaphore(
+            self._handle, ctypes.byref(output)
+        )
+        if int(result) == 0 or not output.value:
+            return None
+        return int(output.value)
+
     def apply_animations(self, time_seconds: float) -> None:
         self._ensure_loaded()
         self._check_result(
@@ -738,6 +755,12 @@ class FilamentVulkanBridge:
             ]
             library.filament_bridge_set_screen_ready_semaphore.restype = ctypes.c_int
             self._screen_ready_semaphore_abi_available = True
+        if hasattr(library, "filament_bridge_get_finished_drawing_semaphore"):
+            library.filament_bridge_get_finished_drawing_semaphore.argtypes = [
+                ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)
+            ]
+            library.filament_bridge_get_finished_drawing_semaphore.restype = ctypes.c_int
+            self._finished_drawing_semaphore_abi_available = True
         library.filament_bridge_apply_animations.argtypes = [
             ctypes.c_void_p, ctypes.c_double
         ]

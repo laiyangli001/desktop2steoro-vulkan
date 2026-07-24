@@ -258,7 +258,7 @@ class OpenXrVulkanPresenter(
         self._filament_screen_image_enabled = os.environ.get(
             # Prefer zero-copy when the per-frame synchronization contract is
             # available; _can_use_filament_screen_image provides the fallback.
-            "D2S_ENABLE_FILAMENT_SCREEN_IMAGE", "1"
+            "D2S_ENABLE_FILAMENT_SCREEN_IMAGE", "0"
         ).strip().lower() in {"1", "true", "yes", "on"}
         self._controllers_root = Path(__file__).resolve().parent / "controllers"
         self._controller_brands = discover_controller_brands(self._controllers_root)
@@ -312,6 +312,7 @@ class OpenXrVulkanPresenter(
         self._presenter_thread_id: int | None = None
         self._presenter_commands: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=2)
         self._output_adapter: Any | None = None
+        self._output_adapter_error: str | None = None
         self._next_output_frame_id = 0
         self._pending_output: VulkanStereoOutputFrame | None = None
         self._displayed_output: VulkanStereoOutputFrame | None = None
@@ -335,6 +336,7 @@ class OpenXrVulkanPresenter(
         self._tool_overlay_xr_fps = 0.0
         self._tool_overlay_sbs_fps = 0.0
         self._tool_overlay_latency_ms = 0.0
+        self._tool_overlay_pending_latency_ms = 0.0
         self._tool_overlay_xr_window_started = 0.0
         self._tool_overlay_xr_window_frames = 0
         self._tool_overlay_sbs_window_started = 0.0
@@ -1085,10 +1087,41 @@ class OpenXrVulkanPresenter(
             or not getattr(
                 self.filament_bridge, "screen_ready_semaphore_abi_available", False
             )
+            or not getattr(
+                self.filament_bridge, "async_submit_abi_available", False
+            )
+            or not getattr(
+                self.filament_bridge,
+                "finished_drawing_semaphore_abi_available",
+                False,
+            )
         ):
             return False
         metadata = dict(output_frame.metadata or {})
-        if metadata.get("vulkan_output_sync") != "cuda_external_semaphore":
+        if metadata.get("vulkan_output_sync") not in {
+            "gpu_external_semaphore",
+            # Compatibility for older producer adapters still in the queue.
+            "cuda_external_semaphore",
+        }:
+            return False
+        # The producer initially owns a GENERAL image. The presenter performs
+        # the producer-ready wait and GENERAL -> SHADER_READ_ONLY transition,
+        # then gives Filament a post-barrier semaphore to consume.
+        if (
+            metadata.get("vulkan_source_layout_left")
+            not in {"general", "shader_read_only_optimal"}
+            or metadata.get("vulkan_source_layout_right")
+            not in {"general", "shader_read_only_optimal"}
+        ):
+            return False
+        if (
+            metadata.get("vulkan_source_queue_family_left") is None
+            or metadata.get("vulkan_source_queue_family_right") is None
+        ):
+            return False
+        if not callable(metadata.get("_vulkan_source_consumer_release")):
+            return False
+        if not callable(metadata.get("_vulkan_source_prepare_for_sampling")):
             return False
         return bool(
             metadata.get("vulkan_ready_semaphore_left")
@@ -1797,9 +1830,21 @@ class OpenXrVulkanPresenter(
         """Convert and publish inference output while owning the Vulkan context."""
 
         if self._output_adapter is None:
-            from app_runtime.runtime_output import CudaVulkanOutputAdapter
+            from app_runtime.gpu_producer import create_gpu_producer_adapter
 
-            self._output_adapter = CudaVulkanOutputAdapter(self)
+            try:
+                self._output_adapter = create_gpu_producer_adapter(self)
+                self._output_adapter_error = None
+            except Exception as exc:
+                message = f"{type(exc).__name__}: {exc}"
+                if message != self._output_adapter_error:
+                    print(
+                        f"[OpenXRViewer] GPU producer adapter unavailable: {message}; "
+                        "waiting for a compatible GPU interop adapter",
+                        flush=True,
+                    )
+                    self._output_adapter_error = message
+                return
         try:
             left_eye = getattr(runtime_result, "left_eye", None)
             right_eye = getattr(runtime_result, "right_eye", None)
@@ -2408,7 +2453,9 @@ class OpenXrVulkanPresenter(
             self._filament_animation_origin = self._frame_now
         animation_time = max(0.0, self._frame_now - self._filament_animation_origin)
         acquired_images: list[tuple[_EyeSwapchain, int]] = []
+        consumer_release_semaphores: list[int | None] = [None, None]
         render_succeeded = False
+        screen_image_projection = False
         try:
             # Keep both OpenXR images acquired while Filament queues both eye
             # submissions. They are released only after the single frame-wide
@@ -2421,6 +2468,10 @@ class OpenXrVulkanPresenter(
                     xr.SwapchainImageWaitInfo(timeout=xr.INFINITE_DURATION),
                 )
             screen_image_projection = self._can_use_filament_screen_image(output_frame)
+            if screen_image_projection and not all(consumer_release_semaphores):
+                raise RuntimeError(
+                    "Filament did not publish render-finished semaphores for both eyes"
+                )
             if self.filament_bridge is not None:
                 self._update_filament_screen_light(
                     self.filament_bridge,
@@ -2432,9 +2483,6 @@ class OpenXrVulkanPresenter(
                 if self.filament_bridge is not None:
                     bridge = self.filament_bridge
                     bridge.set_active_eye(eye_index)
-                    # Do not pass a raw Vulkan VkImage to Filament's generic
-                    # Texture::Builder::import API. The old validated path
-                    # presents the virtual screen as an OpenXR quad layer.
                     _update_filament_camera(
                         bridge,
                         render_views[eye_index],
@@ -2451,6 +2499,12 @@ class OpenXrVulkanPresenter(
                             if eye_index == 0
                             else output_frame.right_eye
                         )
+                        prepare_source = (output_frame.metadata or {}).get(
+                            "_vulkan_source_prepare_for_sampling"
+                        )
+                        visible_semaphore = prepare_source(
+                            output_frame.frame_id, eye_index
+                        )
                         # Bind the matching runtime eye image to the Filament
                         # screen material. The native bridge caches imported
                         # VkImages by handle, so this is not a per-frame
@@ -2461,25 +2515,19 @@ class OpenXrVulkanPresenter(
                             height=screen_source.height,
                             format=screen_source.format,
                         )
-                        ready_key = (
-                            "vulkan_ready_semaphore_left"
-                            if eye_index == 0
-                            else "vulkan_ready_semaphore_right"
-                        )
-                        ready_semaphore = (output_frame.metadata or {}).get(ready_key)
-                        if (
-                            ready_semaphore is not None
-                            and getattr(
-                                bridge, "screen_ready_semaphore_abi_available", False
-                            )
-                        ):
-                            bridge.set_screen_ready_semaphore(ready_semaphore)
+                        bridge.set_screen_ready_semaphore(visible_semaphore)
                     self._update_filament_controllers(bridge)
                     if hasattr(bridge, "apply_animations"):
                         bridge.apply_animations(animation_time)
                     bridge.set_acquired_image(image_index)
                     bridge.begin_frame()
                     bridge.end_frame()
+                    if screen_image_projection and hasattr(
+                        bridge, "get_finished_drawing_semaphore"
+                    ):
+                        consumer_release_semaphores[eye_index] = (
+                            bridge.get_finished_drawing_semaphore()
+                        )
                 else:
                     if output_frame is not None:
                         source = (
@@ -2498,9 +2546,15 @@ class OpenXrVulkanPresenter(
                         self.vulkan.clear_color_image(image, self.config.clear_color)
             if self.filament_bridge is not None:
                 bridge = self.filament_bridge
-                if getattr(bridge, "async_submit_abi_available", False):
-                    # Both eyes are submitted before the single completion wait.
-                    bridge.wait_for_idle()
+                if screen_image_projection and isinstance(
+                    output_frame, VulkanStereoOutputFrame
+                ):
+                    release_source = (output_frame.metadata or {}).get(
+                        "_vulkan_source_consumer_release"
+                    )
+                    release_source(
+                        output_frame.frame_id, tuple(consumer_release_semaphores)
+                    )
             render_succeeded = True
         finally:
             for eye, _image_index in acquired_images:
@@ -2509,6 +2563,23 @@ class OpenXrVulkanPresenter(
                 isinstance(output_frame, VulkanStereoOutputFrame)
                 and not render_succeeded
             ):
+                if screen_image_projection:
+                    release_source = (output_frame.metadata or {}).get(
+                        "_vulkan_source_consumer_release"
+                    )
+                    if callable(release_source):
+                        try:
+                            if (
+                                self.filament_bridge is not None
+                                and not any(consumer_release_semaphores)
+                            ):
+                                self.filament_bridge.wait_for_idle()
+                            release_source(
+                                output_frame.frame_id,
+                                tuple(consumer_release_semaphores),
+                            )
+                        except Exception:
+                            pass
                 self._abort_output_frame(output_frame)
         return OpenXrCompositionBuilder(xr, self.reference_space).projection_layer(
             composition_views, self.swapchains
@@ -2596,6 +2667,7 @@ class OpenXrVulkanPresenter(
         self._tool_overlay_xr_fps = 0.0
         self._tool_overlay_sbs_fps = 0.0
         self._tool_overlay_latency_ms = 0.0
+        self._tool_overlay_pending_latency_ms = 0.0
         self._tool_overlay_xr_window_started = 0.0
         self._tool_overlay_xr_window_frames = 0
         self._tool_overlay_sbs_window_started = 0.0
@@ -2615,6 +2687,10 @@ class OpenXrVulkanPresenter(
             self._tool_overlay_xr_fps = (
                 self._tool_overlay_xr_window_frames / xr_elapsed
             )
+            # Keep all displayed performance values on the same low-rate
+            # snapshot. Rebuilding the PIL texture from per-frame latency
+            # defeats the legacy overlay cache and stalls the presenter.
+            self._tool_overlay_latency_ms = self._tool_overlay_pending_latency_ms
             self._tool_overlay_xr_window_started = now
             self._tool_overlay_xr_window_frames = 0
 
@@ -2637,7 +2713,7 @@ class OpenXrVulkanPresenter(
         timestamp = float(output_frame.timestamp)
         latency_ms = (now - timestamp) * 1000.0
         if 0.0 <= latency_ms <= 10000.0:
-            self._tool_overlay_latency_ms = latency_ms
+            self._tool_overlay_pending_latency_ms = latency_ms
 
     def _render_quad_layers(self, output_frame: VulkanStereoOutputFrame | None) -> list[Any]:
         # The main virtual screen is rendered in the Projection Layer when

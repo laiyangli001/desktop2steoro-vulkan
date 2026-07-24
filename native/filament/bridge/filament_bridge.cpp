@@ -199,6 +199,11 @@ int filament_bridge_set_screen_ready_semaphore(
     return bridge_eye_set_ready_semaphore(bridge, semaphore);
 }
 
+int filament_bridge_get_finished_drawing_semaphore(
+        FilamentBridge* bridge, const void** semaphore) {
+    return bridge_eye_get_finished_semaphore(bridge, semaphore);
+}
+
 int filament_bridge_apply_animations(
         FilamentBridge* bridge, double time_seconds) {
     return bridge_scene_apply_animations(bridge, time_seconds);

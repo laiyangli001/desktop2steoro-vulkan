@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import platform
 import sys
 from pathlib import Path
@@ -68,6 +69,42 @@ def _probe_openxr_extensions() -> dict[str, object]:
         }
 
 
+def _probe_gpu_producers() -> dict[str, object]:
+    """Report producer selection without loading vendor interop handles."""
+    override = os.environ.get("D2S_VULKAN_GPU_BACKEND")
+    report: dict[str, object] = {
+        "selection": "auto",
+        "override": override.strip() if override and override.strip() else None,
+        "selected_backend": "none",
+        "cuda": {"torch_available": False, "available": False},
+        "rocm": {"torch_available": False, "hip_version": None, "available": False},
+    }
+    try:
+        import torch
+
+        cuda_available = bool(torch.cuda.is_available())
+        hip_version = getattr(getattr(torch, "version", None), "hip", None)
+        report["cuda"] = {
+            "torch_available": True,
+            "available": cuda_available and not bool(hip_version),
+        }
+        report["rocm"] = {
+            "torch_available": True,
+            "hip_version": str(hip_version) if hip_version else None,
+            "available": bool(hip_version) and cuda_available,
+        }
+        if override and override.strip().lower() not in {"", "auto", "default"}:
+            report["selection"] = "override"
+            report["selected_backend"] = override.strip().lower()
+        elif bool(hip_version) and cuda_available:
+            report["selected_backend"] = "rocm"
+        elif cuda_available:
+            report["selected_backend"] = "cuda"
+    except Exception as exc:
+        report["error"] = f"{type(exc).__name__}: {exc}"
+    return report
+
+
 def build_capability_report() -> dict[str, object]:
     src_root = Path(__file__).resolve().parents[1]
     filament_platforms = {
@@ -97,6 +134,7 @@ def build_capability_report() -> dict[str, object]:
             name: _module_available(module_name) for name, module_name in _OPTIONAL_MODULES.items()
         },
         "vulkan": _probe_vulkan_device(),
+        "gpu_producers": _probe_gpu_producers(),
         "openxr": _probe_openxr_extensions(),
         "filament_bridge": {
             "expected_path": str(filament_path) if filament_path else None,

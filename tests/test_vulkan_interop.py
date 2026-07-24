@@ -79,3 +79,19 @@ def test_interop_close_is_idempotent() -> None:
     session.close()
     assert session.in_flight_count == 0
     assert context.registered == []
+
+
+def test_sampling_transition_is_explicitly_separate_from_cuda_prepare() -> None:
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "src/viewer/vulkan_context.py").read_text(
+        encoding="utf-8"
+    )
+    assert "def prepare_external_image_for_sampling" in source
+    assert "VK_IMAGE_LAYOUT_GENERAL" in source
+    assert "VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL" in source
+    assert "def release_external_image_from_sampling" in source
+    assert "wait_semaphore: Any | None = None" in source
+    assert "signal_semaphore: Any | None = None" in source
+    assert "pWaitSemaphores=wait_semaphores or None" in source
+    assert "pSignalSemaphores=signal_semaphores or None" in source

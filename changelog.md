@@ -9,9 +9,15 @@
 - 修复 OpenXR FPS 面板和操作指南导致的帧率骤降：工具 Quad layer 现在缓存 PIL 栅格化纹理，并复用已上传且已释放的 Vulkan swapchain image；内容未变化时每帧只重建轻量 layer pose，不再重复字体绘制、host staging map/copy 和 acquire/wait/release。FPS 面板接入 Presenter 的真实 XR 提交帧率、运行时输出帧率和输出延迟，并按旧工程每秒采样一次；操作指南保持静态 GPU 纹理复用。虚拟屏幕的每帧立体输出不受影响。
 - 修复 Projection Layer 内的显示顺序：虚拟屏幕从 Renderable priority `7` 调整为背景 priority `0`，保持不写深度；手柄 PBR 和深度测试激光在其后渲染，屏幕不再覆盖手柄和激光。该修改需要三平台 Filament Bridge 远程构建后实机验证。
 - 修复 OpenXR `Default` 无房间环境中手柄和激光发白：Default profile 显式使用 `preview_exposure: 0.0`，不再继承运行时 `2.0 EV` 的线性曝光默认值。手柄 PBR 材质和激光仍共用既有 View 色彩管线，房间环境与 Default 的曝光行为现在一致。
-- 明确 Vulkan 外部屏幕图像直采样的长期规范：每张源 `VkImage` 只创建一次 Filament 外部纹理，并保存格式、尺寸、layout、队列归属、producer-ready 和 consumer-release 状态；CUDA/Vulkan 写入后必须经过 barrier 和 queue ownership transfer 到 `VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL`，Filament 采样完成后才能复用槽位。屏幕源同步与 OpenXR 输出交换链同步分离；能力不完整时回退一次 Vulkan GPU copy/Quad Layer，不退回 CPU 像素传输。当前直接采样仍标记为实验路径，待三平台 CI、Validation Layer 和实机长稳验证后再启用为默认路径。
+- 明确 Vulkan 外部屏幕图像直采样的长期规范：每张源 `VkImage` 只创建一次 Filament 外部纹理，并保存格式、尺寸、layout、队列归属、producer-ready 和 consumer-release 状态；CUDA、ROCm/HIP 等 GPU producer 写入后都必须经过 barrier 和 queue ownership transfer 到 `VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL`，Filament 采样完成后才能复用槽位。屏幕源同步与 OpenXR 输出交换链同步分离；能力不完整时回退一次 Vulkan GPU copy/Quad Layer，不退回 CPU 像素传输。当前直接采样仍标记为实验路径，待三平台 CI、Validation Layer 和实机长稳验证后再启用为默认路径。
+- 接通 Filament 外部源 `VkImage` 的 zero-copy 同步闭环：CUDA/ROCm producer-ready external semaphore 由 Presenter 在 source barrier submit 中等待，`GENERAL -> SHADER_READ_ONLY_OPTIMAL` 完成后发出每槽位的 device-local visible semaphore，Filament 通过现有 `set_screen_ready_semaphore` 等待后直接采样持久化外部纹理；帧完成后执行 `SHADER_READ_ONLY_OPTIMAL -> GENERAL` release barrier，并以每槽位 exportable consumer-release semaphore 通知 producer，producer 在复用 ring slot 前通过 CUDA/HIP stream wait 消费该 semaphore。同步能力不完整时仍自动回退 Vulkan GPU copy/Quad Layer，不退回 CPU 像素传输。该路径仍需 Validation Layer、三平台 Bridge CI 和实机长稳验证后再改变默认开关。
+- 扩展稳定 Filament C ABI：native Vulkan platform 保存 Filament `present()` 提供的 per-eye `finished_drawing` semaphore，并通过 `filament_bridge_get_finished_drawing_semaphore` 返回借用句柄；Python release barrier 现在直接等待该 GPU 完成点后发出 producer consumer-release，不再依赖 `wait_for_idle()` 推断采样结束。该 ABI 修改需要三平台 Bridge 远程构建产物才能实机使用。
 - 固化“命令队列 + Presenter 线程执行”不可回退约束：后台线程只提交原始结果或资源描述，所有 Vulkan/Filament 图形资源创建、外部图像导入、barrier、队列归属转换、纹理绑定、释放和 Projection/Quad Layer 提交均由 Presenter 在 OpenXR 帧边界执行。后续外部 `VkImage` 直采样重构不得恢复后台线程直接调用 Filament C ABI 或操作 Vulkan 资源。
 - 按旧工程行为基准恢复控制器输入语义：Vive/WMR 触控板上/中/下方向模拟、模拟按键与真实 click 的互斥、OpenXR changed 边沿回退、touch/click 区分以及按键/摇杆动画目标平滑重新接入 Vulkan Presenter。该修复只调整 Python 输入策略，Filament/Vulkan 资源仍由 Presenter 命令队列线程独占。
+- 修复工具 FPS Quad Layer 的隐性每帧重绘：延迟值改为与 XR/SBS FPS 一起按约 1 秒快照更新，内容 key 不再被每帧延迟变化击穿；操作指南继续复用静态纹理，XR 帧只更新 Quad layer 姿态和提交结构，避免重复字体栅格化与 staging 上传拖慢 Projection Layer。
+- 收紧屏幕外部 `VkImage` 直采样门槛：显式开启实验路径时必须提供 per-eye producer-ready、source prepare、visible semaphore 和 consumer-release 回调；源图像初态为 `GENERAL`，由 Presenter 在 GPU submit 中完成采样前转换，不再要求生产者伪造 shader-read 初态，也不再仅凭 producer semaphore 导入未完成同步的图像。
+- 输出契约现在发布左右眼源 `VkImage` 的真实 layout 和 queue family；CUDA 写入后的 `GENERAL` 状态会被明确暴露，未经过 source barrier 的图像不会被误判为可供 Filament 采样。
+- Vulkan context 增加显式的 source barrier/release barrier API，并同步维护 `ImageStateTracker`；提交器同时支持 binary semaphore wait/signal，并与现有 timeline wait/signal 合并到同一次 `vkQueueSubmit2`/`vkQueueSubmit`。
 
 ### 验证结果
 
@@ -119,7 +125,11 @@
 - 修复非 Windows 测试导入 `_KEYEVENTF_KEYUP` 失败：Windows 输入常量在 no-op 平台分支保持同名导出，GitHub Actions Linux 合规测试可正常收集 OpenXR 测试。
 - 补齐 GitHub Actions OpenXR 测试依赖 `Pillow`，确保工具 Quad Layer 纹理模块在 Linux 合规环境可导入。
 - 修复实机 `FilamentBridge.end_frame()` access violation：日志确认崩溃来自缺少源图像同步时的运行时 VkImage 直导入屏幕路径；无同步契约时使用旧工程已验证的 Projection Layer 场景加 Quad Layer GPU copy，zero-copy 仅在能力门控通过时启用。
-- 将 Filament 屏幕直采改为能力门控：默认保留 zero-copy 意图，但只有输出帧同时提供左右眼 `cuda_external_semaphore` ready semaphore、Bridge 屏幕图像 ABI 和 semaphore ABI 时才启用；未满足同步契约时自动回退 Quad Layer GPU copy，避免未同步 raw `VkImage` 进入 Filament。
+- 将 Filament 屏幕直采改为能力门控：默认保留 zero-copy 意图，但只有输出帧同时提供左右眼 `gpu_external_semaphore` ready semaphore、Bridge 屏幕图像 ABI 和 semaphore ABI 时才启用；未满足同步契约时自动回退 Quad Layer GPU copy，避免未同步 raw `VkImage` 进入 Filament。
+- 新增后端无关的 `GpuProducerAdapter` 契约；CUDA 适配器改为具体实现，输出同步模式统一为 `gpu_external_semaphore` / `gpu_synchronized`，为 ROCm/HIP 等后端接入保留同一 Vulkan producer 边界。
+- Presenter 改为通过后端注册表创建 GPU producer，不再直接依赖 CUDA 类；已注册 CUDA 与 ROCm/HIP 适配器，后端自动识别，ROCm/HIP external semaphore 默认按 runtime 能力启用，API 不可用时明确回退 GPU copy，不会伪装成其它厂商或走 CPU 像素回传。
+- ROCm/HIP runtime 缺失或 external-memory ABI 不可用时，适配器创建失败现在被 Presenter 捕获并限次记录，不再让 OpenXR Presenter 线程异常退出；后续帧仍可重试适配器创建。
+- capability report 新增 GPU producer 自动选择结果、CUDA/HIP runtime 状态和覆盖标记，AMD 实机可通过 `--probe` 直接确认是否选择 ROCm，无需猜测环境变量。
 - 修复 FPS/键盘等工具 Quad Layer 上传崩溃：`VulkanHostImage.upload()` 改用 PyVulkan 映射内存提供的可写 buffer，按 `rowPitch` 写入像素，不再把 cffi 映射对象错误转换为整数指针；菜单键打开 FPS 面板不再触发 `TypeError` 退出 XR 线程。
 - 对齐旧工程控制器动画语义：补齐 PICO `photo/home/app` 按键到菜单动画映射，并将摇杆按下状态传入 native Bridge；控制器 `_pressed_value` 节点现在可响应按钮、摇杆和扳机输入。
 - 修复 Vulkan 激光不可见：旧实现使用 Aim 射线负 Z 方向绘制长条光束；Vulkan Quad Layer 现在提交沿 Aim 射线排列的蓝色长条纹理，不再把光束放在控制器后方的微小圆点位置。

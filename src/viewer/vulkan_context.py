@@ -602,6 +602,150 @@ class VulkanContext:
         # the CUDA stream and never call vkDeviceWaitIdle.
         self.wait_idle()
         return timeline_value
+
+    def prepare_external_image_for_producer(self, resource: Any) -> int:
+        """Prepare an exportable image for any GPU producer backend."""
+        return self.prepare_external_image_for_cuda(resource)
+
+    def prepare_external_image_for_sampling(
+        self,
+        resource: Any,
+        *,
+        wait_for_timeline: int | None = None,
+        wait_semaphore: Any | None = None,
+        signal_semaphore: Any | None = None,
+    ) -> int:
+        """Transition a producer image to shader-read layout on graphics queue.
+
+        ``wait_semaphore`` is the producer-ready point. The optional
+        ``signal_semaphore`` is the post-barrier point consumed by Filament.
+        """
+        self._ensure_open()
+        if getattr(resource, "context", self) is not self:
+            raise VulkanCapabilityError("external image belongs to a different context")
+        vk = self.vk
+        image_key = _cffi_handle_address(vk, resource.image)
+        state = self._image_states.get(
+            image_key, undefined_layout=vk.VK_IMAGE_LAYOUT_UNDEFINED
+        )
+        self._image_states.require_owner(image_key, self.queue_family_index)
+        if state.layout != vk.VK_IMAGE_LAYOUT_GENERAL:
+            raise VulkanCapabilityError(
+                "Filament source image must be in GENERAL before sampling transition"
+            )
+
+        def record(command_buffer: Any) -> None:
+            barrier = vk.VkImageMemoryBarrier(
+                sType=vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                srcAccessMask=state.access_mask or vk.VK_ACCESS_MEMORY_WRITE_BIT,
+                dstAccessMask=vk.VK_ACCESS_SHADER_READ_BIT,
+                oldLayout=vk.VK_IMAGE_LAYOUT_GENERAL,
+                newLayout=vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                srcQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+                dstQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+                image=resource.image,
+                subresourceRange=_color_subresource_range(vk),
+            )
+            vk.vkCmdPipelineBarrier(
+                command_buffer,
+                state.stage_mask or vk.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                | vk.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                0,
+                0,
+                None,
+                0,
+                None,
+                1,
+                [barrier],
+            )
+
+        timeline_value = self.submit_on(
+            "graphics",
+            record,
+            wait_for_timeline=wait_for_timeline,
+            wait_semaphore=wait_semaphore,
+            signal_semaphore=signal_semaphore,
+        )
+        self._image_states.update(
+            image_key,
+            ImageState(
+                layout=vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                access_mask=vk.VK_ACCESS_SHADER_READ_BIT,
+                stage_mask=(
+                    vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                    | vk.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+                ),
+                queue_family_index=self.queue_family_index,
+            ),
+        )
+        return timeline_value
+
+    def release_external_image_from_sampling(
+        self,
+        resource: Any,
+        *,
+        wait_semaphore: Any | None = None,
+        signal_semaphore: Any | None = None,
+    ) -> int:
+        """Return a Filament source image to producer-writable GENERAL layout."""
+        self._ensure_open()
+        if getattr(resource, "context", self) is not self:
+            raise VulkanCapabilityError("external image belongs to a different context")
+        vk = self.vk
+        image_key = _cffi_handle_address(vk, resource.image)
+        state = self._image_states.get(
+            image_key, undefined_layout=vk.VK_IMAGE_LAYOUT_UNDEFINED
+        )
+        self._image_states.require_owner(image_key, self.queue_family_index)
+        if state.layout != vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+            raise VulkanCapabilityError(
+                "Filament source image must be shader-read before consumer release"
+            )
+
+        def record(command_buffer: Any) -> None:
+            barrier = vk.VkImageMemoryBarrier(
+                sType=vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                srcAccessMask=vk.VK_ACCESS_SHADER_READ_BIT,
+                dstAccessMask=vk.VK_ACCESS_MEMORY_WRITE_BIT,
+                oldLayout=vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                newLayout=vk.VK_IMAGE_LAYOUT_GENERAL,
+                srcQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+                dstQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+                image=resource.image,
+                subresourceRange=_color_subresource_range(vk),
+            )
+            vk.vkCmdPipelineBarrier(
+                command_buffer,
+                vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                | vk.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                vk.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                0,
+                0,
+                None,
+                0,
+                None,
+                1,
+                [barrier],
+            )
+
+        timeline_value = self.submit_on(
+            "graphics",
+            record,
+            wait_semaphore=wait_semaphore,
+            signal_semaphore=signal_semaphore,
+        )
+        self._image_states.update(
+            image_key,
+            ImageState(
+                layout=vk.VK_IMAGE_LAYOUT_GENERAL,
+                access_mask=vk.VK_ACCESS_MEMORY_WRITE_BIT,
+                stage_mask=vk.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                queue_family_index=self.queue_family_index,
+            ),
+        )
+        return timeline_value
+
     def copy_image(
         self,
         source: Any,
@@ -815,6 +959,8 @@ class VulkanContext:
         record: Callable[[Any], None],
         *,
         wait_for_timeline: int | None = None,
+        wait_semaphore: Any | None = None,
+        signal_semaphore: Any | None = None,
     ) -> int:
         with self._lock:
             self._ensure_open()
@@ -857,6 +1003,8 @@ class VulkanContext:
                 fence=queue_resources.fence,
                 timeline_value=queue_resources.timeline_value,
                 wait_timeline_value=wait_for_timeline,
+                wait_semaphore=wait_semaphore,
+                signal_semaphore=signal_semaphore,
             )
             self._frame_index = (self._frame_index + 1) % self.frame_context_count
             return queue_resources.timeline_value
@@ -960,6 +1108,8 @@ class VulkanContext:
         fence: Any,
         timeline_value: int,
         wait_timeline_value: int | None = None,
+        wait_semaphore: Any | None = None,
+        signal_semaphore: Any | None = None,
     ) -> None:
         vk = self.vk
         if wait_timeline_value is not None and self._timeline_semaphore is None:
@@ -984,6 +1134,16 @@ class VulkanContext:
                 deviceIndex=0,
             )
             wait_infos = []
+            if wait_semaphore is not None:
+                wait_infos.append(
+                    vk.VkSemaphoreSubmitInfo(
+                        sType=vk.VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                        semaphore=wait_semaphore,
+                        value=0,
+                        stageMask=_pipeline_stage_2_all_commands(vk),
+                        deviceIndex=0,
+                    )
+                )
             if wait_timeline_value is not None:
                 wait_infos.append(
                     vk.VkSemaphoreSubmitInfo(
@@ -994,14 +1154,25 @@ class VulkanContext:
                         deviceIndex=0,
                     )
                 )
+            signal_infos = [signal_info]
+            if signal_semaphore is not None:
+                signal_infos.append(
+                    vk.VkSemaphoreSubmitInfo(
+                        sType=vk.VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                        semaphore=signal_semaphore,
+                        value=0,
+                        stageMask=_pipeline_stage_2_all_commands(vk),
+                        deviceIndex=0,
+                    )
+                )
             submit_info = vk.VkSubmitInfo2(
                 sType=vk.VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
                 waitSemaphoreInfoCount=len(wait_infos),
                 pWaitSemaphoreInfos=wait_infos or None,
                 commandBufferInfoCount=1,
                 pCommandBufferInfos=[command_info],
-                signalSemaphoreInfoCount=1,
-                pSignalSemaphoreInfos=[signal_info],
+                signalSemaphoreInfoCount=len(signal_infos),
+                pSignalSemaphoreInfos=signal_infos,
             )
             vk.vkQueueSubmit2(queue, 1, [submit_info], fence)
             return
@@ -1017,22 +1188,29 @@ class VulkanContext:
                 signalSemaphoreValueCount=1,
                 pSignalSemaphoreValues=[timeline_value],
             )
+        wait_semaphores = []
+        wait_stage_masks = []
+        if wait_semaphore is not None:
+            wait_semaphores.append(wait_semaphore)
+            wait_stage_masks.append(vk.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT)
+        if wait_timeline_value is not None:
+            wait_semaphores.append(self._timeline_semaphore)
+            wait_stage_masks.append(vk.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT)
+        signal_semaphores = []
+        if self._timeline_semaphore is not None:
+            signal_semaphores.append(self._timeline_semaphore)
+        if signal_semaphore is not None:
+            signal_semaphores.append(signal_semaphore)
         submit_info = vk.VkSubmitInfo(
             sType=vk.VK_STRUCTURE_TYPE_SUBMIT_INFO,
             pNext=timeline_info,
             commandBufferCount=1,
             pCommandBuffers=[command_buffer],
-            waitSemaphoreCount=1 if wait_timeline_value is not None else 0,
-            pWaitSemaphores=[self._timeline_semaphore]
-            if wait_timeline_value is not None
-            else None,
-            pWaitDstStageMask=[vk.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT]
-            if wait_timeline_value is not None
-            else None,
-            signalSemaphoreCount=1 if self._timeline_semaphore is not None else 0,
-            pSignalSemaphores=[self._timeline_semaphore]
-            if self._timeline_semaphore is not None
-            else None,
+            waitSemaphoreCount=len(wait_semaphores),
+            pWaitSemaphores=wait_semaphores or None,
+            pWaitDstStageMask=wait_stage_masks or None,
+            signalSemaphoreCount=len(signal_semaphores),
+            pSignalSemaphores=signal_semaphores or None,
         )
         vk.vkQueueSubmit(queue, 1, [submit_info], fence)
 

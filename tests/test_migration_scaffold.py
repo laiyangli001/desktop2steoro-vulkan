@@ -29,6 +29,8 @@ def test_capability_report_identifies_new_project():
     assert report["project"] == "desktop2steoro-vulkan"
     assert report["migration"]["python_vulkan_runtime"] == "phase1_implemented"
     assert report["migration"]["openxr_vulkan_session"] == "phase1_validated"
+    assert report["gpu_producers"]["selection"] in {"auto", "override"}
+    assert "selected_backend" in report["gpu_producers"]
 
 
 def test_current_style_source_layout_is_present():

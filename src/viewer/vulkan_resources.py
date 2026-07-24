@@ -536,3 +536,30 @@ class VulkanExportableSemaphore:
 
     def __exit__(self, exc_type, exc, traceback) -> None:
         self.close()
+
+
+class VulkanBinarySemaphore:
+    """Own a device-local binary semaphore used between Vulkan submissions."""
+
+    def __init__(self, context: Any, *, label: str = "binary-semaphore") -> None:
+        self.context = context
+        self.vk = context.vk
+        self.label = str(label)
+        self.semaphore = self.vk.vkCreateSemaphore(
+            context.device,
+            self.vk.VkSemaphoreCreateInfo(
+                sType=self.vk.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+            ),
+            None,
+        )
+
+    def close(self) -> None:
+        if self.semaphore is not None and self.context.device is not None:
+            self.vk.vkDestroySemaphore(self.context.device, self.semaphore, None)
+        self.semaphore = None
+
+    def __enter__(self) -> "VulkanBinarySemaphore":
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        self.close()

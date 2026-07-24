@@ -197,3 +197,12 @@ int bridge_eye_set_ready_semaphore(
     return bridge->platform->set_pending_ready_semaphore(bridge->external_swapchain, ready)
             ? 1 : 0;
 }
+
+int bridge_eye_get_finished_semaphore(
+        FilamentBridge* bridge, const void** semaphore) {
+    if (!bridge || !semaphore || !bridge->external_swapchain) return 0;
+    const VkSemaphore finished = bridge->external_swapchain->last_finished_drawing;
+    if (finished == VK_NULL_HANDLE) return 0;
+    *semaphore = reinterpret_cast<const void*>(static_cast<uintptr_t>(finished));
+    return 1;
+}

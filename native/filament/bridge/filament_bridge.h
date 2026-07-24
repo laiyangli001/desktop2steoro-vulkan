@@ -123,6 +123,10 @@ FILAMENT_BRIDGE_API int filament_bridge_set_screen_image(
 // Set a borrowed binary semaphore signaled by the runtime output producer.
 FILAMENT_BRIDGE_API int filament_bridge_set_screen_ready_semaphore(
         FilamentBridge* bridge, const void* semaphore);
+// Return the borrowed Filament render-finished semaphore for the active eye.
+// The caller must consume it before the next frame reuses the swapchain slot.
+FILAMENT_BRIDGE_API int filament_bridge_get_finished_drawing_semaphore(
+        FilamentBridge* bridge, const void** semaphore);
 FILAMENT_BRIDGE_API int filament_bridge_apply_animations(
         FilamentBridge* bridge, double time_seconds);
 FILAMENT_BRIDGE_API uint32_t filament_bridge_animation_count(

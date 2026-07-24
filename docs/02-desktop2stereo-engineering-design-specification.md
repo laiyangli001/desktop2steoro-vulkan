@@ -375,11 +375,21 @@ ScreenExternalImage {
 }
 ```
 
-CUDA/Vulkan producer 完成写入后，必须 signal external binary/timeline semaphore；Presenter/Bridge 消费 ready point，并在 Filament 采样前通过 Vulkan barrier 完成 access、layout 和 queue ownership transfer，目标布局为 `VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL`。Filament 完成提交后必须发布独立的 consumer-release point，生产端只有在该完成点到达后才能复用槽位。屏幕源图像的 ready/release 同步与 OpenXR 输出 swapchain 的 acquire/render-finished/release 同步必须分开管理。
+CUDA/Vulkan producer 完成写入后，必须 signal external binary/timeline semaphore；Presenter graphics submit 等待 producer-ready，并在同一次 source submit 中通过 Vulkan barrier 完成 access、layout 和 queue ownership transfer，目标布局为 `VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL`，同时 signal 一个 Filament visible semaphore。Bridge 把 visible semaphore 作为外部纹理 acquire wait，Filament 完成采样后，Presenter 再提交反向 barrier 到 `GENERAL` 并 signal 独立的 exportable consumer-release semaphore；生产端在复用槽位前必须以 CUDA/HIP stream wait 消费该 release。屏幕源图像的 ready/visible/release 同步与 OpenXR 输出 swapchain 的 acquire/render-finished/release 同步必须分开管理。
 
 直接外部采样是 Vulkan 主路径的首选：每张源 `VkImage` 只创建一次 Filament 外部纹理，稳态帧只切换槽位和材质绑定。不得把“裸 `VkImage` 可导入”当作完整同步；如果缺少格式/尺寸、layout、queue ownership 或 producer/consumer 同步信息，必须拒绝零拷贝绑定并选择一次 GPU copy 的屏幕路径或 Quad Layer 回退。回退不能使用 CPU 像素回读，也不能在已提交的 Filament 采样期间复用或销毁源图像。槽位扩容或尺寸变化属于受控重配置，不得发生在正常帧循环。
 
-当前实现状态：图像环、Filament 多槽缓存和 external semaphore ABI 已接入；稳定默认路径仍以一次 Vulkan GPU copy 验证为基线。`D2S_ENABLE_FILAMENT_SCREEN_IMAGE=1` 仅表示直接外部采样实验路径，只有在每槽元数据、source-image barrier、queue ownership transfer、Filament sampling completion 和生产端 release 全部满足时才能启用。该路径必须经过三平台 CI、Validation Layer、实机长稳和帧率/显存压力验证后，才可成为默认路径。
+源图像 producer 必须通过后端无关的 Vulkan interop contract 接入 Presenter：`GpuProducerAdapter` 负责导出/导入 external memory、提交 producer-ready semaphore 或 timeline、报告实际 image layout/queue family，并在收到 consumer-release 后回收槽位。CUDA、ROCm/HIP、MIGraphX、DirectML 或其它推理后端只能实现该适配器，不得把 CUDA API、HIP API 或厂商句柄泄漏到 Filament Bridge 和 `VulkanContext` 的策略接口。Windows/Linux 优先复用各后端已有 external memory；ROCm/HIP 或驱动不支持安全零拷贝时，必须降级为一次 GPU copy，不能降级为 CPU 像素往返。
+
+Presenter 只能通过 `GpuProducerAdapter` 注册表创建具体 producer；不得在 OpenXR、Filament 或 `VulkanContext` 中直接实例化 CUDA、HIP 或其它厂商适配器。未注册或能力不足的后端必须明确进入 GPU copy/Quad Layer 回退路径，禁止将一个厂商的句柄或同步语义伪装成另一个厂商的实现。
+
+`src/tools/probe.py` 的 capability report 必须输出 producer 自动选择结果、CUDA/HIP runtime 状态和显式覆盖标记；探测只读取运行时能力，不应为了生成报告而创建 Vulkan external memory 或导入厂商句柄。
+
+当前已注册 `cuda`/`nvidia` 与 `rocm`/`hip` producer，默认根据运行时自动识别后端。ROCm 适配器延迟加载 `amdhip64`/`libamdhip64`，使用 Vulkan 导出的 Win32 handle 或 FD；HIP external memory/semaphore 不可用时，不得启用直接采样实验路径，必须保留 Vulkan GPU copy 回退。`D2S_ENABLE_ROCM_EXTERNAL_SEMAPHORE=0` 仅作为调试禁用开关，不是正常运行前提。
+
+适配器发现或加载失败属于能力缺失，不得传播为 Presenter 线程异常；必须限频记录原因、保持 OpenXR 生命周期运行，并在后续输出帧重新尝试创建适配器。若当前 producer 没有可用 Vulkan import/copy 能力，则该帧只能丢弃，禁止退回 CPU 像素往返。
+
+当前实现状态：图像环、Filament 多槽缓存、producer-ready、source barrier、Filament visible semaphore、consumer-release barrier、Filament per-eye render-finished ABI 和 CUDA/ROCm/HIP producer wait 已接入；稳定默认路径仍以一次 Vulkan GPU copy 验证为基线。`D2S_ENABLE_FILAMENT_SCREEN_IMAGE=1` 仅表示直接外部采样实验路径，只有在每槽元数据、source-image barrier、queue ownership transfer、Filament sampling completion 和生产端 release 全部满足时才能启用。该路径必须经过三平台 CI、Validation Layer、实机长稳和帧率/显存压力验证后，才可成为默认路径。旧 Bridge 缺少 completion ABI 时自动回退，不得移除 consumer-release。
 
 ### 5.5 Projection Layer 异步提交
 
@@ -769,7 +779,7 @@ Bridge 接口必须覆盖以下功能域：
 4. GLB 加载、纹理/PBR/透明材质资源准备、场景切换、卸载和 last-good scene 保留。
 5. 场景对象的可见性、变换、虚拟屏幕、手柄和场景根节点状态更新。
 6. 预览相机、左右眼相机、look-at、视图矩阵、投影/frustum、near/far 和 viewport。
-7. Preview window、Vulkan Render Target、OpenXR Projection Layer 目标的渲染提交。
+7. Preview window、Vulkan Render Target、OpenXR Projection Layer 目标的渲染提交，以及 per-eye Filament render-finished semaphore 的借用查询。
 8. 动画枚举、名称/时长、选择、播放、暂停、循环和由 Python 驱动的动画时间应用。
 9. 场景主体亮度/曝光、天空盒亮度、方向光、填充光及其颜色和方向的独立控制。
 10. 材质参数、亮度、对比度、饱和度、Gamma、色温和色调控制。
@@ -891,6 +901,8 @@ xrPollEvent
 ### 13.5 Layers
 
 主房间、虚拟屏幕、手柄和默认 Glow 使用 Projection Layer。文字面板、虚拟键盘等独立 UI 可使用 Quad Layer。Layer 数量和顺序由单一 `CompositionBuilder` 生成，模块不能各自调用 `xrEndFrame`。
+
+FPS 面板、操作指南和其它工具 Quad Layer 必须区分“内容更新”和“姿态提交”：纹理内容由 Python 策略层按旧工程的 content key 缓存，静态指南只生成/上传一次，FPS/延迟等统计按约 1 秒快照更新；没有内容变化时，Presenter 每帧只更新 layer pose 和 composition 结构，不得重新栅格化字体、map staging 或 acquire/wait/release 图像。工具纹理的更新仍由 Presenter 命令队列线程执行，不能由后台线程直接操作 Vulkan 或 Filament 资源。
 
 手柄激光属于与控制器同坐标系的 3D 场景几何体，随左右眼 View 分别投影；激光 View 必须使用与主控制器共享 GLB 资源但 Renderable 独立的外壳实例作为仅写深度的遮挡体，使外壳遮挡光束根部，同时控制器颜色仍仅由 HDR 主 View 的原始 PBR 实例输出。两实例必须同步姿态和动画，材质绑定在加载后保持不变。它不是平面 UI，不得占用 OpenXR Quad Layer。
 

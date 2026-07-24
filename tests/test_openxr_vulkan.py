@@ -444,6 +444,29 @@ def test_controller_callout_uses_projection_layer_not_quad_layer() -> None:
     assert "actual_fps=self._tool_overlay_xr_fps" in source
 
 
+def test_tool_overlay_metrics_snapshot_latency_with_fps_window() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._frame_now = 10.0
+
+    frame = type("Frame", (), {"frame_id": 1, "timestamp": 10.0})()
+    presenter._update_tool_overlay_metrics(frame)
+    assert presenter._tool_overlay_latency_ms == 0.0
+
+    presenter._frame_now = 10.25
+    frame.frame_id = 2
+    frame.timestamp = 10.20
+    presenter._update_tool_overlay_metrics(frame)
+    assert presenter._tool_overlay_latency_ms == 0.0
+    assert presenter._tool_overlay_pending_latency_ms == pytest.approx(50.0)
+
+    presenter._frame_now = 11.05
+    frame.frame_id = 3
+    frame.timestamp = 11.0
+    presenter._update_tool_overlay_metrics(frame)
+    assert presenter._tool_overlay_xr_fps == pytest.approx(3.0 / 1.05)
+    assert presenter._tool_overlay_latency_ms == pytest.approx(50.0)
+
+
 def test_filament_controller_guide_tracks_geometry_and_visibility() -> None:
     presenter = OpenXrVulkanPresenter()
     presenter._head_position_w = np.asarray((0.0, 0.0, 0.2), dtype=np.float64)
@@ -481,7 +504,7 @@ def test_filament_controller_guide_tracks_geometry_and_visibility() -> None:
 def test_presenter_defaults_to_capability_gated_zero_copy_path(monkeypatch) -> None:
     monkeypatch.delenv("D2S_ENABLE_FILAMENT_SCREEN_IMAGE", raising=False)
     presenter = OpenXrVulkanPresenter()
-    assert presenter._filament_screen_image_enabled is True
+    assert presenter._filament_screen_image_enabled is False
 
 
 def test_filament_screen_image_requires_per_eye_external_ready_semaphores() -> None:
@@ -491,6 +514,8 @@ def test_filament_screen_image_requires_per_eye_external_ready_semaphores() -> N
     class Bridge:
         screen_image_abi_available = True
         screen_ready_semaphore_abi_available = True
+        async_submit_abi_available = True
+        finished_drawing_semaphore_abi_available = True
 
     presenter.filament_bridge = Bridge()
     frame = SimpleNamespace(
@@ -501,7 +526,16 @@ def test_filament_screen_image_requires_per_eye_external_ready_semaphores() -> N
         }
     )
     assert presenter._can_use_filament_screen_image(frame) is False
-    frame.metadata["vulkan_output_sync"] = "cuda_external_semaphore"
+    frame.metadata["vulkan_output_sync"] = "gpu_external_semaphore"
+    assert presenter._can_use_filament_screen_image(frame) is False
+    frame.metadata.update({
+        "vulkan_source_layout_left": "shader_read_only_optimal",
+        "vulkan_source_layout_right": "shader_read_only_optimal",
+        "vulkan_source_queue_family_left": 0,
+        "vulkan_source_queue_family_right": 0,
+        "_vulkan_source_prepare_for_sampling": lambda *_args: object(),
+        "_vulkan_source_consumer_release": lambda: None,
+    })
     assert presenter._can_use_filament_screen_image(frame) is True
 
 

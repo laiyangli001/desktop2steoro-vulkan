@@ -66,6 +66,7 @@ public:
         uint32_t pending_image = kInvalidImageIndex;
         VkSemaphore pending_ready_semaphore = VK_NULL_HANDLE;
         uint32_t current_image = kInvalidImageIndex;
+        VkSemaphore last_finished_drawing = VK_NULL_HANDLE;
     };
 
     SwapChainPtr create_external_swapchain(
@@ -151,11 +152,11 @@ public:
 
     VkResult present(SwapChainPtr handle, uint32_t image_index,
             VkSemaphore finished_drawing) override {
-        (void) finished_drawing;
         auto* swapchain = as_external(handle);
         if (!swapchain || image_index >= swapchain->images.size()) {
             return VK_ERROR_OUT_OF_DATE_KHR;
         }
+        swapchain->last_finished_drawing = finished_drawing;
         return VK_SUCCESS;
     }
 

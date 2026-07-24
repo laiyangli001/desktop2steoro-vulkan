@@ -8,17 +8,30 @@ import threading
 import time
 
 from viewer.cuda_vulkan_interop import CudaVulkanImageImporter
+from viewer.rocm_vulkan_interop import RocmVulkanImageImporter
 from viewer.vulkan_resources import (
+    VulkanBinarySemaphore,
     VulkanExportableImage,
     VulkanExportableSemaphore,
     VulkanImageResource,
 )
 
+from .gpu_producer import GpuProducerAdapter, register_gpu_producer_adapter
 from .output_contract import VulkanStereoOutputFrame
 
 
-class CudaVulkanOutputAdapter:
+class CudaVulkanOutputAdapter(GpuProducerAdapter):
     """Convert CUDA RGBA tensors into persistent Vulkan image slots."""
+
+    backend_name = "cuda"
+
+    def _create_importer(self):
+        return CudaVulkanImageImporter()
+
+    @staticmethod
+    def _source_image_contract(resource: VulkanImageResource) -> dict[str, object]:
+        """Compatibility alias for callers using the former CUDA adapter API."""
+        return GpuProducerAdapter.source_image_contract(resource)
 
     @staticmethod
     def _external_semaphore_requested() -> bool:
@@ -33,6 +46,10 @@ class CudaVulkanOutputAdapter:
         self.right_slots = []
         self.left_ready_semaphores = []
         self.right_ready_semaphores = []
+        self.left_release_semaphores = []
+        self.right_release_semaphores = []
+        self.left_visible_semaphores = []
+        self.right_visible_semaphores = []
         self.external_semaphore_enabled = False
         self.left_slot = None
         self.right_slot = None
@@ -42,6 +59,12 @@ class CudaVulkanOutputAdapter:
         self._closed = False
         self._screen_light_rgb = (0.18, 0.18, 0.18)
         self._screen_light_pending = None
+        self._release_signaled: set[tuple[int, int]] = set()
+        self._source_frames: dict[int, tuple[object, object, int]] = {}
+        self._released_source_frames: set[int] = set()
+        self._prepared_source_eyes: set[tuple[int, int]] = set()
+
+
         self._screen_light_last_submit = 0.0
 
     def _update_screen_light_sample(self, left, right) -> None:
@@ -100,6 +123,7 @@ class CudaVulkanOutputAdapter:
             event.record(torch.cuda.current_stream(left.device))
             self._screen_light_pending = (host, event)
             self._screen_light_last_submit = now
+
         except Exception:
             # Screen illumination is supplemental and must never break output.
             self._screen_light_pending = None
@@ -126,7 +150,72 @@ class CudaVulkanOutputAdapter:
                 if lease_frame_id == int(frame_id):
                     del self._active_leases[slot_index]
                     self._lease_condition.notify_all()
+                    if not any(
+                        prepared_frame == int(frame_id)
+                        for prepared_frame, _eye in getattr(
+                            self, "_prepared_source_eyes", ()
+                        )
+                    ):
+                        getattr(self, "_source_frames", {}).pop(int(frame_id), None)
                     return
+
+    def prepare_source_for_sampling(self, frame_id: int, eye_index: int):
+        """Wait for the producer and publish a post-barrier semaphore to Filament."""
+        entry = self._source_frames.get(int(frame_id))
+        if entry is None:
+            raise RuntimeError(f"unknown Vulkan source frame {frame_id}")
+        left, right, slot_index = entry
+        resource = left if int(eye_index) == 0 else right
+        ready = (
+            self.left_ready_semaphores[slot_index]
+            if int(eye_index) == 0
+            else self.right_ready_semaphores[slot_index]
+        )
+        visible = (
+            self.left_visible_semaphores[slot_index]
+            if int(eye_index) == 0
+            else self.right_visible_semaphores[slot_index]
+        )
+        self.presenter.vulkan.prepare_external_image_for_sampling(
+            resource.resource,
+            wait_semaphore=ready.semaphore,
+            signal_semaphore=visible.semaphore,
+        )
+        self._prepared_source_eyes.add((int(frame_id), int(eye_index)))
+        return visible.semaphore
+
+    def release_consumer_frame(
+        self, frame_id: int, consumer_semaphores=None
+    ) -> None:
+        """Signal producer-release semaphores after Filament has finished sampling."""
+        frame_key = int(frame_id)
+        if frame_key in self._released_source_frames:
+            return
+        entry = self._source_frames.get(frame_key)
+        if entry is None:
+            self.release_frame(frame_key)
+            self._released_source_frames.add(frame_key)
+            return
+        left, right, slot_index = entry
+        waits = tuple(consumer_semaphores or ())
+        for eye_index, resource, release_semaphore in (
+            (0, left.resource, self.left_release_semaphores[slot_index]),
+            (1, right.resource, self.right_release_semaphores[slot_index]),
+        ):
+            if (frame_key, eye_index) not in self._prepared_source_eyes:
+                continue
+            self.presenter.vulkan.release_external_image_from_sampling(
+                resource,
+                wait_semaphore=(
+                    waits[eye_index] if eye_index < len(waits) else None
+                ),
+                signal_semaphore=release_semaphore.semaphore,
+            )
+            self._release_signaled.add((eye_index, slot_index))
+            self._prepared_source_eyes.discard((frame_key, eye_index))
+        self.release_frame(frame_key)
+        self._released_source_frames.add(frame_key)
+        self._source_frames.pop(frame_key, None)
 
     def _ensure_slots(self, width: int, height: int) -> None:
         if not bool(getattr(self.presenter, "initialized", False)):
@@ -139,7 +228,7 @@ class CudaVulkanOutputAdapter:
         self.close()
         with self._lease_condition:
             self._closed = False
-        self.importer = CudaVulkanImageImporter()
+        self.importer = self._create_importer()
         # Runtime eye tensors contain display-referred sRGB bytes. Keep the
         # Vulkan image format sRGB so Quad Layer copies remain byte-preserving.
         output_format = context.vk.VK_FORMAT_R8G8B8A8_SRGB
@@ -175,14 +264,46 @@ class CudaVulkanOutputAdapter:
                 )
                 for index in range(self.ring_size)
             ]
-            for semaphore in (*self.left_ready_semaphores, *self.right_ready_semaphores):
+            self.left_release_semaphores = [
+                VulkanExportableSemaphore(context, label=f"runtime-left-release-{index}")
+                for index in range(self.ring_size)
+            ]
+            self.right_release_semaphores = [
+                VulkanExportableSemaphore(context, label=f"runtime-right-release-{index}")
+                for index in range(self.ring_size)
+            ]
+            self.left_visible_semaphores = [
+                VulkanBinarySemaphore(context, label=f"runtime-left-visible-{index}")
+                for index in range(self.ring_size)
+            ]
+            self.right_visible_semaphores = [
+                VulkanBinarySemaphore(context, label=f"runtime-right-visible-{index}")
+                for index in range(self.ring_size)
+            ]
+            for semaphore in (
+                *self.left_ready_semaphores,
+                *self.right_ready_semaphores,
+                *self.left_release_semaphores,
+                *self.right_release_semaphores,
+            ):
                 self.importer.register_semaphore(semaphore)
             self.external_semaphore_enabled = self.importer.capabilities.external_semaphore
         except Exception:
-            for semaphore in (*self.left_ready_semaphores, *self.right_ready_semaphores):
+            for semaphore in (
+                *self.left_ready_semaphores,
+                *self.right_ready_semaphores,
+                *self.left_release_semaphores,
+                *self.right_release_semaphores,
+                *self.left_visible_semaphores,
+                *self.right_visible_semaphores,
+            ):
                 semaphore.close()
             self.left_ready_semaphores = []
             self.right_ready_semaphores = []
+            self.left_release_semaphores = []
+            self.right_release_semaphores = []
+            self.left_visible_semaphores = []
+            self.right_visible_semaphores = []
             self.external_semaphore_enabled = False
         self._extent = (width, height)
 
@@ -199,8 +320,6 @@ class CudaVulkanOutputAdapter:
         self.right_slot = self.right_slots[slot_index]
         try:
             self._update_screen_light_sample(left, right)
-            self.importer.copy_tensor(left, self.left_slot)
-            self.importer.copy_tensor(right, self.right_slot)
             left_ready = None
             right_ready = None
             use_external_semaphore = bool(
@@ -208,16 +327,36 @@ class CudaVulkanOutputAdapter:
                 and getattr(self.presenter, "screen_ready_semaphore_available", False)
             )
             if use_external_semaphore:
+                for eye_index, release_semaphore in (
+                    (0, self.left_release_semaphores[slot_index]),
+                    (1, self.right_release_semaphores[slot_index]),
+                ):
+                    if (eye_index, slot_index) not in self._release_signaled:
+                        continue
+                    self.importer.wait_semaphore(release_semaphore)
+                    self._release_signaled.discard((eye_index, slot_index))
+                self.importer.copy_tensor(left, self.left_slot)
+                self.importer.copy_tensor(right, self.right_slot)
                 left_ready = self.left_ready_semaphores[slot_index]
                 right_ready = self.right_ready_semaphores[slot_index]
                 stream = None
                 self.importer.signal_semaphore(left_ready, stream=stream)
                 self.importer.signal_semaphore(right_ready, stream=stream)
             if not use_external_semaphore:
+                self.importer.copy_tensor(left, self.left_slot)
+                self.importer.copy_tensor(right, self.right_slot)
                 self.importer.synchronize()
         except Exception:
             self.release_frame(frame_id)
             raise
+        left_contract = self.source_image_contract(self.left_slot.resource)
+        right_contract = self.source_image_contract(self.right_slot.resource)
+        self._source_frames[int(frame_id)] = (
+            self.left_slot,
+            self.right_slot,
+            slot_index,
+        )
+        self._released_source_frames.discard(int(frame_id))
         return VulkanStereoOutputFrame(
             frame_id=frame_id,
             timestamp=timestamp,
@@ -229,9 +368,9 @@ class CudaVulkanOutputAdapter:
                 "vulkan_output_ring_slot": slot_index,
                 "vulkan_output_ring_size": self.ring_size,
                 "vulkan_output_sync": (
-                    "cuda_external_semaphore"
+                    self.external_semaphore_sync_mode
                     if use_external_semaphore
-                    else "cuda_stream_synchronized"
+                    else self.output_sync_mode
                 ),
                 "vulkan_ready_semaphore_left": (
                     left_ready.semaphore if left_ready is not None else None
@@ -239,6 +378,12 @@ class CudaVulkanOutputAdapter:
                 "vulkan_ready_semaphore_right": (
                     right_ready.semaphore if right_ready is not None else None
                 ),
+                "vulkan_source_layout_left": left_contract["layout"],
+                "vulkan_source_layout_right": right_contract["layout"],
+                "vulkan_source_queue_family_left": left_contract["queue_family"],
+                "vulkan_source_queue_family_right": right_contract["queue_family"],
+                "_vulkan_source_prepare_for_sampling": self.prepare_source_for_sampling,
+                "_vulkan_source_consumer_release": self.release_consumer_frame,
                 "_vulkan_output_release": self.release_frame,
                 "screen_light_linear_rgb": self._screen_light_rgb,
             },
@@ -259,16 +404,48 @@ class CudaVulkanOutputAdapter:
                 slot.close()
         self.left_slots = []
         self.right_slots = []
-        for semaphore in (*self.left_ready_semaphores, *self.right_ready_semaphores):
+        for semaphore in (
+            *self.left_ready_semaphores,
+            *self.right_ready_semaphores,
+            *self.left_release_semaphores,
+            *self.right_release_semaphores,
+            *self.left_visible_semaphores,
+            *self.right_visible_semaphores,
+        ):
             if semaphore is not None:
                 semaphore.close()
         self.left_ready_semaphores = []
         self.right_ready_semaphores = []
+        self.left_release_semaphores = []
+        self.right_release_semaphores = []
+        self.left_visible_semaphores = []
+        self.right_visible_semaphores = []
         self.external_semaphore_enabled = False
         self.left_slot = None
         self.right_slot = None
         self._extent = None
         self._screen_light_pending = None
+        self._release_signaled.clear()
+        self._source_frames.clear()
+        self._released_source_frames.clear()
+        self._prepared_source_eyes.clear()
+
+
+class RocmVulkanOutputAdapter(CudaVulkanOutputAdapter):
+    """Convert HIP tensors using the AMD ROCm Vulkan interop importer."""
+
+    backend_name = "rocm"
+
+    @staticmethod
+    def _external_semaphore_requested() -> bool:
+        value = os.environ.get("D2S_ENABLE_ROCM_EXTERNAL_SEMAPHORE", "auto")
+        normalized = value.strip().lower()
+        if normalized in {"", "auto", "default"}:
+            return True
+        return normalized in {"1", "true", "yes", "on"}
+
+    def _create_importer(self):
+        return RocmVulkanImageImporter()
 
 
 class VulkanRuntimeOutputConsumer:
@@ -401,3 +578,9 @@ class VulkanRuntimeOutputConsumer:
         close = getattr(self.gpu_adapter, "close", None)
         if callable(close):
             close()
+
+
+register_gpu_producer_adapter("cuda", CudaVulkanOutputAdapter)
+register_gpu_producer_adapter("nvidia", CudaVulkanOutputAdapter)
+register_gpu_producer_adapter("rocm", RocmVulkanOutputAdapter)
+register_gpu_producer_adapter("hip", RocmVulkanOutputAdapter)
