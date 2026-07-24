@@ -159,6 +159,10 @@ OpenXR 交换链
 - 使用 `VK_KHR_external_memory_win32` (Windows) 或 `VK_KHR_external_memory_fd` (Linux)。
 - 推理输出与渲染输入的同一块 GPU 内存，零拷贝。
 
+该路径不是“把裸句柄交给 Filament”就完成了。每个源 `VkImage` 必须在创建时建立一次 Filament 外部纹理，并保存格式、尺寸、当前 layout、producer/consumer queue family 及槽位 lease。CUDA signal 的 external semaphore/timeline 是 producer-ready；Presenter/Bridge 必须在 Filament 采样前执行 source-image barrier 和 queue ownership transfer 到 `VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL`。Filament graphics completion 是 consumer-release，生产端在该完成点前不得重写或复用图像。它与 OpenXR 输出 swapchain 的 acquire、render-finished 和 release 同步完全独立。
+
+如果上述任一条件无法由当前 Vulkan Runtime、CUDA interop 或 Filament Bridge ABI 可靠表达，运行时必须选择一次 Vulkan GPU copy 的屏幕路径或 Quad Layer 回退，并记录能力缺失原因；不得把未同步的外部图像提交给 Filament，也不得退回 CPU 像素传输。
+
 ### 4.2 AMD (Windows) — ROCm 首选路径
 
 ```

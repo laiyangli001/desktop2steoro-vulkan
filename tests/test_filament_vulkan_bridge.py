@@ -303,3 +303,18 @@ def test_native_controller_animation_preserves_touch_semantics_without_abi_growt
     assert "controller.button_values[6] * controller.joystick_y" in source
     assert "std::array<float, 7> button_values{};" in internal
     assert "uint32_t button_mask" in public_header
+
+
+def test_native_screen_is_rendered_before_controller_and_laser() -> None:
+    root = Path(__file__).resolve().parents[1]
+    screen_source = (root / "native/filament/bridge/bridge_screen.cpp").read_text(
+        encoding="utf-8"
+    )
+    laser_source = (root / "native/filament/bridge/bridge_laser.cpp").read_text(
+        encoding="utf-8"
+    )
+
+    assert ".priority(0).culling(false)" in screen_source
+    assert ".depthWrite(false)" in screen_source
+    assert ".priority(7)" in laser_source
+    assert ".depthWrite(true)" in laser_source

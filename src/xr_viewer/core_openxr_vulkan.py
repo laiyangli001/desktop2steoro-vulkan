@@ -327,6 +327,19 @@ class OpenXrVulkanPresenter(
         self._last_quad_layers: list[Any] = []
         self._last_screen_quad_layers: list[Any] = []
         self._overlay_quad_entries: dict[str, dict[str, Any]] = {}
+        # Keep rasterized tool textures and their released swapchain image
+        # alive. Static Quad layers must not perform a host upload every XR
+        # frame; only the layer pose is rebuilt per frame.
+        self._tool_quad_texture_cache: dict[str, np.ndarray] = {}
+        self._tool_quad_texture_keys: dict[str, tuple[Any, ...]] = {}
+        self._tool_overlay_xr_fps = 0.0
+        self._tool_overlay_sbs_fps = 0.0
+        self._tool_overlay_latency_ms = 0.0
+        self._tool_overlay_xr_window_started = 0.0
+        self._tool_overlay_xr_window_frames = 0
+        self._tool_overlay_sbs_window_started = 0.0
+        self._tool_overlay_sbs_window_frames = 0
+        self._tool_overlay_last_output_id: int | None = None
         self._controller_callout_rgba: np.ndarray | None = None
         # Legacy OpenXR shortcut state is kept in the presenter so both the
         # Vulkan projection path and future Quad Layer overlays read one state.
@@ -572,6 +585,7 @@ class OpenXrVulkanPresenter(
                     self._cache_head_position(views)
                     with self._output_lock:
                         output_frame = self._pending_output
+                    self._update_tool_overlay_metrics(output_frame)
                     # Match the legacy frame gate: runtime rendering readiness
                     # is separate from the availability of a fresh stereo frame.
                     if self._pending_output is None and not self._has_presented_frame:
@@ -2577,6 +2591,53 @@ class OpenXrVulkanPresenter(
             except Exception:
                 pass
         self._overlay_quad_entries.clear()
+        self._tool_quad_texture_cache.clear()
+        self._tool_quad_texture_keys.clear()
+        self._tool_overlay_xr_fps = 0.0
+        self._tool_overlay_sbs_fps = 0.0
+        self._tool_overlay_latency_ms = 0.0
+        self._tool_overlay_xr_window_started = 0.0
+        self._tool_overlay_xr_window_frames = 0
+        self._tool_overlay_sbs_window_started = 0.0
+        self._tool_overlay_sbs_window_frames = 0
+        self._tool_overlay_last_output_id = None
+
+    def _update_tool_overlay_metrics(
+        self, output_frame: VulkanStereoOutputFrame | None
+    ) -> None:
+        """Update low-rate overlay metrics without touching GPU resources."""
+        now = float(self._frame_now or time.perf_counter())
+        if self._tool_overlay_xr_window_started <= 0.0:
+            self._tool_overlay_xr_window_started = now
+        self._tool_overlay_xr_window_frames += 1
+        xr_elapsed = now - self._tool_overlay_xr_window_started
+        if xr_elapsed >= 1.0:
+            self._tool_overlay_xr_fps = (
+                self._tool_overlay_xr_window_frames / xr_elapsed
+            )
+            self._tool_overlay_xr_window_started = now
+            self._tool_overlay_xr_window_frames = 0
+
+        if output_frame is None:
+            return
+        frame_id = int(output_frame.frame_id)
+        if frame_id == self._tool_overlay_last_output_id:
+            return
+        self._tool_overlay_last_output_id = frame_id
+        if self._tool_overlay_sbs_window_started <= 0.0:
+            self._tool_overlay_sbs_window_started = now
+        self._tool_overlay_sbs_window_frames += 1
+        sbs_elapsed = now - self._tool_overlay_sbs_window_started
+        if sbs_elapsed >= 1.0:
+            self._tool_overlay_sbs_fps = (
+                self._tool_overlay_sbs_window_frames / sbs_elapsed
+            )
+            self._tool_overlay_sbs_window_started = now
+            self._tool_overlay_sbs_window_frames = 0
+        timestamp = float(output_frame.timestamp)
+        latency_ms = (now - timestamp) * 1000.0
+        if 0.0 <= latency_ms <= 10000.0:
+            self._tool_overlay_latency_ms = latency_ms
 
     def _render_quad_layers(self, output_frame: VulkanStereoOutputFrame | None) -> list[Any]:
         # The main virtual screen is rendered in the Projection Layer when
@@ -2627,9 +2688,19 @@ class OpenXrVulkanPresenter(
         if self._keyboard_visible:
             keyboard_width = float(self._keyboard_width)
             keyboard_height = float(self._keyboard_height)
-            rgba, self._keyboard_keys = build_keyboard_rgba(
-                self._kb_show_shifted, keyboard_width, keyboard_height
+            keyboard_cache_key = (
+                "keyboard",
+                bool(self._kb_show_shifted),
+                keyboard_width,
+                keyboard_height,
             )
+            rgba = self._tool_quad_texture_cache.get("keyboard")
+            if rgba is None or getattr(self, "_keyboard_texture_key", None) != keyboard_cache_key:
+                rgba, self._keyboard_keys = build_keyboard_rgba(
+                    self._kb_show_shifted, keyboard_width, keyboard_height
+                )
+                self._tool_quad_texture_cache["keyboard"] = rgba
+                self._keyboard_texture_key = keyboard_cache_key
             keyboard_pose = self._keyboard_pose_mat4()
             specs.append((
                 "keyboard", rgba,
@@ -2637,19 +2708,44 @@ class OpenXrVulkanPresenter(
                 (keyboard_width, keyboard_height), rotation,
             ))
         if self._fps_overlay_visible:
-            rgba = build_fps_overlay_rgba(
-                actual_fps=0.0, sbs_fps=0.0, latency_ms=0.0,
-                screen_width=width, screen_height=height, screen_distance=abs(float(position[2])),
-                depth_strength=0.0, vr_res=(0, 0), sbs_res=(0, 0),
-                controller_brand=getattr(self._controller_brand, "name", ""),
-                environment_visible=True,
+            fps_texture_key = (
+                float(width),
+                float(height),
+                float(position[2]),
+                getattr(self._controller_brand, "name", ""),
+                round(self._tool_overlay_xr_fps, 1),
+                round(self._tool_overlay_sbs_fps, 1),
+                round(self._tool_overlay_latency_ms, 1),
             )
+            rgba = self._tool_quad_texture_cache.get("fps")
+            if rgba is None or self._tool_quad_texture_keys.get("fps") != fps_texture_key:
+                rgba = build_fps_overlay_rgba(
+                    actual_fps=self._tool_overlay_xr_fps,
+                    sbs_fps=self._tool_overlay_sbs_fps,
+                    latency_ms=self._tool_overlay_latency_ms,
+                    screen_width=width, screen_height=height, screen_distance=abs(float(position[2])),
+                    depth_strength=0.0, vr_res=(0, 0), sbs_res=(0, 0),
+                    controller_brand=getattr(self._controller_brand, "name", ""),
+                    environment_visible=True,
+                )
+                self._tool_quad_texture_cache["fps"] = rgba
+                self._tool_quad_texture_keys["fps"] = fps_texture_key
             specs.append(("fps", rgba, (position[0] - width * 0.42, position[1] + height * 0.72, position[2]), (width * 0.42, height * 0.13), rotation))
         if self._operation_guide_visible:
-            rgba = build_help_rgba(environment_mode=False)
+            help_texture_key = (False,)
+            rgba = self._tool_quad_texture_cache.get("help")
+            if rgba is None or self._tool_quad_texture_keys.get("help") != help_texture_key:
+                rgba = build_help_rgba(environment_mode=False)
+                self._tool_quad_texture_cache["help"] = rgba
+                self._tool_quad_texture_keys["help"] = help_texture_key
             specs.append(("help", rgba, (position[0] + width * 0.34, position[1] + height * 0.72, position[2]), (width * 0.32, height * 0.28), rotation))
         if self._aperture_visible:
-            rgba = build_short_osd_rgba(("Aperture", "B: close"), width=384, height=64)
+            aperture_texture_key = ("Aperture", "B: close", 384, 64)
+            rgba = self._tool_quad_texture_cache.get("aperture")
+            if rgba is None or self._tool_quad_texture_keys.get("aperture") != aperture_texture_key:
+                rgba = build_short_osd_rgba(("Aperture", "B: close"), width=384, height=64)
+                self._tool_quad_texture_cache["aperture"] = rgba
+                self._tool_quad_texture_keys["aperture"] = aperture_texture_key
             specs.append(("aperture", rgba, position, (width * 0.24, height * 0.06), rotation))
         return [self._upload_tool_quad(*spec) for spec in specs]
 
@@ -2763,7 +2859,11 @@ class OpenXrVulkanPresenter(
         entry = self._overlay_quad_entries.get(key)
         formats = self.xr.enumerate_swapchain_formats(self.session)
         format_value = _select_swapchain_format(self.vulkan.vk, list(formats), "srgb")
-        if entry is None or entry["size"] != (width, height):
+        if (
+            entry is None
+            or entry["size"] != (width, height)
+            or entry.get("format") != format_value
+        ):
             if entry is not None:
                 entry["staging"].close()
                 for resource in reversed(entry["resources"]):
@@ -2781,13 +2881,20 @@ class OpenXrVulkanPresenter(
             entry = {
                 "swapchain": swapchain,
                 "size": (width, height),
+                "format": format_value,
                 "resources": self._register_swapchain_images(images, width, height, format_value),
                 "staging": VulkanHostImage(self.vulkan, width, height, format=format_value, label=f"overlay-{key}"),
+                "image_index": None,
+                "content": None,
             }
             self._overlay_quad_entries[key] = entry
-        entry["staging"].upload(rgba)
-        with _acquired_swapchain_image(self.xr, _EyeSwapchain(entry["swapchain"], [], width, height, entry["resources"])) as image_index:
-            self.vulkan.copy_image(entry["staging"].resource, entry["resources"][image_index])
+        if entry.get("content") is not rgba or entry.get("image_index") is None:
+            entry["staging"].upload(rgba)
+            with _acquired_swapchain_image(self.xr, _EyeSwapchain(entry["swapchain"], [], width, height, entry["resources"])) as image_index:
+                self.vulkan.copy_image(entry["staging"].resource, entry["resources"][image_index])
+                entry["image_index"] = image_index
+            entry["content"] = rgba
+        image_index = int(entry["image_index"])
         if len(rotation) == 4:
             qx, qy, qz, qw = (float(value) for value in rotation)
         else:

@@ -433,7 +433,15 @@ def test_controller_callout_uses_projection_layer_not_quad_layer() -> None:
     assert "bridge.set_controller_guide_texture(self._controller_callout_rgba)" in source
     assert "bridge.set_controller_guide(guide_matrix, visible=True)" in source
     assert 'specs.append(("controller_callouts"' not in source
-    assert 'if self._operation_guide_visible:\n            rgba = build_help_rgba' in source
+    assert "if self._operation_guide_visible:" in source
+    assert "build_help_rgba(environment_mode=False)" in source
+    assert 'self._tool_quad_texture_cache.get("help")' in source
+    assert 'entry.get("content") is not rgba' in source
+    assert 'entry.get("image_index") is None' in source
+    assert "_tool_overlay_xr_fps" in source
+    assert "_tool_overlay_sbs_fps" in source
+    assert "self._update_tool_overlay_metrics(output_frame)" in source
+    assert "actual_fps=self._tool_overlay_xr_fps" in source
 
 
 def test_filament_controller_guide_tracks_geometry_and_visibility() -> None:

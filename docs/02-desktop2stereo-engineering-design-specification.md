@@ -347,7 +347,7 @@ Capture 与 Inference 以 latest-frame 推进；新 screen image 完成后以原
 
 Effects Graph 消费最近完成的 screen slot，并发布 `latest_effect_slot`。Graphics Queue 从不等待指定 frame ID 的光效结果。
 
-### 5.4 Vulkan 屏幕图像环
+### 5.4 Vulkan 屏幕图像环与 Filament 外部采样
 
 `CudaVulkanOutputAdapter` 负责拥有左右眼输出图像环，默认 `D2S_VULKAN_OUTPUT_RING_SIZE=3`。它必须：
 
@@ -357,9 +357,29 @@ Effects Graph 消费最近完成的 screen slot，并发布 `latest_effect_slot`
 4. 让 `VulkanStereoOutputFrame` 持有该槽位的非拥有资源视图，不复制像素；
 5. 在尺寸变化或关闭阶段等待有限的在途工作后统一释放整个环。
 
-Filament Bridge 对每只眼维护 `VkImage -> Filament Texture` 缓存。`set_screen_image` 命中缓存时只切换材质参数，不能销毁旧 Texture 后重新 import。槽位扩容或尺寸变化属于受控重配置，不得发生在正常帧循环。
+该环的图形所有权固定属于 Presenter 线程。Capture、Inference、文件读取和后台输出消费者只能通过有界命令队列提交原始结果或资源描述，不得直接创建、导入、转换、绑定、释放 `VkImage`/`VkSemaphore`，也不得调用 Filament C ABI。所有 source-image barrier、queue ownership transfer、外部纹理绑定、consumer-release 和 GPU copy/Quad Layer 回退都必须在 Presenter 的 OpenXR 帧边界内执行。任何后续零拷贝重构若绕过命令队列或恢复后台线程直接操作图形资源，均视为架构回归。
 
-当前实现状态：图像环、Filament 多槽缓存和 external semaphore ABI 已完成。CUDA copy 完成后 signal 对应槽位 semaphore，Filament 在目标 swapchain acquire 时等待；平台、CUDA Runtime 或旧 Bridge 不支持时保留 CPU stream 同步降级。下一阶段是三平台 CI 二进制和 Validation Layer/头显长稳验证。
+Filament Bridge 对每只眼维护 `VkImage -> Filament Texture` 缓存。`set_screen_image` 命中缓存时只切换材质参数，不能销毁旧 Texture 后重新 import。每个缓存槽必须同时保存以下状态：
+
+```text
+ScreenExternalImage {
+  VkImage image
+  VkFormat format
+  VkExtent2D extent
+  VkImageLayout layout
+  uint32_t producer_queue_family
+  uint32_t consumer_queue_family
+  uint64_t producer_ready_value
+  uint64_t consumer_release_value
+  bool filament_sampling
+}
+```
+
+CUDA/Vulkan producer 完成写入后，必须 signal external binary/timeline semaphore；Presenter/Bridge 消费 ready point，并在 Filament 采样前通过 Vulkan barrier 完成 access、layout 和 queue ownership transfer，目标布局为 `VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL`。Filament 完成提交后必须发布独立的 consumer-release point，生产端只有在该完成点到达后才能复用槽位。屏幕源图像的 ready/release 同步与 OpenXR 输出 swapchain 的 acquire/render-finished/release 同步必须分开管理。
+
+直接外部采样是 Vulkan 主路径的首选：每张源 `VkImage` 只创建一次 Filament 外部纹理，稳态帧只切换槽位和材质绑定。不得把“裸 `VkImage` 可导入”当作完整同步；如果缺少格式/尺寸、layout、queue ownership 或 producer/consumer 同步信息，必须拒绝零拷贝绑定并选择一次 GPU copy 的屏幕路径或 Quad Layer 回退。回退不能使用 CPU 像素回读，也不能在已提交的 Filament 采样期间复用或销毁源图像。槽位扩容或尺寸变化属于受控重配置，不得发生在正常帧循环。
+
+当前实现状态：图像环、Filament 多槽缓存和 external semaphore ABI 已接入；稳定默认路径仍以一次 Vulkan GPU copy 验证为基线。`D2S_ENABLE_FILAMENT_SCREEN_IMAGE=1` 仅表示直接外部采样实验路径，只有在每槽元数据、source-image barrier、queue ownership transfer、Filament sampling completion 和生产端 release 全部满足时才能启用。该路径必须经过三平台 CI、Validation Layer、实机长稳和帧率/显存压力验证后，才可成为默认路径。
 
 ### 5.5 Projection Layer 异步提交
 

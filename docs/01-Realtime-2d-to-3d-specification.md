@@ -514,14 +514,18 @@ Right VkImage[0..N-1]  <- CUDA external memory import once per slot
                          +-> Filament Texture cache, one import per VkImage
 ```
 
-每个环槽的 Vulkan image、image view、CUDA external-memory mapping 和 Filament Texture 必须保持稳定。正常帧不得执行以下操作：
+每个环槽的 Vulkan image、image view、CUDA external-memory mapping 和 Filament Texture 必须保持稳定。这里的“屏幕源图像”是推理/合成输出、由 Filament 屏幕材质采样的图像，不是 OpenXR 眼睛输出交换链图像；两者必须使用不同的同步契约。正常帧不得执行以下操作：
 
 - 重新创建或销毁运行时屏幕纹理；
 - 为每帧分配新的 external-memory handle；
 - 将 GPU 图像回读到 CPU；
 - 用 `vkDeviceWaitIdle`、`vkQueueWaitIdle` 或 `flushAndWait` 作为每眼同步。
 
-帧生命周期固定为：选择可复用槽位 -> CUDA 写入 -> 发布 ready 同步点 -> Projection Layer 绑定对应左右眼槽位 -> Filament 提交两眼 -> 完成后回收槽位。槽位在 graphics 完成前不得被 CUDA 重写。当前已接入 CUDA external semaphore signal 与 Filament image-ready wait；平台、CUDA Runtime 或旧 Bridge ABI 不支持时，才退回 `cudaStreamSynchronize` 兼容安全栅栏。
+每张屏幕源图像的持久化记录至少包含：`VkImage`、格式、extent、当前 `VkImageLayout`、producer queue family、consumer queue family、ring slot、producer-ready point 和 consumer-release point。帧生命周期固定为：选择可复用槽位 -> CUDA 写入 -> producer signal -> Vulkan barrier 将图像转换为 `VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL` 并完成 queue ownership transfer -> Filament 采样对应的持久化外部纹理 -> graphics completion signal -> release queue ownership/barrier -> 生产端回收槽位。槽位在 graphics completion 前不得被 CUDA 重写。`set_screen_ready_semaphore`（或后续等价 ABI）只表示屏幕源图像 producer-ready，不得被用作 OpenXR 输出目标完成信号；Filament 输出目标必须使用独立的 render-finished/present 同步。
+
+直接把 Vulkan 外部图像交给 Filament 采样是 Vulkan 主路径的目标优化，不得因为当前 Bridge 不完整而永久关闭。每个源 `VkImage` 只允许创建一次对应的 Filament 外部纹理；正常帧只更新材质绑定和槽位状态，不重复 import、复制或回读。若平台不支持安全的 external memory、external semaphore/timeline、layout transition、queue ownership transfer 或 Filament 外部纹理接入，运行时必须在能力探测阶段或首次绑定失败时记录原因，并自动退回一次 GPU copy 的屏幕路径/Quad Layer；不得把不完整的同步契约直接提交给 Filament，也不得崩溃。
+
+平台、CUDA Runtime 或旧 Bridge ABI 不支持完整源图像同步时，才允许退回 `cudaStreamSynchronize` 兼容安全栅栏。该降级必须显式标记为兼容路径，不能伪装成零拷贝；输出槽位仍须通过 producer lease 和 consumer completion 保护，直到 Filament 完成采样后才可复用。
 
 Filament Bridge 必须缓存每眼所有已导入的环槽纹理，并只更新当前材质绑定。Projection Layer 两眼应先完成 acquire/wait，再批量提交，整帧只执行一次必要的完成等待，随后统一 release 两眼 OpenXR 图像。
 

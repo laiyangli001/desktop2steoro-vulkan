@@ -6,7 +6,12 @@
 
 ### 已实现
 
+- 修复 OpenXR FPS 面板和操作指南导致的帧率骤降：工具 Quad layer 现在缓存 PIL 栅格化纹理，并复用已上传且已释放的 Vulkan swapchain image；内容未变化时每帧只重建轻量 layer pose，不再重复字体绘制、host staging map/copy 和 acquire/wait/release。FPS 面板接入 Presenter 的真实 XR 提交帧率、运行时输出帧率和输出延迟，并按旧工程每秒采样一次；操作指南保持静态 GPU 纹理复用。虚拟屏幕的每帧立体输出不受影响。
+- 修复 Projection Layer 内的显示顺序：虚拟屏幕从 Renderable priority `7` 调整为背景 priority `0`，保持不写深度；手柄 PBR 和深度测试激光在其后渲染，屏幕不再覆盖手柄和激光。该修改需要三平台 Filament Bridge 远程构建后实机验证。
 - 修复 OpenXR `Default` 无房间环境中手柄和激光发白：Default profile 显式使用 `preview_exposure: 0.0`，不再继承运行时 `2.0 EV` 的线性曝光默认值。手柄 PBR 材质和激光仍共用既有 View 色彩管线，房间环境与 Default 的曝光行为现在一致。
+- 明确 Vulkan 外部屏幕图像直采样的长期规范：每张源 `VkImage` 只创建一次 Filament 外部纹理，并保存格式、尺寸、layout、队列归属、producer-ready 和 consumer-release 状态；CUDA/Vulkan 写入后必须经过 barrier 和 queue ownership transfer 到 `VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL`，Filament 采样完成后才能复用槽位。屏幕源同步与 OpenXR 输出交换链同步分离；能力不完整时回退一次 Vulkan GPU copy/Quad Layer，不退回 CPU 像素传输。当前直接采样仍标记为实验路径，待三平台 CI、Validation Layer 和实机长稳验证后再启用为默认路径。
+- 固化“命令队列 + Presenter 线程执行”不可回退约束：后台线程只提交原始结果或资源描述，所有 Vulkan/Filament 图形资源创建、外部图像导入、barrier、队列归属转换、纹理绑定、释放和 Projection/Quad Layer 提交均由 Presenter 在 OpenXR 帧边界执行。后续外部 `VkImage` 直采样重构不得恢复后台线程直接调用 Filament C ABI 或操作 Vulkan 资源。
+- 按旧工程行为基准恢复控制器输入语义：Vive/WMR 触控板上/中/下方向模拟、模拟按键与真实 click 的互斥、OpenXR changed 边沿回退、touch/click 区分以及按键/摇杆动画目标平滑重新接入 Vulkan Presenter。该修复只调整 Python 输入策略，Filament/Vulkan 资源仍由 Presenter 命令队列线程独占。
 
 ### 验证结果
 

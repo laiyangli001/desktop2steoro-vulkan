@@ -254,7 +254,10 @@ int bridge_screen_create(FilamentBridge* bridge) {
             .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES,
                     bridge->screen_vertex_buffer, bridge->screen_index_buffer,
                     0, static_cast<uint32_t>(bridge->screen_indices.size()))
-            .priority(7).culling(false).castShadows(false).receiveShadows(false)
+            // Render the display-referred screen before controllers and laser.
+            // The screen does not write depth, so foreground controller PBR
+            // geometry and the depth-tested laser remain visible on top.
+            .priority(0).culling(false).castShadows(false).receiveShadows(false)
             .build(*bridge->engine, bridge->screen_entity);
     if (result != filament::RenderableManager::Builder::Success) {
         bridge_set_error(bridge, "Filament could not create OpenXR screen renderable");
