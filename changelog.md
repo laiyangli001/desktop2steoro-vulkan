@@ -11,6 +11,7 @@
 - 修复 Filament 源码远程构建的跨平台差异：Linux runner 显式使用 Clang，macOS 外部图像元数据接口改为无 nullability 警告的引用参数，Windows Bridge 从源码安装前缀递归发现实际 `.lib`；上一轮 CI `30158908856` 因这些构建配置问题失败，未生成可用三平台 Bridge。
 - 修复 Linux Filament 源码构建缺少 BlueVK XCB 头文件：CI 安装 `libxcb1-dev`；CI `30161119621` 的 Windows、macOS 已成功，Linux 仅因该依赖失败。
 - 优化 Filament 远程构建耗时：GitHub Actions 按 runner、架构、Filament 版本和源码补丁 hash 缓存源码、CMake 构建目录及安装前缀；缓存命中时跳过 Filament 全量编译，只构建 Bridge。Linux 同时补齐 `libx11-dev`。
+- 补齐 Linux BlueGL 构建依赖 `libgl1-mesa-dev`；CI `30163398945` 的 Windows、macOS 成功，Linux 最后缺少 `GL/gl.h`。
 - NVIDIA CUDA producer-ready/consumer-release external semaphore 现在默认开启；设置 `D2S_ENABLE_CUDA_EXTERNAL_SEMAPHORE=0` 可单独关闭 CUDA 外部同步进行回归对比。CUDA runtime 或 Vulkan 能力不足时仍自动回退 GPU copy。
 - 定位并阻止 Filament Vulkan 外部纹理 native 崩溃：Filament v1.74 公共 `Texture::Builder::import()` 仅支持 OpenGL/Metal 纹理标识，不接受裸 Vulkan `VkImage`。新增 `filament_bridge_vulkan_external_image_abi_available` 能力门控，当前 stock SDK 报告不支持时不再进入危险直采样调用；zero-copy 请求仍保留，运行时安全回退 Vulkan GPU copy，后续扩展 Filament Vulkan backend 后再打开真实路径。
 - 修复 OpenXR FPS 面板和操作指南导致的帧率骤降：工具 Quad layer 现在缓存 PIL 栅格化纹理，并复用已上传且已释放的 Vulkan swapchain image；内容未变化时每帧只重建轻量 layer pose，不再重复字体绘制、host staging map/copy 和 acquire/wait/release。FPS 面板接入 Presenter 的真实 XR 提交帧率、运行时输出帧率和输出延迟，并按旧工程每秒采样一次；操作指南保持静态 GPU 纹理复用。虚拟屏幕的每帧立体输出不受影响。
