@@ -26,22 +26,36 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Cache patched Filament build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ runner.temp }}/filament-source
+            ${{ runner.temp }}/filament-install
+          key: filament-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/filament/version.json', 'native/filament/patches/**') }}
+
       - name: Build patched Filament Vulkan backend
         shell: pwsh
         run: |
           $config = Get-Content -Raw -Encoding utf8 'native/filament/version.json' | ConvertFrom-Json
           $sourceRoot = Join-Path $env:RUNNER_TEMP 'filament-source'
           $installRoot = Join-Path $env:RUNNER_TEMP 'filament-install'
-          git clone --recursive --depth 1 --branch $config.source.ref $config.source.repository $sourceRoot
-          python native/filament/patches/apply_d2s_vulkan_external_image.py $sourceRoot
-          cmake -S $sourceRoot -B (Join-Path $sourceRoot 'out/d2s') `
-            -G 'Visual Studio 17 2022' -A x64 `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_INSTALL_PREFIX="$installRoot" `
-            -DFILAMENT_SUPPORTS_VULKAN=ON `
-            -DFILAMENT_BUILD_FILAMAT=ON `
-            -DFILAMENT_SKIP_SAMPLES=ON
-          cmake --build (Join-Path $sourceRoot 'out/d2s') --config Release --target INSTALL --parallel 2
+          if (-not (Test-Path -LiteralPath (Join-Path $sourceRoot '.git'))) {
+            git clone --recursive --depth 1 --branch $config.source.ref $config.source.repository $sourceRoot
+            python native/filament/patches/apply_d2s_vulkan_external_image.py $sourceRoot
+          }
+          if (-not (Test-Path -LiteralPath (Join-Path $installRoot 'include/filament/Engine.h'))) {
+            cmake -S $sourceRoot -B (Join-Path $sourceRoot 'out/d2s') `
+              -G 'Visual Studio 17 2022' -A x64 `
+              -DCMAKE_BUILD_TYPE=Release `
+              -DCMAKE_INSTALL_PREFIX="$installRoot" `
+              -DFILAMENT_SUPPORTS_VULKAN=ON `
+              -DFILAMENT_BUILD_FILAMAT=ON `
+              -DFILAMENT_SKIP_SAMPLES=ON
+            cmake --build (Join-Path $sourceRoot 'out/d2s') --config Release --target INSTALL --parallel 2
+          } else {
+            Write-Host 'Reusing cached patched Filament install.'
+          }
           $sdkRoot = $installRoot
           if (-not (Test-Path -LiteralPath (Join-Path $sdkRoot 'include/filament/Engine.h'))) {
             throw 'Patched Filament install did not produce public headers'
@@ -87,9 +101,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Cache patched Filament build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ runner.temp }}/filament-source
+            ${{ runner.temp }}/filament-install
+          key: filament-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/filament/version.json', 'native/filament/patches/**') }}
+
       - name: Install Linux Vulkan development files
         if: matrix.needs_vulkan_dev
-        run: sudo apt-get update && sudo apt-get install --yes clang libc++-dev libc++abi-dev libvulkan-dev libxcb1-dev
+        run: sudo apt-get update && sudo apt-get install --yes clang libc++-dev libc++abi-dev libvulkan-dev libxcb1-dev libx11-dev
 
       - name: Install macOS Vulkan headers
         if: matrix.platform == 'macos'
@@ -103,18 +125,24 @@ jobs:
           ref="$(jq -r '.source.ref' native/filament/version.json)"
           source_root="$RUNNER_TEMP/filament-source"
           install_root="$RUNNER_TEMP/filament-install"
-          git clone --recursive --depth 1 --branch "$ref" "$repository" "$source_root"
-          python3 native/filament/patches/apply_d2s_vulkan_external_image.py "$source_root"
-          cmake -S "$source_root" -B "$source_root/out/d2s" \
-            -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER=clang \
-            -DCMAKE_CXX_COMPILER=clang++ \
-            -DCMAKE_INSTALL_PREFIX="$install_root" \
-            -DFILAMENT_SUPPORTS_VULKAN=ON \
-            -DFILAMENT_BUILD_FILAMAT=ON \
-            -DFILAMENT_SKIP_SAMPLES=ON
-          cmake --build "$source_root/out/d2s" --target install --parallel 2
+          if [[ ! -d "$source_root/.git" ]]; then
+            git clone --recursive --depth 1 --branch "$ref" "$repository" "$source_root"
+            python3 native/filament/patches/apply_d2s_vulkan_external_image.py "$source_root"
+          fi
+          if [[ ! -f "$install_root/include/filament/Engine.h" ]]; then
+            cmake -S "$source_root" -B "$source_root/out/d2s" \
+              -G Ninja \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_C_COMPILER=clang \
+              -DCMAKE_CXX_COMPILER=clang++ \
+              -DCMAKE_INSTALL_PREFIX="$install_root" \
+              -DFILAMENT_SUPPORTS_VULKAN=ON \
+              -DFILAMENT_BUILD_FILAMAT=ON \
+              -DFILAMENT_SKIP_SAMPLES=ON
+            cmake --build "$source_root/out/d2s" --target install --parallel 2
+          else
+            echo 'Reusing cached patched Filament install.'
+          fi
           test -f "$install_root/include/filament/Engine.h"
           echo "FILAMENT_SDK_ROOT=$install_root" >> "$GITHUB_ENV"
 
