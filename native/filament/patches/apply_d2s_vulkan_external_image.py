@@ -90,6 +90,7 @@ def main() -> int:
 public:
     explicit D2SVulkanExternalImage(Platform::VulkanExternalImageData data) noexcept
             : mData(data) {}
+    ~D2SVulkanExternalImage() override;
 
 protected:
     bool getVulkanImageData(Platform::VulkanExternalImageData& out) const noexcept override {
@@ -100,6 +101,8 @@ protected:
 private:
     Platform::VulkanExternalImageData mData;
 };
+
+D2SVulkanExternalImage::~D2SVulkanExternalImage() = default;
 
 Platform::ExternalImageHandle VulkanPlatform::createExternalImageFromVkImage(
         VkImage image, VkFormat format, uint32_t width, uint32_t height) noexcept {

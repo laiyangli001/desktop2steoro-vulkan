@@ -4,6 +4,11 @@ project(filament_bridge LANGUAGES CXX)
 option(D2S_FILAMENT_VULKAN_EXTERNAL_IMAGE
     "Build against the patched Filament Vulkan external VkImage API" OFF)
 
+if(MSVC)
+    # Match Filament's source build, which uses the static MSVC runtime.
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
 if(WIN32)
     set(_filament_default_sdk "${CMAKE_CURRENT_SOURCE_DIR}/../sdk/windows/v1.74.0")
 elseif(APPLE)
