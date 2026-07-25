@@ -47,7 +47,8 @@ def main() -> int:
         virtual ~ExternalImage() noexcept;
 
     public:
-        virtual bool getVulkanImageData(VulkanExternalImageData*) const noexcept {
+        virtual bool getVulkanImageData(VulkanExternalImageData& out) const noexcept {
+            out = {};
             return false;
         }
 """,
@@ -91,11 +92,8 @@ public:
             : mData(data) {}
 
 protected:
-    bool getVulkanImageData(Platform::VulkanExternalImageData* out) const noexcept override {
-        if (!out) {
-            return false;
-        }
-        *out = mData;
+    bool getVulkanImageData(Platform::VulkanExternalImageData& out) const noexcept override {
+        out = mData;
         return mData.image != 0 && mData.width != 0 && mData.height != 0;
     }
 
@@ -115,7 +113,7 @@ Platform::ExternalImageHandle VulkanPlatform::createExternalImageFromVkImage(
 VulkanPlatform::ExternalImageMetadata VulkanPlatform::extractExternalImageMetadata(
         ExternalImageHandleRef image) const {
     Platform::VulkanExternalImageData data;
-    if (!image || !image->getVulkanImageData(&data)) {
+    if (!image || !image->getVulkanImageData(data)) {
         return {};
     }
     const bool srgb = data.format == static_cast<int32_t>(VK_FORMAT_R8G8B8A8_SRGB);
@@ -143,7 +141,7 @@ VulkanPlatform::ExternalImageMetadata VulkanPlatform::extractExternalImageMetada
 VulkanPlatform::ImageData VulkanPlatform::createVkImageFromExternal(
         ExternalImageHandleRef image, uint32_t, uint32_t) const {
     Platform::VulkanExternalImageData data;
-    if (!image || !image->getVulkanImageData(&data)) {
+    if (!image || !image->getVulkanImageData(data)) {
         return {};
     }
     ImageData result;

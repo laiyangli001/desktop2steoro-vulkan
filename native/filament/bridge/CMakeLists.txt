@@ -126,7 +126,9 @@ else()
     message(FATAL_ERROR "Unsupported platform")
 endif()
 
-file(GLOB _filament_libraries CONFIGURE_DEPENDS "${_filament_lib_dir}/*.lib" "${_filament_lib_dir}/*.a")
+file(GLOB_RECURSE _filament_libraries CONFIGURE_DEPENDS
+    "${FILAMENT_SDK_ROOT}/lib/*.lib"
+    "${FILAMENT_SDK_ROOT}/lib/*.a")
 if(NOT _filament_libraries)
     message(FATAL_ERROR "No Filament libraries found in ${_filament_lib_dir}")
 endif()

@@ -8,6 +8,7 @@
 
 - 默认开启 Filament 外部源 `VkImage` zero-copy 实验路径；Presenter 仍执行完整能力门控，条件不满足时自动回退 Vulkan GPU copy/Quad Layer。设置 `D2S_ENABLE_FILAMENT_SCREEN_IMAGE=0` 可恢复旧路径进行回归对比。
 - 接入 Filament v1.74.0 Vulkan backend 源码远程构建：新增 `native/filament/patches/apply_d2s_vulkan_external_image.py`，为 `VulkanPlatform` 增加正式的借用式外部 `VkImage` 元数据和工厂接口；GitHub Actions 在 Windows、Linux、macOS 远程构建 patched Filament 与 Bridge，并通过 `D2S_FILAMENT_VULKAN_EXTERNAL_IMAGE` 编译开关报告能力。本机不编译 C++，旧 Bridge/stock SDK 仍由能力探针自动回退 GPU copy。
+- 修复 Filament 源码远程构建的跨平台差异：Linux runner 显式使用 Clang，macOS 外部图像元数据接口改为无 nullability 警告的引用参数，Windows Bridge 从源码安装前缀递归发现实际 `.lib`；上一轮 CI `30158908856` 因这些构建配置问题失败，未生成可用三平台 Bridge。
 - NVIDIA CUDA producer-ready/consumer-release external semaphore 现在默认开启；设置 `D2S_ENABLE_CUDA_EXTERNAL_SEMAPHORE=0` 可单独关闭 CUDA 外部同步进行回归对比。CUDA runtime 或 Vulkan 能力不足时仍自动回退 GPU copy。
 - 定位并阻止 Filament Vulkan 外部纹理 native 崩溃：Filament v1.74 公共 `Texture::Builder::import()` 仅支持 OpenGL/Metal 纹理标识，不接受裸 Vulkan `VkImage`。新增 `filament_bridge_vulkan_external_image_abi_available` 能力门控，当前 stock SDK 报告不支持时不再进入危险直采样调用；zero-copy 请求仍保留，运行时安全回退 Vulkan GPU copy，后续扩展 Filament Vulkan backend 后再打开真实路径。
 - 修复 OpenXR FPS 面板和操作指南导致的帧率骤降：工具 Quad layer 现在缓存 PIL 栅格化纹理，并复用已上传且已释放的 Vulkan swapchain image；内容未变化时每帧只重建轻量 layer pose，不再重复字体绘制、host staging map/copy 和 acquire/wait/release。FPS 面板接入 Presenter 的真实 XR 提交帧率、运行时输出帧率和输出延迟，并按旧工程每秒采样一次；操作指南保持静态 GPU 纹理复用。虚拟屏幕的每帧立体输出不受影响。

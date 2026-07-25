@@ -89,7 +89,7 @@ jobs:
 
       - name: Install Linux Vulkan development files
         if: matrix.needs_vulkan_dev
-        run: sudo apt-get update && sudo apt-get install --yes libvulkan-dev
+        run: sudo apt-get update && sudo apt-get install --yes clang libvulkan-dev
 
       - name: Install macOS Vulkan headers
         if: matrix.platform == 'macos'
@@ -108,6 +108,8 @@ jobs:
           cmake -S "$source_root" -B "$source_root/out/d2s" \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++ \
             -DCMAKE_INSTALL_PREFIX="$install_root" \
             -DFILAMENT_SUPPORTS_VULKAN=ON \
             -DFILAMENT_BUILD_FILAMAT=ON \
