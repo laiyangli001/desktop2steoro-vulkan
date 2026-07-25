@@ -89,7 +89,7 @@ jobs:
 
       - name: Install Linux Vulkan development files
         if: matrix.needs_vulkan_dev
-        run: sudo apt-get update && sudo apt-get install --yes clang libc++-dev libc++abi-dev libvulkan-dev
+        run: sudo apt-get update && sudo apt-get install --yes clang libc++-dev libc++abi-dev libvulkan-dev libxcb1-dev
 
       - name: Install macOS Vulkan headers
         if: matrix.platform == 'macos'
