@@ -194,6 +194,18 @@ int filament_bridge_set_screen_image(
     return bridge_screen_set_image(bridge, image, width, height, format);
 }
 
+int filament_bridge_vulkan_external_image_abi_available(
+        const FilamentBridge*) {
+#if defined(D2S_FILAMENT_VULKAN_EXTERNAL_IMAGE)
+    return 1;
+#else
+    // Filament v1.74's public Texture::Builder::import API does not accept
+    // Vulkan VkImage handles. Keep the capability disabled until the Vulkan
+    // backend is extended with a real external-image implementation.
+    return 0;
+#endif
+}
+
 int filament_bridge_set_screen_ready_semaphore(
         FilamentBridge* bridge, const void* semaphore) {
     return bridge_eye_set_ready_semaphore(bridge, semaphore);

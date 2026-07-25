@@ -120,6 +120,10 @@ FILAMENT_BRIDGE_API int filament_bridge_set_screen_light(
 FILAMENT_BRIDGE_API int filament_bridge_set_screen_image(
         FilamentBridge* bridge, const void* image,
         uint32_t width, uint32_t height, int32_t format);
+// Reports whether this Bridge is backed by a Filament Vulkan backend that
+// supports sampling an application-owned VkImage as a material texture.
+FILAMENT_BRIDGE_API int filament_bridge_vulkan_external_image_abi_available(
+        const FilamentBridge* bridge);
 // Set a borrowed binary semaphore signaled by the runtime output producer.
 FILAMENT_BRIDGE_API int filament_bridge_set_screen_ready_semaphore(
         FilamentBridge* bridge, const void* semaphore);

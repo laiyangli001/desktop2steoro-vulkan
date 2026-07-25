@@ -274,9 +274,9 @@ int bridge_screen_set_image(FilamentBridge* bridge, const void* image,
         uint32_t width, uint32_t height, int32_t format) {
     if (!bridge || !bridge->engine || !bridge->screen_material_instance ||
             !image || width == 0 || height == 0) return 0;
-    if (format != VK_FORMAT_R8G8B8A8_SRGB) {
+    if (format != VK_FORMAT_R8G8B8A8_SRGB && format != VK_FORMAT_R8G8B8A8_UNORM) {
         bridge_set_error(bridge,
-                "Virtual screen requires VK_FORMAT_R8G8B8A8_SRGB");
+                "Virtual screen requires VK_FORMAT_R8G8B8A8_SRGB or VK_FORMAT_R8G8B8A8_UNORM");
         return 0;
     }
     const uint32_t eye_index = bridge->active_eye;
@@ -295,6 +295,30 @@ int bridge_screen_set_image(FilamentBridge* bridge, const void* image,
             return 1;
         }
     }
+#if defined(D2S_FILAMENT_VULKAN_EXTERNAL_IMAGE)
+    const auto external_image =
+            bridge->platform->createExternalImageFromVkImage(
+                    reinterpret_cast<VkImage>(const_cast<void*>(image)),
+                    static_cast<VkFormat>(format), width, height);
+    if (!external_image) {
+        bridge_set_error(bridge,
+                "Filament Vulkan backend rejected the external VkImage metadata");
+        return 0;
+    }
+    const auto texture_format = format == VK_FORMAT_R8G8B8A8_SRGB
+            ? filament::Texture::InternalFormat::SRGB8_A8
+            : filament::Texture::InternalFormat::RGBA8;
+    auto* texture = filament::Texture::Builder()
+            .width(width).height(height).levels(1)
+            .format(texture_format)
+            .sampler(filament::Texture::Sampler::SAMPLER_2D)
+            .usage(filament::Texture::Usage::SAMPLEABLE)
+            .external()
+            .build(*bridge->engine);
+    if (texture) {
+        texture->setExternalImage(*bridge->engine, external_image);
+    }
+#else
     auto* texture = filament::Texture::Builder()
             .width(width).height(height).levels(1)
             // Runtime eye images contain display-referred sRGB bytes in a
@@ -304,6 +328,7 @@ int bridge_screen_set_image(FilamentBridge* bridge, const void* image,
             .usage(filament::Texture::Usage::SAMPLEABLE)
             .import(reinterpret_cast<intptr_t>(const_cast<void*>(image)))
             .build(*bridge->engine);
+#endif
     if (!texture) {
         bridge_set_error(bridge, "Filament could not import virtual screen Vulkan image");
         return 0;

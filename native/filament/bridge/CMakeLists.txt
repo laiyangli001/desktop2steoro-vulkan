@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.21)
 project(filament_bridge LANGUAGES CXX)
 
+option(D2S_FILAMENT_VULKAN_EXTERNAL_IMAGE
+    "Build against the patched Filament Vulkan external VkImage API" OFF)
+
 if(WIN32)
     set(_filament_default_sdk "${CMAKE_CURRENT_SOURCE_DIR}/../sdk/windows/v1.74.0")
 elseif(APPLE)
@@ -82,6 +85,9 @@ add_library(filament_bridge SHARED
     preview_bridge.cpp)
 target_compile_features(filament_bridge PRIVATE cxx_std_20)
 target_compile_definitions(filament_bridge PRIVATE FILAMENT_BRIDGE_BUILD=1)
+if(D2S_FILAMENT_VULKAN_EXTERNAL_IMAGE)
+    target_compile_definitions(filament_bridge PRIVATE D2S_FILAMENT_VULKAN_EXTERNAL_IMAGE=1)
+endif()
 if(MSVC)
     target_compile_options(filament_bridge PRIVATE /GR-)
 else()

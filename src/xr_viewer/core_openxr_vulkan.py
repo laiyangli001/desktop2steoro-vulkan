@@ -258,7 +258,7 @@ class OpenXrVulkanPresenter(
         self._filament_screen_image_enabled = os.environ.get(
             # Prefer zero-copy when the per-frame synchronization contract is
             # available; _can_use_filament_screen_image provides the fallback.
-            "D2S_ENABLE_FILAMENT_SCREEN_IMAGE", "0"
+            "D2S_ENABLE_FILAMENT_SCREEN_IMAGE", "1"
         ).strip().lower() in {"1", "true", "yes", "on"}
         self._controllers_root = Path(__file__).resolve().parent / "controllers"
         self._controller_brands = discover_controller_brands(self._controllers_root)
@@ -1084,6 +1084,11 @@ class OpenXrVulkanPresenter(
             or not self._filament_screen_image_enabled
             or self.filament_bridge is None
             or not getattr(self.filament_bridge, "screen_image_abi_available", False)
+            or not getattr(
+                self.filament_bridge,
+                "vulkan_external_image_abi_available",
+                False,
+            )
             or not getattr(
                 self.filament_bridge, "screen_ready_semaphore_abi_available", False
             )
@@ -2466,12 +2471,8 @@ class OpenXrVulkanPresenter(
                 xr.wait_swapchain_image(
                     eye.handle,
                     xr.SwapchainImageWaitInfo(timeout=xr.INFINITE_DURATION),
-                )
+            )
             screen_image_projection = self._can_use_filament_screen_image(output_frame)
-            if screen_image_projection and not all(consumer_release_semaphores):
-                raise RuntimeError(
-                    "Filament did not publish render-finished semaphores for both eyes"
-                )
             if self.filament_bridge is not None:
                 self._update_filament_screen_light(
                     self.filament_bridge,
@@ -2544,6 +2545,10 @@ class OpenXrVulkanPresenter(
                         image_address = _ctypes_handle_address(eye.images[image_index].image)
                         image = self.vulkan.image_handle_from_address(image_address)
                         self.vulkan.clear_color_image(image, self.config.clear_color)
+            if screen_image_projection and not all(consumer_release_semaphores):
+                raise RuntimeError(
+                    "Filament did not publish render-finished semaphores for both eyes"
+                )
             if self.filament_bridge is not None:
                 bridge = self.filament_bridge
                 if screen_image_projection and isinstance(

@@ -5,11 +5,13 @@ on:
   push:
     paths:
       - 'native/filament/bridge/**'
+      - 'native/filament/patches/**'
       - 'native/filament/version.json'
       - '.github/workflows/filament-bridge.yml'
   pull_request:
     paths:
       - 'native/filament/bridge/**'
+      - 'native/filament/patches/**'
       - 'native/filament/version.json'
       - '.github/workflows/filament-bridge.yml'
 
@@ -24,23 +26,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download and verify Filament SDK
+      - name: Build patched Filament Vulkan backend
         shell: pwsh
         run: |
           $config = Get-Content -Raw -Encoding utf8 'native/filament/version.json' | ConvertFrom-Json
-          $asset = $config.platforms.windows.asset
-          $expectedSha256 = $config.platforms.windows.sha256
-          $archive = Join-Path $env:RUNNER_TEMP $asset
-          Invoke-WebRequest `
-            -Uri "https://github.com/google/filament/releases/download/v$($config.version)/$asset" `
-            -OutFile $archive
-          $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actual -ne $expectedSha256) {
-            throw "Filament SDK SHA-256 mismatch: $actual"
+          $sourceRoot = Join-Path $env:RUNNER_TEMP 'filament-source'
+          $installRoot = Join-Path $env:RUNNER_TEMP 'filament-install'
+          git clone --recursive --depth 1 --branch $config.source.ref $config.source.repository $sourceRoot
+          python native/filament/patches/apply_d2s_vulkan_external_image.py $sourceRoot
+          cmake -S $sourceRoot -B (Join-Path $sourceRoot 'out/d2s') `
+            -G 'Visual Studio 17 2022' -A x64 `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_INSTALL_PREFIX="$installRoot" `
+            -DFILAMENT_SUPPORTS_VULKAN=ON `
+            -DFILAMENT_BUILD_FILAMAT=ON `
+            -DFILAMENT_SKIP_SAMPLES=ON
+          cmake --build (Join-Path $sourceRoot 'out/d2s') --config Release --target INSTALL --parallel 2
+          $sdkRoot = $installRoot
+          if (-not (Test-Path -LiteralPath (Join-Path $sdkRoot 'include/filament/Engine.h'))) {
+            throw 'Patched Filament install did not produce public headers'
           }
-          $sdkRoot = Join-Path $env:RUNNER_TEMP 'filament-sdk'
-          New-Item -ItemType Directory -Path $sdkRoot -Force | Out-Null
-          tar -xzf $archive -C $sdkRoot
           "FILAMENT_SDK_ROOT=$sdkRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Configure and build bridge
@@ -48,7 +53,8 @@ jobs:
         run: |
           cmake -S native/filament/bridge -B native/filament/build/ci-windows `
             -G 'Visual Studio 17 2022' -A x64 `
-            -DFILAMENT_SDK_ROOT="$env:FILAMENT_SDK_ROOT"
+            -DFILAMENT_SDK_ROOT="$env:FILAMENT_SDK_ROOT" `
+            -DD2S_FILAMENT_VULKAN_EXTERNAL_IMAGE=ON
           cmake --build native/filament/build/ci-windows --config Release --parallel 2
           if (-not (Test-Path -LiteralPath 'src/xr_viewer/native/windows/filament_bridge.dll')) {
             throw 'Windows Filament bridge was not produced'
@@ -89,21 +95,26 @@ jobs:
         if: matrix.platform == 'macos'
         run: brew install vulkan-headers
 
-      - name: Download and verify Filament SDK
+      - name: Build patched Filament Vulkan backend
         shell: bash
         run: |
           set -euo pipefail
-          version="$(jq -r '.version' native/filament/version.json)"
-          asset="$(jq -r '.platforms.${{ matrix.platform }}.asset' native/filament/version.json)"
-          expected_sha256="$(jq -r '.platforms.${{ matrix.platform }}.sha256' native/filament/version.json)"
-          archive="$RUNNER_TEMP/$asset"
-          curl --fail --location --retry 3 \
-            "https://github.com/google/filament/releases/download/v$version/$asset" \
-            --output "$archive"
-          actual="$(shasum -a 256 "$archive" | awk '{print $1}')"
-          test "$actual" = "$expected_sha256"
-          mkdir -p "$RUNNER_TEMP/filament-sdk"
-          tar -xzf "$archive" -C "$RUNNER_TEMP/filament-sdk"
+          repository="$(jq -r '.source.repository' native/filament/version.json)"
+          ref="$(jq -r '.source.ref' native/filament/version.json)"
+          source_root="$RUNNER_TEMP/filament-source"
+          install_root="$RUNNER_TEMP/filament-install"
+          git clone --recursive --depth 1 --branch "$ref" "$repository" "$source_root"
+          python3 native/filament/patches/apply_d2s_vulkan_external_image.py "$source_root"
+          cmake -S "$source_root" -B "$source_root/out/d2s" \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$install_root" \
+            -DFILAMENT_SUPPORTS_VULKAN=ON \
+            -DFILAMENT_BUILD_FILAMAT=ON \
+            -DFILAMENT_SKIP_SAMPLES=ON
+          cmake --build "$source_root/out/d2s" --target install --parallel 2
+          test -f "$install_root/include/filament/Engine.h"
+          echo "FILAMENT_SDK_ROOT=$install_root" >> "$GITHUB_ENV"
 
       - name: Configure and build bridge
         shell: bash
@@ -111,7 +122,8 @@ jobs:
           set -euo pipefail
           cmake -S native/filament/bridge -B native/filament/build/ci \
             -DCMAKE_BUILD_TYPE=Release \
-            -DFILAMENT_SDK_ROOT="$RUNNER_TEMP/filament-sdk/filament"
+            -DFILAMENT_SDK_ROOT="$FILAMENT_SDK_ROOT" \
+            -DD2S_FILAMENT_VULKAN_EXTERNAL_IMAGE=ON
           cmake --build native/filament/build/ci --config Release --parallel 2
           test -f "src/xr_viewer/native/${{ matrix.platform }}/${{ matrix.output }}"
 

@@ -50,6 +50,7 @@ class FilamentVulkanBridge:
         self._laser_abi_available = False
         self._controller_guide_abi_available = False
         self._screen_image_abi_available = False
+        self._vulkan_external_image_abi_available = False
         self._screen_curved_abi_available = False
         self._screen_light_abi_available = False
         self._passthrough_backdrop_abi_available = False
@@ -84,6 +85,10 @@ class FilamentVulkanBridge:
     @property
     def screen_image_abi_available(self) -> bool:
         return self._screen_image_abi_available
+
+    @property
+    def vulkan_external_image_abi_available(self) -> bool:
+        return self._vulkan_external_image_abi_available
 
     @property
     def screen_curved_abi_available(self) -> bool:
@@ -749,6 +754,15 @@ class FilamentVulkanBridge:
             ]
             library.filament_bridge_set_screen_image.restype = ctypes.c_int
             self._screen_image_abi_available = True
+        external_image_abi = getattr(
+            library, "filament_bridge_vulkan_external_image_abi_available", None
+        )
+        if external_image_abi is not None:
+            external_image_abi.argtypes = [ctypes.c_void_p]
+            external_image_abi.restype = ctypes.c_int
+            self._vulkan_external_image_abi_available = bool(
+                external_image_abi(None)
+            )
         if hasattr(library, "filament_bridge_set_screen_ready_semaphore"):
             library.filament_bridge_set_screen_ready_semaphore.argtypes = [
                 ctypes.c_void_p, ctypes.c_void_p

@@ -504,7 +504,7 @@ def test_filament_controller_guide_tracks_geometry_and_visibility() -> None:
 def test_presenter_defaults_to_capability_gated_zero_copy_path(monkeypatch) -> None:
     monkeypatch.delenv("D2S_ENABLE_FILAMENT_SCREEN_IMAGE", raising=False)
     presenter = OpenXrVulkanPresenter()
-    assert presenter._filament_screen_image_enabled is False
+    assert presenter._filament_screen_image_enabled is True
 
 
 def test_filament_screen_image_requires_per_eye_external_ready_semaphores() -> None:
@@ -513,6 +513,7 @@ def test_filament_screen_image_requires_per_eye_external_ready_semaphores() -> N
 
     class Bridge:
         screen_image_abi_available = True
+        vulkan_external_image_abi_available = True
         screen_ready_semaphore_abi_available = True
         async_submit_abi_available = True
         finished_drawing_semaphore_abi_available = True

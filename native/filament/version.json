@@ -1,6 +1,11 @@
 {
   "version": "1.74.0",
   "release_url": "https://github.com/google/filament/releases/tag/v1.74.0",
+  "source": {
+    "repository": "https://github.com/google/filament.git",
+    "ref": "v1.74.0",
+    "patch": "native/filament/patches/apply_d2s_vulkan_external_image.py"
+  },
   "platforms": {
     "windows": {
       "asset": "filament-v1.74.0-windows.tgz",

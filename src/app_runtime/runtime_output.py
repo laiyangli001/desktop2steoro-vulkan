@@ -35,7 +35,7 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
 
     @staticmethod
     def _external_semaphore_requested() -> bool:
-        value = os.environ.get("D2S_ENABLE_CUDA_EXTERNAL_SEMAPHORE", "0")
+        value = os.environ.get("D2S_ENABLE_CUDA_EXTERNAL_SEMAPHORE", "1")
         return value.strip().lower() in {"1", "true", "yes", "on"}
 
     def __init__(self, presenter):
@@ -51,6 +51,7 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
         self.left_visible_semaphores = []
         self.right_visible_semaphores = []
         self.external_semaphore_enabled = False
+        self._logged_external_sync_mode = False
         self.left_slot = None
         self.right_slot = None
         self._extent = None
@@ -326,6 +327,15 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
                 self.external_semaphore_enabled
                 and getattr(self.presenter, "screen_ready_semaphore_available", False)
             )
+            if not self._logged_external_sync_mode:
+                print(
+                    "[VulkanOutput] CUDA external semaphore sync: "
+                    f"requested={self._external_semaphore_requested()} "
+                    f"available={self.external_semaphore_enabled} "
+                    f"active={use_external_semaphore}",
+                    flush=True,
+                )
+                self._logged_external_sync_mode = True
             if use_external_semaphore:
                 for eye_index, release_semaphore in (
                     (0, self.left_release_semaphores[slot_index]),

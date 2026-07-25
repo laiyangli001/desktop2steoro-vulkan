@@ -72,6 +72,10 @@ Python产品代码必须直接支持Windows x86_64、Linux x86_64和macOS arm64�
 
 新工程允许重新实现该Bridge，使其支持Filament Vulkan Backend和Python提供的Vulkan/OpenXR目标。Bridge是唯一自有原生边界，只管理Filament对象和渲染调用；Capture、Inference、Vulkan资源图、OpenXR生命周期和产品状态机必须保留在Python。Bridge使用窄C ABI并由Python通过`ctypes`或`cffi`加载。
 
+Filament Vulkan 外部源图像接口必须以源码扩展方式接入，不得把 release SDK 的通用 `Texture::Builder::import()` 猜测为 Vulkan `VkImage` 接口。当前版本锁定 Filament `v1.74.0`，补丁脚本为 `native/filament/patches/apply_d2s_vulkan_external_image.py`：它在 `VulkanPlatform` 中增加借用式 `VkImage` 外部句柄、格式/尺寸元数据和 `ExternalImage` 工厂，Bridge 通过 `D2S_FILAMENT_VULKAN_EXTERNAL_IMAGE` 编译开关启用。补丁只包装调用方所有的 `VkImage`，不负责销毁图像、内存、OpenXR swapchain 或 producer semaphore；layout、queue family、producer-ready 和 consumer-release 仍由 Python Presenter 的 Vulkan 同步契约负责。
+
+该 Filament 源码和 Bridge 必须由 GitHub Actions 在 Windows、Linux、macOS 三个平台远程构建并安装到临时构建前缀；本机不编译 C++/Filament。三平台二进制只有在 CI 构建完成、ABI 能力探针通过并下载回 `src/xr_viewer/native/<platform>/` 后，才允许实机启用外部源图像路径。旧 stock SDK 或旧 Bridge 的能力探针返回 false 时，必须保持 Vulkan GPU copy/Quad Layer 回退。
+
 ### 2.4 推荐的 Fallback 策略
 
 ```text
@@ -389,7 +393,7 @@ Presenter 只能通过 `GpuProducerAdapter` 注册表创建具体 producer；不
 
 适配器发现或加载失败属于能力缺失，不得传播为 Presenter 线程异常；必须限频记录原因、保持 OpenXR 生命周期运行，并在后续输出帧重新尝试创建适配器。若当前 producer 没有可用 Vulkan import/copy 能力，则该帧只能丢弃，禁止退回 CPU 像素往返。
 
-当前实现状态：图像环、Filament 多槽缓存、producer-ready、source barrier、Filament visible semaphore、consumer-release barrier、Filament per-eye render-finished ABI 和 CUDA/ROCm/HIP producer wait 已接入；稳定默认路径仍以一次 Vulkan GPU copy 验证为基线。`D2S_ENABLE_FILAMENT_SCREEN_IMAGE=1` 仅表示直接外部采样实验路径，只有在每槽元数据、source-image barrier、queue ownership transfer、Filament sampling completion 和生产端 release 全部满足时才能启用。该路径必须经过三平台 CI、Validation Layer、实机长稳和帧率/显存压力验证后，才可成为默认路径。旧 Bridge 缺少 completion ABI 时自动回退，不得移除 consumer-release。
+当前实现状态：图像环、Filament 多槽缓存、producer-ready、source barrier、Filament visible semaphore、consumer-release barrier、Filament per-eye render-finished ABI 和 CUDA/ROCm/HIP producer wait 已接入；Filament v1.74.0 源码补丁和三平台 CI 远程构建入口已接入。直接外部采样请求默认开启，但只有带 `D2S_FILAMENT_VULKAN_EXTERNAL_IMAGE` 的新 Bridge 才会报告 `filament_bridge_vulkan_external_image_abi_available=true` 并实际包装外部 `VkImage`；旧 stock SDK/Bridge 仍报告 false，Presenter 自动回退到 Vulkan GPU copy。`D2S_ENABLE_FILAMENT_SCREEN_IMAGE=0` 仍可用于回归测试和故障隔离。不得把通用 `import()` 强行当作 Vulkan 外部纹理接口，也不得移除 consumer-release。
 
 ### 5.5 Projection Layer 异步提交
 
