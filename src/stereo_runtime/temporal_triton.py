@@ -4,6 +4,8 @@ import torch
 import triton
 import triton.language as tl
 
+from .triton_runtime import triton_runtime_available
+
 
 @triton.jit
 def _temporal_masked_kernel(
@@ -41,11 +43,7 @@ def can_use_triton_temporal_masked(
     mask: torch.Tensor,
 ) -> bool:
     return (
-        left.is_cuda
-        and right.is_cuda
-        and prev_left.is_cuda
-        and prev_right.is_cuda
-        and mask.is_cuda
+        triton_runtime_available(left.device)
         and left.dtype == torch.float32
         and right.dtype == torch.float32
         and prev_left.dtype == torch.float32

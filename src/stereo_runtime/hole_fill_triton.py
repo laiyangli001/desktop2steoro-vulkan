@@ -4,6 +4,8 @@ import torch
 import triton
 import triton.language as tl
 
+from .triton_runtime import triton_runtime_available
+
 
 @triton.jit
 def _hole_fill_radius3_kernel(
@@ -46,8 +48,7 @@ def can_use_triton_radius3(image: torch.Tensor, mask: torch.Tensor, *, radius: i
     return (
         radius == 3
         and strength == 1.0
-        and image.is_cuda
-        and mask.is_cuda
+        and triton_runtime_available(image.device)
         and image.dtype == torch.float32
         and mask.dtype == torch.float32
         and image.ndim == 4
@@ -112,8 +113,7 @@ def can_use_triton_radius1(image: torch.Tensor, mask: torch.Tensor, *, radius: i
     return (
         radius == 1
         and abs(float(strength) - 0.60) < 1e-6
-        and image.is_cuda
-        and mask.is_cuda
+        and triton_runtime_available(image.device)
         and image.dtype == torch.float32
         and mask.dtype == torch.float32
         and image.ndim == 4

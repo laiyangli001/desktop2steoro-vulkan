@@ -4,6 +4,8 @@ import torch
 import triton
 import triton.language as tl
 
+from .triton_runtime import triton_runtime_available
+
 
 @triton.jit
 def _warp_composite2_kernel(
@@ -69,9 +71,7 @@ def can_use_triton_warp_composite2(rgb: torch.Tensor, depth: torch.Tensor, base_
     return (
         layers == 2
         and symmetric
-        and rgb.is_cuda
-        and depth.is_cuda
-        and base_shift.is_cuda
+        and triton_runtime_available(rgb.device)
         and rgb.dtype == torch.float32
         and depth.dtype == torch.float32
         and base_shift.dtype == torch.float32

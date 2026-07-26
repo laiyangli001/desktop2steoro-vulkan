@@ -4,6 +4,8 @@ import torch
 import triton
 import triton.language as tl
 
+from .triton_runtime import triton_runtime_available
+
 
 @triton.jit
 def _clamp_i32(value, lo: tl.constexpr, hi: tl.constexpr):
@@ -216,8 +218,7 @@ def _fast_plus_half_sbs_uint8_kernel(
 
 def can_use_fast_plus_fused_half_sbs_uint8(rgb: torch.Tensor, depth: torch.Tensor) -> bool:
     return (
-        rgb.is_cuda
-        and depth.is_cuda
+        triton_runtime_available(rgb.device)
         and rgb.dtype == torch.float32
         and depth.dtype == torch.float32
         and rgb.ndim == 4

@@ -233,6 +233,12 @@ def test_openxr_defaults_to_validated_srgb_projection_target() -> None:
     assert OpenXrVulkanConfig().controller_guide_max_distance == pytest.approx(0.4)
 
 
+def test_presenter_config_keeps_default_screen_geometry() -> None:
+    config = OpenXrVulkanConfig()
+    assert config.filament_screen_width == pytest.approx(23.09)
+    assert config.filament_screen_distance == pytest.approx(20.0)
+
+
 def test_presenter_rejects_non_positive_controller_guide_distance() -> None:
     with pytest.raises(ValueError, match="controller_guide_max_distance"):
         OpenXrVulkanPresenter(OpenXrVulkanConfig(controller_guide_max_distance=0.0))
@@ -435,9 +441,11 @@ def test_controller_callout_uses_projection_layer_not_quad_layer() -> None:
     assert "bridge.set_controller_guide_texture(self._controller_callout_rgba)" in source
     assert "bridge.set_controller_guide(guide_matrix, visible=True)" in source
     assert 'specs.append(("controller_callouts"' not in source
-    assert "if self._operation_guide_visible:" in source
-    assert "build_help_rgba(environment_mode=False)" in source
-    assert 'self._tool_quad_texture_cache.get("help")' in source
+    assert "if self._screen_operation_guide_visible:" in source
+    assert "build_help_rgba(environment_mode=environment_mode, lang=language)" in source
+    assert 'self._tool_quad_texture_cache.get("screen_help")' in source
+    assert '"keyboard", rgba, _keyboard_position' in source
+    assert '"keyboard", rgba, keyboard_position' not in source
     assert 'entry.get("content") is not rgba' in source
     assert 'entry.get("image_index") is None' in source
     assert "_tool_overlay_xr_fps" in source
@@ -540,6 +548,68 @@ def test_filament_screen_image_requires_per_eye_external_ready_semaphores() -> N
         "_vulkan_source_consumer_release": lambda: None,
     })
     assert presenter._can_use_filament_screen_image(frame) is True
+
+
+def test_filament_screen_image_gate_reports_gpu_copy_fallback_reason() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_screen_image_enabled = True
+
+    class Bridge:
+        screen_image_abi_available = True
+        vulkan_external_image_abi_available = True
+        screen_ready_semaphore_abi_available = True
+        async_submit_abi_available = True
+        finished_drawing_semaphore_abi_available = True
+
+    presenter.filament_bridge = Bridge()
+    frame = SimpleNamespace(metadata={"vulkan_output_sync": "gpu_synchronized"})
+
+    assert presenter._filament_screen_image_gate_reason(frame) == (
+        "producer_sync=gpu_synchronized"
+    )
+
+
+def test_filament_screen_image_status_ignores_normal_frame_reuse(capsys) -> None:
+    presenter = OpenXrVulkanPresenter()
+
+    presenter._report_filament_screen_image_status(None, False, "no_output_frame")
+
+    assert capsys.readouterr().out == ""
+
+
+def test_release_output_frame_waits_for_filament_finished_semaphores() -> None:
+    calls = []
+    frame = SimpleNamespace(
+        frame_id=17,
+        metadata={
+            "_vulkan_source_consumer_release": lambda frame_id, semaphores: calls.append(
+                (frame_id, semaphores)
+            ),
+            "_vulkan_consumer_release_semaphores": ("left-finished", "right-finished"),
+            "_vulkan_output_release": lambda frame_id: calls.append(("fallback", frame_id)),
+        },
+    )
+
+    OpenXrVulkanPresenter._release_output_frame(frame)
+
+    assert calls == [(17, ("left-finished", "right-finished"))]
+
+
+def test_release_displayed_output_for_reuse_releases_matching_ring_slot() -> None:
+    calls = []
+    presenter = OpenXrVulkanPresenter()
+    presenter._displayed_output = SimpleNamespace(
+        frame_id=23,
+        metadata={
+            "vulkan_output_ring_slot": 2,
+            "_vulkan_output_release": lambda frame_id: calls.append(frame_id),
+        },
+    )
+
+    assert presenter.release_displayed_output_for_reuse(2) is True
+    assert presenter._displayed_output is None
+    assert calls == [23]
+    assert presenter.release_displayed_output_for_reuse(2) is False
 
 
 def test_host_image_upload_writes_padded_rows_without_pointer_cast() -> None:
@@ -705,7 +775,7 @@ def test_vulkan_presenter_exposes_legacy_overlay_shortcut_state() -> None:
     assert presenter._keyboard_visible is False
 
 
-def test_vulkan_b_long_press_displays_operation_guide() -> None:
+def test_vulkan_b_long_press_cycles_hand_fps_and_operation_guide() -> None:
     presenter = OpenXrVulkanPresenter()
     presenter._frame_now = 1.0
     presenter._controller_inputs = ({}, {"b_button": 1.0})
@@ -714,14 +784,79 @@ def test_vulkan_b_long_press_displays_operation_guide() -> None:
     presenter._frame_now = 2.01
     presenter._handle_controller_shortcuts()
 
-    assert presenter._operation_guide_visible is True
+    # First B hold: hand FPS only.
+    assert presenter._hand_fps_visible is True
+    assert presenter._hand_operation_guide_visible is False
+    assert presenter._operation_guide_visible is False
     assert presenter._fps_overlay_visible is False
     assert presenter._aperture_visible is False
+
+    presenter._dispatch_controller_shortcut("cycle_hand_panel")
+    assert presenter._hand_fps_visible is True
+    assert presenter._hand_operation_guide_visible is True
+    assert presenter._operation_guide_visible is True
+    assert presenter._fps_overlay_visible is False
+
+    presenter._dispatch_controller_shortcut("cycle_hand_panel")
+    assert presenter._hand_fps_visible is False
+    assert presenter._hand_operation_guide_visible is False
+    assert presenter._operation_guide_visible is False
+
+
+def test_menu_panel_cycle_keeps_fps_when_vertical_screen_guide_is_shown() -> None:
+    presenter = OpenXrVulkanPresenter()
+
+    presenter._dispatch_controller_shortcut("cycle_status_panel")
+    assert presenter._fps_overlay_visible is True
+    assert presenter._screen_operation_guide_visible is False
+
+    presenter._dispatch_controller_shortcut("cycle_status_panel")
+    assert presenter._fps_overlay_visible is True
+    assert presenter._screen_operation_guide_visible is True
+
+    presenter._dispatch_controller_shortcut("cycle_status_panel")
+    assert presenter._fps_overlay_visible is False
+    assert presenter._screen_operation_guide_visible is False
+
+
+def test_keyboard_pose_faces_head_independently_of_profile_screen_rotation() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_screen = (
+        (0.0, 1.0, -2.0), 2.4, 1.35, (35.0, 20.0, 10.0)
+    )
+    presenter._head_position_w = np.asarray((0.8, 1.2, 0.0), dtype=np.float64)
+
+    pose = presenter._keyboard_pose_mat4()
+    toward_head = presenter._head_position_w - pose[:3, 3]
+    toward_head /= np.linalg.norm(toward_head)
+
+    assert float(np.dot(pose[:3, 2], toward_head)) > 0.99
+
+
+def test_laser_cursor_ring_is_emitted_at_screen_hit() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_screen = (
+        (0.0, 0.0, -2.0), 2.4, 1.35, (0.0, 0.0, 0.0)
+    )
+    presenter._head_position_w = np.asarray((0.0, 0.0, 0.0), dtype=np.float64)
+    presenter._aim_mat_r = np.eye(4, dtype=np.float32)
+    presenter._grip_mat_r = np.eye(4, dtype=np.float32)
+
+    specs = presenter._cursor_overlay_specs(
+        np.ones((64, 64, 4), dtype=np.uint8),
+        presenter._filament_screen_pose_mat4(),
+        presenter._head_position_w,
+    )
+
+    assert len(specs) == 1
+    assert specs[0][0] == "laser_cursor_1"
+    assert specs[0][2][2] > -2.0
 
 
 def test_vulkan_shortcuts_cycle_screen_preset_and_background() -> None:
     presenter = OpenXrVulkanPresenter()
     presenter._head_position_w = (0.0, 0.0, 0.0)
+    presenter._head_forward_w = (0.0, 0.0, -1.0)
     presenter._filament_screen = (
         (0.0, 0.0, -16.0),
         16.0,
@@ -746,6 +881,7 @@ def test_vulkan_reset_screen_restores_initial_size_and_pose() -> None:
     presenter = OpenXrVulkanPresenter()
     initial = ((0.0, 0.0, -2.5), 2.4, 1.35, (0.0, 0.0, 0.0))
     presenter._filament_screen_initial = initial
+    presenter._filament_screen_profile_authored = True
     presenter._filament_screen = (
         (1.0, 0.5, -20.0), 22.0, 12.375, (5.0, 10.0, 0.0)
     )
@@ -774,6 +910,57 @@ def test_right_grip_moves_screen_without_resizing_it() -> None:
     assert height == pytest.approx(1.35)
 
 
+def test_right_grip_drag_orbits_screen_around_head_and_faces_head() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_screen = (
+        (0.0, 0.0, -2.0), 2.4, 1.35, (0.0, 0.0, 0.0)
+    )
+    presenter._head_position_w = np.asarray((0.0, 0.0, 0.0), dtype=np.float64)
+    presenter._aim_mat_r = np.eye(4, dtype=np.float32)
+    presenter._grip_mat_r = np.eye(4, dtype=np.float32)
+    presenter._controller_inputs = ({}, {"grip": 1.0})
+
+    presenter._handle_vulkan_pointer_input()
+    presenter._grip_mat_r[0, 3] = 0.4
+    presenter._handle_vulkan_pointer_input()
+
+    position, _width, _height, rotation = presenter._filament_screen
+    assert np.linalg.norm(np.asarray(position)) == pytest.approx(2.0)
+    pose = presenter._filament_screen_pose_mat4()
+    toward_head = -np.asarray(position, dtype=np.float64)
+    toward_head /= np.linalg.norm(toward_head)
+    assert float(np.dot(pose[:3, 2], toward_head)) > 0.99
+    assert rotation[0] != pytest.approx(0.0)
+
+
+def test_screen_drag_uses_the_calibrated_visible_controller_ray() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_screen = (
+        (0.0, 0.0, -2.0), 2.4, 1.35, (0.0, 0.0, 0.0)
+    )
+    angle = math.radians(-19.0)
+    presenter._aim_mat_r = np.asarray(
+        (
+            (1.0, 0.0, 0.0, 0.0),
+            (0.0, math.cos(angle), -math.sin(angle), 0.0),
+            (0.0, math.sin(angle), math.cos(angle), 0.0),
+            (0.0, 0.0, 0.0, 1.0),
+        ),
+        dtype=np.float32,
+    )
+    presenter._grip_mat_r = np.eye(4, dtype=np.float32)
+    presenter._controller_inputs = ({}, {"grip": 1.0})
+
+    # The uncalibrated Aim -Z ray misses the screen, while the visible legacy
+    # laser ray (12 degrees around local X) lands inside it.
+    assert presenter._screen_ray_hit(presenter._aim_mat_r) is None
+    assert presenter._screen_ray_hit_for_hand(1) is not None
+
+    presenter._handle_vulkan_pointer_input()
+
+    assert presenter._grip_target_r == "screen"
+
+
 def test_left_grip_rotation_snaps_screen_to_quarter_turn() -> None:
     presenter = OpenXrVulkanPresenter()
     presenter._filament_screen = (
@@ -795,6 +982,28 @@ def test_left_grip_rotation_snaps_screen_to_quarter_turn() -> None:
     presenter._apply_grip_screen_rotation(0)
 
     assert presenter._filament_screen[3] == pytest.approx((0.0, 0.0, 90.0))
+
+
+def test_right_grip_wrist_rotation_does_not_rotate_screen() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_screen = (
+        (0.0, 0.0, -2.0), 2.4, 1.35, (10.0, 5.0, 3.0)
+    )
+    presenter._grip_mat_r = np.eye(4, dtype=np.float32)
+    presenter._grip_rotation_anchor_r = np.eye(3, dtype=np.float64)
+    presenter._screen_rotation_anchor_r = (10.0, 5.0, 3.0)
+    presenter._grip_mat_r[:3, :3] = np.asarray(
+        (
+            (0.0, -1.0, 0.0),
+            (1.0, 0.0, 0.0),
+            (0.0, 0.0, 1.0),
+        ),
+        dtype=np.float32,
+    )
+
+    presenter._apply_grip_screen_rotation(1)
+
+    assert presenter._filament_screen[3] == pytest.approx((10.0, 5.0, 3.0))
 
 
 def test_keyboard_world_position_is_converted_to_screen_relative_offset() -> None:
@@ -1055,11 +1264,32 @@ def test_default_filament_profile_creates_identity_view_and_screen(tmp_path) -> 
     assert presenter._profile_view_name == "Default"
     assert presenter._profile_head_transform == pytest.approx(np.eye(4))
     assert presenter._filament_screen == (
-        (0.0, 0.0, -2.0),
-        2.4,
-        1.35,
+        (0.0, 0.0, -20.0),
+        23.09,
+        12.988125,
         (0.0, 0.0, 0.0),
     )
+
+
+def test_default_screen_is_initialized_from_head_pose() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_screen = (
+        (0.0, 0.0, -20.0),
+        23.09,
+        12.988125,
+        (0.0, 0.0, 0.0),
+    )
+    presenter._head_position_w = np.asarray((1.0, 1.6, 2.0), dtype=np.float64)
+    presenter._head_forward_w = np.asarray((1.0, 0.0, 0.0), dtype=np.float64)
+    presenter._initial_head_y = 1.6
+
+    presenter._initialize_filament_screen_from_head()
+
+    position, width, height, rotation = presenter._filament_screen
+    assert position == pytest.approx((21.0, 1.6, 2.0))
+    assert width == pytest.approx(23.09)
+    assert height == pytest.approx(12.988125)
+    assert rotation == pytest.approx((-90.0, 0.0, 0.0))
 
 
 def test_packaged_default_profile_uses_neutral_filament_exposure() -> None:
@@ -1101,6 +1331,25 @@ def test_projection_layer_binds_matching_runtime_eye_to_filament_screen() -> Non
     assert "screen_image_abi_available" in source
     assert "self._filament_screen_image_enabled" in source
     assert "The main virtual screen is rendered in the Projection Layer" in source
+
+
+def test_filament_screen_status_reports_projection_target_extent() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter.swapchains = [
+        SimpleNamespace(width=3648, height=3648),
+        SimpleNamespace(width=3648, height=3648),
+    ]
+    frame = SimpleNamespace(
+        left_eye=SimpleNamespace(width=3840, height=2160),
+        metadata={"vulkan_output_sync": "gpu_external_semaphore"},
+    )
+
+    presenter._report_filament_screen_image_status(frame, True, None)
+
+    assert presenter._last_filament_screen_image_status[-1] == (
+        (3648, 3648),
+        (3648, 3648),
+    )
 
 
 def test_presenter_run_until_owns_shutdown_close() -> None:

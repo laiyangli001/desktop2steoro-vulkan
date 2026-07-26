@@ -81,9 +81,9 @@ class CoreControllerGuideInputMixin:
         right_target = getattr(self, "_grip_target_r", None)
         if grip_l and not grip_r:
             if keyboard and left_target == "keyboard":
-                if pressed(left, "stick_click") and (
-                    self._guide_axis_active(lx) or self._guide_axis_active(ly)
-                ):
+                # The legacy viewer used the left stick axes directly for
+                # keyboard orbit. Stick click remains a separate shortcut.
+                if self._guide_axis_active(lx) or self._guide_axis_active(ly):
                     self._emit_guide_action(
                         "orbit_keyboard", horizontal=lx * dt, vertical=ly * dt
                     )
@@ -93,12 +93,22 @@ class CoreControllerGuideInputMixin:
                         yaw_delta=-rx * self._SCREEN_ROTATION_SPEED * dt,
                         pitch_delta=ry * self._SCREEN_ROTATION_SPEED * dt,
                     )
-            elif self._guide_axis_active(lx) or self._guide_axis_active(ly):
-                self._emit_guide_action(
-                    "rotate_screen",
-                    yaw_delta=-lx * self._SCREEN_ROTATION_SPEED * dt,
-                    pitch_delta=ly * self._SCREEN_ROTATION_SPEED * dt,
-                )
+            else:
+                # Preserve both legacy rotation mappings: left stick handles
+                # local fine rotation and right stick handles independent yaw
+                # and pitch rotation while the left grip is held.
+                if self._guide_axis_active(lx) or self._guide_axis_active(ly):
+                    self._emit_guide_action(
+                        "rotate_screen",
+                        yaw_delta=-lx * self._SCREEN_ROTATION_SPEED * dt,
+                        pitch_delta=ly * self._SCREEN_ROTATION_SPEED * dt,
+                    )
+                if self._guide_axis_active(rx) or self._guide_axis_active(ry):
+                    self._emit_guide_action(
+                        "rotate_screen",
+                        yaw_delta=-rx * self._SCREEN_ROTATION_SPEED * dt,
+                        pitch_delta=ry * self._SCREEN_ROTATION_SPEED * dt,
+                    )
             return
 
         if grip_r and not grip_l:

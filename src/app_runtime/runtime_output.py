@@ -51,6 +51,9 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
         self.left_visible_semaphores = []
         self.right_visible_semaphores = []
         self.external_semaphore_enabled = False
+        self._external_semaphore_error: str | None = None
+        self._external_semaphore_request_reason: str | None = None
+        self._external_semaphore_request_enabled = False
         self._logged_external_sync_mode = False
         self.left_slot = None
         self.right_slot = None
@@ -137,12 +140,26 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
         return shape[1], shape[0]
 
     def _claim_slot(self, slot_index: int, frame_id: int) -> None:
-        with self._lease_condition:
-            while slot_index in self._active_leases and not self._closed:
+        while True:
+            with self._lease_condition:
+                if self._closed:
+                    raise RuntimeError("Vulkan output adapter is closed")
+                if slot_index not in self._active_leases:
+                    self._active_leases[slot_index] = int(frame_id)
+                    return
+
+            # Do not call back into the presenter while holding the adapter
+            # condition: releasing a displayed frame re-enters this adapter.
+            presenter = getattr(self, "presenter", None)
+            release_displayed = getattr(
+                presenter, "release_displayed_output_for_reuse", None
+            )
+            if callable(release_displayed) and release_displayed(slot_index):
+                continue
+            with self._lease_condition:
+                if slot_index not in self._active_leases:
+                    continue
                 self._lease_condition.wait()
-            if self._closed:
-                raise RuntimeError("Vulkan output adapter is closed")
-            self._active_leases[slot_index] = int(frame_id)
 
     def release_frame(self, frame_id: int) -> None:
         """Release a producer slot after the XR consumer no longer samples it."""
@@ -230,6 +247,8 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
         with self._lease_condition:
             self._closed = False
         self.importer = self._create_importer()
+        self._external_semaphore_error = None
+        self._external_semaphore_request_reason = None
         # Runtime eye tensors contain display-referred sRGB bytes. Keep the
         # Vulkan image format sRGB so Quad Layer copies remain byte-preserving.
         output_format = context.vk.VK_FORMAT_R8G8B8A8_SRGB
@@ -245,10 +264,23 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
             )
             for index in range(self.ring_size)
         ]
-        external_semaphore_requested = bool(
-            self._external_semaphore_requested()
-            and getattr(self.presenter, "screen_ready_semaphore_available", False)
+        env_external_semaphore_requested = self._external_semaphore_requested()
+        presenter_ready_semaphore_available = bool(
+            getattr(self.presenter, "screen_ready_semaphore_available", False)
         )
+        external_semaphore_requested = bool(
+            env_external_semaphore_requested and presenter_ready_semaphore_available
+        )
+        self._external_semaphore_request_enabled = external_semaphore_requested
+        if not external_semaphore_requested:
+            if not env_external_semaphore_requested:
+                self._external_semaphore_request_reason = (
+                    "disabled_by_D2S_ENABLE_CUDA_EXTERNAL_SEMAPHORE"
+                )
+            elif not presenter_ready_semaphore_available:
+                self._external_semaphore_request_reason = (
+                    "filament_ready_semaphore_abi_unavailable"
+                )
         try:
             if not external_semaphore_requested:
                 self._extent = (width, height)
@@ -288,8 +320,20 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
                 *self.right_release_semaphores,
             ):
                 self.importer.register_semaphore(semaphore)
-            self.external_semaphore_enabled = self.importer.capabilities.external_semaphore
-        except Exception:
+            self.external_semaphore_enabled = bool(
+                self.importer.capabilities.external_semaphore
+            )
+            if not self.external_semaphore_enabled:
+                self._external_semaphore_error = "producer_external_semaphore_api_unavailable"
+        except Exception as exc:
+            self._external_semaphore_error = (
+                f"{type(exc).__name__}: {exc}"
+            )
+            print(
+                "[VulkanOutput] External semaphore setup failed; "
+                f"using synchronized GPU-copy source: {self._external_semaphore_error}",
+                flush=True,
+            )
             for semaphore in (
                 *self.left_ready_semaphores,
                 *self.right_ready_semaphores,
@@ -327,12 +371,17 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
                 self.external_semaphore_enabled
                 and getattr(self.presenter, "screen_ready_semaphore_available", False)
             )
+            external_semaphore_requested = bool(
+                self._external_semaphore_request_enabled
+            )
             if not self._logged_external_sync_mode:
                 print(
                     "[VulkanOutput] CUDA external semaphore sync: "
-                    f"requested={self._external_semaphore_requested()} "
+                    f"requested={external_semaphore_requested} "
                     f"available={self.external_semaphore_enabled} "
-                    f"active={use_external_semaphore}",
+                    f"active={use_external_semaphore} "
+                    f"blocked_reason={self._external_semaphore_request_reason or 'none'} "
+                    f"error={self._external_semaphore_error or 'none'}",
                     flush=True,
                 )
                 self._logged_external_sync_mode = True
@@ -388,6 +437,16 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
                 "vulkan_ready_semaphore_right": (
                     right_ready.semaphore if right_ready is not None else None
                 ),
+                "vulkan_external_semaphore_available": bool(
+                    use_external_semaphore
+                ),
+                "vulkan_external_semaphore_requested": bool(
+                    external_semaphore_requested
+                ),
+                "vulkan_external_semaphore_request_reason": (
+                    self._external_semaphore_request_reason
+                ),
+                "vulkan_external_semaphore_error": self._external_semaphore_error,
                 "vulkan_source_layout_left": left_contract["layout"],
                 "vulkan_source_layout_right": right_contract["layout"],
                 "vulkan_source_queue_family_left": left_contract["queue_family"],
@@ -431,6 +490,7 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
         self.left_visible_semaphores = []
         self.right_visible_semaphores = []
         self.external_semaphore_enabled = False
+        self._external_semaphore_request_enabled = False
         self.left_slot = None
         self.right_slot = None
         self._extent = None

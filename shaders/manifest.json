@@ -51,6 +51,23 @@
       ],
       "push_constants_size": 0,
       "precision": "fp32"
+    },
+    {
+      "name": "d2s_stereo_fused",
+      "source": "d2s_stereo_fused.comp",
+      "spirv": "d2s_stereo_fused.spv",
+      "stage": "compute",
+      "entry": "main",
+      "workgroup": [16, 16, 1],
+      "descriptor_bindings": [
+        {"set": 0, "binding": 0, "kind": "storage_buffer", "access": "read_only", "format": null},
+        {"set": 0, "binding": 1, "kind": "storage_buffer", "access": "read_only", "format": null},
+        {"set": 0, "binding": 2, "kind": "storage_buffer", "access": "write_only", "format": null},
+        {"set": 0, "binding": 3, "kind": "storage_buffer", "access": "write_only", "format": null},
+        {"set": 0, "binding": 4, "kind": "storage_buffer", "access": "write_only", "format": null}
+      ],
+      "push_constants_size": 40,
+      "precision": "fp32"
     }
   ]
 }

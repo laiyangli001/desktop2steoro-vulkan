@@ -2,6 +2,37 @@
 
 本文件记录项目重大更新和每日工作收尾。新记录按日期倒序追加；每个工作日结束时更新“已实现”“验证结果”“未决事项”和“下一项内容”。
 
+## 2026-07-26
+
+### 已实现
+
+- 收紧 Filament 外部屏幕图像路径的运行时诊断：CUDA producer 现在发布外部 semaphore 请求是否被环境变量或 Bridge ABI 阻止、初始化异常及最终 active 状态；Presenter 记录 direct screen path 的具体回退原因，不再把 zero-copy 未启动静默表现成普通 GPU copy。
+- 修复 Filament 直接采样源图像的租约生命周期：显示中的 Vulkan ring slot 会保持到新帧替换或关闭，环形缓冲即将复用该 slot 时由 Presenter 先完成 finished semaphore 后再释放，避免 Filament 仍在采样时被 CUDA 覆盖而产生模糊。
+- 恢复旧工程的头显推荐屏幕几何：OpenXR Link 读取 GUI 的 `XR Headset Model`，按对应最佳观看距离和 60° 水平视场自动计算 16:9 屏幕宽高；Pico 4 / 4 Ultra 为 `23.09m × 12.99m @ 20m`，不再使用固定的 `16m × 9m @ 16m`。
+- 对齐旧工程 OpenXR 工具交互：菜单键循环为“FPS → FPS+屏幕左侧竖向操作指南 → 全隐藏”，屏幕指南改用 `build_team_help_rgba`，不再误用手柄双列指南。
+- 恢复旧工程键盘头向和激光命中点拖屏逻辑：键盘每帧以头部为目标重新朝向，单手 Grip 保持激光命中的屏幕局部锚点，手柄平移或旋转都能拖动屏幕；补回激光终点光圈显示。
+- 输入路径异常现在只做一次可见日志，不再静默吞掉键盘、拖屏和快捷键更新失败。
+- 修正右手 Grip 旋转屏幕的回归：旧工程 `openxr_right_grip_screen_rotation` 默认关闭，Vulkan 端现在明确禁止右手腕部旋转屏幕，仅保留旧工程允许的左 Grip 旋转和左 Grip+右摇杆旋转。
+- 恢复旧工程右 Grip 单手拖屏的球面轨道：屏幕围绕头部保持固定距离移动，并在轨道移动后重新朝向头部。
+- 补齐 B 长按三态循环：隐藏 → 手柄 FPS → 手柄 FPS+手柄操作指南 → 隐藏；不再把 B 长按错误实现为二态切换。
+- 建立 `docs/05-openxr-behavior-migration-matrix.md`，按旧工程函数、Vulkan 函数、渲染层和验证方式登记 OpenXR 行为迁移状态；后续迁移项必须同时补自动对照测试和头显验证项。
+- 按旧工程恢复 reference-space change pending 处理：运行时重定位后重建共享基础空间，重新应用 profile pose，并清空旧头部缓存，避免屏幕、手柄和投影视图使用不同坐标系。
+- 按旧工程补齐曲面屏圆柱射线求交和 UV 到曲面世界坐标转换；左 Grip 同时支持旧工程的左右摇杆旋转，键盘轨道不再错误要求 stick click。
+- 修正平面屏激光命中的旧工程 UV 方向：下边缘为 `v=0`、上边缘为 `v=1`，命中点拖动和 Quad 光圈与实际屏幕纹理保持同一上下方向。
+- 新增第一版 Vulkan Compute 立体合成融合 pass：单次 dispatch 完成视差计算、左右眼水平 warp、遮挡边缘膨胀、方向感知补洞和边缘保护；深度模型推理路径保持由各厂商后端负责。
+- 新增 `vulkan_stereo_benchmark.py` 和 Vulkan smoke 校验；Windows RTX 3090 的 3840×2160 初测为约 `31.34 ms / 31.9 FPS`，同机现有 CUDA/Triton `fast_plus` 端到端初测约 `26.29 ms / 38.0 FPS`。该结果是首版融合计算对比，尚不代表最终零拷贝端到端性能。
+- 明确立体合成后端选择：`auto/vendor` 先做真实 Triton kernel 探测；NVIDIA 走 CUDA Triton，AMD 走 ROCm/Windows Triton，只有探测失败或厂商不是 NVIDIA/AMD 时才走 Vulkan Compute。显式 `vulkan` 可在 NVIDIA、AMD、Intel 全部使用 Vulkan Compute，且不改变深度模型推理后端。
+- 统一 Triton 运行时门控：视差、warp、遮挡、补洞、时域和输出阶段不再直接用 `is_cuda` 判断厂商，统一读取 GPU vendor；NVIDIA 与 AMD 使用同一套 Triton kernel 源码，Intel 等其它厂商不会误进入 Triton。
+- CUDA 12.8 profile 改为稳定配套：PyTorch `2.11.0`、torchvision `0.26.0`、Linux Triton 3.6 系列和 Windows `triton-windows==3.6.0.post26`；AMD ROCm7 profile 保留独立 nightly 配套版本。Torch/Triton 升级需要重新验证 TensorRT、深度推理和 Triton kernel。
+- 实际升级嵌入式 Python 到 `torch==2.11.0+cu128`、`torchvision==0.26.0+cu128`、`triton-windows==3.6.0.post26`；RTX 3090 / CUDA 12.8 / TensorRT 10.14.1 导入和 Triton kernel 探测均通过。全量测试最终为 `603 passed, 6 warnings`。
+
+### 验证结果
+
+- `src/python3/python.exe -m pytest -q tests/test_openxr_vulkan.py tests/test_cuda_vulkan_interop.py tests/test_runtime_output.py`：105 passed，2 warnings。
+- `src/python3/python.exe -m pytest -q tests/test_openxr_behavior_parity.py tests/test_openxr_vulkan.py`：107 passed，2 warnings。
+- `src/python3/python.exe -m pytest -q`：603 passed，6 warnings。
+- 当前 Windows Bridge 能力探针：外部屏幕图像、Vulkan external image、ready semaphore、finished semaphore、async submit 均为可用；CUDA runtime external semaphore API 也可见。
+
 ## 2026-07-24
 
 ### 已实现

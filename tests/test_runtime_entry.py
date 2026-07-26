@@ -34,6 +34,20 @@ def test_openxr_starts_after_inference_load_and_first_ready_output() -> None:
     assert prepare < capture_start < wait_ready < presenter_create
 
 
+def test_openxr_filament_screen_geometry_follows_gui_headset_model() -> None:
+    from app_runtime.runtime_entry import _openxr_filament_config
+
+    config = _openxr_filament_config(
+        {
+            "Environment Model": "Default",
+            "XR Headset Model": "Pico 4 / 4 Ultra",
+        }
+    )
+
+    assert config["filament_screen_distance"] == 20.0
+    assert config["filament_screen_width"] == 23.09
+
+
 def test_openxr_environment_uses_selected_folder_and_profile_glb(tmp_path: Path) -> None:
     resolver = _load_environment_resolver()
     room = tmp_path / "xr_viewer/environments/3D_Artemis"

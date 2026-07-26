@@ -42,11 +42,13 @@ def test_cuda_external_semaphore_signal_params_match_runtime_abi() -> None:
     assert ctypes.sizeof(_ExternalSemaphoreWaitParams) == 144
 
 
-def test_cuda_external_semaphore_requires_explicit_opt_in(monkeypatch) -> None:
+def test_cuda_external_semaphore_enabled_by_default_and_can_be_disabled(monkeypatch) -> None:
     monkeypatch.delenv("D2S_ENABLE_CUDA_EXTERNAL_SEMAPHORE", raising=False)
-    assert not CudaVulkanOutputAdapter._external_semaphore_requested()
+    assert CudaVulkanOutputAdapter._external_semaphore_requested()
     monkeypatch.setenv("D2S_ENABLE_CUDA_EXTERNAL_SEMAPHORE", "1")
     assert CudaVulkanOutputAdapter._external_semaphore_requested()
+    monkeypatch.setenv("D2S_ENABLE_CUDA_EXTERNAL_SEMAPHORE", "0")
+    assert not CudaVulkanOutputAdapter._external_semaphore_requested()
 
 
 def test_rocm_external_semaphore_is_capability_gated_by_default(monkeypatch) -> None:

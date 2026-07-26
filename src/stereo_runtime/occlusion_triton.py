@@ -4,6 +4,8 @@ import torch
 import triton
 import triton.language as tl
 
+from .triton_runtime import triton_runtime_available
+
 
 @triton.jit
 def _occlusion_radius2_kernel(
@@ -57,8 +59,7 @@ def can_use_triton_occlusion_radius2(
     return (
         abs(float(edge_threshold) - 0.04) < 1e-6
         and dilation == 2
-        and depth.is_cuda
-        and shift_px.is_cuda
+        and triton_runtime_available(depth.device)
         and depth.dtype == torch.float32
         and shift_px.dtype == torch.float32
         and depth.ndim == 4
@@ -134,8 +135,7 @@ def can_use_triton_occlusion_radius1(
     return (
         (abs(float(edge_threshold) - 0.03) < 1e-6 or abs(float(edge_threshold) - 0.04) < 1e-6)
         and dilation == 1
-        and depth.is_cuda
-        and shift_px.is_cuda
+        and triton_runtime_available(depth.device)
         and depth.dtype == torch.float32
         and shift_px.dtype == torch.float32
         and depth.ndim == 4

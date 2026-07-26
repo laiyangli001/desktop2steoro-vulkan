@@ -106,8 +106,9 @@ def validate_manifest(root: Path) -> list[str]:
                 errors.append(
                     f"{name}: bindings {actual_bindings} != {expected_bindings}"
                 )
-        if entry.get("push_constants_size") != 0:
-            errors.append(f"{name}: push constants are not supported by this validator")
+        push_constants_size = entry.get("push_constants_size")
+        if not isinstance(push_constants_size, int) or push_constants_size < 0 or push_constants_size % 4:
+            errors.append(f"{name}: push_constants_size must be a non-negative multiple of 4")
         if entry.get("precision") not in {"fp16", "fp32"}:
             errors.append(f"{name}: precision must be fp16 or fp32")
     return errors

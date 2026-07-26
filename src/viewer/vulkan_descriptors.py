@@ -227,13 +227,27 @@ class VulkanStorageBuffer:
         vk.vkBindBufferMemory(self.context.device, self.buffer, self.memory, 0)
 
     def write_uint32(self, value: int) -> None:
-        mapped = self.vk.vkMapMemory(self.context.device, self.memory, 0, 4, 0)
-        mapped[:4] = int(value).to_bytes(4, "little")
-        self.vk.vkUnmapMemory(self.context.device, self.memory)
+        self.write_bytes(int(value).to_bytes(4, "little"))
 
     def read_uint32(self) -> int:
-        mapped = self.vk.vkMapMemory(self.context.device, self.memory, 0, 4, 0)
-        value = int.from_bytes(bytes(mapped[:4]), "little")
+        return int.from_bytes(self.read_bytes(4), "little")
+
+    def write_bytes(self, payload: bytes | bytearray | memoryview, *, offset: int = 0) -> None:
+        data = bytes(payload)
+        start = int(offset)
+        if start < 0 or start + len(data) > self.size:
+            raise ValueError("storage buffer write exceeds buffer bounds")
+        mapped = self.vk.vkMapMemory(self.context.device, self.memory, 0, self.size, 0)
+        mapped[start : start + len(data)] = data
+        self.vk.vkUnmapMemory(self.context.device, self.memory)
+
+    def read_bytes(self, size: int | None = None, *, offset: int = 0) -> bytes:
+        start = int(offset)
+        length = self.size - start if size is None else int(size)
+        if start < 0 or length < 0 or start + length > self.size:
+            raise ValueError("storage buffer read exceeds buffer bounds")
+        mapped = self.vk.vkMapMemory(self.context.device, self.memory, 0, self.size, 0)
+        value = bytes(mapped[start : start + length])
         self.vk.vkUnmapMemory(self.context.device, self.memory)
         return value
 

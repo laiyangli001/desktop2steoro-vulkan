@@ -56,9 +56,11 @@ from .overlay_textures import (
     build_cursor_rgba,
     build_fps_overlay_rgba,
     build_help_rgba,
+    build_team_help_rgba,
     build_keyboard_rgba,
     build_short_osd_rgba,
 )
+from .keyboard_layout import _KB_TEX_H, _KB_TEX_W
 from .windows_input import (
     _MOUSEEVENTF_LEFTDOWN,
     _MOUSEEVENTF_LEFTUP,
@@ -69,6 +71,11 @@ from .windows_input import (
     _set_cursor_pos,
     _get_desktop_size,
 )
+from utils import LANG
+from utils.xr_headset_presets import resolve_xr_headset_preset
+
+
+_DEFAULT_XR_HEADSET_PRESET = resolve_xr_headset_preset(None)
 
 
 class OpenXrVulkanUnavailableError(RuntimeError):
@@ -91,6 +98,11 @@ class OpenXrVulkanConfig:
     filament_profile_path: str | None = None
     filament_scene_exposure_ev: float = 0.0
     filament_skybox_brightness: float = 1.0
+    # Reuse the legacy headset preset for profiles without a screen. The
+    # presenter only consumes these resolved values; it does not define a
+    # second headset-geometry table.
+    filament_screen_width: float = _DEFAULT_XR_HEADSET_PRESET.width_m
+    filament_screen_distance: float = _DEFAULT_XR_HEADSET_PRESET.distance_m
     filament_ambient_light_color: tuple[float, float, float] = (0.14, 0.13, 0.15)
     filament_screen_light_color: tuple[float, float, float] = (0.92, 0.96, 1.0)
     filament_screen_light_intensity: float = 3.5
@@ -232,6 +244,8 @@ class OpenXrVulkanPresenter(
         self._profile_space_applied = False
         self._profile_view_name: str | None = None
         self._head_position_w: np.ndarray | None = None
+        self._head_forward_w: np.ndarray | None = None
+        self._initial_head_y = 0.0
         self._profile_near_plane = 0.05
         self._profile_far_plane = 1000.0
         self._filament_scene_exposure = self.config.filament_scene_exposure_ev
@@ -242,15 +256,22 @@ class OpenXrVulkanPresenter(
             self.config.filament_screen_light_intensity
         )
         self._screen_ready_semaphore_abi_available = False
+        self._last_filament_screen_image_status = None
         self._controller_hdr_lighting = False
         self._last_filament_screen_light = None
         self._filament_fill_light_color = self.config.filament_fill_light_color
         self._filament_fill_light_intensity = self.config.filament_fill_light_intensity
         self._filament_fill_light_direction = self.config.filament_fill_light_direction
+        self._filament_lighting_presets: tuple[dict[str, Any], ...] = ()
+        self._filament_lighting_preset_index = 0
+        self._filament_glow_mode = "off"
+        self._filament_glow_intensity_multiplier = 0.0
         self._filament_screen: tuple[
             tuple[float, float, float], float, float, tuple[float, float, float]
         ] | None = None
         self._filament_screen_initial = None
+        self._filament_screen_profile_authored = False
+        self._filament_screen_head_initialized = False
         self._screen_curved = False
         self._passthrough_backdrop = False
         # The virtual screen must be rendered as scene geometry so each eye
@@ -277,6 +298,7 @@ class OpenXrVulkanPresenter(
         self._controller_b_button_local: np.ndarray | None = None
         self._controller_b_button_resolved = False
         self._controller_inputs = ({}, {})
+        self._last_controller_input_error: str | None = None
         self._aim_space_l = None
         self._aim_space_r = None
         self._grip_space_l = None
@@ -348,6 +370,9 @@ class OpenXrVulkanPresenter(
         self._keyboard_visible = False
         self._fps_overlay_visible = False
         self._operation_guide_visible = False
+        self._screen_operation_guide_visible = False
+        self._hand_fps_visible = False
+        self._hand_operation_guide_visible = False
         self._aperture_visible = False
         self._init_controller_shortcuts()
         self._init_controller_guide_input()
@@ -376,6 +401,8 @@ class OpenXrVulkanPresenter(
         self._pointer_press_time = {"left": 0.0, "right": 0.0}
         self._left_grab_anchor = None
         self._right_grab_anchor = None
+        self._screen_hit_grab_anchor_l = None
+        self._screen_hit_grab_anchor_r = None
         self._keyboard_position_offset = np.zeros(3, dtype=np.float64)
         self._keyboard_rotation_offset = np.zeros(2, dtype=np.float64)
         self._keyboard_grab_anchor = None
@@ -394,13 +421,15 @@ class OpenXrVulkanPresenter(
         self._status_panel_cycle = 0
         self._hand_panel_cycle = 0
         self._unsupported_shortcut_actions: set[str] = set()
+        default_screen_width = max(0.25, float(self.config.filament_screen_width))
+        default_screen_distance = max(0.25, float(self.config.filament_screen_distance))
         self._shortcut_screen_presets = (
             ('10" Tablet', 0.30, 0.4),
             ('27" Monitor', 0.60, 0.6),
             ('65" TV', 1.44, 2.0),
             ('100" Projector 1', 2.40, 2.0),
             ('100" Projector 2', 2.21, 2.5),
-            ('Cinema Giant', 16.0, 16.0),
+            ('Headset Recommended', default_screen_width, default_screen_distance),
             ('1000" IMAX', 22.0, 20.0),
         )
         self._shortcut_screen_preset_index = 5
@@ -518,8 +547,49 @@ class OpenXrVulkanPresenter(
                     xr.SessionState.LOSS_PENDING,
                 ):
                     self.exit_requested = True
+            elif event.type == xr.StructureType.EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING:
+                # The legacy viewer rebuilt its base reference space and then
+                # reapplied the authored seat/profile transform. Keep the
+                # same two-step contract so controller poses, screen poses,
+                # and projection views share one calibrated space.
+                self._recreate_reference_space_after_runtime_change()
             elif event.type == xr.StructureType.EVENT_DATA_INSTANCE_LOSS_PENDING:
                 self.exit_requested = True
+
+    def _recreate_reference_space_after_runtime_change(self) -> None:
+        """Recreate the base XR space after a runtime relocation event."""
+        if self.xr is None or self.session is None or self._reference_space_type is None:
+            self._profile_space_applied = False
+            return
+        try:
+            new_space = self.xr.create_reference_space(
+                self.session,
+                self.xr.ReferenceSpaceCreateInfo(
+                    reference_space_type=self._reference_space_type
+                ),
+            )
+        except Exception as exc:
+            # Keep the current space alive if the runtime cannot create a
+            # replacement; the next valid view will retry profile application.
+            print(
+                f"[OpenXRViewer] Reference space change pending; "
+                f"recreate failed: {exc}",
+                flush=True,
+            )
+            self._profile_space_applied = False
+            return
+        old_space = self.reference_space
+        self.reference_space = new_space
+        self._xr_space = new_space
+        self._profile_space_applied = False
+        self._profile_initial_head = None
+        self._head_position_w = None
+        self._head_forward_w = None
+        if old_space is not None:
+            try:
+                self.xr.destroy_space(old_space)
+            except Exception:
+                pass
 
     def run_frame(self) -> bool:
         self._ensure_initialized()
@@ -555,8 +625,18 @@ class OpenXrVulkanPresenter(
             self._handle_vulkan_pointer_input()
             self._handle_controller_shortcuts()
             self._handle_controller_guide_input(self._last_frame_dt)
-        except Exception:
-            pass
+            self._last_controller_input_error = None
+        except Exception as exc:
+            # Keep one bad optional input path from terminating XR, but make
+            # the failure observable instead of silently disabling all
+            # keyboard, drag, and shortcut handling for the session.
+            error = f"{type(exc).__name__}: {exc}"
+            if error != self._last_controller_input_error:
+                self._last_controller_input_error = error
+                print(
+                    f"[OpenXRViewer] Controller input update failed: {error}",
+                    flush=True,
+                )
         xr.begin_frame(self.session)
         layer_structures: list[Any] = []
         layer_pointers: list[Any] = []
@@ -585,6 +665,7 @@ class OpenXrVulkanPresenter(
                             ),
                         )
                     self._cache_head_position(views)
+                    self._initialize_filament_screen_from_head()
                     with self._output_lock:
                         output_frame = self._pending_output
                     self._update_tool_overlay_metrics(output_frame)
@@ -632,9 +713,22 @@ class OpenXrVulkanPresenter(
         return not self.exit_requested
 
     def _set_shortcut_panel(self, name: str | None) -> None:
-        self._fps_overlay_visible = name == "fps"
-        self._operation_guide_visible = name == "guide"
+        # Legacy Menu/A cycle: hidden -> FPS -> FPS + vertical screen guide
+        # -> hidden. The guide never replaces the FPS panel at state 2.
+        self._fps_overlay_visible = name in {"fps", "guide"}
+        self._screen_operation_guide_visible = name == "guide"
         self._aperture_visible = name == "aperture"
+        self._operation_guide_visible = self._screen_operation_guide_visible
+
+    def _set_hand_shortcut_panel(self, name: str | None) -> None:
+        # Legacy B cycle: hidden -> hand FPS -> hand FPS + hand guide -> hidden.
+        self._hand_fps_visible = name in {"fps", "guide"}
+        self._hand_operation_guide_visible = name == "guide"
+        # Keep the legacy compatibility flag true for the controller-attached
+        # B-panel; Menu uses _screen_operation_guide_visible above.
+        self._operation_guide_visible = (
+            self._screen_operation_guide_visible or self._hand_operation_guide_visible
+        )
 
     def _set_shortcut_skybox_brightness(self, brightness: float) -> None:
         self._filament_skybox_brightness = max(0.0, float(brightness))
@@ -643,28 +737,106 @@ class OpenXrVulkanPresenter(
                 self._filament_skybox_brightness
             )
 
+    def _apply_filament_lighting_preset(
+        self, preset: dict[str, Any], *, apply_bridge: bool = True
+    ) -> None:
+        """Apply the legacy environment lighting-preset fields to Filament."""
+        if not isinstance(preset, dict):
+            return
+        for key, attribute in (
+            ("preview_exposure", "_filament_scene_exposure"),
+            ("env_exposure", "_filament_scene_exposure"),
+            ("preview_skybox_brightness", "_filament_skybox_brightness"),
+            ("screen_light_intensity", "_filament_screen_light_intensity"),
+            ("controller_head_light_intensity", "_filament_fill_light_intensity"),
+        ):
+            if key in preset:
+                try:
+                    setattr(self, attribute, float(preset[key]))
+                except (TypeError, ValueError):
+                    pass
+        for keys, attribute in (
+            (("env_ambient_color", "ambient_color"), "_filament_ambient_light_color"),
+            (("env_head_light_color", "head_light_color"), "_filament_fill_light_color"),
+        ):
+            for key in keys:
+                value = preset.get(key)
+                if isinstance(value, (list, tuple)) and len(value) >= 3:
+                    try:
+                        setattr(self, attribute, tuple(float(item) for item in value[:3]))
+                    except (TypeError, ValueError):
+                        pass
+                    break
+        direction = preset.get("env_fill_light_direction", preset.get("fill_light_direction"))
+        if isinstance(direction, (list, tuple)) and len(direction) >= 3:
+            try:
+                self._filament_fill_light_direction = tuple(
+                    float(item) for item in direction[:3]
+                )
+            except (TypeError, ValueError):
+                pass
+        if "glow_mode" in preset:
+            mode = str(preset["glow_mode"]).strip().lower()
+            if mode in {"off", "screen", "surround", "veil", "frosted"}:
+                self._filament_glow_mode = mode
+        if "glow_intensity_multiplier" in preset:
+            try:
+                self._filament_glow_intensity_multiplier = max(
+                    0.0, float(preset["glow_intensity_multiplier"])
+                )
+            except (TypeError, ValueError):
+                pass
+        if not apply_bridge or self.filament_bridge is None:
+            return
+        bridge = self.filament_bridge
+        bridge.set_scene_exposure(self._filament_scene_exposure)
+        bridge.set_skybox_brightness(self._filament_skybox_brightness)
+        if hasattr(bridge, "set_ambient_light"):
+            bridge.set_ambient_light(self._controller_ambient_light_color())
+        bridge.set_fill_light(
+            self._filament_fill_light_color,
+            self._filament_fill_light_intensity,
+            self._filament_fill_light_direction,
+        )
+        self._last_filament_screen_light = None
+
     def _cycle_shortcut_screen_preset(self) -> None:
         if self._filament_screen is None:
             return
         self._shortcut_screen_preset_index = (
             self._shortcut_screen_preset_index + 1
         ) % len(self._shortcut_screen_presets)
-        _name, width, distance = self._shortcut_screen_presets[
-            self._shortcut_screen_preset_index
-        ]
+        self._apply_shortcut_screen_preset(self._shortcut_screen_preset_index)
+
+    def _apply_shortcut_screen_preset(self, index: int) -> None:
+        """Apply the legacy screen preset size, distance, and head-facing pose."""
+        if self._filament_screen is None or not self._shortcut_screen_presets:
+            return
+        index = int(index) % len(self._shortcut_screen_presets)
+        _name, width, distance = self._shortcut_screen_presets[index]
         old_position, old_width, old_height, rotation = self._filament_screen
-        head = (
-            np.asarray(self._head_position_w, dtype=np.float64)
-            if self._head_position_w is not None
-            else np.zeros(3, dtype=np.float64)
-        )
-        direction = np.asarray(old_position, dtype=np.float64) - head
-        length = float(np.linalg.norm(direction))
-        if length <= 1e-6:
-            direction = np.asarray((0.0, 0.0, -1.0), dtype=np.float64)
+        if self._head_position_w is not None and self._head_forward_w is not None:
+            hx, _hy, hz = self._head_position_w
+            fx, _fy, fz = self._head_forward_w
+            horizontal = math.sqrt(float(fx) * float(fx) + float(fz) * float(fz))
+            if horizontal > 1e-4:
+                fx /= horizontal
+                fz /= horizontal
+            else:
+                fx, fz = 0.0, -1.0
+            position = (
+                float(hx) + float(fx) * float(distance),
+                float(self._initial_head_y),
+                float(hz) + float(fz) * float(distance),
+            )
+            rotation = (
+                math.degrees(math.atan2(-float(fx), -float(fz))),
+                0.0,
+                0.0,
+            )
         else:
-            direction /= length
-        position = head + direction * float(distance)
+            position = (0.0, 0.0, -float(distance))
+            rotation = (0.0, 0.0, 0.0)
         height = float(width) * float(old_height) / max(float(old_width), 1e-6)
         self._filament_screen = (
             tuple(float(value) for value in position),
@@ -683,17 +855,30 @@ class OpenXrVulkanPresenter(
                 (None, "fps", "guide")[self._status_panel_cycle]
             )
         elif action == "cycle_hand_panel":
-            self._hand_panel_cycle = (self._hand_panel_cycle + 1) % 2
-            self._set_shortcut_panel("guide" if self._hand_panel_cycle else None)
+            # Match the legacy B long-press state machine exactly.
+            self._hand_panel_cycle = (self._hand_panel_cycle + 1) % 3
+            self._set_hand_shortcut_panel(
+                (None, "fps", "guide")[self._hand_panel_cycle]
+            )
         elif action == "toggle_keyboard":
             self._keyboard_visible = not self._keyboard_visible
             self._keyboard_position_offset[:] = 0.0
             self._keyboard_grab_anchor = None
+            if self._keyboard_visible:
+                screen_width = float(self._filament_screen[1]) if self._filament_screen else 2.4
+                self._keyboard_width = max(0.3, screen_width * 0.8)
+                self._keyboard_height = self._keyboard_width * _KB_TEX_H / float(_KB_TEX_W)
+                self._keyboard_keys = []
+                self._keyboard_texture_key = None
         elif action == "reset_screen":
-            if self._filament_screen_initial is not None:
-                self._filament_screen = self._filament_screen_initial
-                if self.filament_bridge is not None:
-                    self.filament_bridge.set_screen(*self._filament_screen)
+            if self._filament_screen_profile_authored:
+                if self._filament_screen_initial is not None:
+                    self._filament_screen = self._filament_screen_initial
+                    if self.filament_bridge is not None:
+                        self.filament_bridge.set_screen(*self._filament_screen)
+            else:
+                self._shortcut_screen_preset_index = 5
+                self._apply_shortcut_screen_preset(5)
         elif action == "cycle_screen_preset":
             self._cycle_shortcut_screen_preset()
         elif action == "toggle_screen_shape":
@@ -718,14 +903,26 @@ class OpenXrVulkanPresenter(
                     self._shortcut_saved_skybox_brightness or 1.0
                 )
         elif action == "cycle_environment_light":
-            current = self._filament_skybox_brightness
-            index = min(
-                range(len(self._shortcut_light_levels)),
-                key=lambda item: abs(self._shortcut_light_levels[item] - current),
-            )
-            self._set_shortcut_skybox_brightness(
-                self._shortcut_light_levels[(index + 1) % len(self._shortcut_light_levels)]
-            )
+            if self._filament_lighting_presets:
+                self._filament_lighting_preset_index = (
+                    self._filament_lighting_preset_index + 1
+                ) % len(self._filament_lighting_presets)
+                self._apply_filament_lighting_preset(
+                    self._filament_lighting_presets[
+                        self._filament_lighting_preset_index
+                    ]
+                )
+            else:
+                current = self._filament_skybox_brightness
+                index = min(
+                    range(len(self._shortcut_light_levels)),
+                    key=lambda item: abs(self._shortcut_light_levels[item] - current),
+                )
+                self._set_shortcut_skybox_brightness(
+                    self._shortcut_light_levels[
+                        (index + 1) % len(self._shortcut_light_levels)
+                    ]
+                )
         elif action == "toggle_passthrough":
             bridge = self.filament_bridge
             if bridge is None or not getattr(
@@ -753,13 +950,13 @@ class OpenXrVulkanPresenter(
         elif action == "save_controller_calibration":
             self._save_shortcut_controller_calibration()
         elif action == "rotate_screen":
-            if self._screen_ray_hit(self._aim_mat_l) is not None:
+            if self._screen_ray_hit_for_hand(0) is not None:
                 self._adjust_shortcut_screen_rotation(
                     float(values.get("yaw_delta", 0.0)),
                     float(values.get("pitch_delta", 0.0)),
                 )
         elif action == "resize_screen":
-            if self._screen_ray_hit(self._aim_mat_r) is not None:
+            if self._screen_ray_hit_for_hand(1) is not None:
                 self._adjust_shortcut_screen_size(
                     float(values.get("width_delta", 0.0)),
                     float(values.get("distance_delta", 0.0)),
@@ -849,6 +1046,8 @@ class OpenXrVulkanPresenter(
         self, width_delta: float, distance_delta: float
     ) -> None:
         self._keyboard_width = max(0.3, min(4.0, self._keyboard_width + width_delta))
+        self._keyboard_height = self._keyboard_width * _KB_TEX_H / float(_KB_TEX_W)
+        self._keyboard_texture_key = None
         pose = self._keyboard_pose_mat4()
         head = np.asarray(
             self._head_position_w if self._head_position_w is not None else (0, 0, 0),
@@ -938,21 +1137,47 @@ class OpenXrVulkanPresenter(
         return False
 
     def _keyboard_pose_mat4(self) -> np.ndarray:
-        position, screen_width, screen_height, rotation = self._filament_screen or (
+        _position, _screen_width, screen_height, _rotation = self._filament_screen or (
             (0.0, 1.2, -2.0), 2.4, 1.35, (0.0, 0.0, 0.0)
         )
-        keyboard_rotation = (
-            float(rotation[0]) + float(self._keyboard_rotation_offset[0]),
-            float(rotation[1]) + float(self._keyboard_rotation_offset[1]),
-            float(rotation[2]),
-        )
-        matrix = euler_to_mat4(
-            *(math.radians(float(value)) for value in keyboard_rotation)
-        )
-        matrix[:3, 3] = np.asarray(
-            (position[0], position[1] - screen_height * 0.72, position[2]),
+        screen_pose = self._filament_screen_pose_mat4()
+        local_position = np.asarray(
+            (0.0, -float(screen_height) / 2.0 - float(screen_height) * 0.15
+             - float(self._keyboard_height) / 2.0, 0.0),
             dtype=np.float64,
-        ) + self._keyboard_position_offset
+        )
+        keyboard_position = (
+            screen_pose[:3, 3]
+            + screen_pose[:3, :3] @ local_position
+            + self._keyboard_position_offset
+        )
+        # The legacy keyboard is independently head-facing. Do not inherit a
+        # room/profile screen rotation when that rotation is not head-facing.
+        head = self._head_position_w
+        if head is not None:
+            direction_from_head = keyboard_position - np.asarray(head, dtype=np.float64)
+            distance = float(np.linalg.norm(direction_from_head))
+        else:
+            direction_from_head = None
+            distance = 0.0
+        if direction_from_head is not None and distance > 1e-6:
+            nx, ny, nz = direction_from_head / distance
+            base_yaw = math.atan2(-float(nx), -float(nz))
+            base_pitch = math.asin(max(-1.0, min(1.0, float(ny))))
+            matrix = euler_to_mat4(
+                base_yaw + math.radians(float(self._keyboard_rotation_offset[0])),
+                base_pitch + math.radians(float(self._keyboard_rotation_offset[1])),
+                0.0,
+            ).astype(np.float64)
+        else:
+            matrix = screen_pose.copy().astype(np.float64)
+            local_rotation = euler_to_mat4(
+                0.0,
+                math.radians(float(self._keyboard_rotation_offset[1])),
+                math.radians(float(self._keyboard_rotation_offset[0])),
+            ).astype(np.float64)
+            matrix[:3, :3] = matrix[:3, :3] @ local_rotation[:3, :3]
+        matrix[:3, 3] = keyboard_position
         return matrix.astype(np.float64)
 
     def _keyboard_plane_hit(self, origin, direction):
@@ -977,14 +1202,110 @@ class OpenXrVulkanPresenter(
             return None, None
         return x, y
 
-    def _screen_ray_hit(self, matrix):
+    def _controller_interaction_ray(self, hand):
+        """Return the legacy-calibrated ray used by the visible laser."""
+        aim_matrix = self._aim_mat_l if hand == 0 else self._aim_mat_r
+        if aim_matrix is None:
+            return None, None
+        grip_matrix = self._grip_mat_l if hand == 0 else self._grip_mat_r
+        origin, direction = self._get_smoothed_ray(hand)
+        if origin is None or direction is None:
+            if grip_matrix is not None:
+                origin = (
+                    grip_matrix[:3, 3] + grip_matrix[:3, 1] * 0.020
+                ).astype(np.float64)
+            else:
+                origin = aim_matrix[:3, 3].astype(np.float64)
+            direction = (-aim_matrix[:3, 2]).astype(np.float64)
+        else:
+            origin = np.asarray(origin, dtype=np.float64)
+            direction = np.asarray(direction, dtype=np.float64)
+        direction /= max(float(np.linalg.norm(direction)), 1e-8)
+        right_axis = aim_matrix[:3, 0].astype(np.float64)
+        right_axis /= max(float(np.linalg.norm(right_axis)), 1e-8)
+        angle = math.radians(12.0)
+        direction = (
+            direction * math.cos(angle)
+            + np.cross(right_axis, direction) * math.sin(angle)
+            + right_axis
+            * float(np.dot(right_axis, direction))
+            * (1.0 - math.cos(angle))
+        )
+        direction /= max(float(np.linalg.norm(direction)), 1e-8)
+        return origin, direction
+
+    def _screen_ray_hit_for_hand(self, hand):
+        aim_matrix = self._aim_mat_l if hand == 0 else self._aim_mat_r
+        origin, direction = self._controller_interaction_ray(hand)
+        if origin is None or direction is None:
+            return None
+        return self._screen_ray_hit(aim_matrix, origin, direction)
+
+    def _screen_hit_world_for_hand(self, hand):
+        """Return the current calibrated laser hit in screen world space."""
+        hit = self._screen_ray_hit_for_hand(hand)
+        if hit is None or self._filament_screen is None:
+            return None
+        u, v = (float(hit[0]), float(hit[1]))
+        return self._screen_uv_to_world(u, v)
+
+    def _screen_ray_hit(self, matrix, ray_origin=None, ray_direction=None):
         if matrix is None or self._filament_screen is None:
             return None
         position, width, height, rotation = self._filament_screen
         pose = euler_to_mat4(*(math.radians(float(value)) for value in rotation)).astype(np.float64)
         pose[:3, 3] = np.asarray(position, dtype=np.float64)
-        origin = matrix[:3, 3].astype(np.float64)
-        direction = (-matrix[:3, 2]).astype(np.float64)
+        origin = (
+            matrix[:3, 3].astype(np.float64)
+            if ray_origin is None
+            else np.asarray(ray_origin, dtype=np.float64)
+        )
+        direction = (
+            (-matrix[:3, 2]).astype(np.float64)
+            if ray_direction is None
+            else np.asarray(ray_direction, dtype=np.float64)
+        )
+        direction /= max(float(np.linalg.norm(direction)), 1e-10)
+        if self._screen_curved:
+            # Match the legacy _laser_screen_hit_uv cylinder geometry and
+            # return the same bottom-to-top UV convention used by the GLB
+            # screen mesh. Analytic roots avoid a frame-dependent scan.
+            half_width = float(width) / 2.0
+            half_height = float(height) / 2.0
+            half_angle = min(0.72, math.pi / 2.0)
+            radius = half_width / max(half_angle, 1e-8)
+            local_origin = pose[:3, :3].T @ (origin - pose[:3, 3])
+            local_direction = pose[:3, :3].T @ direction
+            ox, oy, oz = (float(value) for value in local_origin)
+            dx, _dy, dz = (float(value) for value in local_direction)
+            qa = dx * dx + dz * dz
+            qb = 2.0 * (ox * dx + (oz - radius) * dz)
+            qc = ox * ox + (oz - radius) * (oz - radius) - radius * radius
+            if abs(qa) < 1e-10:
+                return None
+            discriminant = qb * qb - 4.0 * qa * qc
+            if discriminant < 0.0:
+                return None
+            root = math.sqrt(max(0.0, discriminant))
+            roots = sorted(
+                ((-qb - root) / (2.0 * qa), (-qb + root) / (2.0 * qa))
+            )
+            for distance in roots:
+                if distance <= 0.01:
+                    continue
+                local_hit = local_origin + local_direction * distance
+                if abs(float(local_hit[1])) > half_height + 1e-6:
+                    continue
+                angle = math.atan2(
+                    float(local_hit[0]), radius - float(local_hit[2])
+                )
+                if angle < -half_angle - 1e-6 or angle > half_angle + 1e-6:
+                    continue
+                return (
+                    float((angle + half_angle) / (2.0 * half_angle)),
+                    float((float(local_hit[1]) + half_height) / (2.0 * half_height)),
+                )
+            return None
         normal = pose[:3, 2]
         denominator = float(np.dot(normal, direction))
         if abs(denominator) < 1e-6:
@@ -998,8 +1319,40 @@ class OpenXrVulkanPresenter(
             return None
         return (
             max(0.0, min(1.0, float(local[0]) / width + 0.5)),
-            max(0.0, min(1.0, 0.5 - float(local[1]) / height)),
+            max(0.0, min(1.0, 0.5 + float(local[1]) / height)),
         )
+
+    def _screen_uv_to_world(self, u: float, v: float) -> np.ndarray | None:
+        """Convert screen UV to the current flat or curved screen surface."""
+        if self._filament_screen is None:
+            return None
+        position, width, height, rotation = self._filament_screen
+        pose = euler_to_mat4(
+            *(math.radians(float(value)) for value in rotation)
+        ).astype(np.float64)
+        pose[:3, 3] = np.asarray(position, dtype=np.float64)
+        if self._screen_curved:
+            half_angle = min(0.72, math.pi / 2.0)
+            radius = float(width) / 2.0 / max(half_angle, 1e-8)
+            angle = -half_angle + 2.0 * half_angle * float(u)
+            local = np.asarray(
+                (
+                    radius * math.sin(angle),
+                    (float(v) - 0.5) * float(height),
+                    radius * (1.0 - math.cos(angle)),
+                ),
+                dtype=np.float64,
+            )
+        else:
+            local = np.asarray(
+                (
+                    (float(u) - 0.5) * float(width),
+                    (float(v) - 0.5) * float(height),
+                    0.0,
+                ),
+                dtype=np.float64,
+            )
+        return pose[:3, 3] + pose[:3, :3] @ local
 
     def _set_filament_screen_pose(self, position, rotation=None) -> None:
         if self._filament_screen is None:
@@ -1011,19 +1364,28 @@ class OpenXrVulkanPresenter(
             self.filament_bridge.set_screen(self._filament_screen[0], width, height, pose_rotation)
 
     def _set_keyboard_world_position(self, position) -> None:
-        screen_position, _width, screen_height, _rotation = self._filament_screen or (
+        _screen_position, _width, screen_height, _rotation = self._filament_screen or (
             (0.0, 1.2, -2.0),
             2.4,
             1.35,
             (0.0, 0.0, 0.0),
         )
-        base_position = np.asarray(
+        # Keep the legacy absolute-position setter compatible with the new
+        # screen-relative keyboard anchor.  The caller-provided world
+        # position is converted to an offset from the current anchor, so the
+        # next pose evaluation reproduces it exactly.
+        local_position = np.asarray(
             (
-                screen_position[0],
-                screen_position[1] - screen_height * 0.72,
-                screen_position[2],
+                0.0,
+                -float(screen_height) / 2.0
+                - float(screen_height) * 0.15
+                - float(self._keyboard_height) / 2.0,
+                0.0,
             ),
             dtype=np.float64,
+        )
+        base_position = self._filament_screen_pose_mat4()[:3, 3] + (
+            self._filament_screen_pose_mat4()[:3, :3] @ local_position
         )
         self._keyboard_position_offset = (
             np.asarray(position, dtype=np.float64) - base_position
@@ -1043,6 +1405,11 @@ class OpenXrVulkanPresenter(
         return tuple(math.degrees(value) for value in (yaw, pitch, roll))
 
     def _apply_grip_screen_rotation(self, hand_index: int) -> None:
+        # The legacy right-grip wrist-rotation feature was disabled. Screen
+        # rotation remains available only through the legacy left-grip gesture
+        # and the documented left-grip/right-stick shortcut.
+        if int(hand_index) != 0:
+            return
         if self._filament_screen is None:
             return
         suffix = "l" if hand_index == 0 else "r"
@@ -1069,6 +1436,91 @@ class OpenXrVulkanPresenter(
         )
         self._set_filament_screen_pose(self._filament_screen[0], rotation)
 
+    def _filament_screen_image_gate_reason(
+        self, output_frame: VulkanStereoOutputFrame | None
+    ) -> str | None:
+        """Return the first reason the direct Filament screen path is unavailable."""
+
+        if output_frame is None:
+            return "no_output_frame"
+        if not self._filament_screen_image_enabled:
+            return "disabled_by_D2S_ENABLE_FILAMENT_SCREEN_IMAGE"
+        if self.filament_bridge is None:
+            return "filament_bridge_unavailable"
+        abi_requirements = (
+            ("screen_image_abi", "screen_image_abi_available"),
+            ("vulkan_external_image_abi", "vulkan_external_image_abi_available"),
+            ("screen_ready_semaphore_abi", "screen_ready_semaphore_abi_available"),
+            ("async_submit_abi", "async_submit_abi_available"),
+            (
+                "finished_drawing_semaphore_abi",
+                "finished_drawing_semaphore_abi_available",
+            ),
+        )
+        for label, attribute in abi_requirements:
+            if not bool(getattr(self.filament_bridge, attribute, False)):
+                return f"bridge_{label}_unavailable"
+
+        metadata = dict(output_frame.metadata or {})
+        if metadata.get("vulkan_output_sync") not in {
+            "gpu_external_semaphore",
+            # Compatibility for older producer adapters still in the queue.
+            "cuda_external_semaphore",
+        }:
+            return f"producer_sync={metadata.get('vulkan_output_sync', 'missing')}"
+        for eye in ("left", "right"):
+            layout = metadata.get(f"vulkan_source_layout_{eye}")
+            if layout not in {"general", "shader_read_only_optimal"}:
+                return f"source_{eye}_layout={layout!r}"
+            if metadata.get(f"vulkan_source_queue_family_{eye}") is None:
+                return f"source_{eye}_queue_family_missing"
+        if not callable(metadata.get("_vulkan_source_consumer_release")):
+            return "consumer_release_callback_missing"
+        if not callable(metadata.get("_vulkan_source_prepare_for_sampling")):
+            return "source_prepare_callback_missing"
+        if not metadata.get("vulkan_ready_semaphore_left"):
+            return "left_ready_semaphore_missing"
+        if not metadata.get("vulkan_ready_semaphore_right"):
+            return "right_ready_semaphore_missing"
+        return None
+
+    def _report_filament_screen_image_status(
+        self,
+        output_frame: VulkanStereoOutputFrame | None,
+        active: bool,
+        reason: str | None,
+    ) -> None:
+        """Log direct-screen activation changes without producing per-frame noise."""
+
+        # No new runtime frame is a normal reuse tick. Keep the last real
+        # producer/direct-path status instead of alternating with no_output_frame.
+        if output_frame is None:
+            return
+        metadata = dict(output_frame.metadata or {}) if output_frame is not None else {}
+        target_extent = tuple(
+            (int(getattr(eye, "width", 0)), int(getattr(eye, "height", 0)))
+            for eye in self.swapchains[:2]
+        )
+        status = (
+            bool(active),
+            reason or "active",
+            metadata.get("vulkan_output_sync"),
+            int(getattr(output_frame.left_eye, "width", 0)) if output_frame else 0,
+            int(getattr(output_frame.left_eye, "height", 0)) if output_frame else 0,
+            target_extent,
+        )
+        if status == self._last_filament_screen_image_status:
+            return
+        self._last_filament_screen_image_status = status
+        print(
+            "[OpenXRViewer] Filament screen image path: "
+            f"active={bool(active)} reason={reason or 'none'} "
+            f"sync={metadata.get('vulkan_output_sync', 'missing')} "
+            f"source={status[3]}x{status[4]} "
+            f"projection_target={target_extent or 'unknown'}",
+            flush=True,
+        )
+
     def _can_use_filament_screen_image(
         self, output_frame: VulkanStereoOutputFrame | None
     ) -> bool:
@@ -1079,59 +1531,7 @@ class OpenXrVulkanPresenter(
         semaphores, and the bridge must consume them from the same Vulkan
         device before rendering the imported image.
         """
-        if (
-            output_frame is None
-            or not self._filament_screen_image_enabled
-            or self.filament_bridge is None
-            or not getattr(self.filament_bridge, "screen_image_abi_available", False)
-            or not getattr(
-                self.filament_bridge,
-                "vulkan_external_image_abi_available",
-                False,
-            )
-            or not getattr(
-                self.filament_bridge, "screen_ready_semaphore_abi_available", False
-            )
-            or not getattr(
-                self.filament_bridge, "async_submit_abi_available", False
-            )
-            or not getattr(
-                self.filament_bridge,
-                "finished_drawing_semaphore_abi_available",
-                False,
-            )
-        ):
-            return False
-        metadata = dict(output_frame.metadata or {})
-        if metadata.get("vulkan_output_sync") not in {
-            "gpu_external_semaphore",
-            # Compatibility for older producer adapters still in the queue.
-            "cuda_external_semaphore",
-        }:
-            return False
-        # The producer initially owns a GENERAL image. The presenter performs
-        # the producer-ready wait and GENERAL -> SHADER_READ_ONLY transition,
-        # then gives Filament a post-barrier semaphore to consume.
-        if (
-            metadata.get("vulkan_source_layout_left")
-            not in {"general", "shader_read_only_optimal"}
-            or metadata.get("vulkan_source_layout_right")
-            not in {"general", "shader_read_only_optimal"}
-        ):
-            return False
-        if (
-            metadata.get("vulkan_source_queue_family_left") is None
-            or metadata.get("vulkan_source_queue_family_right") is None
-        ):
-            return False
-        if not callable(metadata.get("_vulkan_source_consumer_release")):
-            return False
-        if not callable(metadata.get("_vulkan_source_prepare_for_sampling")):
-            return False
-        return bool(
-            metadata.get("vulkan_ready_semaphore_left")
-            and metadata.get("vulkan_ready_semaphore_right")
-        )
+        return self._filament_screen_image_gate_reason(output_frame) is None
 
     def _update_filament_screen_light(
         self, bridge: Any, output_frame: VulkanStereoOutputFrame | None
@@ -1165,7 +1565,7 @@ class OpenXrVulkanPresenter(
         """Reuse legacy trigger hold/drag semantics for the Vulkan screen."""
         now = time.perf_counter()
         inputs = (self._controller_input(0), self._controller_input(1))
-        hits = (self._screen_ray_hit(self._aim_mat_l), self._screen_ray_hit(self._aim_mat_r))
+        hits = (self._screen_ray_hit_for_hand(0), self._screen_ray_hit_for_hand(1))
         left_grip = bool(inputs[0].get("grip", 0.0) > 0.5)
         right_grip = bool(inputs[1].get("grip", 0.0) > 0.5)
         stick_active = (
@@ -1187,13 +1587,15 @@ class OpenXrVulkanPresenter(
                 setattr(self, anchor_attr, None)
                 setattr(self, rotation_attr, None)
                 setattr(self, screen_rotation_attr, None)
+                setattr(self, f"_screen_hit_grab_anchor_{suffix}", None)
                 continue
             if getattr(self, target_attr) is None:
                 keyboard_hit = False
                 aim = aim_matrices[index]
+                ray_origin, ray_direction = self._controller_interaction_ray(index)
                 if self._keyboard_visible and aim is not None:
                     keyboard_hit = self._keyboard_plane_hit(
-                        aim[:3, 3], -aim[:3, 2]
+                        ray_origin, ray_direction
                     ) != (None, None)
                 if keyboard_hit:
                     setattr(self, target_attr, "keyboard")
@@ -1238,6 +1640,7 @@ class OpenXrVulkanPresenter(
                 if stick_active[index]:
                     setattr(self, anchor_attr, None)
                     setattr(self, rotation_attr, None)
+                    setattr(self, f"_screen_hit_grab_anchor_{suffix}", None)
                     continue
                 grip_position = grip_matrices[index][:3, 3].astype(np.float64)
                 target = getattr(self, f"_grip_target_{suffix}")
@@ -1248,35 +1651,57 @@ class OpenXrVulkanPresenter(
                         setattr(self, anchor_attr, anchor)
                     self._set_keyboard_world_position(grip_position + anchor)
                 elif target == "screen" and self._filament_screen is not None:
-                    anchor = getattr(self, anchor_attr)
-                    if anchor is None:
-                        anchor = np.asarray(
-                            self._filament_screen[0], dtype=np.float64
-                        ) - grip_position
-                        setattr(self, anchor_attr, anchor)
-                        setattr(
-                            self,
-                            rotation_attr,
-                            grip_matrices[index][:3, :3].astype(np.float64).copy(),
-                        )
-                        setattr(
-                            self,
-                            screen_rotation_attr,
-                            tuple(self._filament_screen[3]),
-                        )
-                    self._set_filament_screen_pose(grip_position + anchor)
-                    self._apply_grip_screen_rotation(index)
+                    # Match the legacy renderer: the point selected by the
+                    # visible laser stays attached to the same screen-local
+                    # coordinate while the hand moves or rotates.
+                    hit_world = self._screen_hit_world_for_hand(index)
+                    if hit_world is None:
+                        continue
+                    screen_position, screen_width, screen_height, screen_rotation = (
+                        self._filament_screen
+                    )
+                    screen_pose = self._filament_screen_pose_mat4()
+                    screen_center = screen_pose[:3, 3].astype(np.float64)
+                    screen_basis = screen_pose[:3, :3].astype(np.float64)
+                    hit_anchor_attr = f"_screen_hit_grab_anchor_{suffix}"
+                    hit_anchor = getattr(self, hit_anchor_attr)
+                    if hit_anchor is None:
+                        hit_anchor = screen_basis.T @ (hit_world - screen_center)
+                        setattr(self, hit_anchor_attr, hit_anchor)
+                    target_center = hit_world - screen_basis @ hit_anchor
+                    target_rotation = screen_rotation
+                    if index == 1 and self._head_position_w is not None:
+                        # Right-hand legacy drag orbits around the head while
+                        # preserving the current screen distance and keeps the
+                        # screen normal aimed back at the head.
+                        head = np.asarray(self._head_position_w, dtype=np.float64)
+                        original_radius = float(np.linalg.norm(screen_center - head))
+                        radial = target_center - head
+                        radial_length = float(np.linalg.norm(radial))
+                        if original_radius > 1e-6 and radial_length > 1e-6:
+                            target_center = head + radial / radial_length * original_radius
+                            dx, dy, dz = (target_center - head) / original_radius
+                            target_rotation = (
+                                math.degrees(math.atan2(-float(dx), -float(dz))),
+                                math.degrees(math.asin(max(-1.0, min(1.0, float(dy))))),
+                                float(screen_rotation[2]),
+                            )
+                    self._set_filament_screen_pose(target_center, target_rotation)
+                    if index == 0:
+                        self._apply_grip_screen_rotation(index)
         for name, hand, hit, down_flag, up_flag in (
             ("left", inputs[0], hits[0], _MOUSEEVENTF_RIGHTDOWN, _MOUSEEVENTF_RIGHTUP),
             ("right", inputs[1], hits[1], _MOUSEEVENTF_LEFTDOWN, _MOUSEEVENTF_LEFTUP),
         ):
             trigger = float(hand.get("trigger", 0.0) or 0.0)
             state = self._pointer_state[name]
-            aim_matrix = self._aim_mat_l if name == "left" else self._aim_mat_r
+            hand_index = 0 if name == "left" else 1
+            aim_matrix = self._aim_mat_l if hand_index == 0 else self._aim_mat_r
             keyboard_hit = False
+            ray_origin, ray_direction = self._controller_interaction_ray(hand_index)
             if self._keyboard_visible and aim_matrix is not None:
                 keyboard_hit = self._keyboard_plane_hit(
-                    aim_matrix[:3, 3], -aim_matrix[:3, 2]
+                    ray_origin, ray_direction
                 ) != (None, None)
             if hit is None or keyboard_hit:
                 if state != "idle":
@@ -1518,6 +1943,7 @@ class OpenXrVulkanPresenter(
         self._graphics_binding = None
         self._initialized = False
         self._screen_ready_semaphore_abi_available = False
+        self._last_filament_screen_image_status = None
         self._clear_presenter_commands()
         self._drop_output_frames()
         self._has_presented_frame = False
@@ -1938,9 +2364,31 @@ class OpenXrVulkanPresenter(
     def _release_output_frame(frame: VulkanStereoOutputFrame | None) -> None:
         if frame is None:
             return
-        callback = (frame.metadata or {}).get("_vulkan_output_release")
+        metadata = frame.metadata or {}
+        consumer_release = metadata.get("_vulkan_source_consumer_release")
+        consumer_semaphores = metadata.get(
+            "_vulkan_consumer_release_semaphores"
+        )
+        if callable(consumer_release) and consumer_semaphores is not None:
+            consumer_release(frame.frame_id, tuple(consumer_semaphores))
+            return
+        callback = metadata.get("_vulkan_output_release")
         if callable(callback):
             callback(frame.frame_id)
+
+    def release_displayed_output_for_reuse(self, slot_index: int) -> bool:
+        """Release a displayed source slot before a producer ring wrap blocks."""
+
+        with self._output_lock:
+            displayed = self._displayed_output
+            if displayed is None:
+                return False
+            metadata = displayed.metadata or {}
+            if metadata.get("vulkan_output_ring_slot") != int(slot_index):
+                return False
+            self._displayed_output = None
+        self._release_output_frame(displayed)
+        return True
 
     def _drop_output_frames(self) -> None:
         with self._output_lock:
@@ -2047,10 +2495,13 @@ class OpenXrVulkanPresenter(
                     flush=True,
                 )
                 print(
-                    "Filament screen image path: "
-                    f"enabled={self._filament_screen_image_enabled} "
-                    f"abi={getattr(bridge, 'screen_image_abi_available', False)} "
-                    "fallback=OpenXR Quad Layer Vulkan copy",
+                    "Filament screen image capability: "
+                    f"requested={self._filament_screen_image_enabled} "
+                    f"screen_image_abi={getattr(bridge, 'screen_image_abi_available', False)} "
+                    f"vulkan_external_image_abi={getattr(bridge, 'vulkan_external_image_abi_available', False)} "
+                    f"ready_semaphore_abi={getattr(bridge, 'screen_ready_semaphore_abi_available', False)} "
+                    f"finished_semaphore_abi={getattr(bridge, 'finished_drawing_semaphore_abi_available', False)} "
+                    f"async_submit_abi={getattr(bridge, 'async_submit_abi_available', False)}",
                     flush=True,
                 )
             bridge.set_scene_exposure(self._filament_scene_exposure)
@@ -2158,27 +2609,15 @@ class OpenXrVulkanPresenter(
                         hand, np.eye(4, dtype=np.float32), visible=False
                     )
                 else:
-                    smoothed_origin, direction = self._get_smoothed_ray(hand)
+                    smoothed_origin, direction = self._controller_interaction_ray(hand)
                     if smoothed_origin is None or direction is None:
-                        smoothed_origin = (
-                            grip_matrix[:3, 3] + grip_matrix[:3, 1] * 0.020
-                        ).astype(np.float64)
-                        direction = (-aim_matrix[:3, 2]).astype(np.float64)
-                    direction /= max(float(np.linalg.norm(direction)), 1e-8)
+                        bridge.set_controller_laser(
+                            hand, np.eye(4, dtype=np.float32), visible=False
+                        )
+                        continue
                     right_axis = aim_matrix[:3, 0].astype(np.float64)
                     right_axis /= max(float(np.linalg.norm(right_axis)), 1e-8)
-                    # Match the legacy controller ray calibration: rotate the
-                    # Aim -Z vector by 12 degrees around local X and start the
-                    # beam just beyond the grip shell.
-                    angle = math.radians(12.0)
-                    direction = (
-                        direction * math.cos(angle)
-                        + np.cross(right_axis, direction) * math.sin(angle)
-                        + right_axis
-                        * float(np.dot(right_axis, direction))
-                        * (1.0 - math.cos(angle))
-                    )
-                    direction /= max(float(np.linalg.norm(direction)), 1e-8)
+                    # Start the beam just beyond the grip shell.
                     beam_origin = (
                         smoothed_origin.astype(np.float64) + direction * 0.11
                     )
@@ -2217,6 +2656,32 @@ class OpenXrVulkanPresenter(
             profile = json.load(handle)
         if not isinstance(profile, dict):
             raise ValueError("Filament profile root must be an object")
+
+        presets = profile.get("lighting_presets")
+        self._filament_lighting_presets = tuple(
+            item for item in presets if isinstance(item, dict)
+        ) if isinstance(presets, list) else ()
+        try:
+            self._filament_lighting_preset_index = int(
+                profile.get("lighting_preset_index", 0)
+            )
+        except (TypeError, ValueError):
+            self._filament_lighting_preset_index = 0
+        if self._filament_lighting_presets:
+            self._filament_lighting_preset_index %= len(
+                self._filament_lighting_presets
+            )
+        mode = str(profile.get("glow_mode", "off")).strip().lower()
+        self._filament_glow_mode = (
+            mode if mode in {"off", "screen", "surround", "veil", "frosted"}
+            else "off"
+        )
+        try:
+            self._filament_glow_intensity_multiplier = max(
+                0.0, float(profile.get("glow_intensity_multiplier", 0.0))
+            )
+        except (TypeError, ValueError):
+            self._filament_glow_intensity_multiplier = 0.0
 
         view_pose = profile.get("view_pose", profile.get("camera"))
         view_poses = profile.get("view_poses")
@@ -2323,12 +2788,22 @@ class OpenXrVulkanPresenter(
                 )
             ),
         )
+        if self._filament_lighting_presets:
+            self._apply_filament_lighting_preset(
+                self._filament_lighting_presets[
+                    self._filament_lighting_preset_index
+                ],
+                apply_bridge=False,
+            )
         screen = profile.get("screen")
+        self._filament_screen_profile_authored = isinstance(screen, dict)
         if not isinstance(screen, dict):
+            default_width = max(0.25, float(self.config.filament_screen_width))
+            default_distance = max(0.25, float(self.config.filament_screen_distance))
             screen = {
-                "position": [0.0, 0.0, -2.0],
-                "width": 2.4,
-                "height": 1.35,
+                "position": [0.0, 0.0, -default_distance],
+                "width": default_width,
+                "height": default_width * 9.0 / 16.0,
                 "rotation_deg": [0.0, 0.0, 0.0],
             }
         if isinstance(screen, dict):
@@ -2473,6 +2948,11 @@ class OpenXrVulkanPresenter(
                     xr.SwapchainImageWaitInfo(timeout=xr.INFINITE_DURATION),
             )
             screen_image_projection = self._can_use_filament_screen_image(output_frame)
+            self._report_filament_screen_image_status(
+                output_frame,
+                screen_image_projection,
+                self._filament_screen_image_gate_reason(output_frame),
+            )
             if self.filament_bridge is not None:
                 self._update_filament_screen_light(
                     self.filament_bridge,
@@ -2549,17 +3029,15 @@ class OpenXrVulkanPresenter(
                 raise RuntimeError(
                     "Filament did not publish render-finished semaphores for both eyes"
                 )
-            if self.filament_bridge is not None:
-                bridge = self.filament_bridge
-                if screen_image_projection and isinstance(
-                    output_frame, VulkanStereoOutputFrame
-                ):
-                    release_source = (output_frame.metadata or {}).get(
-                        "_vulkan_source_consumer_release"
-                    )
-                    release_source(
-                        output_frame.frame_id, tuple(consumer_release_semaphores)
-                    )
+            if screen_image_projection and isinstance(
+                output_frame, VulkanStereoOutputFrame
+            ):
+                # Keep this source image leased while it remains the displayed
+                # Filament screen. It must not be returned to the producer ring
+                # until a newer frame replaces it.
+                output_frame.metadata[
+                    "_vulkan_consumer_release_semaphores"
+                ] = tuple(consumer_release_semaphores)
             render_succeeded = True
         finally:
             for eye, _image_index in acquired_images:
@@ -2764,79 +3242,314 @@ class OpenXrVulkanPresenter(
         # Submit the virtual screen behind controller/laser tool layers.
         return screen_layers + layers
 
+    def _overlay_language(self) -> str:
+        value = str(LANG or "EN").strip().upper()
+        return "CN" if value.startswith(("CN", "ZH")) else "EN"
+
+    def _filament_screen_pose_mat4(self) -> np.ndarray:
+        position, _width, _height, rotation = self._filament_screen or (
+            (0.0, 1.2, -2.0), 2.4, 1.35, (0.0, 0.0, 0.0)
+        )
+        pose = euler_to_mat4(
+            *(math.radians(float(value)) for value in rotation)
+        ).astype(np.float64)
+        pose[:3, 3] = np.asarray(position, dtype=np.float64)
+        return pose
+
+    @staticmethod
+    def _overlay_pose_from_matrix(matrix: np.ndarray) -> tuple[tuple[float, ...], tuple[float, ...]]:
+        quaternion = _mat3_to_quat_xyzw(matrix[:3, :3].astype(np.float64))
+        position = tuple(float(value) for value in matrix[:3, 3])
+        return position, tuple(float(value) for value in quaternion)
+
+    def _screen_overlay_pose(self, local_model: np.ndarray):
+        return self._overlay_pose_from_matrix(
+            self._filament_screen_pose_mat4() @ local_model
+        )
+
+    def _controller_overlay_pose(self, hand: int, panel_height: float, top_ref: float):
+        grip = self._grip_mat_l if int(hand) == 0 else self._grip_mat_r
+        aim = self._aim_mat_l if int(hand) == 0 else self._aim_mat_r
+        panel_pos = panel_fwd = panel_up = None
+        if grip is not None and aim is not None:
+            grip_up = np.asarray(grip[:3, 1], dtype=np.float64)
+            grip_up /= max(float(np.linalg.norm(grip_up)), 1e-10)
+            laser_fwd = -np.asarray(aim[:3, 2], dtype=np.float64)
+            right_axis = np.asarray(aim[:3, 0], dtype=np.float64)
+            right_axis /= max(float(np.linalg.norm(right_axis)), 1e-10)
+            angle = math.radians(12.0)
+            laser_fwd = (
+                laser_fwd * math.cos(angle)
+                + np.cross(right_axis, laser_fwd) * math.sin(angle)
+                + right_axis * float(np.dot(right_axis, laser_fwd))
+                * (1.0 - math.cos(angle))
+            )
+            laser_fwd /= max(float(np.linalg.norm(laser_fwd)), 1e-10)
+            grip_pos = np.asarray(grip[:3, 3], dtype=np.float64)
+            laser_origin = grip_pos + grip_up * 0.020 + laser_fwd * 0.11
+            panel_fwd = grip_up - laser_fwd
+            panel_fwd /= max(float(np.linalg.norm(panel_fwd)), 1e-10)
+            panel_up = grip_up
+            panel_right = np.cross(panel_up, panel_fwd)
+            panel_right /= max(float(np.linalg.norm(panel_right)), 1e-10)
+            panel_up2 = np.cross(panel_fwd, panel_right)
+            panel_up2 /= max(float(np.linalg.norm(panel_up2)), 1e-10)
+            panel_pos = (
+                laser_origin
+                + panel_fwd * 0.05
+                + panel_up2 * (top_ref - panel_height / 2.0)
+            )
+            basis = np.column_stack((panel_right, panel_up2, panel_fwd))
+            matrix = np.eye(4, dtype=np.float64)
+            matrix[:3, :3] = basis
+            matrix[:3, 3] = panel_pos
+            return self._overlay_pose_from_matrix(matrix)
+
+        if self._head_position_w is None or self._head_forward_w is None:
+            return None
+        head = np.asarray(self._head_position_w, dtype=np.float64)
+        forward = np.asarray(self._head_forward_w, dtype=np.float64)
+        forward /= max(float(np.linalg.norm(forward)), 1e-10)
+        panel_pos = head + forward * (1.0 if int(hand) == 0 else 1.2)
+        panel_pos[1] += -0.15 if int(hand) == 0 else -0.3
+        panel_fwd = -forward
+        panel_up = np.asarray((0.0, 1.0, 0.0), dtype=np.float64)
+        panel_right = np.cross(panel_up, panel_fwd)
+        panel_right /= max(float(np.linalg.norm(panel_right)), 1e-10)
+        panel_up2 = np.cross(panel_fwd, panel_right)
+        matrix = np.eye(4, dtype=np.float64)
+        matrix[:3, :3] = np.column_stack((panel_right, panel_up2, panel_fwd))
+        matrix[:3, 3] = panel_pos
+        return self._overlay_pose_from_matrix(matrix)
+
+    def _operation_guide_environment_mode(self) -> bool:
+        name = str(getattr(self, "_profile_view_name", "") or "").strip().lower()
+        return bool(name and name not in {"default", "none"})
+
+    def _cursor_overlay_specs(self, rgba, screen_pose, head):
+        """Build the legacy laser hit rings as transparent tool quads."""
+        specs = []
+        for hand in (0, 1):
+            origin, direction = self._controller_interaction_ray(hand)
+            if origin is None or direction is None:
+                continue
+            keyboard_hit = None
+            if self._keyboard_visible:
+                keyboard_hit = self._keyboard_plane_hit(origin, direction)
+            if keyboard_hit != (None, None) and keyboard_hit is not None:
+                pose = self._keyboard_pose_mat4()
+                x, y = (float(keyboard_hit[0]), float(keyboard_hit[1]))
+                local = np.asarray((x, y, 0.0), dtype=np.float64)
+                matrix = pose.copy()
+                matrix[:3, 3] = (
+                    pose[:3, 3] + pose[:3, :3] @ local + pose[:3, 2] * 0.003
+                )
+            else:
+                hit = self._screen_ray_hit_for_hand(hand)
+                if hit is None:
+                    continue
+                u, v = (float(hit[0]), float(hit[1]))
+                _position, width, height, _rotation = self._filament_screen or (
+                    (0.0, 1.2, -2.0), 2.4, 1.35, (0.0, 0.0, 0.0)
+                )
+                matrix = screen_pose.copy()
+                if self._screen_curved:
+                    half_angle = min(0.72, math.pi / 2.0)
+                    angle = -half_angle + 2.0 * half_angle * u
+                    tangent = np.asarray(
+                        (math.cos(angle), 0.0, math.sin(angle)),
+                        dtype=np.float64,
+                    )
+                    normal = np.asarray(
+                        (-math.sin(angle), 0.0, math.cos(angle)),
+                        dtype=np.float64,
+                    )
+                    curved_basis = np.column_stack(
+                        (tangent, np.asarray((0.0, 1.0, 0.0)), normal)
+                    )
+                    matrix[:3, :3] = screen_pose[:3, :3] @ curved_basis
+                    hit_world = self._screen_uv_to_world(u, v)
+                    if hit_world is None:
+                        continue
+                    matrix[:3, 3] = (
+                        hit_world + screen_pose[:3, :3] @ normal * 0.003
+                    )
+                else:
+                    matrix[:3, 3] = (
+                        screen_pose[:3, 3]
+                        + screen_pose[:3, :3]
+                        @ np.asarray(((u - 0.5) * float(width),
+                                      (v - 0.5) * float(height), 0.0), dtype=np.float64)
+                        + screen_pose[:3, 2] * 0.003
+                    )
+            distance = float(np.linalg.norm(matrix[:3, 3] - head))
+            radius = 0.012 * float(np.clip(distance / 2.0, 0.35, 50.0))
+            position, rotation = self._overlay_pose_from_matrix(matrix)
+            specs.append(
+                (
+                    f"laser_cursor_{hand}",
+                    rgba,
+                    position,
+                    (radius * 2.0, radius * 2.0),
+                    rotation,
+                )
+            )
+        return specs
+
     def _render_tool_quad_layers(self) -> list[Any]:
-        """Submit legacy keyboard, laser, FPS, aperture and help quads."""
+        """Submit the legacy keyboard and overlay quads with legacy poses."""
         if self.xr is None or self.session is None or self.vulkan is None:
             return []
-        position, width, height, rotation = self._filament_screen or ((0.0, 1.2, -2.0), 2.4, 1.35, (0.0, 0.0, 0.0))
+        _position, width, height, _rotation = self._filament_screen or (
+            (0.0, 1.2, -2.0), 2.4, 1.35, (0.0, 0.0, 0.0)
+        )
+        width = float(width)
+        height = float(height)
+        language = self._overlay_language()
+        environment_mode = self._operation_guide_environment_mode()
         specs = []
+
         if self._keyboard_visible:
             keyboard_width = float(self._keyboard_width)
             keyboard_height = float(self._keyboard_height)
             keyboard_cache_key = (
-                "keyboard",
-                bool(self._kb_show_shifted),
-                keyboard_width,
-                keyboard_height,
+                bool(self._kb_show_shifted), keyboard_width, keyboard_height
             )
             rgba = self._tool_quad_texture_cache.get("keyboard")
-            if rgba is None or getattr(self, "_keyboard_texture_key", None) != keyboard_cache_key:
+            if rgba is None or self._tool_quad_texture_keys.get("keyboard") != keyboard_cache_key:
                 rgba, self._keyboard_keys = build_keyboard_rgba(
                     self._kb_show_shifted, keyboard_width, keyboard_height
                 )
                 self._tool_quad_texture_cache["keyboard"] = rgba
-                self._keyboard_texture_key = keyboard_cache_key
+                self._tool_quad_texture_keys["keyboard"] = keyboard_cache_key
             keyboard_pose = self._keyboard_pose_mat4()
-            specs.append((
-                "keyboard", rgba,
-                tuple(float(value) for value in keyboard_pose[:3, 3]),
-                (keyboard_width, keyboard_height), rotation,
-            ))
-        if self._fps_overlay_visible:
-            fps_texture_key = (
-                float(width),
-                float(height),
-                float(position[2]),
-                getattr(self._controller_brand, "name", ""),
-                round(self._tool_overlay_xr_fps, 1),
-                round(self._tool_overlay_sbs_fps, 1),
-                round(self._tool_overlay_latency_ms, 1),
+            _keyboard_position, keyboard_quaternion = self._overlay_pose_from_matrix(
+                keyboard_pose
             )
+            specs.append(
+                (
+                    "keyboard", rgba, _keyboard_position,
+                    (keyboard_width, keyboard_height), keyboard_quaternion,
+                )
+            )
+
+        head = np.asarray(
+            self._head_position_w if self._head_position_w is not None else (0, 0, 0),
+            dtype=np.float64,
+        )
+        screen_pose = self._filament_screen_pose_mat4()
+        screen_distance = float(np.linalg.norm(screen_pose[:3, 3] - head))
+        fps_key = (
+            "fps", language, environment_mode, round(width, 3), round(height, 3),
+            round(self._tool_overlay_xr_fps, 1), round(self._tool_overlay_sbs_fps, 1),
+            round(self._tool_overlay_latency_ms, 1),
+        )
+        if self._fps_overlay_visible or self._hand_fps_visible:
             rgba = self._tool_quad_texture_cache.get("fps")
-            if rgba is None or self._tool_quad_texture_keys.get("fps") != fps_texture_key:
+            if rgba is None or self._tool_quad_texture_keys.get("fps") != fps_key:
                 rgba = build_fps_overlay_rgba(
                     actual_fps=self._tool_overlay_xr_fps,
                     sbs_fps=self._tool_overlay_sbs_fps,
                     latency_ms=self._tool_overlay_latency_ms,
-                    screen_width=width, screen_height=height, screen_distance=abs(float(position[2])),
-                    depth_strength=0.0, vr_res=(0, 0), sbs_res=(0, 0),
+                    screen_width=width,
+                    screen_height=height,
+                    screen_distance=screen_distance,
+                    depth_strength=0.0,
+                    vr_res=(0, 0),
+                    sbs_res=(0, 0),
                     controller_brand=getattr(self._controller_brand, "name", ""),
-                    environment_visible=True,
+                    environment_visible=environment_mode,
                 )
                 self._tool_quad_texture_cache["fps"] = rgba
-                self._tool_quad_texture_keys["fps"] = fps_texture_key
-            specs.append(("fps", rgba, (position[0] - width * 0.42, position[1] + height * 0.72, position[2]), (width * 0.42, height * 0.13), rotation))
-        if self._operation_guide_visible:
-            help_texture_key = (False,)
-            rgba = self._tool_quad_texture_cache.get("help")
-            if rgba is None or self._tool_quad_texture_keys.get("help") != help_texture_key:
-                rgba = build_help_rgba(environment_mode=False)
-                self._tool_quad_texture_cache["help"] = rgba
-                self._tool_quad_texture_keys["help"] = help_texture_key
-            specs.append(("help", rgba, (position[0] + width * 0.34, position[1] + height * 0.72, position[2]), (width * 0.32, height * 0.28), rotation))
+                self._tool_quad_texture_keys["fps"] = fps_key
+
+        if self._fps_overlay_visible:
+            overlay_h = height / 8.0
+            overlay_w = overlay_h * float(rgba.shape[1]) / max(1.0, float(rgba.shape[0]))
+            local = np.eye(4, dtype=np.float64)
+            local[:3, 3] = (
+                -width / 2.0 + overlay_w / 2.0,
+                -height / 2.0 - height * 0.02 - overlay_h / 2.0,
+                0.0,
+            )
+            fps_position, fps_rotation = self._screen_overlay_pose(local)
+            specs.append(("screen_fps", rgba, fps_position, (overlay_w, overlay_h), fps_rotation))
+
+        if self._screen_operation_guide_visible:
+            help_key = ("screen_help", language)
+            rgba = self._tool_quad_texture_cache.get("screen_help")
+            if rgba is None or self._tool_quad_texture_keys.get("screen_help") != help_key:
+                # This is the legacy screen-side vertical guide. The
+                # controller-attached two-column guide is a different panel.
+                rgba = build_team_help_rgba(lang=language)
+                self._tool_quad_texture_cache["screen_help"] = rgba
+                self._tool_quad_texture_keys["screen_help"] = help_key
+            panel_h = height
+            panel_w = panel_h * float(rgba.shape[1]) / max(1.0, float(rgba.shape[0]))
+            gap = height * 0.02
+            head_local = screen_pose[:3, :3].T @ (head - screen_pose[:3, 3])
+            hinge = np.asarray((-width / 2.0 - gap, 0.0, 0.0), dtype=np.float64)
+            to_user = head_local - hinge
+            to_user /= max(float(np.linalg.norm(to_user)), 1e-10)
+            theta = math.atan2(float(to_user[0]), float(to_user[2]))
+            hinge_rotation = np.eye(4, dtype=np.float64)
+            hinge_rotation[0, 0] = math.cos(theta)
+            hinge_rotation[0, 2] = math.sin(theta)
+            hinge_rotation[2, 0] = -math.sin(theta)
+            hinge_rotation[2, 2] = math.cos(theta)
+            hinge_translation = np.eye(4, dtype=np.float64)
+            hinge_translation[0, 3] = -width / 2.0 - gap
+            panel_offset = np.eye(4, dtype=np.float64)
+            panel_offset[0, 3] = -panel_w / 2.0
+            panel_position, panel_rotation = self._overlay_pose_from_matrix(
+                screen_pose @ hinge_translation @ hinge_rotation @ panel_offset
+            )
+            specs.append(("screen_help", rgba, panel_position, (panel_w, panel_h), panel_rotation))
+
+        if self._hand_fps_visible:
+            pose = self._controller_overlay_pose(0, 0.075, 0.10)
+            if pose is not None:
+                hand_position, hand_rotation = pose
+                overlay_w = 0.075 * float(rgba.shape[1]) / max(1.0, float(rgba.shape[0]))
+                specs.append(("hand_fps", rgba, hand_position, (overlay_w, 0.075), hand_rotation))
+
+        if self._hand_operation_guide_visible:
+            help_key = ("hand_help", language, environment_mode)
+            hand_help = self._tool_quad_texture_cache.get("hand_help")
+            if hand_help is None or self._tool_quad_texture_keys.get("hand_help") != help_key:
+                hand_help = build_help_rgba(environment_mode=environment_mode, lang=language)
+                self._tool_quad_texture_cache["hand_help"] = hand_help
+                self._tool_quad_texture_keys["hand_help"] = help_key
+            panel_h = 0.2
+            panel_w = panel_h * float(hand_help.shape[1]) / max(1.0, float(hand_help.shape[0]))
+            pose = self._controller_overlay_pose(1, panel_h, panel_h + 0.025)
+            if pose is not None:
+                hand_position, hand_rotation = pose
+                specs.append(("hand_help", hand_help, hand_position, (panel_w, panel_h), hand_rotation))
+
         if self._aperture_visible:
-            aperture_texture_key = ("Aperture", "B: close", 384, 64)
+            aperture_key = ("Aperture", "B: close", 384, 64)
             rgba = self._tool_quad_texture_cache.get("aperture")
-            if rgba is None or self._tool_quad_texture_keys.get("aperture") != aperture_texture_key:
+            if rgba is None or self._tool_quad_texture_keys.get("aperture") != aperture_key:
                 rgba = build_short_osd_rgba(("Aperture", "B: close"), width=384, height=64)
                 self._tool_quad_texture_cache["aperture"] = rgba
-                self._tool_quad_texture_keys["aperture"] = aperture_texture_key
+                self._tool_quad_texture_keys["aperture"] = aperture_key
+            position, rotation = self._overlay_pose_from_matrix(screen_pose)
             specs.append(("aperture", rgba, position, (width * 0.24, height * 0.06), rotation))
+
+        cursor_rgba = self._tool_quad_texture_cache.get("laser_cursor")
+        if cursor_rgba is None:
+            cursor_rgba = build_cursor_rgba(64)
+            self._tool_quad_texture_cache["laser_cursor"] = cursor_rgba
+            self._tool_quad_texture_keys["laser_cursor"] = ("legacy_cursor_ring", 64)
+        specs.extend(self._cursor_overlay_specs(cursor_rgba, screen_pose, head))
+
         return [self._upload_tool_quad(*spec) for spec in specs]
 
     def _cache_head_position(self, views: list[Any]) -> None:
         if len(views) < 2:
             self._head_position_w = None
+            self._head_forward_w = None
             return
         eye_positions = [
             np.asarray(
@@ -2846,6 +3559,25 @@ class OpenXrVulkanPresenter(
             for view in views[:2]
         ]
         self._head_position_w = (eye_positions[0] + eye_positions[1]) * 0.5
+        head_matrix = _xr_view_pose_to_model_mat4(views[0].pose)
+        self._head_forward_w = -head_matrix[:3, 2].astype(np.float64)
+        if self._head_position_w is not None:
+            self._initial_head_y = float(self._head_position_w[1])
+
+    def _initialize_filament_screen_from_head(self) -> None:
+        """Initialize an unauthored screen with the legacy head-centered preset."""
+        if (
+            self._filament_screen_head_initialized
+            or self._filament_screen_profile_authored
+            or self._filament_screen is None
+            or self._head_position_w is None
+            or self._head_forward_w is None
+        ):
+            return
+        self._shortcut_screen_preset_index = 5
+        self._apply_shortcut_screen_preset(5)
+        self._filament_screen_initial = self._filament_screen
+        self._filament_screen_head_initialized = True
 
     def _controller_guide_geometry(self):
         """Return the world-space panel geometry for the Projection Layer guide."""

@@ -4,6 +4,8 @@ import torch
 import triton
 import triton.language as tl
 
+from .triton_runtime import triton_runtime_available
+
 
 @triton.jit
 def _half_sbs_kernel(
@@ -39,8 +41,7 @@ def _half_sbs_kernel(
 
 def can_use_triton_half_sbs(left: torch.Tensor, right: torch.Tensor) -> bool:
     return (
-        left.is_cuda
-        and right.is_cuda
+        triton_runtime_available(left.device)
         and left.dtype == torch.float32
         and right.dtype == torch.float32
         and left.ndim == 4
@@ -54,8 +55,7 @@ def can_use_triton_half_sbs(left: torch.Tensor, right: torch.Tensor) -> bool:
 
 def can_use_triton_full_sbs(left: torch.Tensor, right: torch.Tensor) -> bool:
     return (
-        left.is_cuda
-        and right.is_cuda
+        triton_runtime_available(left.device)
         and left.dtype == torch.float32
         and right.dtype == torch.float32
         and left.ndim == 4
@@ -68,8 +68,7 @@ def can_use_triton_full_sbs(left: torch.Tensor, right: torch.Tensor) -> bool:
 
 def can_use_triton_half_tab(left: torch.Tensor, right: torch.Tensor) -> bool:
     return (
-        left.is_cuda
-        and right.is_cuda
+        triton_runtime_available(left.device)
         and left.dtype == torch.float32
         and right.dtype == torch.float32
         and left.ndim == 4
@@ -87,7 +86,7 @@ def can_use_triton_full_tab(left: torch.Tensor, right: torch.Tensor) -> bool:
 
 def can_use_triton_depth_map(depth: torch.Tensor, channels: int) -> bool:
     return (
-        depth.is_cuda
+        triton_runtime_available(depth.device)
         and depth.dtype == torch.float32
         and depth.ndim == 4
         and depth.shape[0] == 1
@@ -98,8 +97,7 @@ def can_use_triton_depth_map(depth: torch.Tensor, channels: int) -> bool:
 
 def _can_use_triton_postprocess(left: torch.Tensor, right: torch.Tensor) -> bool:
     return (
-        left.is_cuda
-        and right.is_cuda
+        triton_runtime_available(left.device)
         and left.dtype == torch.float32
         and right.dtype == torch.float32
         and left.ndim == 4

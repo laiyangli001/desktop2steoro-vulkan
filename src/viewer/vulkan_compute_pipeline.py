@@ -37,6 +37,7 @@ class VulkanComputePipeline:
         shader_path: str | Path,
         *,
         descriptor_bindings: list[DescriptorBinding] | None = None,
+        push_constants_size: int = 0,
     ) -> None:
         self.context = context
         self.vk = context.vk
@@ -44,6 +45,9 @@ class VulkanComputePipeline:
         self.descriptor_set_layout = None
         self.pipeline_layout = None
         self.pipeline = None
+        self.push_constants_size = int(push_constants_size)
+        if self.push_constants_size < 0 or self.push_constants_size % 4:
+            raise ValueError("push_constants_size must be a non-negative multiple of 4")
         words = read_spirv_words(shader_path)
         payload = struct.pack(f"<{len(words)}I", *words)
         try:
@@ -59,6 +63,15 @@ class VulkanComputePipeline:
             bindings = list(descriptor_bindings or [])
             if bindings:
                 self.descriptor_set_layout = create_descriptor_set_layout(context, bindings)
+            push_constant_ranges = None
+            if self.push_constants_size:
+                push_constant_ranges = [
+                    self.vk.VkPushConstantRange(
+                        stageFlags=self.vk.VK_SHADER_STAGE_COMPUTE_BIT,
+                        offset=0,
+                        size=self.push_constants_size,
+                    )
+                ]
             self.pipeline_layout = self.vk.vkCreatePipelineLayout(
                 context.device,
                 self.vk.VkPipelineLayoutCreateInfo(
@@ -67,6 +80,8 @@ class VulkanComputePipeline:
                     pSetLayouts=[self.descriptor_set_layout]
                     if self.descriptor_set_layout is not None
                     else None,
+                    pushConstantRangeCount=1 if push_constant_ranges else 0,
+                    pPushConstantRanges=push_constant_ranges,
                 ),
                 None,
             )
@@ -101,6 +116,7 @@ class VulkanComputePipeline:
         group_count_y: int = 1,
         group_count_z: int = 1,
         descriptor_set: Any | None = None,
+        push_constants: bytes | bytearray | memoryview | None = None,
     ) -> None:
         if self.pipeline is None:
             raise VulkanComputePipelineError("compute pipeline is closed")
@@ -124,6 +140,30 @@ class VulkanComputePipeline:
                 [descriptor_set],
                 0,
                 None,
+            )
+        if push_constants is not None:
+            payload = bytes(push_constants)
+            if not self.push_constants_size:
+                raise VulkanComputePipelineError(
+                    "push constants supplied to pipeline without a push-constant range"
+                )
+            if len(payload) != self.push_constants_size:
+                raise VulkanComputePipelineError(
+                    f"push constants size {len(payload)} != {self.push_constants_size}"
+                )
+            ffi = getattr(self.vk, "ffi", None)
+            if ffi is None:
+                raise VulkanComputePipelineError(
+                    "Vulkan binding does not expose an FFI allocator for push constants"
+                )
+            push_payload = ffi.new("char[]", payload)
+            self.vk.vkCmdPushConstants(
+                command_buffer,
+                self.pipeline_layout,
+                self.vk.VK_SHADER_STAGE_COMPUTE_BIT,
+                0,
+                len(payload),
+                push_payload,
             )
         self.vk.vkCmdDispatch(command_buffer, *(int(value) for value in counts))
 

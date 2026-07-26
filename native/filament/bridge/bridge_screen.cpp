@@ -179,6 +179,13 @@ int bridge_screen_set_light(
 int bridge_screen_create(FilamentBridge* bridge) {
     if (!bridge || !bridge->engine || !bridge->scene) return 0;
     bridge_screen_destroy(bridge);
+    // Match the legacy viewer's runtime screen texture path. The source is
+    // display-referred sRGB bytes; linear filtering only controls sampling
+    // during rasterization and does not modify the source color values.
+    bridge->screen_texture_sampler = filament::TextureSampler(
+            filament::TextureSampler::MinFilter::LINEAR,
+            filament::TextureSampler::MagFilter::LINEAR,
+            filament::TextureSampler::WrapMode::CLAMP_TO_EDGE);
     const char* shader = R"FILAMENT(
         void material(inout MaterialInputs material) {
             prepareMaterial(material);

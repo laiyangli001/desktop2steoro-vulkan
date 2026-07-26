@@ -21,6 +21,8 @@ from utils import (
     DEVICE_INFO,
     FPS,
     MONITOR_INDEX,
+    OPENXR_SCREEN_DISTANCE,
+    OPENXR_SCREEN_WIDTH,
     OS_NAME,
     OUTPUT_RESOLUTION,
     RENDER_SIZE_CONFIG,
@@ -128,6 +130,10 @@ def _openxr_filament_config(settings: dict) -> dict[str, object]:
         "filament_skybox_brightness": float(
             settings.get("Filament Skybox Brightness", 1.0)
         ),
+        # These values are resolved by the legacy viewer-settings path and
+        # exported through utils; keep the Vulkan entrypoint as a consumer.
+        "filament_screen_width": float(OPENXR_SCREEN_WIDTH),
+        "filament_screen_distance": float(OPENXR_SCREEN_DISTANCE),
     }
 
 
