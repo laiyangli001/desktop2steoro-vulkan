@@ -193,10 +193,12 @@ int bridge_screen_create(FilamentBridge* bridge) {
             .parameter("screenTexture", filamat::MaterialBuilder::SamplerType::SAMPLER_2D)
             .shading(filament::Shading::UNLIT)
             .materialDomain(filament::MaterialDomain::SURFACE)
-            .blending(filament::BlendingMode::TRANSPARENT)
+            // Match the legacy projection pass: the display is an opaque
+            // image that writes depth before foreground controllers render.
+            .blending(filament::BlendingMode::OPAQUE)
             .culling(filament::backend::CullingMode::NONE)
-            .depthWrite(false)
-            .depthCulling(false)
+            .depthWrite(true)
+            .depthCulling(true)
             .targetApi(filamat::MaterialBuilder::TargetApi::ALL)
             .platform(filamat::MaterialBuilder::Platform::ALL);
     const filamat::Package package = builder.build(bridge->engine->getJobSystem());
@@ -254,9 +256,8 @@ int bridge_screen_create(FilamentBridge* bridge) {
             .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES,
                     bridge->screen_vertex_buffer, bridge->screen_index_buffer,
                     0, static_cast<uint32_t>(bridge->screen_indices.size()))
-            // Render the display-referred screen before controllers and laser.
-            // The screen does not write depth, so foreground controller PBR
-            // geometry and the depth-tested laser remain visible on top.
+            // Render the display-referred screen before controllers and laser,
+            // matching the legacy projection pass and preserving depth order.
             .priority(0).culling(false).castShadows(false).receiveShadows(false)
             .build(*bridge->engine, bridge->screen_entity);
     if (result != filament::RenderableManager::Builder::Success) {

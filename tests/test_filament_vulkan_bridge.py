@@ -318,7 +318,9 @@ def test_native_screen_is_rendered_before_controller_and_laser() -> None:
     )
 
     assert ".priority(0).culling(false)" in screen_source
-    assert ".depthWrite(false)" in screen_source
+    assert ".blending(filament::BlendingMode::OPAQUE)" in screen_source
+    assert ".depthWrite(true)" in screen_source
+    assert ".depthCulling(true)" in screen_source
     assert "renderables.setPriority(instance, 6);" in controller_source
     assert ".priority(7)" in laser_source
     assert ".depthWrite(true)" in laser_source
