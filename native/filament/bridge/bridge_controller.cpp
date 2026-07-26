@@ -293,13 +293,15 @@ int bridge_controller_load(
     }
     bridge->scene->addEntities(
             controller.asset->getEntities(), controller.asset->getEntityCount());
-    // Controllers and lasers share the main View and depth buffer. The original
-    // glTF PBR renderables therefore write depth before the laser geometry.
+    // Keep controllers in front of the virtual screen and below the laser.
+    // Both are rendered in the same Filament View, so priority is the
+    // ordering contract for the foreground objects.
     auto& renderables = bridge->engine->getRenderableManager();
     for (size_t index = 0; index < controller.asset->getRenderableEntityCount(); ++index) {
         const auto entity = controller.asset->getRenderableEntities()[index];
         const auto instance = renderables.getInstance(entity);
         if (!instance.isValid()) continue;
+        renderables.setPriority(instance, 6);
         renderables.setLightChannel(instance, 0, false);
         renderables.setLightChannel(instance, 1, true);
         renderables.setLayerMask(instance, 0xff, 0x01);

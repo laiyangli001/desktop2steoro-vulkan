@@ -310,11 +310,15 @@ def test_native_screen_is_rendered_before_controller_and_laser() -> None:
     screen_source = (root / "native/filament/bridge/bridge_screen.cpp").read_text(
         encoding="utf-8"
     )
+    controller_source = (root / "native/filament/bridge/bridge_controller.cpp").read_text(
+        encoding="utf-8"
+    )
     laser_source = (root / "native/filament/bridge/bridge_laser.cpp").read_text(
         encoding="utf-8"
     )
 
     assert ".priority(0).culling(false)" in screen_source
     assert ".depthWrite(false)" in screen_source
+    assert "renderables.setPriority(instance, 6);" in controller_source
     assert ".priority(7)" in laser_source
     assert ".depthWrite(true)" in laser_source

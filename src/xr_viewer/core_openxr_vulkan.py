@@ -2726,7 +2726,10 @@ class OpenXrVulkanPresenter(
         # controller tools and other 2D overlays only.
         layers = self._render_tool_quad_layers()
         if output_frame is None:
-            return layers + list(self._last_screen_quad_layers)
+            # OpenXR composition layers are ordered back to front. The virtual
+            # screen must be submitted before controller tools so the latter
+            # remain visible in front of it.
+            return list(self._last_screen_quad_layers) + layers
         if self._filament_screen is None:
             self._last_screen_quad_layers = []
             return layers
@@ -2758,7 +2761,8 @@ class OpenXrVulkanPresenter(
                 eye, position, screen_width, screen_height, rotation, eye_index
             ))
         self._last_screen_quad_layers = screen_layers
-        return layers + screen_layers
+        # Submit the virtual screen behind controller/laser tool layers.
+        return screen_layers + layers
 
     def _render_tool_quad_layers(self) -> list[Any]:
         """Submit legacy keyboard, laser, FPS, aperture and help quads."""

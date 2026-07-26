@@ -430,6 +430,8 @@ def test_controller_callout_uses_projection_layer_not_quad_layer() -> None:
     source = (Path(__file__).resolve().parents[1] /
               "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
 
+    assert "return screen_layers + layers" in source
+    assert "return layers + screen_layers" not in source
     assert "bridge.set_controller_guide_texture(self._controller_callout_rgba)" in source
     assert "bridge.set_controller_guide(guide_matrix, visible=True)" in source
     assert 'specs.append(("controller_callouts"' not in source
