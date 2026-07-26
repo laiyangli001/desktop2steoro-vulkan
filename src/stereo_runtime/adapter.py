@@ -18,6 +18,7 @@ OnnxDtypeMode = Literal["auto", "fp16", "fp32"]
 DepthUpsampleMode = Literal["bilinear", "guided"]
 OutputFormat = Literal["half_sbs", "full_sbs", "half_tab", "full_tab", "mono", "anaglyph", "interleaved", "leia", "depth_map"]
 HoleFill = Literal["none", "fast", "edge_aware"]
+StereoComputeBackendMode = Literal["auto", "triton", "vulkan"]
 
 
 @dataclass(frozen=True)
@@ -88,6 +89,7 @@ class StereoRuntimeConfig:
     color_tint: float = 0.0
     debug_output: bool = False
     fused: bool = True
+    stereo_compute_backend: StereoComputeBackendMode = "auto"
 
     @property
     def resolved_model_id(self) -> str:
@@ -266,6 +268,9 @@ def runtime_config_from_d2s_settings(
         color_tint=float(settings.get("Color Tint", 0.0)),
         debug_output=_to_bool(settings.get("Debug Stereo Output", False)),
         profile_sync=_to_bool(settings.get("Depth Profile Sync", settings.get("Profile Sync", False))),
+        stereo_compute_backend=_normalize_stereo_compute_backend(
+            settings.get("Stereo Compute Backend", "auto")
+        ),
     )
 
 
@@ -356,6 +361,17 @@ def _normalize_stereo_quality(value: Any) -> StereoQuality:
         "hq_4k": "hq_4k",
     }
     return mapping.get(key, "quality_4k")
+
+
+def _normalize_stereo_compute_backend(value: Any) -> StereoComputeBackendMode:
+    key = str(value or "auto").strip().lower().replace("-", "_")
+    if key in {"auto", "vendor", "vendor_default"}:
+        return "auto"
+    if key in {"triton", "cuda", "cuda_triton", "amd_triton", "rocm_triton"}:
+        return "triton"
+    if key in {"vulkan", "vulkan_compute"}:
+        return "vulkan"
+    raise ValueError(f"unknown stereo compute backend: {value!r}")
 
 
 def _normalize_hole_fill_mode(value: Any) -> tuple[str, int, float]:

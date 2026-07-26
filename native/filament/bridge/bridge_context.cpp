@@ -89,6 +89,10 @@ FilamentBridge* bridge_context_create(
         eye.view->setScene(bridge->scene);
         eye.view->setCamera(eye.camera);
         eye.view->setVisibleLayers(0xff, 0x03);
+        // The legacy OpenGL projection path has no post-process FXAA. Keep
+        // text and fine screen details from being softened by Filament's
+        // default FXAA pass.
+        eye.view->setAntiAliasing(filament::AntiAliasing::NONE);
         // There is only one View per eye. The old false setting was required
         // to retain depth between the former scene and laser Views; retaining
         // it here leaks external OpenXR depth across frames and creates trails.

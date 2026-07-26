@@ -17,6 +17,7 @@ from app_runtime.runtime_output import (
     RocmVulkanOutputAdapter,
 )
 from viewer.cuda_vulkan_interop import (
+    _ExternalMemoryBufferDesc,
     _ExternalSemaphoreWaitParams,
     _ExternalSemaphoreSignalParams,
     _SemaphoreSignalParams,
@@ -40,6 +41,14 @@ def test_cuda_external_semaphore_signal_params_match_runtime_abi() -> None:
     assert _ExternalSemaphoreWaitParams.params.offset == 0
     assert _ExternalSemaphoreWaitParams.flags.offset == 72
     assert ctypes.sizeof(_ExternalSemaphoreWaitParams) == 144
+
+
+def test_cuda_external_buffer_desc_matches_runtime_abi() -> None:
+    assert _ExternalMemoryBufferDesc.offset.offset == 0
+    assert _ExternalMemoryBufferDesc.size.offset == ctypes.sizeof(ctypes.c_size_t)
+    assert _ExternalMemoryBufferDesc.flags.offset == ctypes.sizeof(ctypes.c_size_t) * 2
+    # CUDA aligns the trailing uint32 field to the host size_t alignment.
+    assert ctypes.sizeof(_ExternalMemoryBufferDesc) == 24
 
 
 def test_cuda_external_semaphore_enabled_by_default_and_can_be_disabled(monkeypatch) -> None:

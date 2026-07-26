@@ -9,7 +9,6 @@ from typing import Callable
 from capture.types import CapturedFrame
 
 from .render_size import RenderSizeConfig, resolve_render_size, runtime_output_size_text
-from .runtime import openxr_result_from_stereo_result
 from .settings_snapshot import RuntimeSettingsPipelineRebuildRequired, RuntimeSettingsRestartRequired, RuntimeSettingsSnapshot
 
 _OPENXR_FULL_SYNTHESIS_PRESETS = {"cinema", "game_low_latency", "still_image_hq", "debug_export"}
@@ -833,28 +832,35 @@ class RuntimePipelineLoop:
                 openxr_full_synthesis = ctx.run_mode == "OpenXR" and _openxr_full_synthesis_enabled(ctx)
                 _enable_openxr_depth_cuda_graph_if_needed(ctx, openxr_full_synthesis, captured_frame)
                 runtime_call_start_time = time.perf_counter()
-                if ctx.run_mode == "OpenXR" and not openxr_full_synthesis:
-                    runtime_result = ctx.stereo_runtime.process_openxr_frame(
-                        runtime_rgb,
-                        ctx.current_openxr_render_config(),
-                    )
-                else:
+                if ctx.run_mode == "OpenXR":
                     original_stereo_config = None
+                    openxr_config = ctx.current_openxr_render_config()
                     if openxr_full_synthesis:
                         original_stereo_config = getattr(ctx.stereo_runtime, "stereo_config", None)
                         realtime_config = _openxr_realtime_synthesis_config(original_stereo_config)
                         if realtime_config is not original_stereo_config:
                             ctx.stereo_runtime.stereo_config = realtime_config
+                        if openxr_config is not None and is_dataclass(openxr_config):
+                            openxr_config = replace(
+                                openxr_config,
+                                output_mode="full_synthesis_eyes",
+                            )
                     try:
-                        runtime_result = ctx.stereo_runtime.process_rgb_frame(
+                        # Keep the Vulkan request attached to the runtime
+                        # result so the Presenter can dispatch directly into
+                        # its own external images and semaphores.
+                        runtime_result = ctx.stereo_runtime.process_openxr_frame(
                             runtime_rgb,
-                            skip_sbs_output=openxr_full_synthesis,
+                            openxr_config,
                         )
                     finally:
                         if original_stereo_config is not None:
                             ctx.stereo_runtime.stereo_config = original_stereo_config
-                    if ctx.run_mode == "OpenXR":
-                        runtime_result = openxr_result_from_stereo_result(runtime_result, source_rgb=runtime_rgb)
+                else:
+                    runtime_result = ctx.stereo_runtime.process_rgb_frame(
+                        runtime_rgb,
+                        skip_sbs_output=False,
+                    )
                 ctx.breakdown_add_time("rt_call", time.perf_counter() - runtime_call_start_time)
                 _attach_pipeline_debug(
                     runtime_result,

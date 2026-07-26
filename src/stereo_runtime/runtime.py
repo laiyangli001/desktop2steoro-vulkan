@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from dataclasses import replace
 import logging
 import os
+from pathlib import Path
 import time
 from typing import Any
 
@@ -22,8 +23,11 @@ from .settings_snapshot import (
     RuntimeSettingsSnapshot,
     SnapshotChangeClass,
 )
+from .compute_backend import resolve_stereo_compute_backend
+from .output import make_sbs, match_depth
 from .synthesis import StereoResult, synthesize_stereo
-from .temporal import TemporalState
+from .temporal import TemporalState, apply_temporal
+from .triton_runtime import probe_triton_runtime
 
 
 LOGGER = logging.getLogger(__name__)
@@ -195,6 +199,15 @@ class StereoRuntimeResult:
 
 
 @dataclass(frozen=True)
+class VulkanComputeRequest:
+    """Presenter-thread request for direct Vulkan stereo image synthesis."""
+
+    rgb: torch.Tensor
+    depth: torch.Tensor
+    params: Any
+
+
+@dataclass(frozen=True)
 class OpenXRRuntimeResult:
     depth: torch.Tensor
     left_eye: torch.Tensor
@@ -214,6 +227,7 @@ class OpenXRRuntimeResult:
     provider_info: dict[str, Any] = field(default_factory=dict)
     cuda_ready_event: Any | None = None
     cuda_timing_events: dict[str, Any] = field(default_factory=dict)
+    vulkan_compute_request: VulkanComputeRequest | None = None
 
 
 def openxr_result_from_stereo_result(
@@ -823,6 +837,9 @@ class StereoRuntime:
         self._dynamic_convergence_last_measured: float | None = None
         self._dynamic_convergence_pending_measurement: torch.Tensor | None = None
         self._dynamic_convergence_pending_event: Any | None = None
+        self._vulkan_stereo_backend: Any | None = None
+        self._vulkan_stereo_backend_error: str | None = None
+        self._resolved_stereo_compute_backend: str | None = None
         self.stats = RollingRuntimeStats(maxlen=stats_window)
         self.collect_memory_stats = bool(collect_memory_stats)
 
@@ -969,6 +986,10 @@ class StereoRuntime:
         close = getattr(self.depth_provider, "close", None)
         if callable(close):
             close()
+        close_vulkan = getattr(self._vulkan_stereo_backend, "close", None)
+        if callable(close_vulkan):
+            close_vulkan()
+        self._vulkan_stereo_backend = None
         self._loaded = False
 
     def provider_report(self) -> dict[str, Any]:
@@ -979,6 +1000,10 @@ class StereoRuntime:
         report["depth_provider"] = self.provider_report()
         report["depth_backend_resolved"] = self.depth_config.backend
         report["stereo_backend"] = self.stereo_config.backend
+        report["stereo_compute_backend"] = (
+            self._resolved_stereo_compute_backend
+            or getattr(self.config, "stereo_compute_backend", "auto")
+        )
         report["last_timing"] = dict(self.last_timing)
         report["last_memory"] = dict(self.last_memory)
         report["rolling_stats"] = self.stats.to_report()
@@ -1005,8 +1030,22 @@ class StereoRuntime:
         stereo_config, convergence_debug = _dynamic_convergence_config_for_depth(self, depth, self.stereo_config)
 
         synth_start = time.perf_counter()
-        fused_sbs, fused_skip = (None, "skip_sbs_output") if skip_sbs_output else self._try_fast_plus_fused_sbs(output_rgb, depth, stereo_config)
-        if fused_sbs is not None:
+        vulkan_stereo, vulkan_skip = self._try_vulkan_fused_stereo(
+            output_rgb,
+            depth,
+            stereo_config,
+            skip_sbs_output=skip_sbs_output,
+        )
+        fused_sbs, fused_skip = (None, "vulkan_selected") if vulkan_stereo is not None else (
+            (None, "skip_sbs_output")
+            if skip_sbs_output
+            else self._try_fast_plus_fused_sbs(output_rgb, depth, stereo_config)
+        )
+        if vulkan_stereo is not None:
+            stereo = vulkan_stereo
+            stereo.debug_info.setdefault("fast_plus_fused_backend", "not_used")
+            stereo.debug_info.setdefault("fast_plus_fused_skip", vulkan_skip)
+        elif fused_sbs is not None:
             stereo = StereoResult(
                 left_eye=output_rgb,
                 right_eye=output_rgb,
@@ -1222,37 +1261,101 @@ class StereoRuntime:
         pack_backend = "none"
         source_rgb = rgb_frame
         raw_depth = depth
+        visual_regression_dir: str | None = None
+        vulkan_compute_request: VulkanComputeRequest | None = None
+        deferred_reason = "prewarp_disabled"
         if prewarp_eyes:
-            render_start = time.perf_counter()
-            openxr = render_openxr_stereo(output_rgb, depth, openxr_config_for_frame)
-            openxr_render_ms = (time.perf_counter() - render_start) * 1000.0
-            _record_cuda_event(cuda_events, "openxr_render", rgb_frame)
+            deferred_request, deferred_reason = self._build_vulkan_compute_request(
+                output_rgb,
+                depth,
+                stereo_config,
+            )
+            # OpenXR must defer the final stereo dispatch to the Presenter so
+            # it can write directly into Presenter-owned images. This remains
+            # true even if the runtime used its regular Vulkan backend for an
+            # earlier non-OpenXR frame.
+            if deferred_request is not None:
+                vulkan_compute_request = deferred_request
+                visual_regression_dir = self._maybe_dump_openxr_rgb_depth(
+                    source_rgb=output_rgb,
+                    raw_depth=raw_depth,
+                    prepared_depth=deferred_request.depth,
+                )
+                left_eye = output_rgb
+                right_eye = output_rgb
+                output_format = "openxr_eye_views"
+                render_backend = {
+                    "backend": str(stereo_config.backend),
+                    "sbs_backend": "vulkan_deferred_stereo",
+                    "warp_composite_backend": "vulkan_layered_stereo_output_image",
+                    "occlusion_mask_backend": "vulkan_layered_stereo_output_image",
+                    "hole_fill_backend": "vulkan_layered_stereo_output_image",
+                    "stereo_compute_backend": "vulkan",
+                    "vulkan_openxr_prewarp": 1,
+                    "vulkan_zero_copy_request": 1,
+                    "vulkan_zero_copy_deferred": 1,
+                    "vulkan_zero_copy_reason": deferred_reason,
+                }
+                render_backend["vulkan_openxr_prewarp"] = 1
+                _record_cuda_event(cuda_events, "openxr_render", rgb_frame)
+            else:
+                vulkan_stereo, vulkan_skip = self._try_vulkan_fused_stereo(
+                    output_rgb,
+                    depth,
+                    stereo_config,
+                    skip_sbs_output=True,
+                )
+                if vulkan_stereo is not None:
+                    left_eye = vulkan_stereo.left_eye
+                    right_eye = vulkan_stereo.right_eye
+                    output_format = "openxr_eye_views"
+                    render_backend = dict(vulkan_stereo.debug_info)
+                    render_backend["vulkan_openxr_prewarp"] = 1
+                    render_backend["vulkan_fused_skip"] = vulkan_skip
+                    _record_cuda_event(cuda_events, "openxr_render", rgb_frame)
+                else:
+                    render_start = time.perf_counter()
+                    openxr = render_openxr_stereo(output_rgb, depth, openxr_config_for_frame)
+                    openxr_render_ms = (time.perf_counter() - render_start) * 1000.0
+                    _record_cuda_event(cuda_events, "openxr_render", rgb_frame)
 
-            pack_start = time.perf_counter()
-            left_eye = openxr.left_eye
-            right_eye = openxr.right_eye
-            if bool(getattr(stereo_config, "cross_eyed", False)):
-                left_eye, right_eye = right_eye, left_eye
-            _record_cuda_event(cuda_events, "openxr_pack_start", left_eye)
-            if _openxr_runtime_output_uint8_enabled():
-                packed_left, left_pack_backend = _pack_openxr_eye_rgba_u8_with_backend(left_eye)
-                packed_right, right_pack_backend = _pack_openxr_eye_rgba_u8_with_backend(right_eye)
-                if packed_left is not left_eye or packed_right is not right_eye:
-                    left_eye = packed_left
-                    right_eye = packed_right
-                    pack_backend = _merge_openxr_rgba_pack_backend(left_pack_backend, right_pack_backend)
-            pack_ms = (time.perf_counter() - pack_start) * 1000.0
-            _record_cuda_event(cuda_events, "openxr_pack", left_eye)
-            output_format = "openxr_eye_views"
-            render_backend = dict(openxr.debug_info)
+                    pack_start = time.perf_counter()
+                    left_eye = openxr.left_eye
+                    right_eye = openxr.right_eye
+                    if bool(getattr(stereo_config, "cross_eyed", False)):
+                        left_eye, right_eye = right_eye, left_eye
+                    _record_cuda_event(cuda_events, "openxr_pack_start", left_eye)
+                    if _openxr_runtime_output_uint8_enabled():
+                        packed_left, left_pack_backend = _pack_openxr_eye_rgba_u8_with_backend(left_eye)
+                        packed_right, right_pack_backend = _pack_openxr_eye_rgba_u8_with_backend(right_eye)
+                        if packed_left is not left_eye or packed_right is not right_eye:
+                            left_eye = packed_left
+                            right_eye = packed_right
+                            pack_backend = _merge_openxr_rgba_pack_backend(left_pack_backend, right_pack_backend)
+                    pack_ms = (time.perf_counter() - pack_start) * 1000.0
+                    _record_cuda_event(cuda_events, "openxr_pack", left_eye)
+                    output_format = "openxr_eye_views"
+                    render_backend = dict(openxr.debug_info)
         else:
             depth = self._prepare_openxr_rgb_depth(depth)
             _record_cuda_event(cuda_events, "openxr_depth_prepare", rgb_frame)
-            self._maybe_dump_openxr_rgb_depth(source_rgb=source_rgb, raw_depth=raw_depth, prepared_depth=depth)
+            visual_regression_dir = self._maybe_dump_openxr_rgb_depth(
+                source_rgb=source_rgb,
+                raw_depth=raw_depth,
+                prepared_depth=depth,
+            )
             left_eye = output_rgb
             right_eye = output_rgb
             output_format = "openxr_rgb_depth"
             render_backend = {"backend": "openxr_viewer_shader_dibr"}
+        if visual_regression_dir is None:
+            # Keep the automatic input/depth evidence available even when a
+            # frame cannot use the deferred Vulkan request and falls back.
+            visual_regression_dir = self._maybe_dump_openxr_rgb_depth(
+                source_rgb=output_rgb,
+                raw_depth=raw_depth,
+                prepared_depth=depth,
+            )
         total_ms = (time.perf_counter() - total_start) * 1000.0
         _record_cuda_event(cuda_events, "end", left_eye if isinstance(left_eye, torch.Tensor) else rgb_frame)
 
@@ -1273,11 +1376,15 @@ class StereoRuntime:
         debug = dict(render_backend)
         debug["application_runtime_target"] = "openxr"
         debug["stereo_synthesis_mode"] = "full_synthesis_eyes" if prewarp_eyes else "rgb_depth_direct"
+        debug["vulkan_zero_copy_request"] = int(vulkan_compute_request is not None)
+        debug["vulkan_zero_copy_reason"] = str(deferred_reason)
         debug["runtime_depth_backend"] = self.depth_config.backend
         debug["runtime_output_format"] = output_format
         debug["packing_format"] = "none"
         debug["active_settings_version"] = int(self.active_settings_version)
         debug["runtime_output_dtype"] = _runtime_eye_dtype(left_eye, right_eye)
+        if visual_regression_dir is not None:
+            debug["visual_regression_dir"] = visual_regression_dir
         debug["cross_eyed"] = int(bool(getattr(stereo_config, "cross_eyed", False)))
         debug["hot_reload_class"] = self.last_settings_change_class
         debug["hot_reload_changed_fields"] = list(self.last_settings_changed_fields)
@@ -1330,7 +1437,77 @@ class StereoRuntime:
             timing=timing,
             provider_info=provider_info,
             cuda_timing_events=cuda_events,
+            vulkan_compute_request=vulkan_compute_request,
         )
+
+    def _build_vulkan_compute_request(
+        self,
+        rgb_frame: torch.Tensor,
+        depth: torch.Tensor,
+        stereo_config: Any,
+    ) -> tuple[VulkanComputeRequest | None, str]:
+        """Build a Presenter-owned Vulkan request without touching Vulkan here."""
+        backend = str(getattr(stereo_config, "backend", ""))
+        if backend not in {"fast_plus", "quality_4k", "hq_4k"}:
+            return None, f"backend={backend or 'unknown'}"
+        if str(getattr(stereo_config, "output_format", "")) == "depth_map":
+            return None, "depth_map_not_supported"
+        if isinstance(getattr(stereo_config, "convergence", None), torch.Tensor):
+            return None, "dynamic_convergence_tensor"
+        if bool(getattr(stereo_config, "refine", False)):
+            return None, "local_refine_not_supported"
+        # Temporal blending and eye swapping require a prior output image or a
+        # separate image pass. Keep those semantics on the existing path until
+        # their Vulkan stateful kernels are migrated.
+        if bool(getattr(stereo_config, "temporal", False)):
+            return None, "temporal_stateful_kernel_not_supported"
+        if bool(getattr(stereo_config, "cross_eyed", False)):
+            return None, "cross_eyed_output_not_supported"
+        if self._resolve_stereo_compute_backend(rgb_frame) != "vulkan":
+            return None, f"selected={self._resolved_stereo_compute_backend}"
+        try:
+            processed_depth = postprocess_depth(
+                match_depth(depth, rgb_frame.shape[-2], rgb_frame.shape[-1]),
+                depth_pop=float(getattr(stereo_config, "depth_pop", 0.0)),
+                antialias_strength=float(getattr(stereo_config, "depth_antialias_strength", 0.0)),
+            )
+            budget = resolve_parallax_budget(
+                render_width=int(rgb_frame.shape[-1]),
+                render_height=int(rgb_frame.shape[-2]),
+                preset=getattr(stereo_config, "parallax_preset", "standard"),
+                convergence=float(getattr(stereo_config, "convergence", 0.0)),
+                max_disparity_px=getattr(stereo_config, "max_disparity_px", None),
+            )
+            from .vulkan_stereo_pass import VulkanLayeredStereoParams
+
+            hole_fill = str(getattr(stereo_config, "hole_fill", "edge_aware")).strip().lower()
+            hole_fill_mode = str(getattr(stereo_config, "hole_fill_mode", "balanced")).strip().lower()
+            directional_fill = hole_fill_mode in {"quality", "content_aware", "directional"}
+            params = VulkanLayeredStereoParams(
+                depth_strength=max(0.0, float(getattr(stereo_config, "depth_strength", 1.0))),
+                max_disparity_px=float(budget.max_disparity_px),
+                convergence=float(getattr(stereo_config, "convergence", 0.0)),
+                edge_threshold=float(getattr(stereo_config, "edge_threshold", 0.04)),
+                fill_strength=(
+                    float(getattr(stereo_config, "hole_fill_strength", 1.0))
+                    if hole_fill != "none" else 0.0
+                ),
+                fill_radius=max(0, min(3, int(getattr(stereo_config, "hole_fill_radius", 3)))),
+                mask_feather_radius=max(0, min(3, int(getattr(stereo_config, "mask_feather_radius", 3)))),
+                symmetric=bool(getattr(stereo_config, "symmetric", True)),
+                layers=(1 if backend == "fast_plus" else max(1, min(4, int(getattr(stereo_config, "layers", 2))))),
+                softness=0.08,
+                foreground_scale=max(0.0, float(getattr(stereo_config, "foreground_shift_scale", 1.0))),
+                midground_scale=max(0.0, float(getattr(stereo_config, "midground_shift_scale", 1.0))),
+                background_scale=max(0.0, float(getattr(stereo_config, "background_shift_scale", 1.0))),
+                edge_dilation=max(0, min(3, int(getattr(stereo_config, "edge_dilation", 2)))),
+                screen_edge_suppression=max(0, int(getattr(stereo_config, "screen_edge_mask_suppression", 0))),
+                hole_fill_mode=1 if directional_fill else 0,
+                occlusion_enabled=bool(getattr(stereo_config, "occlusion", True)),
+            )
+            return VulkanComputeRequest(rgb=rgb_frame, depth=processed_depth, params=params), "ready"
+        except Exception as exc:
+            return None, f"request_failed:{type(exc).__name__}"
 
     def _prepare_openxr_rgb_depth(self, depth: torch.Tensor) -> torch.Tensor:
         depth = depth.detach().contiguous().float().clamp(0.0, 1.0)
@@ -1343,7 +1520,10 @@ class StereoRuntime:
             depth_pop=float(getattr(self.stereo_config, "depth_pop", 0.0)),
             antialias_strength=float(getattr(self.stereo_config, "depth_antialias_strength", 0.0)),
         )
-        return self._stabilize_openxr_rgb_depth(depth)
+        return self._stabilize_openxr_rgb_depth(
+            depth,
+            enabled=bool(getattr(self.stereo_config, "temporal", False)),
+        )
 
     def _maybe_dump_openxr_rgb_depth(
         self,
@@ -1351,27 +1531,36 @@ class StereoRuntime:
         source_rgb: torch.Tensor,
         raw_depth: torch.Tensor,
         prepared_depth: torch.Tensor,
-    ) -> None:
+    ) -> str | None:
+        # Runtime visual regression is opt-in. The normal application path
+        # must not perform host readback or write diagnostic images.
         dump_dir = os.environ.get("D2S_OPENXR_RGB_DEPTH_DUMP_DIR", "").strip()
-        if not dump_dir or self._openxr_rgb_depth_dumped:
-            return
+        if not dump_dir:
+            return None
+        out_dir = Path(dump_dir)
+        if self._openxr_rgb_depth_dumped:
+            return str(out_dir)
         try:
-            from pathlib import Path
-
             from .io import save_depth, save_rgb
 
-            out_dir = Path(dump_dir)
             out_dir.mkdir(parents=True, exist_ok=True)
-            save_rgb(source_rgb.detach().float().clamp(0.0, 1.0), out_dir / "source_rgb.png")
-            save_depth(raw_depth.detach().float().clamp(0.0, 1.0), out_dir / "raw_depth.png")
-            save_depth(prepared_depth.detach().float().clamp(0.0, 1.0), out_dir / "prepared_depth.png")
-            print(f"[StereoRuntime] OpenXR rgb_depth dump saved: {out_dir}", flush=True)
+            save_rgb(source_rgb.detach().float().clamp(0.0, 1.0), out_dir / "00_capture_rgb.png")
+            save_depth(raw_depth.detach().float().clamp(0.0, 1.0), out_dir / "01_raw_depth.png")
+            save_depth(prepared_depth.detach().float().clamp(0.0, 1.0), out_dir / "02_prepared_depth.png")
+            print(f"[StereoRuntime] OpenXR visual regression capture saved: {out_dir}", flush=True)
             self._openxr_rgb_depth_dumped = True
+            return str(out_dir)
         except Exception as exc:
-            print(f"[StereoRuntime] OpenXR rgb_depth dump failed: {type(exc).__name__}: {exc}", flush=True)
+            print(f"[StereoRuntime] OpenXR visual regression capture failed: {type(exc).__name__}: {exc}", flush=True)
+            return None
 
-    def _stabilize_openxr_rgb_depth(self, depth: torch.Tensor) -> torch.Tensor:
-        alpha = _openxr_rgb_depth_temporal_alpha()
+    def _stabilize_openxr_rgb_depth(
+        self,
+        depth: torch.Tensor,
+        *,
+        enabled: bool = True,
+    ) -> torch.Tensor:
+        alpha = _openxr_rgb_depth_temporal_alpha() if enabled else 0.0
         depth = depth.detach().contiguous().float()
         if alpha <= 0.0:
             self._openxr_depth_temporal = None
@@ -1448,6 +1637,228 @@ class StereoRuntime:
             ), "used"
         except Exception as exc:
             return None, f"kernel_failed:{type(exc).__name__}"
+
+    def _resolve_stereo_compute_backend(self, rgb_frame: torch.Tensor) -> str:
+        requested = str(getattr(self.config, "stereo_compute_backend", "auto") or "auto")
+        probe = probe_triton_runtime(getattr(rgb_frame, "device", None))
+        if requested.strip().lower() in {"triton", "cuda", "cuda_triton"}:
+            requested = "triton"
+        try:
+            resolved = resolve_stereo_compute_backend(
+                requested,
+                vendor_id=0,
+                cuda_available=bool(getattr(rgb_frame, "is_cuda", False)),
+                vulkan_available=True,
+                triton_available=probe.available,
+                triton_vendor=probe.vendor,
+            )
+        except Exception:
+            resolved = "triton" if requested == "triton" else "vulkan"
+        self._resolved_stereo_compute_backend = str(resolved.value)
+        return str(resolved.value)
+
+    def _try_vulkan_fused_stereo(
+        self,
+        rgb_frame: torch.Tensor,
+        depth: torch.Tensor,
+        stereo_config: Any,
+        *,
+        skip_sbs_output: bool,
+    ) -> tuple[StereoResult | None, str]:
+        backend = str(getattr(stereo_config, "backend", ""))
+        if backend in {"quality_4k", "hq_4k"}:
+            return self._try_vulkan_layered_stereo(
+                rgb_frame,
+                depth,
+                stereo_config,
+                skip_sbs_output=skip_sbs_output,
+            )
+        if backend != "fast_plus":
+            return None, f"backend={getattr(stereo_config, 'backend', 'unknown')}"
+        if str(getattr(stereo_config, "output_format", "")) == "depth_map":
+            return None, "depth_map_not_supported"
+        if _layered_parallax_enabled(stereo_config):
+            return None, "layered_parallax"
+        if isinstance(getattr(stereo_config, "convergence", None), torch.Tensor):
+            return None, "dynamic_convergence_tensor"
+
+        backend_name = self._resolve_stereo_compute_backend(rgb_frame)
+        if backend_name != "vulkan":
+            return None, f"selected={backend_name}"
+        if self._vulkan_stereo_backend_error is not None:
+            return None, f"backend_unavailable:{self._vulkan_stereo_backend_error}"
+
+        try:
+            if self._vulkan_stereo_backend is None:
+                from .vulkan_backend import VulkanStereoComputeBackend
+
+                self._vulkan_stereo_backend = VulkanStereoComputeBackend()
+            processed_depth = postprocess_depth(
+                match_depth(depth, rgb_frame.shape[-2], rgb_frame.shape[-1]),
+                depth_pop=float(getattr(stereo_config, "depth_pop", 0.0)),
+                antialias_strength=float(getattr(stereo_config, "depth_antialias_strength", 0.0)),
+            )
+            budget = resolve_parallax_budget(
+                render_width=int(rgb_frame.shape[-1]),
+                render_height=int(rgb_frame.shape[-2]),
+                preset=getattr(stereo_config, "parallax_preset", "standard"),
+                convergence=float(getattr(stereo_config, "convergence", 0.0)),
+                max_disparity_px=getattr(stereo_config, "max_disparity_px", None),
+            )
+            from .vulkan_stereo_pass import VulkanStereoFusedParams
+
+            left, right, mask, backend_debug = self._vulkan_stereo_backend.submit_frame(
+                rgb_frame,
+                processed_depth,
+                params=VulkanStereoFusedParams(
+                    depth_strength=max(0.0, float(getattr(stereo_config, "depth_strength", 1.0))),
+                    max_disparity_px=float(budget.max_disparity_px),
+                    convergence=float(getattr(stereo_config, "convergence", 0.0)),
+                    edge_threshold=float(getattr(stereo_config, "edge_threshold", 0.03)),
+                    fill_strength=(
+                        float(getattr(stereo_config, "hole_fill_strength", 0.6))
+                        if getattr(stereo_config, "hole_fill", "edge_aware") != "none"
+                        else 0.0
+                    ),
+                    fill_radius=max(0, min(3, int(getattr(stereo_config, "hole_fill_radius", 1)))),
+                    mask_feather_radius=max(0, min(3, int(getattr(stereo_config, "mask_feather_radius", 3)))),
+                    symmetric=bool(getattr(stereo_config, "symmetric", True)),
+                ),
+            )
+            if bool(getattr(stereo_config, "temporal", False)):
+                left, right = apply_temporal(
+                    left,
+                    right,
+                    mask,
+                    self.temporal_state,
+                    strength=float(getattr(stereo_config, "temporal_strength", 0.75)),
+                )
+            if bool(getattr(stereo_config, "cross_eyed", False)):
+                left, right = right, left
+            output_format = "mono" if skip_sbs_output else str(stereo_config.output_format)
+            sbs = make_sbs(left, right, output_format, fused=False)
+            debug = {
+                "backend": str(stereo_config.backend),
+                "sbs_backend": "vulkan_fused_stereo",
+                "warp_composite_backend": "vulkan_fused_stereo",
+                "occlusion_mask_backend": "vulkan_fused_stereo",
+                "hole_fill_backend": "vulkan_fused_stereo",
+                "stereo_compute_backend": "vulkan",
+                "fast_plus_fused_temporal_bypass": 0,
+                "occlusion_mask": mask,
+                **backend_debug,
+            }
+            return StereoResult(left_eye=left, right_eye=right, sbs=sbs, debug_info=debug), "used"
+        except Exception as exc:
+            self._vulkan_stereo_backend_error = f"{type(exc).__name__}: {exc}"
+            close = getattr(self._vulkan_stereo_backend, "close", None)
+            if callable(close):
+                close()
+            self._vulkan_stereo_backend = None
+            LOGGER.warning("Vulkan stereo fused pass unavailable; falling back: %s", self._vulkan_stereo_backend_error)
+            return None, f"kernel_failed:{self._vulkan_stereo_backend_error}"
+
+    def _try_vulkan_layered_stereo(
+        self,
+        rgb_frame: torch.Tensor,
+        depth: torch.Tensor,
+        stereo_config: Any,
+        *,
+        skip_sbs_output: bool,
+    ) -> tuple[StereoResult | None, str]:
+        if str(getattr(stereo_config, "output_format", "")) == "depth_map":
+            return None, "depth_map_not_supported"
+        if isinstance(getattr(stereo_config, "convergence", None), torch.Tensor):
+            return None, "dynamic_convergence_tensor"
+        if bool(getattr(stereo_config, "refine", False)):
+            return None, "local_refine_not_supported"
+
+        backend_name = self._resolve_stereo_compute_backend(rgb_frame)
+        if backend_name != "vulkan":
+            return None, f"selected={backend_name}"
+        if self._vulkan_stereo_backend_error is not None:
+            return None, f"backend_unavailable:{self._vulkan_stereo_backend_error}"
+
+        try:
+            if self._vulkan_stereo_backend is None:
+                from .vulkan_backend import VulkanStereoComputeBackend
+
+                self._vulkan_stereo_backend = VulkanStereoComputeBackend()
+            processed_depth = postprocess_depth(
+                match_depth(depth, rgb_frame.shape[-2], rgb_frame.shape[-1]),
+                depth_pop=float(getattr(stereo_config, "depth_pop", 0.0)),
+                antialias_strength=float(getattr(stereo_config, "depth_antialias_strength", 0.0)),
+            )
+            budget = resolve_parallax_budget(
+                render_width=int(rgb_frame.shape[-1]),
+                render_height=int(rgb_frame.shape[-2]),
+                preset=getattr(stereo_config, "parallax_preset", "standard"),
+                convergence=float(getattr(stereo_config, "convergence", 0.0)),
+                max_disparity_px=getattr(stereo_config, "max_disparity_px", None),
+            )
+            from .vulkan_stereo_pass import VulkanLayeredStereoParams
+
+            hole_fill = str(getattr(stereo_config, "hole_fill", "edge_aware")).strip().lower()
+            hole_fill_mode = str(getattr(stereo_config, "hole_fill_mode", "balanced")).strip().lower()
+            directional_fill = hole_fill_mode in {"quality", "content_aware", "directional"}
+            left, right, mask, backend_debug = self._vulkan_stereo_backend.submit_layered_frame(
+                rgb_frame,
+                processed_depth,
+                params=VulkanLayeredStereoParams(
+                    depth_strength=max(0.0, float(getattr(stereo_config, "depth_strength", 1.0))),
+                    max_disparity_px=float(budget.max_disparity_px),
+                    convergence=float(getattr(stereo_config, "convergence", 0.0)),
+                    edge_threshold=float(getattr(stereo_config, "edge_threshold", 0.04)),
+                    fill_strength=(
+                        float(getattr(stereo_config, "hole_fill_strength", 1.0))
+                        if hole_fill != "none" else 0.0
+                    ),
+                    fill_radius=max(0, min(3, int(getattr(stereo_config, "hole_fill_radius", 3)))),
+                    mask_feather_radius=max(0, min(3, int(getattr(stereo_config, "mask_feather_radius", 3)))),
+                    symmetric=bool(getattr(stereo_config, "symmetric", True)),
+                    layers=max(1, min(4, int(getattr(stereo_config, "layers", 2)))),
+                    softness=0.08,
+                    foreground_scale=max(0.0, float(getattr(stereo_config, "foreground_shift_scale", 1.0))),
+                    midground_scale=max(0.0, float(getattr(stereo_config, "midground_shift_scale", 1.0))),
+                    background_scale=max(0.0, float(getattr(stereo_config, "background_shift_scale", 1.0))),
+                    edge_dilation=max(0, min(3, int(getattr(stereo_config, "edge_dilation", 2)))),
+                    screen_edge_suppression=max(0, int(getattr(stereo_config, "screen_edge_mask_suppression", 0))),
+                    hole_fill_mode=1 if directional_fill else 0,
+                    occlusion_enabled=bool(getattr(stereo_config, "occlusion", True)),
+                ),
+            )
+            if bool(getattr(stereo_config, "temporal", False)):
+                left, right = apply_temporal(
+                    left,
+                    right,
+                    mask,
+                    self.temporal_state,
+                    strength=float(getattr(stereo_config, "temporal_strength", 0.75)),
+                )
+            if bool(getattr(stereo_config, "cross_eyed", False)):
+                left, right = right, left
+            output_format = "mono" if skip_sbs_output else str(stereo_config.output_format)
+            sbs = make_sbs(left, right, output_format, fused=False)
+            debug = {
+                "backend": str(stereo_config.backend),
+                "sbs_backend": "vulkan_layered_stereo",
+                "warp_composite_backend": "vulkan_layered_stereo",
+                "occlusion_mask_backend": "vulkan_layered_stereo",
+                "hole_fill_backend": "vulkan_layered_stereo",
+                "stereo_compute_backend": "vulkan",
+                "layers": int(getattr(stereo_config, "layers", 2)),
+                "occlusion_mask": mask,
+                **backend_debug,
+            }
+            return StereoResult(left_eye=left, right_eye=right, sbs=sbs, debug_info=debug), "used"
+        except Exception as exc:
+            self._vulkan_stereo_backend_error = f"{type(exc).__name__}: {exc}"
+            close = getattr(self._vulkan_stereo_backend, "close", None)
+            if callable(close):
+                close()
+            self._vulkan_stereo_backend = None
+            LOGGER.warning("Vulkan layered stereo pass unavailable; falling back: %s", self._vulkan_stereo_backend_error)
+            return None, f"kernel_failed:{self._vulkan_stereo_backend_error}"
 
     def _reset_cuda_peak_if_needed(self) -> None:
         if not self.collect_memory_stats or not torch.cuda.is_available():
@@ -1652,7 +2063,9 @@ def _openxr_runtime_output_uint8_enabled() -> bool:
 
 
 def _openxr_prewarp_eyes_enabled() -> bool:
-    return _env_flag("D2S_OPENXR_PREWARP_EYES", "0")
+    # OpenXR uses the Presenter-owned Vulkan image path by default. The
+    # environment variable remains an explicit escape hatch for diagnostics.
+    return _env_flag("D2S_OPENXR_PREWARP_EYES", "1")
 
 
 def _openxr_rgb_depth_temporal_alpha() -> float:

@@ -353,13 +353,33 @@ Effects Graph 消费最近完成的 screen slot，并发布 `latest_effect_slot`
 
 ### 5.4 Vulkan 屏幕图像环与 Filament 外部采样
 
-`CudaVulkanOutputAdapter` 负责拥有左右眼输出图像环，默认 `D2S_VULKAN_OUTPUT_RING_SIZE=3`。它必须：
+`VulkanZeroCopyOutputAdapter` 和 `CudaVulkanOutputAdapter` 共同负责拥有左右眼输出图像环，默认 `D2S_VULKAN_OUTPUT_RING_SIZE=3`。前者用于 Vulkan Compute 直接输出，后者用于 CUDA/ROCm/HIP producer；两者都必须：
 
 1. 为每个环槽创建可导出、可采样的 device-local `VkImage`；
-2. 为每个环槽只注册一次 CUDA external memory 和 mapped array；
+2. Vulkan Compute 槽位只创建一次 storage-capable external `VkImage`；CUDA/ROCm/HIP 槽位只注册一次 external memory 和 mapped array；
 3. 按 `frame_id % ring_size` 选择槽位，并在输出元数据中记录 `vulkan_output_ring_slot`；
 4. 让 `VulkanStereoOutputFrame` 持有该槽位的非拥有资源视图，不复制像素；
 5. 在尺寸变化或关闭阶段等待有限的在途工作后统一释放整个环。
+
+Vulkan Compute 直接输出的资源状态机为：
+
+```text
+GENERAL / producer-writable
+  -> Compute shader write (storage image)
+  -> timeline wait + graphics barrier
+SHADER_READ_ONLY_OPTIMAL / Filament sampling
+  -> Filament finished semaphore + release barrier
+GENERAL / slot reusable
+```
+
+Presenter 线程创建 `VulkanStereoImageComputeBackend`，在其所属 Vulkan context 中提交
+`d2s_stereo_layered_output.spv`。该 pass 的两个输出是环槽的 `VulkanExportableImage`；NVIDIA
+CUDA float32 RGB/Depth 输入优先写入可导出的 Vulkan storage buffer，CUDA 通过 mapped external
+buffer 和 ready semaphore 将 GPU 内拷贝完成点交给 Vulkan Compute，Compute 再等待该 semaphore。
+外部 buffer 能力不可用时才使用 host-visible storage buffer，并在元数据中标记兼容回退。Compute
+完成后只发布 timeline 和 per-eye visible semaphore，禁止读取 left/right 输出 buffer。因而当前
+“zero-copy”是 Compute 输入（CUDA external buffer）和 Compute→`VkImage`→Filament 输出链路的
+GPU 路径；CUDA Tensor 到 Vulkan buffer 仍是一次 GPU 内拷贝，不得误称为 CPU 零拷贝。
 
 该环的图形所有权固定属于 Presenter 线程。Capture、Inference、文件读取和后台输出消费者只能通过有界命令队列提交原始结果或资源描述，不得直接创建、导入、转换、绑定、释放 `VkImage`/`VkSemaphore`，也不得调用 Filament C ABI。所有 source-image barrier、queue ownership transfer、外部纹理绑定、consumer-release 和 GPU copy/Quad Layer 回退都必须在 Presenter 的 OpenXR 帧边界内执行。任何后续零拷贝重构若绕过命令队列或恢复后台线程直接操作图形资源，均视为架构回归。
 
@@ -379,7 +399,7 @@ ScreenExternalImage {
 }
 ```
 
-CUDA/Vulkan producer 完成写入后，必须 signal external binary/timeline semaphore；Presenter graphics submit 等待 producer-ready，并在同一次 source submit 中通过 Vulkan barrier 完成 access、layout 和 queue ownership transfer，目标布局为 `VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL`，同时 signal 一个 Filament visible semaphore。Bridge 把 visible semaphore 作为外部纹理 acquire wait，Filament 完成采样后，Presenter 再提交反向 barrier 到 `GENERAL` 并 signal 独立的 exportable consumer-release semaphore；生产端在复用槽位前必须以 CUDA/HIP stream wait 消费该 release。屏幕源图像的 ready/visible/release 同步与 OpenXR 输出 swapchain 的 acquire/render-finished/release 同步必须分开管理。
+Vulkan Compute 完成写入后，Presenter graphics submit 等待 Compute timeline，并在 source barrier 中把图像转换到 `VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL`，同时 signal per-eye Filament visible semaphore。CUDA/Vulkan producer 完成写入时使用等价的 external binary/timeline semaphore。Bridge 把 visible semaphore 作为外部纹理 acquire wait，Filament 完成采样后，Presenter 再提交反向 barrier 到 `GENERAL`；槽位 release timeline 交给下一次 Compute submit 等待。屏幕源图像的 ready/visible/release 同步与 OpenXR 输出 swapchain 的 acquire/render-finished/release 同步必须分开管理。
 
 直接外部采样是 Vulkan 主路径的首选：每张源 `VkImage` 只创建一次 Filament 外部纹理，稳态帧只切换槽位和材质绑定。不得把“裸 `VkImage` 可导入”当作完整同步；如果缺少格式/尺寸、layout、queue ownership 或 producer/consumer 同步信息，必须拒绝零拷贝绑定并选择一次 GPU copy 的屏幕路径或 Quad Layer 回退。回退不能使用 CPU 像素回读，也不能在已提交的 Filament 采样期间复用或销毁源图像。槽位扩容或尺寸变化属于受控重配置，不得发生在正常帧循环。
 
@@ -389,11 +409,11 @@ Presenter 只能通过 `GpuProducerAdapter` 注册表创建具体 producer；不
 
 `src/tools/probe.py` 的 capability report 必须输出 producer 自动选择结果、CUDA/HIP runtime 状态和显式覆盖标记；探测只读取运行时能力，不应为了生成报告而创建 Vulkan external memory 或导入厂商句柄。
 
-当前已注册 `cuda`/`nvidia` 与 `rocm`/`hip` producer，默认根据运行时自动识别后端。ROCm 适配器延迟加载 `amdhip64`/`libamdhip64`，使用 Vulkan 导出的 Win32 handle 或 FD；HIP external memory/semaphore 不可用时，不得启用直接采样实验路径，必须保留 Vulkan GPU copy 回退。`D2S_ENABLE_ROCM_EXTERNAL_SEMAPHORE=0` 仅作为调试禁用开关，不是正常运行前提。
+当前已注册 `cuda`/`nvidia`、`rocm`/`hip` 与 `vulkan_zero_copy` producer。OpenXR runtime result 携带 `VulkanComputeRequest` 时，Presenter 必须选择 `vulkan_zero_copy`，不能误选 `vulkan_host` 回退；只有请求不满足（例如仍启用尚未迁移的时域状态）或能力探测失败时才进入兼容路径。ROCm 适配器延迟加载 `amdhip64`/`libamdhip64`，使用 Vulkan 导出的 Win32 handle 或 FD；HIP external memory/semaphore 不可用时，不得启用直接采样实验路径，必须保留 Vulkan GPU copy 回退。`D2S_ENABLE_ROCM_EXTERNAL_SEMAPHORE=0` 仅作为调试禁用开关，不是正常运行前提。
 
 适配器发现或加载失败属于能力缺失，不得传播为 Presenter 线程异常；必须限频记录原因、保持 OpenXR 生命周期运行，并在后续输出帧重新尝试创建适配器。若当前 producer 没有可用 Vulkan import/copy 能力，则该帧只能丢弃，禁止退回 CPU 像素往返。
 
-当前实现状态：图像环、Filament 多槽缓存、producer-ready、source barrier、Filament visible semaphore、consumer-release barrier、Filament per-eye render-finished ABI 和 CUDA/ROCm/HIP producer wait 已接入；Filament v1.74.0 源码补丁和三平台 CI 远程构建入口已接入。直接外部采样请求默认开启，但只有带 `D2S_FILAMENT_VULKAN_EXTERNAL_IMAGE` 的新 Bridge 才会报告 `filament_bridge_vulkan_external_image_abi_available=true` 并实际包装外部 `VkImage`；旧 stock SDK/Bridge 仍报告 false，Presenter 自动回退到 Vulkan GPU copy。`D2S_ENABLE_FILAMENT_SCREEN_IMAGE=0` 仍可用于回归测试和故障隔离。不得把通用 `import()` 强行当作 Vulkan 外部纹理接口，也不得移除 consumer-release。
+当前实现状态：图像环、Filament 多槽缓存、Vulkan Compute 直接写图像、Compute timeline、source barrier、Filament visible semaphore、consumer-release barrier、Filament per-eye render-finished ABI 和 CUDA/ROCm/HIP producer wait 已接入；Filament v1.74.0 源码补丁和三平台 CI 远程构建入口已接入。直接外部采样请求默认开启，但只有带 `D2S_FILAMENT_VULKAN_EXTERNAL_IMAGE` 的新 Bridge 才会报告 `filament_bridge_vulkan_external_image_abi_available=true` 并实际包装外部 `VkImage`；旧 stock SDK/Bridge 仍报告 false，Presenter 自动回退到显式标记的 Vulkan GPU copy。`D2S_ENABLE_FILAMENT_SCREEN_IMAGE=0` 仍可用于回归测试和故障隔离。不得把通用 `import()` 强行当作 Vulkan 外部纹理接口，也不得移除 consumer-release。
 
 ### 5.5 Projection Layer 异步提交
 
@@ -628,7 +648,7 @@ Capture Adapter 报告真实 `capture_size`、pixel format、transfer function�
 
 虚拟屏幕光与上述环境模式正交，HDR 开关不得关闭或控制屏幕光。运行时每 250 ms 在 CUDA 流上异步下采样左右眼显示用 sRGB 图像，按标准 sRGB EOTF 转为线性平均色；颜色继续沿用旧工程的 `82%` 屏幕采样色与 `18%` profile 中性色混合。Filament 在屏幕中心创建只作用于控制器 light channel 1 的无阴影前向聚光源，方向跟随屏幕法线、衰减距离使用屏幕对角线，并由 `screen_light_intensity` 控制强度。该补充采样不得阻塞输出路径，失败时必须保留 last-good 屏幕光颜色。
 
-虚拟屏幕、UI 和手柄激光属于显示参考 LDR 内容：其输入图像必须是 `VK_FORMAT_R8G8B8A8_SRGB`，Filament 只解码一次。主场景使用一个 View，包含 GLB、原始 PBR 手柄、屏幕/UI 与激光，所有图元共享同一深度缓冲；手柄 PBR 先写入深度，激光以 `depthCulling=true` 渲染，必须自然被外壳遮挡。主 View 的 ColorGrading 使用 `LINEAR` tone mapping，不使用 ACES 或其他场景曲线，但保持后处理启用以在最终 sRGB 目标上完成唯一一次输出编码。禁止通过双 View、重复 controller asset、临时交换材质或 `colorWrite=false` 深度副本处理激光遮挡。默认颜色控制必须为恒等变换，非中性颜色控制只能来自明确的用户配置。
+虚拟屏幕、UI 和手柄激光属于显示参考 LDR 内容。传统 Quad Layer/直接 sRGB 纹理路径使用 `VK_FORMAT_R8G8B8A8_SRGB`，由 Filament 只解码一次；Presenter-owned Vulkan Compute 的 storage image 受 Vulkan storage-image 格式约束使用 `VK_FORMAT_R8G8B8A8_UNORM`，Compute 必须先把输入 sRGB 解码为线性光再写入，Filament 以线性 `RGBA8` 采样。两条路径在输出契约上都保持 `color_space=srgb`，最终只由 sRGB OpenXR 目标完成一次编码。主场景使用一个 View，包含 GLB、原始 PBR 手柄、屏幕/UI 与激光，所有图元共享同一深度缓冲；手柄 PBR 先写入深度，激光以 `depthCulling=true` 渲染，必须自然被外壳遮挡。主 View 的 ColorGrading 使用 `LINEAR` tone mapping，不使用 ACES 或其他场景曲线，但保持后处理启用以在最终 sRGB 目标上完成唯一一次输出编码。禁止通过双 View、重复 controller asset、临时交换材质或 `colorWrite=false` 深度副本处理激光遮挡。默认颜色控制必须为恒等变换，非中性颜色控制只能来自明确的用户配置。
 
 窗口尺寸或 HDR 状态改变时发布 format-change event。资源重建在 Frame Boundary 进行，capture callback 不直接重建 Vulkan 资源。
 
@@ -769,7 +789,7 @@ OpenGL Fallback 直接渲染到 OpenGL OpenXR swapchain 或 OpenGL window frameb
 
 ### 11.2.1 Filament 颜色管线
 
-Filament Bridge 必须将 GLB、原始 PBR 手柄、显示参考屏幕/UI 和激光放入同一个主 View，使控制器与激光共享 Scene 和深度缓冲。手柄使用原始 PBR 材质并写深度；激光使用不透明、`depthWrite=true`、`depthCulling=true` 的材质和控制器相同的 layer，因此外壳在几何上遮挡激光。单 View 每个 OpenXR 帧必须清理 channel 0 深度；仅多 View 同帧合成时才允许关闭该清理，且不得把该设置跨帧保留。每只眼的 Renderer 还必须在创建时显式设置 `ClearOptions.clear=true`、黑色 clear color 和 `discard=true`，因为 Filament 默认不清理颜色，而 OpenXR 外部 swapchain 图像的上一帧内容不得保留。主 View 使用 ColorGrading `LINEAR` tone mapping，不应用 ACES/其他场景曲线；保留后处理仅用于最终目标的单次 sRGB 编码。AssetLoader 只加载一个 controller asset，不得为遮挡创建副本、修改同一 Renderable 的材质绑定或在帧内切换 View。`VK_FORMAT_R8G8B8A8_SRGB` 是当前屏幕纹理导入的唯一合法格式；以 UNORM 图像配合 `SRGB8_A8` 采样属于错误，必须拒绝。
+Filament Bridge 必须将 GLB、原始 PBR 手柄、显示参考屏幕/UI 和激光放入同一个主 View，使控制器与激光共享 Scene 和深度缓冲。手柄使用原始 PBR 材质并写深度；激光使用不透明、`depthWrite=true`、`depthCulling=true` 的材质和控制器相同的 layer，因此外壳在几何上遮挡激光。单 View 每个 OpenXR 帧必须清理 channel 0 深度；仅多 View 同帧合成时才允许关闭该清理，且不得把该设置跨帧保留。每只眼的 Renderer 还必须在创建时显式设置 `ClearOptions.clear=true`、黑色 clear color 和 `discard=true`，因为 Filament 默认不清理颜色，而 OpenXR 外部 swapchain 图像的上一帧内容不得保留。主 View 使用 ColorGrading `LINEAR` tone mapping，不应用 ACES/其他场景曲线；保留后处理仅用于最终目标的单次 sRGB 编码。AssetLoader 只加载一个 controller asset，不得为遮挡创建副本、修改同一 Renderable 的材质绑定或在帧内切换 View。屏幕源格式必须与其采样语义匹配：sRGB 源使用 `VK_FORMAT_R8G8B8A8_SRGB`/`SRGB8_A8`，Compute 输出的 `VK_FORMAT_R8G8B8A8_UNORM` 必须在 shader 中先完成 sRGB→线性转换并以 Filament `RGBA8` 采样；禁止把 sRGB 数值直接写入 UNORM 后再当线性纹理使用。
 
 ### 11.2.2 Bridge 接口边界与完整性清单
 

@@ -183,9 +183,13 @@ int bridge_screen_create(FilamentBridge* bridge) {
     // display-referred sRGB bytes; linear filtering only controls sampling
     // during rasterization and does not modify the source color values.
     bridge->screen_texture_sampler = filament::TextureSampler(
-            filament::TextureSampler::MinFilter::LINEAR,
+            filament::TextureSampler::MinFilter::LINEAR_MIPMAP_LINEAR,
             filament::TextureSampler::MagFilter::LINEAR,
             filament::TextureSampler::WrapMode::CLAMP_TO_EDGE);
+    // Match the legacy OpenGL screen sampler. Zero-copy external VkImages
+    // expose one mip level, so the mip filter safely resolves to level 0;
+    // anisotropy remains available for the projected minification path.
+    bridge->screen_texture_sampler.setAnisotropy(16.0f);
     const char* shader = R"FILAMENT(
         void material(inout MaterialInputs material) {
             prepareMaterial(material);

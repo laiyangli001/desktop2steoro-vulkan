@@ -961,6 +961,50 @@ def test_screen_drag_uses_the_calibrated_visible_controller_ray() -> None:
     assert presenter._grip_target_r == "screen"
 
 
+def test_screen_edge_ray_snaps_to_legacy_edge() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_screen = (
+        (0.0, 0.0, -2.0), 2.4, 1.35, (0.0, 0.0, 0.0)
+    )
+    yaw = math.radians(-35.0)
+    presenter._aim_mat_r = np.asarray(
+        (
+            (math.cos(yaw), 0.0, math.sin(yaw), 0.0),
+            (0.0, 1.0, 0.0, 0.0),
+            (-math.sin(yaw), 0.0, math.cos(yaw), 0.0),
+            (0.0, 0.0, 0.0, 1.0),
+        ),
+        dtype=np.float32,
+    )
+    presenter._grip_mat_r = np.eye(4, dtype=np.float32)
+    presenter._smooth_ray_origin_r = np.asarray(
+        (0.0, 0.0, 0.0), dtype=np.float64
+    )
+    presenter._smooth_ray_fwd_r = (
+        -presenter._aim_mat_r[:3, 2].astype(np.float64)
+    )
+
+    # The calibrated ray is just outside the finite screen. The legacy
+    # six-degree edge cone must clamp it to the nearest screen edge.
+    origin = presenter._smooth_ray_origin_r
+    raw_origin = presenter._grip_mat_r[:3, 3] + presenter._grip_mat_r[:3, 1] * 0.020
+    raw_direction = -presenter._aim_mat_r[:3, 2].astype(np.float64)
+    right_axis = presenter._aim_mat_r[:3, 0].astype(np.float64)
+    angle = math.radians(12.0)
+    raw_direction = (
+        raw_direction * math.cos(angle)
+        + np.cross(right_axis, raw_direction) * math.sin(angle)
+        + right_axis * np.dot(right_axis, raw_direction) * (1.0 - math.cos(angle))
+    )
+    assert presenter._screen_plane_uv(raw_origin, raw_direction)[0] > 1.0
+    assert presenter._screen_ray_hit(
+        presenter._aim_mat_r, raw_origin, raw_direction
+    ) is None
+    hit = presenter._screen_ray_hit_for_hand(1)
+    assert hit is not None
+    assert hit[0] == pytest.approx(1.0)
+
+
 def test_left_grip_rotation_snaps_screen_to_quarter_turn() -> None:
     presenter = OpenXrVulkanPresenter()
     presenter._filament_screen = (
@@ -982,6 +1026,51 @@ def test_left_grip_rotation_snaps_screen_to_quarter_turn() -> None:
     presenter._apply_grip_screen_rotation(0)
 
     assert presenter._filament_screen[3] == pytest.approx((0.0, 0.0, 90.0))
+
+
+def test_left_grip_input_records_anchor_and_snaps_screen_by_ninety_degrees() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_screen = (
+        (0.0, 0.0, -2.0), 2.4, 1.35, (0.0, 0.0, 0.0)
+    )
+    presenter._aim_mat_l = np.eye(4, dtype=np.float32)
+    presenter._grip_mat_l = np.eye(4, dtype=np.float32)
+    presenter._controller_inputs = ({"grip": 1.0}, {})
+
+    presenter._handle_vulkan_pointer_input()
+    assert presenter._grip_rotation_anchor_l is not None
+    assert presenter._screen_rotation_anchor_l == pytest.approx((0.0, 0.0, 0.0))
+
+    angle = math.radians(50.0)
+    presenter._grip_mat_l[:3, :3] = np.asarray(
+        (
+            (math.cos(angle), -math.sin(angle), 0.0),
+            (math.sin(angle), math.cos(angle), 0.0),
+            (0.0, 0.0, 1.0),
+        ),
+        dtype=np.float32,
+    )
+    presenter._handle_vulkan_pointer_input()
+
+    assert presenter._filament_screen[3][2] == pytest.approx(90.0)
+
+
+def test_right_grip_stick_y_uses_legacy_accelerated_radial_distance() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._head_position_w = np.asarray((0.0, 0.0, 0.0), dtype=np.float64)
+    presenter._filament_screen = (
+        (0.0, 0.0, -2.0), 2.4, 1.35, (0.0, 0.0, 0.0)
+    )
+
+    presenter._apply_right_grip_screen_distance(
+        -1.0,
+        dt=1.0 / 90.0,
+        laser_hit=(0.5, 0.5, 2.0),
+    )
+
+    assert presenter._filament_screen[0] == pytest.approx(
+        (0.0, 0.0, -2.0 - 3.0 / 90.0)
+    )
 
 
 def test_right_grip_wrist_rotation_does_not_rotate_screen() -> None:
@@ -1350,6 +1439,87 @@ def test_filament_screen_status_reports_projection_target_extent() -> None:
         (3648, 3648),
         (3648, 3648),
     )
+
+
+def test_filament_screen_footprint_matches_projected_swapchain_pixels() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_screen = ((0.0, 0.0, -2.0), 2.0, 1.0, (0.0, 0.0, 0.0))
+    view = SimpleNamespace(
+        pose=SimpleNamespace(
+            position=SimpleNamespace(x=0.0, y=0.0, z=0.0),
+            orientation=SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0),
+        ),
+        fov=SimpleNamespace(
+            angle_left=-math.pi / 4.0,
+            angle_right=math.pi / 4.0,
+            angle_down=-math.pi / 4.0,
+            angle_up=math.pi / 4.0,
+        ),
+    )
+
+    footprint = presenter._screen_footprint_pixels(view, (1000, 1000))
+
+    assert footprint == pytest.approx((500.0, 250.0))
+
+
+def test_screen_resolution_log_reports_source_and_projected_pixels(capsys) -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_screen = ((0.0, 0.0, -2.0), 2.0, 1.0, (0.0, 0.0, 0.0))
+    presenter.swapchains = [
+        SimpleNamespace(width=1000, height=1000),
+        SimpleNamespace(width=1000, height=1000),
+    ]
+    view = SimpleNamespace(
+        pose=SimpleNamespace(
+            position=SimpleNamespace(x=0.0, y=0.0, z=0.0),
+            orientation=SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0),
+        ),
+        fov=SimpleNamespace(
+            angle_left=-math.pi / 4.0,
+            angle_right=math.pi / 4.0,
+            angle_down=-math.pi / 4.0,
+            angle_up=math.pi / 4.0,
+        ),
+    )
+    frame = SimpleNamespace(
+        left_eye=SimpleNamespace(width=3840, height=2160),
+        right_eye=SimpleNamespace(width=3840, height=2160),
+        metadata={"render_size": (3840, 2160)},
+    )
+
+    presenter._report_screen_resolution([view, view], frame)
+
+    output = capsys.readouterr().out
+    assert "source_left=3840x2160" in output
+    assert "render_size=3840x2160" in output
+    assert "screen_footprint_left=500x250" in output
+    assert "projection_target_left=1000x1000" in output
+    assert "source_per_screen_pixel_left=7.68x8.64" in output
+
+
+def test_filament_screen_status_reports_presenter_owned_cuda_image(capsys) -> None:
+    presenter = OpenXrVulkanPresenter()
+    frame = SimpleNamespace(
+        left_eye=SimpleNamespace(width=3840, height=2160),
+        metadata={
+            "vulkan_readback": "none",
+            "vulkan_output_path": "presenter_owned_storage_image",
+            "vulkan_output_sync": "gpu_external_semaphore",
+            "vulkan_compute_input_color_space": "srgb",
+            "vulkan_compute_output_image_format": "R8G8B8A8_UNORM",
+            "vulkan_compute_output_image_encoding": "linear",
+        },
+    )
+
+    presenter._report_filament_screen_image_status(frame, True, None)
+
+    output = capsys.readouterr().out
+    assert "vulkan_readback=none" in output
+    assert "vulkan_output_path=presenter_owned_storage_image" in output
+    assert "vulkan_output_sync=gpu_external_semaphore" in output
+    assert "vulkan_compute_input_color_space=srgb" in output
+    assert "vulkan_compute_output_image_format=R8G8B8A8_UNORM" in output
+    assert "vulkan_compute_output_image_encoding=linear" in output
 
 
 def test_presenter_run_until_owns_shutdown_close() -> None:

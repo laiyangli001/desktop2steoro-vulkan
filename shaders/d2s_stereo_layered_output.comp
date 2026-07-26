@@ -1,0 +1,217 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer RgbBuffer { float rgb[]; };
+layout(set = 0, binding = 1, std430) readonly buffer DepthBuffer { float depth[]; };
+layout(set = 0, binding = 2, rgba8) uniform writeonly image2D left_eye;
+layout(set = 0, binding = 3, rgba8) uniform writeonly image2D right_eye;
+
+layout(push_constant) uniform LayeredStereoParams {
+    uint width;
+    uint height;
+    float depth_strength;
+    float max_disparity_px;
+    float convergence;
+    float edge_threshold;
+    float fill_strength;
+    uint fill_radius;
+    uint mask_feather_radius;
+    uint symmetric;
+    uint layers;
+    float softness;
+    float foreground_scale;
+    float midground_scale;
+    float background_scale;
+    uint edge_dilation;
+    uint screen_edge_suppression;
+    uint hole_fill_mode;
+    uint occlusion_enabled;
+} params;
+
+uint pixel_count() { return params.width * params.height; }
+int clamp_x(int x) { return clamp(x, 0, int(params.width) - 1); }
+int clamp_y(int y) { return clamp(y, 0, int(params.height) - 1); }
+uint pixel_index(int x, int y) { return uint(clamp_y(y)) * params.width + uint(clamp_x(x)); }
+float depth_at(int x, int y) { return clamp(depth[pixel_index(x, y)], 0.0, 1.0); }
+
+float depth_scale(float value) {
+    float normalized = clamp(value, 0.0, 1.0);
+    float background_weight = clamp((0.5 - normalized) * 2.0, 0.0, 1.0);
+    float foreground_weight = clamp((normalized - 0.5) * 2.0, 0.0, 1.0);
+    float midground_weight = clamp(1.0 - background_weight - foreground_weight, 0.0, 1.0);
+    return background_weight * max(params.background_scale, 0.0)
+        + midground_weight * max(params.midground_scale, 0.0)
+        + foreground_weight * max(params.foreground_scale, 0.0);
+}
+
+float base_shift_at(int x, int y) {
+    float response = (depth_at(x, y) - params.convergence) * depth_scale(depth_at(x, y));
+    return -response * max(params.depth_strength, 0.0) * params.max_disparity_px * 0.5;
+}
+
+float layer_weight(float value, uint layer_index) {
+    uint count = clamp(params.layers, 1u, 4u);
+    if (count == 1u) return 1.0;
+    float center = float(layer_index) / float(count - 1u);
+    float delta = clamp(value, 0.0, 1.0) - center;
+    return exp(-(delta * delta) / max(params.softness, 1.0e-4));
+}
+
+float layer_shift_scale(uint layer_index) {
+    uint count = clamp(params.layers, 1u, 4u);
+    return 0.75 + 0.25 * float(layer_index + 1u) / float(count);
+}
+
+float reflect_coordinate(float coordinate, float extent) {
+    if (extent <= 1.0) return 0.0;
+    float period = 2.0 * (extent - 1.0);
+    float value = mod(coordinate, period);
+    if (value < 0.0) value += period;
+    return value <= extent - 1.0 ? value : period - value;
+}
+
+vec3 rgb_at(uint pixel) {
+    uint plane = pixel_count();
+    vec3 encoded = vec3(rgb[pixel], rgb[plane + pixel], rgb[2 * plane + pixel]);
+    // The runtime RGB contract is display-referred sRGB in [0, 1]. The
+    // output image is an UNORM storage image imported by Filament as RGBA8,
+    // so decode before filtering and keep all warp/fill math in linear light.
+    return mix(encoded / 12.92,
+            pow((encoded + 0.055) / 1.055, vec3(2.4)),
+            greaterThan(encoded, vec3(0.04045)));
+}
+
+vec3 sample_rgb(float x, float y) {
+    float reflected_x = reflect_coordinate(x, float(params.width));
+    float reflected_y = reflect_coordinate(y, float(params.height));
+    int x0 = int(floor(reflected_x));
+    int y0 = int(floor(reflected_y));
+    int x1 = min(x0 + 1, int(params.width) - 1);
+    int y1 = min(y0 + 1, int(params.height) - 1);
+    float tx = reflected_x - float(x0);
+    float ty = reflected_y - float(y0);
+    vec3 top = mix(rgb_at(pixel_index(x0, y0)), rgb_at(pixel_index(x1, y0)), tx);
+    vec3 bottom = mix(rgb_at(pixel_index(x0, y1)), rgb_at(pixel_index(x1, y1)), tx);
+    return mix(top, bottom, ty);
+}
+
+vec3 layered_warp_at(int x, int y, float eye_sign) {
+    float value = depth_at(x, y);
+    float shift = base_shift_at(x, y);
+    uint count = clamp(params.layers, 1u, 4u);
+    vec3 total = vec3(0.0);
+    float total_weight = 0.0;
+    for (uint layer_index = 0u; layer_index < 4u; ++layer_index) {
+        if (layer_index >= count) break;
+        float weight = layer_weight(value, layer_index);
+        total += sample_rgb(float(x) + shift * layer_shift_scale(layer_index) * eye_sign, float(y)) * weight;
+        total_weight += weight;
+    }
+    return total / max(total_weight, 1.0e-6);
+}
+
+float max_shift_magnitude() {
+    float scale = max(params.depth_strength, 0.0) * params.max_disparity_px * 0.5;
+    return max(max(abs(params.convergence * scale), abs((1.0 - params.convergence) * scale)), 1.0e-6);
+}
+
+float edge_at(int x, int y) {
+    int right_x = min(x + 1, int(params.width) - 1);
+    int down_y = min(y + 1, int(params.height) - 1);
+    float center_depth = depth_at(x, y);
+    float depth_edge = abs(depth_at(right_x, y) - center_depth)
+        + abs(depth_at(x, down_y) - center_depth);
+    float shift_edge = abs(abs(base_shift_at(right_x, y)) - abs(base_shift_at(x, y)))
+        + abs(abs(base_shift_at(x, down_y)) - abs(base_shift_at(x, y)));
+    return (depth_edge > params.edge_threshold || shift_edge / max_shift_magnitude() > 0.05) ? 1.0 : 0.0;
+}
+
+float occlusion_at(int x, int y) {
+    if (params.occlusion_enabled == 0u) return 0.0;
+    int radius = min(int(params.edge_dilation), 3);
+    float found = 0.0;
+    for (int dy = -3; dy <= 3; ++dy) {
+        for (int dx = -3; dx <= 3; ++dx) {
+            if (abs(dx) <= radius && abs(dy) <= radius) {
+                found = max(found, edge_at(x + dx, y + dy));
+                if (found >= 1.0) return 1.0;
+            }
+        }
+    }
+    return found;
+}
+
+float feathered_mask_at(int x, int y) {
+    int radius = min(int(params.mask_feather_radius), 3);
+    if (radius <= 0) return occlusion_at(x, y);
+    // A full nested radius search repeats the dilation kernel once per
+    // feather sample (up to 49 * 49 edge probes per pixel). The cardinal
+    // neighborhood preserves the same local feathering intent while keeping
+    // the cost bounded and making 4K output practical.
+    float total = occlusion_at(x, y);
+    float count = 1.0;
+    int step = radius;
+    total += occlusion_at(x - step, y);
+    total += occlusion_at(x + step, y);
+    total += occlusion_at(x, y - step);
+    total += occlusion_at(x, y + step);
+    count += 4.0;
+    return total / count;
+}
+
+vec3 box_average(int x, int y, float eye_sign) {
+    int radius = min(int(params.fill_radius), 3);
+    vec3 total = vec3(0.0);
+    float count = 0.0;
+    for (int dy = -3; dy <= 3; ++dy) {
+        for (int dx = -3; dx <= 3; ++dx) {
+            if (abs(dx) <= radius && abs(dy) <= radius) {
+                total += layered_warp_at(x + dx, y + dy, eye_sign);
+                count += 1.0;
+            }
+        }
+    }
+    return total / max(count, 1.0);
+}
+
+vec3 fill_eye(int x, int y, float eye_sign, float mask) {
+    vec3 original = layered_warp_at(x, y, eye_sign);
+    if (mask <= 1.0e-5 || params.fill_strength <= 1.0e-5) return original;
+    vec3 blurred = box_average(x, y, eye_sign);
+    if (params.hole_fill_mode == 0u) {
+        return mix(original, blurred, clamp(mask * params.fill_strength, 0.0, 1.0));
+    }
+    float left_depth = depth_at(x - 1, y);
+    float right_depth = depth_at(x + 1, y);
+    bool reliable = abs(right_depth - left_depth) > params.edge_threshold;
+    vec3 directional = right_depth < left_depth
+        ? layered_warp_at(x + 1, y, eye_sign)
+        : layered_warp_at(x - 1, y, eye_sign);
+    vec3 content_aware = reliable ? directional * 0.75 + blurred * 0.25 : blurred;
+    float current_luma = dot(original, vec3(0.299, 0.587, 0.114));
+    float left_luma = dot(layered_warp_at(x - 1, y, eye_sign), vec3(0.299, 0.587, 0.114));
+    float up_luma = dot(layered_warp_at(x, y - 1, eye_sign), vec3(0.299, 0.587, 0.114));
+    float protection = clamp((max(abs(current_luma - left_luma), abs(current_luma - up_luma)) - 0.20) / 0.30, 0.0, 1.0);
+    float blend = clamp(mask * params.fill_strength * (1.0 - protection * 0.70), 0.0, 1.0);
+    return mix(original, content_aware, blend);
+}
+
+bool screen_edge_suppressed(int x, int y) {
+    int border = int(params.screen_edge_suppression);
+    return border > 0 && (x < border || y < border || x >= int(params.width) - border || y >= int(params.height) - border);
+}
+
+void main() {
+    uint x = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+    if (x >= params.width || y >= params.height) return;
+    int ix = int(x);
+    int iy = int(y);
+    float fill_mask = screen_edge_suppressed(ix, iy) ? 0.0 : feathered_mask_at(ix, iy);
+    vec3 left = clamp(fill_eye(ix, iy, 1.0, fill_mask), 0.0, 1.0);
+    float right_sign = params.symmetric != 0u ? -1.0 : -0.9;
+    vec3 right = clamp(fill_eye(ix, iy, right_sign, fill_mask), 0.0, 1.0);
+    imageStore(left_eye, ivec2(ix, iy), vec4(left, 1.0));
+    imageStore(right_eye, ivec2(ix, iy), vec4(right, 1.0));
+}

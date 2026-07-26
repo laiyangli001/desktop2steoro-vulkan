@@ -13,6 +13,7 @@ from viewer.vulkan_resources import (
     VulkanBinarySemaphore,
     VulkanExportableImage,
     VulkanExportableSemaphore,
+    VulkanHostImage,
     VulkanImageResource,
 )
 
@@ -447,6 +448,12 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
                     self._external_semaphore_request_reason
                 ),
                 "vulkan_external_semaphore_error": self._external_semaphore_error,
+                # CUDA writes directly into presenter-owned Vulkan images. The
+                # external semaphore only changes visibility synchronization;
+                # it does not introduce a CPU readback or a different image
+                # ownership path.
+                "vulkan_readback": "none",
+                "vulkan_output_path": "presenter_owned_storage_image",
                 "vulkan_source_layout_left": left_contract["layout"],
                 "vulkan_source_layout_right": right_contract["layout"],
                 "vulkan_source_queue_family_left": left_contract["queue_family"],
@@ -516,6 +523,388 @@ class RocmVulkanOutputAdapter(CudaVulkanOutputAdapter):
 
     def _create_importer(self):
         return RocmVulkanImageImporter()
+
+
+class VulkanHostOutputAdapter(GpuProducerAdapter):
+    """Upload Vulkan-compute results through host-visible Vulkan images.
+
+    This is the cross-vendor correctness fallback. It intentionally reports
+    synchronized GPU copy rather than external-semaphore sync, so the
+    Presenter uses its regular projection/Quad copy path.
+    """
+
+    backend_name = "vulkan_host"
+
+    def __init__(self, presenter):
+        self.presenter = presenter
+        self.ring_size = max(2, int(os.environ.get("D2S_VULKAN_OUTPUT_RING_SIZE", "3")))
+        self.left_slots: list[VulkanHostImage] = []
+        self.right_slots: list[VulkanHostImage] = []
+        self._extent: tuple[int, int] | None = None
+
+    @staticmethod
+    def _tensor_to_rgba(tensor, *, width: int, height: int):
+        import numpy as np
+
+        try:
+            import torch
+
+            value = tensor.detach().to(device="cpu")
+            if value.ndim == 4:
+                value = value[0]
+            if value.ndim == 3 and int(value.shape[0]) in (3, 4):
+                value = value[:3].permute(1, 2, 0)
+            elif value.ndim == 3 and int(value.shape[-1]) in (3, 4):
+                value = value[..., :3]
+            else:
+                raise ValueError(f"expected RGB tensor, got {tuple(value.shape)}")
+            if tuple(value.shape[:2]) != (height, width):
+                raise ValueError(
+                    f"Vulkan host output dimensions differ: {tuple(value.shape[:2])} != {(height, width)}"
+                )
+            value = torch.nan_to_num(value.float(), nan=0.0, posinf=1.0, neginf=0.0)
+            if getattr(tensor, "dtype", None) == torch.uint8:
+                pixels = value.clamp(0.0, 255.0).to(torch.uint8).numpy()
+            else:
+                pixels = value.clamp(0.0, 1.0).mul(255.0).round().to(torch.uint8).numpy()
+        except AttributeError:
+            pixels = np.asarray(tensor)
+            if pixels.ndim == 3 and pixels.shape[0] in (3, 4):
+                pixels = np.transpose(pixels[:3], (1, 2, 0))
+            pixels = np.asarray(pixels, dtype=np.float32)
+            if pixels.max(initial=0.0) <= 1.0:
+                pixels = pixels * 255.0
+            pixels = np.clip(np.rint(pixels), 0.0, 255.0).astype(np.uint8)
+        rgba = np.empty((height, width, 4), dtype=np.uint8)
+        rgba[..., :3] = pixels
+        rgba[..., 3] = 255
+        return np.ascontiguousarray(rgba)
+
+    def _ensure_slots(self, width: int, height: int) -> None:
+        extent = (int(width), int(height))
+        if self._extent == extent and self.left_slots and self.right_slots:
+            return
+        context = getattr(self.presenter, "vulkan", None)
+        if context is None:
+            raise RuntimeError("Presenter Vulkan context is unavailable")
+        context.wait_idle()
+        for slot in (*self.left_slots, *self.right_slots):
+            slot.close()
+        format_value = context.vk.VK_FORMAT_R8G8B8A8_UNORM
+        self.left_slots = [
+            VulkanHostImage(
+                context,
+                extent[0],
+                extent[1],
+                format=format_value,
+                label=f"runtime-vulkan-host-left-{index}",
+            )
+            for index in range(self.ring_size)
+        ]
+        self.right_slots = [
+            VulkanHostImage(
+                context,
+                extent[0],
+                extent[1],
+                format=format_value,
+                label=f"runtime-vulkan-host-right-{index}",
+            )
+            for index in range(self.ring_size)
+        ]
+        self._extent = extent
+
+    def convert(self, runtime_result, *, frame_id: int, timestamp: float):
+        left = getattr(runtime_result, "left_eye", None)
+        right = getattr(runtime_result, "right_eye", None)
+        width, height = self._tensor_extent(left)
+        if self._tensor_extent(right) != (width, height):
+            raise ValueError("left/right runtime eye dimensions differ")
+        self._ensure_slots(width, height)
+        # The host image ring is reused only after the previous Vulkan copy has
+        # completed. This is slower than external semaphores but race-free.
+        wait_start = time.perf_counter()
+        self.presenter.vulkan.wait_idle()
+        wait_idle_ms = (time.perf_counter() - wait_start) * 1000.0
+        slot_index = int(frame_id) % self.ring_size
+        left_slot = self.left_slots[slot_index]
+        right_slot = self.right_slots[slot_index]
+        upload_start = time.perf_counter()
+        left_slot.upload(self._tensor_to_rgba(left, width=width, height=height))
+        right_slot.upload(self._tensor_to_rgba(right, width=width, height=height))
+        upload_ms = (time.perf_counter() - upload_start) * 1000.0
+        left_contract = self.source_image_contract(left_slot.resource)
+        right_contract = self.source_image_contract(right_slot.resource)
+        return VulkanStereoOutputFrame(
+            frame_id=frame_id,
+            timestamp=timestamp,
+            left_eye=left_slot.resource,
+            right_eye=right_slot.resource,
+            metadata={
+                **dict(getattr(runtime_result, "debug_info", None) or {}),
+                "vulkan_output_ring_slot": slot_index,
+                "vulkan_output_ring_size": self.ring_size,
+                "vulkan_output_sync": self.output_sync_mode,
+                "vulkan_output_wait_idle_ms": wait_idle_ms,
+                "vulkan_output_upload_ms": upload_ms,
+                "vulkan_output_path": "host_visible_vulkan_image",
+                "vulkan_source_layout_left": left_contract["layout"],
+                "vulkan_source_layout_right": right_contract["layout"],
+                "vulkan_source_queue_family_left": left_contract["queue_family"],
+                "vulkan_source_queue_family_right": right_contract["queue_family"],
+                "_vulkan_output_release": self.release_frame,
+            },
+            color_space="srgb",
+            image_origin="top_left",
+        )
+
+    @staticmethod
+    def _tensor_extent(tensor) -> tuple[int, int]:
+        shape = tuple(getattr(tensor, "shape", ()))
+        if len(shape) == 4:
+            return int(shape[-1]), int(shape[-2])
+        if len(shape) == 3:
+            # Runtime OpenXR eyes are HxWxC, while compatibility callers may
+            # still provide CxHxW tensors.
+            if int(shape[-1]) in (3, 4):
+                return int(shape[1]), int(shape[0])
+            if int(shape[0]) in (3, 4):
+                return int(shape[2]), int(shape[1])
+        raise ValueError(f"Vulkan host output requires BCHW, HWC, or CHW tensor, got {shape}")
+
+    def release_frame(self, frame_id: int) -> None:
+        return None
+
+    def close(self) -> None:
+        context = getattr(self.presenter, "vulkan", None)
+        if context is not None:
+            context.wait_idle()
+        for slot in (*self.left_slots, *self.right_slots):
+            slot.close()
+        self.left_slots = []
+        self.right_slots = []
+        self._extent = None
+
+
+class VulkanZeroCopyOutputAdapter(CudaVulkanOutputAdapter):
+    """Run Vulkan stereo Compute into images consumed directly by Filament."""
+
+    backend_name = "vulkan_zero_copy"
+
+    def __init__(self, presenter):
+        super().__init__(presenter)
+        self._compute_backend = None
+        self._release_timelines: list[int] = []
+
+    @staticmethod
+    def _external_semaphore_requested() -> bool:
+        return True
+
+    def _ensure_slots(self, width: int, height: int) -> None:
+        extent = (int(width), int(height))
+        if self._extent == extent and self.left_slots and self.right_slots:
+            return
+        context = getattr(self.presenter, "vulkan", None)
+        if context is None or not bool(getattr(self.presenter, "initialized", False)):
+            raise RuntimeError("Presenter Vulkan context is unavailable")
+        self.close()
+        with self._lease_condition:
+            self._closed = False
+        from stereo_runtime.vulkan_backend import VulkanStereoImageComputeBackend
+
+        self._compute_backend = VulkanStereoImageComputeBackend(context)
+        self.left_slots = [
+            VulkanExportableImage(
+                context,
+                extent[0],
+                extent[1],
+                label=f"runtime-zero-copy-left-{index}",
+                format=context.vk.VK_FORMAT_R8G8B8A8_UNORM,
+            )
+            for index in range(self.ring_size)
+        ]
+        self.right_slots = [
+            VulkanExportableImage(
+                context,
+                extent[0],
+                extent[1],
+                label=f"runtime-zero-copy-right-{index}",
+                format=context.vk.VK_FORMAT_R8G8B8A8_UNORM,
+            )
+            for index in range(self.ring_size)
+        ]
+        self.left_visible_semaphores = [
+            VulkanBinarySemaphore(context, label=f"runtime-zero-copy-left-visible-{index}")
+            for index in range(self.ring_size)
+        ]
+        self.right_visible_semaphores = [
+            VulkanBinarySemaphore(context, label=f"runtime-zero-copy-right-visible-{index}")
+            for index in range(self.ring_size)
+        ]
+        self._release_timelines = [0 for _ in range(self.ring_size)]
+        for slot in (*self.left_slots, *self.right_slots):
+            context.prepare_external_image_for_producer(slot.resource)
+        self._extent = extent
+
+    def prepare_source_for_sampling(self, frame_id: int, eye_index: int):
+        entry = self._source_frames.get(int(frame_id))
+        if entry is None:
+            raise RuntimeError(f"unknown Vulkan zero-copy source frame {frame_id}")
+        _left, _right, slot_index = entry
+        visible = (
+            self.left_visible_semaphores[slot_index]
+            if int(eye_index) == 0
+            else self.right_visible_semaphores[slot_index]
+        )
+        self._prepared_source_eyes.add((int(frame_id), int(eye_index)))
+        return visible.semaphore
+
+    def release_consumer_frame(self, frame_id: int, consumer_semaphores=None) -> None:
+        frame_key = int(frame_id)
+        if frame_key in self._released_source_frames:
+            return
+        entry = self._source_frames.get(frame_key)
+        if entry is None:
+            self.release_frame(frame_key)
+            self._released_source_frames.add(frame_key)
+            return
+        left, right, slot_index = entry
+        waits = tuple(consumer_semaphores or ())
+        context = self.presenter.vulkan
+        for eye_index, slot in ((0, left), (1, right)):
+            if (frame_key, eye_index) not in self._prepared_source_eyes:
+                continue
+            timeline = context.release_external_image_from_sampling(
+                slot.resource,
+                wait_semaphore=waits[eye_index] if eye_index < len(waits) else None,
+            )
+            self._release_timelines[slot_index] = max(
+                int(self._release_timelines[slot_index]), int(timeline)
+            )
+            self._prepared_source_eyes.discard((frame_key, eye_index))
+        self.release_frame(frame_key)
+        self._released_source_frames.add(frame_key)
+        self._source_frames.pop(frame_key, None)
+
+    def release_output_frame(self, frame_id: int, *, wait_for_timeline: int | None = None) -> None:
+        """Return a source image after the non-Filament GPU-copy fallback."""
+        frame_key = int(frame_id)
+        entry = self._source_frames.get(frame_key)
+        if entry is None:
+            self.release_frame(frame_key)
+            return
+        left, right, slot_index = entry
+        for slot in (left, right):
+            state = self.presenter.vulkan.image_state(slot.resource.image)
+            if state.layout == self.presenter.vulkan.vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+                timeline = self.presenter.vulkan.release_external_image_from_sampling(
+                    slot.resource,
+                    wait_for_timeline=wait_for_timeline,
+                )
+                self._release_timelines[slot_index] = max(
+                    int(self._release_timelines[slot_index]), int(timeline)
+                )
+        self.release_frame(frame_key)
+        self._source_frames.pop(frame_key, None)
+
+    def convert(self, runtime_result, *, frame_id: int, timestamp: float):
+        request = getattr(runtime_result, "vulkan_compute_request", None)
+        if request is None:
+            raise ValueError("Vulkan zero-copy output requires a deferred Compute request")
+        rgb = request.rgb
+        depth = request.depth
+        shape = tuple(int(value) for value in getattr(rgb, "shape", ()))
+        if len(shape) != 4 or shape[0] != 1 or shape[1] != 3:
+            raise ValueError(f"Vulkan zero-copy RGB request requires [1,3,H,W], got {shape}")
+        width, height = shape[-1], shape[-2]
+        self._ensure_slots(width, height)
+        slot_index = int(frame_id) % self.ring_size
+        self._claim_slot(slot_index, frame_id)
+        left_slot = self.left_slots[slot_index]
+        right_slot = self.right_slots[slot_index]
+        try:
+            if self._release_timelines[slot_index]:
+                self.presenter.vulkan.wait_for_timeline(self._release_timelines[slot_index])
+            if self._compute_backend is None:
+                raise RuntimeError("Vulkan zero-copy Compute backend is unavailable")
+            compute_timeline, backend_debug = self._compute_backend.submit_to_images(
+                rgb,
+                depth,
+                left_slot.resource,
+                right_slot.resource,
+                params=request.params,
+                ready_timeline=self._release_timelines[slot_index] or None,
+            )
+            left_visible = self.left_visible_semaphores[slot_index]
+            right_visible = self.right_visible_semaphores[slot_index]
+            self.presenter.vulkan.prepare_external_image_for_sampling(
+                left_slot.resource,
+                wait_for_timeline=compute_timeline,
+                signal_semaphore=left_visible.semaphore,
+            )
+            self.presenter.vulkan.prepare_external_image_for_sampling(
+                right_slot.resource,
+                wait_for_timeline=compute_timeline,
+                signal_semaphore=right_visible.semaphore,
+            )
+        except Exception:
+            self.release_frame(frame_id)
+            raise
+        self._source_frames[int(frame_id)] = (left_slot, right_slot, slot_index)
+        self._released_source_frames.discard(int(frame_id))
+        left_contract = self.source_image_contract(left_slot.resource)
+        right_contract = self.source_image_contract(right_slot.resource)
+        return VulkanStereoOutputFrame(
+            frame_id=frame_id,
+            timestamp=timestamp,
+            left_eye=left_slot.resource,
+            right_eye=right_slot.resource,
+            ready_timeline=None,
+            metadata={
+                **dict(getattr(runtime_result, "debug_info", None) or {}),
+                **backend_debug,
+                "vulkan_output_ring_slot": slot_index,
+                "vulkan_output_ring_size": self.ring_size,
+                "vulkan_output_sync": "vulkan_compute_external_semaphore",
+                "vulkan_ready_semaphore_left": left_visible.semaphore,
+                "vulkan_ready_semaphore_right": right_visible.semaphore,
+                "vulkan_external_semaphore_available": True,
+                "vulkan_source_layout_left": left_contract["layout"],
+                "vulkan_source_layout_right": right_contract["layout"],
+                "vulkan_source_queue_family_left": left_contract["queue_family"],
+                "vulkan_source_queue_family_right": right_contract["queue_family"],
+                "vulkan_output_path": "presenter_owned_storage_image",
+                "_vulkan_source_prepare_for_sampling": self.prepare_source_for_sampling,
+                "_vulkan_source_consumer_release": self.release_consumer_frame,
+                "_vulkan_output_release": self.release_output_frame,
+            },
+            color_space="srgb",
+            image_origin="top_left",
+        )
+
+    def close(self) -> None:
+        context = getattr(self.presenter, "vulkan", None)
+        if context is not None:
+            context.wait_idle()
+        if self._compute_backend is not None:
+            self._compute_backend.close()
+        self._compute_backend = None
+        for slot in (*self.left_slots, *self.right_slots):
+            slot.close()
+        for semaphore in (*self.left_visible_semaphores, *self.right_visible_semaphores):
+            semaphore.close()
+        self.left_slots = []
+        self.right_slots = []
+        self.left_visible_semaphores = []
+        self.right_visible_semaphores = []
+        self._release_timelines = []
+        self._source_frames.clear()
+        self._released_source_frames.clear()
+        self._prepared_source_eyes.clear()
+        self._extent = None
+        with self._lease_condition:
+            self._closed = True
+            self._active_leases.clear()
+            self._lease_condition.notify_all()
 
 
 class VulkanRuntimeOutputConsumer:
@@ -654,3 +1043,6 @@ register_gpu_producer_adapter("cuda", CudaVulkanOutputAdapter)
 register_gpu_producer_adapter("nvidia", CudaVulkanOutputAdapter)
 register_gpu_producer_adapter("rocm", RocmVulkanOutputAdapter)
 register_gpu_producer_adapter("hip", RocmVulkanOutputAdapter)
+register_gpu_producer_adapter("vulkan", VulkanHostOutputAdapter)
+register_gpu_producer_adapter("vulkan_host", VulkanHostOutputAdapter)
+register_gpu_producer_adapter("vulkan_zero_copy", VulkanZeroCopyOutputAdapter)

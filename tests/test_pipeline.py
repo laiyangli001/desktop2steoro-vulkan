@@ -1,8 +1,19 @@
 import queue
 import threading
 from types import SimpleNamespace
+from pathlib import Path
 
 from stereo_runtime.pipeline import RuntimePipelineLoop, _enable_openxr_depth_cuda_graph_if_needed
+
+
+def test_openxr_pipeline_keeps_deferred_vulkan_request_path():
+    source = (Path(__file__).resolve().parents[1] / "src/stereo_runtime/pipeline.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "ctx.stereo_runtime.process_openxr_frame(" in source
+    assert "openxr_result_from_stereo_result" not in source
+    assert 'output_mode="full_synthesis_eyes"' in source
 
 
 def test_publish_runtime_item_marks_inference_pipeline_ready():

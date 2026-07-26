@@ -175,6 +175,25 @@ class VulkanHostImage:
         finally:
             vk.vkUnmapMemory(self.context.device, self.memory)
 
+    def read_rgba(self):
+        """Read a completed linear image for explicit visual diagnostics."""
+        import numpy as np
+
+        vk = self.vk
+        mapped = vk.vkMapMemory(self.context.device, self.memory, 0, self._layout.size, 0)
+        try:
+            row_pitch = int(self._layout.rowPitch)
+            row_bytes = self.width * 4
+            pixels = np.empty((self.height, self.width, 4), dtype=np.uint8)
+            for row in range(self.height):
+                start = int(self._layout.offset) + row * row_pitch
+                pixels[row] = np.frombuffer(
+                    bytes(mapped[start:start + row_bytes]), dtype=np.uint8
+                ).reshape(self.width, 4)
+            return pixels
+        finally:
+            vk.vkUnmapMemory(self.context.device, self.memory)
+
     def close(self) -> None:
         try:
             self.context.unregister_external_image(self.resource)
@@ -182,6 +201,170 @@ class VulkanHostImage:
             pass
         self.vk.vkDestroyImage(self.context.device, self.image, None)
         self.vk.vkFreeMemory(self.context.device, self.memory, None)
+
+
+class VulkanExportableBuffer:
+    """Own a Vulkan storage buffer whose memory can be imported by a GPU producer."""
+
+    def __init__(self, context: Any, size: int, *, label: str) -> None:
+        if int(size) < 1:
+            raise ValueError("exportable buffer size must be positive")
+        if not str(label).strip():
+            raise ValueError("exportable buffer label must not be empty")
+        self.context = context
+        self.vk = context.vk
+        self.size = int(size)
+        self.label = str(label)
+        self.buffer = None
+        self.memory = None
+        self.allocation_size = 0
+        self._export_handle = None
+        self._handle_type = self._resolve_handle_type()
+        self._create()
+
+    def _resolve_handle_type(self) -> int:
+        if os.name == "nt":
+            return int(self.vk.VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT)
+        if os.name == "posix":
+            return int(self.vk.VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT)
+        raise RuntimeError(f"unsupported external-memory platform: {os.name}")
+
+    def _create(self) -> None:
+        vk = self.vk
+        sharing_families = list(
+            dict.fromkeys(
+                (
+                    self.context.queue_family_index,
+                    self.context.compute_queue_family_index,
+                )
+            )
+        )
+        sharing_mode = (
+            vk.VK_SHARING_MODE_CONCURRENT
+            if len(sharing_families) > 1
+            else vk.VK_SHARING_MODE_EXCLUSIVE
+        )
+        external_buffer = vk.VkExternalMemoryBufferCreateInfo(
+            sType=vk.VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO,
+            handleTypes=self._handle_type,
+        )
+        self.buffer = vk.vkCreateBuffer(
+            self.context.device,
+            vk.VkBufferCreateInfo(
+                sType=vk.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+                pNext=external_buffer,
+                size=self.size,
+                usage=vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                sharingMode=sharing_mode,
+                queueFamilyIndexCount=len(sharing_families) if len(sharing_families) > 1 else 0,
+                pQueueFamilyIndices=sharing_families if len(sharing_families) > 1 else None,
+            ),
+            None,
+        )
+        requirements = vk.vkGetBufferMemoryRequirements(self.context.device, self.buffer)
+        self.allocation_size = int(requirements.size)
+        properties = vk.vkGetPhysicalDeviceMemoryProperties(self.context.physical_device)
+        memory_type = next(
+            (
+                index
+                for index, item in enumerate(properties.memoryTypes)
+                if requirements.memoryTypeBits & (1 << index)
+                and item.propertyFlags & vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+            ),
+            None,
+        )
+        if memory_type is None:
+            vk.vkDestroyBuffer(self.context.device, self.buffer, None)
+            self.buffer = None
+            raise RuntimeError("no device-local memory type for exportable buffer")
+        export_memory = vk.VkExportMemoryAllocateInfo(
+            sType=vk.VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO,
+            handleTypes=self._handle_type,
+        )
+        self.memory = vk.vkAllocateMemory(
+            self.context.device,
+            vk.VkMemoryAllocateInfo(
+                sType=vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+                pNext=export_memory,
+                allocationSize=requirements.size,
+                memoryTypeIndex=memory_type,
+            ),
+            None,
+        )
+        vk.vkBindBufferMemory(self.context.device, self.buffer, self.memory, 0)
+
+    @property
+    def handle_type(self) -> int:
+        return self._handle_type
+
+    @property
+    def export_handle(self) -> Any:
+        if self._export_handle is not None:
+            return self._export_handle
+        vk = self.vk
+        if os.name == "nt":
+            proc = vk.lib.vkGetDeviceProcAddr(
+                self.context.device, b"vkGetMemoryWin32HandleKHR"
+            )
+            if proc == vk.ffi.NULL:
+                raise RuntimeError("vkGetMemoryWin32HandleKHR is unavailable")
+            function = vk.ffi.cast(
+                "VkResult(*)(VkDevice, const VkMemoryGetWin32HandleInfoKHR*, void**)",
+                proc,
+            )
+            output = vk.ffi.new("void **")
+            info = vk.ffi.new("VkMemoryGetWin32HandleInfoKHR *")
+            info.sType = vk.VK_STRUCTURE_TYPE_MEMORY_GET_WIN32_HANDLE_INFO_KHR
+            info.memory = self.memory
+            info.handleType = self._handle_type
+            result = function(self.context.device, info, output)
+            if int(result) != int(vk.VK_SUCCESS):
+                raise RuntimeError(f"vkGetMemoryWin32HandleKHR failed: {result}")
+            self._export_handle = int(vk.ffi.cast("uintptr_t", output[0]))
+            return self._export_handle
+
+        proc = vk.lib.vkGetDeviceProcAddr(self.context.device, b"vkGetMemoryFdKHR")
+        if proc == vk.ffi.NULL:
+            raise RuntimeError("vkGetMemoryFdKHR is unavailable")
+        function = vk.ffi.cast(
+            "VkResult(*)(VkDevice, const VkMemoryGetFdInfoKHR*, int*)", proc
+        )
+        output = vk.ffi.new("int *")
+        info = vk.ffi.new("VkMemoryGetFdInfoKHR *")
+        info.sType = vk.VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR
+        info.memory = self.memory
+        info.handleType = self._handle_type
+        result = function(self.context.device, info, output)
+        if int(result) != int(vk.VK_SUCCESS):
+            raise RuntimeError(f"vkGetMemoryFdKHR failed: {result}")
+        self._export_handle = int(output[0])
+        return self._export_handle
+
+    def close_export_handle(self) -> None:
+        if self._export_handle is None:
+            return
+        if os.name == "nt":
+            ctypes.windll.kernel32.CloseHandle(ctypes.c_void_p(int(self._export_handle)))
+        else:
+            os.close(int(self._export_handle))
+        self._export_handle = None
+
+    def close(self) -> None:
+        self.close_export_handle()
+        if self.context.device is not None:
+            if self.buffer is not None:
+                self.vk.vkDestroyBuffer(self.context.device, self.buffer, None)
+            if self.memory is not None:
+                self.vk.vkFreeMemory(self.context.device, self.memory, None)
+        self.buffer = None
+        self.memory = None
+        self.allocation_size = 0
+
+    def __enter__(self) -> "VulkanExportableBuffer":
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        self.close()
 
 
 class VulkanExportableImage:
@@ -351,6 +534,11 @@ class VulkanExportableImage:
     @property
     def handle_type(self) -> int:
         return self._handle_type
+
+    def require_view(self) -> Any:
+        if self.view is None:
+            raise RuntimeError("exportable image view is unavailable")
+        return self.view
 
     @property
     def export_handle(self) -> Any:

@@ -20,6 +20,7 @@ import numpy as np
 
 from viewer.vulkan_context import (
     MIN_VULKAN_API_VERSION,
+    ImageState,
     VulkanContext,
     VulkanCapabilityError,
     _require_timeline_semaphore_features,
@@ -257,6 +258,7 @@ class OpenXrVulkanPresenter(
         )
         self._screen_ready_semaphore_abi_available = False
         self._last_filament_screen_image_status = None
+        self._last_screen_resolution_status = None
         self._controller_hdr_lighting = False
         self._last_filament_screen_light = None
         self._filament_fill_light_color = self.config.filament_fill_light_color
@@ -327,6 +329,9 @@ class OpenXrVulkanPresenter(
         self._smooth_ray_fwd_r = None
         self._rot_smooth = 0.10
         self._ray_deadzone_rad = 0.0052
+        # Match the legacy laser edge-release cone: once the ray is within
+        # six degrees of the nearest screen edge, keep the cursor attached.
+        self._ray_edge_deadzone_rad = math.radians(6.0)
         self._ray_filter_l = OneEuroFilter3D(8.0, 8.0, 8.0)
         self._ray_filter_r = OneEuroFilter3D(8.0, 8.0, 8.0)
         self._last_frame_dt = 1.0 / 90.0
@@ -349,6 +354,13 @@ class OpenXrVulkanPresenter(
         self._has_presented_frame = False
         self._last_quad_layers: list[Any] = []
         self._last_screen_quad_layers: list[Any] = []
+        # One-shot first-frame visual diagnostics. The readback is deliberately
+        # delayed until the normal render has completed, so it observes the
+        # production Vulkan image and the final OpenXR projection target.
+        self._visual_regression_capture_eyes: set[int] = set()
+        self._visual_regression_capture_failed = False
+        self._visual_regression_source_host_images: dict[int, VulkanHostImage] = {}
+        self._visual_regression_projection_host_images: dict[int, VulkanHostImage] = {}
         self._overlay_quad_entries: dict[str, dict[str, Any]] = {}
         # Keep rasterized tool textures and their released swapchain image
         # alive. Static Quad layers must not perform a host upload every XR
@@ -413,6 +425,7 @@ class OpenXrVulkanPresenter(
         self._grip_rotation_anchor_r = None
         self._screen_rotation_anchor_l = None
         self._screen_rotation_anchor_r = None
+        self._grip_screen_rotation_snapped_l = False
         self._both_grip_anchor = None
         self._scroll_accum_x = 0.0
         self._scroll_accum_y = 0.0
@@ -435,6 +448,11 @@ class OpenXrVulkanPresenter(
         self._shortcut_screen_preset_index = 5
         self._shortcut_saved_skybox_brightness = self._filament_skybox_brightness
         self._shortcut_light_levels = (0.0, 0.5, 1.0)
+        # Match the legacy right-grip distance control: the speed grows
+        # exponentially with thumbstick deflection and reaches 3 m/s.
+        self._dist_speed_base = 0.35
+        self._dist_speed_max = 3.0
+        self._dist_speed_exp = 3.0
 
     @property
     def initialized(self) -> bool:
@@ -1209,30 +1227,97 @@ class OpenXrVulkanPresenter(
             return None, None
         grip_matrix = self._grip_mat_l if hand == 0 else self._grip_mat_r
         origin, direction = self._get_smoothed_ray(hand)
-        if origin is None or direction is None:
+        has_smoothed_ray = origin is not None and direction is not None
+        if not has_smoothed_ray:
             if grip_matrix is not None:
-                origin = (
+                raw_origin = (
                     grip_matrix[:3, 3] + grip_matrix[:3, 1] * 0.020
                 ).astype(np.float64)
             else:
-                origin = aim_matrix[:3, 3].astype(np.float64)
+                raw_origin = aim_matrix[:3, 3].astype(np.float64)
+            origin = raw_origin
             direction = (-aim_matrix[:3, 2]).astype(np.float64)
         else:
             origin = np.asarray(origin, dtype=np.float64)
             direction = np.asarray(direction, dtype=np.float64)
+            if grip_matrix is not None:
+                raw_origin = (
+                    grip_matrix[:3, 3] + grip_matrix[:3, 1] * 0.020
+                ).astype(np.float64)
+            else:
+                raw_origin = aim_matrix[:3, 3].astype(np.float64)
         direction /= max(float(np.linalg.norm(direction)), 1e-8)
         right_axis = aim_matrix[:3, 0].astype(np.float64)
         right_axis /= max(float(np.linalg.norm(right_axis)), 1e-8)
         angle = math.radians(12.0)
-        direction = (
+        direction = self._normalize_interaction_ray(
             direction * math.cos(angle)
             + np.cross(right_axis, direction) * math.sin(angle)
             + right_axis
             * float(np.dot(right_axis, direction))
             * (1.0 - math.cos(angle))
         )
+        if has_smoothed_ray:
+            # The smoothed ray may leave the finite screen by a small amount
+            # while the unsmoothed hand pose is still close to an edge. Copy
+            # the legacy edge constraint so the visible laser and interaction
+            # hit remain latched to the nearest edge instead of disappearing.
+            if self._screen_ray_hit(aim_matrix, raw_origin, direction) is None:
+                raw_direction = (-aim_matrix[:3, 2]).astype(np.float64)
+                raw_direction /= max(float(np.linalg.norm(raw_direction)), 1e-8)
+                raw_direction = self._normalize_interaction_ray(
+                    raw_direction * math.cos(angle)
+                    + np.cross(right_axis, raw_direction) * math.sin(angle)
+                    + right_axis
+                    * float(np.dot(right_axis, raw_direction))
+                    * (1.0 - math.cos(angle))
+                )
+                if self._screen_ray_hit(aim_matrix, raw_origin, raw_direction) is None:
+                    plane_uv = self._screen_plane_uv(raw_origin, direction)
+                    if plane_uv is not None:
+                        clamped_u = max(0.0, min(1.0, float(plane_uv[0])))
+                        clamped_v = max(0.0, min(1.0, float(plane_uv[1])))
+                        clamped_world = self._screen_uv_to_world(clamped_u, clamped_v)
+                        edge_direction = clamped_world - raw_origin
+                        edge_length = float(np.linalg.norm(edge_direction))
+                        if edge_length > 1e-6:
+                            edge_direction /= edge_length
+                            edge_angle = math.acos(
+                                max(-1.0, min(1.0, float(np.dot(raw_direction, edge_direction))))
+                            )
+                            if edge_angle < self._ray_edge_deadzone_rad:
+                                direction = edge_direction
         direction /= max(float(np.linalg.norm(direction)), 1e-8)
         return origin, direction
+
+    @staticmethod
+    def _normalize_interaction_ray(direction: np.ndarray) -> np.ndarray:
+        result = np.asarray(direction, dtype=np.float64)
+        result /= max(float(np.linalg.norm(result)), 1e-8)
+        return result
+
+    def _screen_plane_uv(self, origin: np.ndarray, direction: np.ndarray):
+        """Return unbounded UV on the screen-center plane for edge snapping."""
+        if self._filament_screen is None:
+            return None
+        position, width, height, rotation = self._filament_screen
+        pose = euler_to_mat4(
+            *(math.radians(float(value)) for value in rotation)
+        ).astype(np.float64)
+        pose[:3, 3] = np.asarray(position, dtype=np.float64)
+        normal = pose[:3, 2]
+        denominator = float(np.dot(normal, direction))
+        if abs(denominator) < 1e-6:
+            return None
+        distance = float(np.dot(normal, pose[:3, 3] - origin) / denominator)
+        if distance <= 0.0:
+            return None
+        hit = np.asarray(origin, dtype=np.float64) + np.asarray(direction, dtype=np.float64) * distance
+        local = np.linalg.inv(pose) @ np.append(hit, 1.0)
+        return (
+            float(local[0]) / max(float(width), 1e-6) + 0.5,
+            float(local[1]) / max(float(height), 1e-6) + 0.5,
+        )
 
     def _screen_ray_hit_for_hand(self, hand):
         aim_matrix = self._aim_mat_l if hand == 0 else self._aim_mat_r
@@ -1422,19 +1507,87 @@ class OpenXrVulkanPresenter(
             np.asarray(grip_matrix[:3, :3], dtype=np.float64)
             @ np.asarray(grip_anchor, dtype=np.float64).T
         )
-        yaw, pitch, roll = self._rotation_delta_euler_degrees(relative)
-        if hand_index == 0:
-            # The left-hand physical gesture is intentionally stepped to a
-            # quarter turn, matching the operation guide's 90-degree twist.
-            roll = 90.0 * round(roll / 90.0)
-            yaw = 0.0
-            pitch = 0.0
+        _yaw, _pitch, roll = self._rotation_delta_euler_degrees(relative)
+        if (
+            abs(float(roll)) < 45.0
+            or bool(getattr(self, "_grip_screen_rotation_snapped_l", False))
+        ):
+            return
+        direction = 1.0 if float(roll) > 0.0 else -1.0
         rotation = (
-            float(screen_anchor[0]) + yaw,
-            max(-89.0, min(89.0, float(screen_anchor[1]) + pitch)),
-            float(screen_anchor[2]) + roll,
+            float(screen_anchor[0]),
+            max(-89.0, min(89.0, float(screen_anchor[1]))),
+            float(screen_anchor[2]) + direction * 90.0,
         )
         self._set_filament_screen_pose(self._filament_screen[0], rotation)
+        self._grip_screen_rotation_snapped_l = True
+
+    @staticmethod
+    def _stick_exp_speed(
+        axis_value: float,
+        base_speed: float,
+        max_speed: float,
+        exponent: float,
+        deadzone: float = 0.15,
+    ) -> float:
+        """Match the legacy exponential thumbstick speed curve."""
+        magnitude = abs(float(axis_value))
+        if magnitude <= float(deadzone):
+            return 0.0
+        normalized = max(
+            0.0,
+            min(1.0, (magnitude - float(deadzone)) / max(1e-6, 1.0 - float(deadzone))),
+        )
+        return float(base_speed) * (
+            float(max_speed) / max(float(base_speed), 1e-6)
+        ) ** (normalized ** float(exponent))
+
+    def _apply_right_grip_screen_distance(
+        self, joystick_y: float, *, dt: float, laser_hit: Any
+    ) -> None:
+        """Move the screen radially using the legacy right-grip stick mapping."""
+        if (
+            self._filament_screen is None
+            or self._head_position_w is None
+            or laser_hit is None
+            or abs(float(joystick_y)) <= self._input_deadzone()
+        ):
+            return
+        # The Vulkan controller input contract exposes the thumbstick Y axis
+        # with the sign flipped from the legacy raw OpenXR value. Restore the
+        # legacy sign for this operation: pushing the stick forward must move
+        # the screen away from the head.
+        legacy_joystick_y = -float(joystick_y)
+        speed = self._stick_exp_speed(
+            legacy_joystick_y,
+            self._dist_speed_base,
+            self._dist_speed_max,
+            self._dist_speed_exp,
+            self._input_deadzone(),
+        )
+        if speed <= 0.0:
+            return
+        position, width, height, rotation = self._filament_screen
+        head = np.asarray(self._head_position_w, dtype=np.float64)
+        radial = np.asarray(position, dtype=np.float64) - head
+        radius = float(np.linalg.norm(radial))
+        if radius <= 1e-6:
+            return
+        radial /= radius
+        # Match the legacy sign: positive raw OpenXR Y increases the
+        # head-to-screen radius.
+        next_radius = max(
+            0.3,
+            radius + speed * (1.0 if legacy_joystick_y > 0.0 else -1.0) * dt,
+        )
+        next_position = head + radial * next_radius
+        dx, dy, dz = (next_position - head) / next_radius
+        next_rotation = (
+            math.degrees(math.atan2(-float(dx), -float(dz))),
+            math.degrees(math.asin(max(-1.0, min(1.0, float(dy))))),
+            float(rotation[2]),
+        )
+        self._set_filament_screen_pose(next_position, next_rotation)
 
     def _filament_screen_image_gate_reason(
         self, output_frame: VulkanStereoOutputFrame | None
@@ -1466,6 +1619,7 @@ class OpenXrVulkanPresenter(
             "gpu_external_semaphore",
             # Compatibility for older producer adapters still in the queue.
             "cuda_external_semaphore",
+            "vulkan_compute_external_semaphore",
         }:
             return f"producer_sync={metadata.get('vulkan_output_sync', 'missing')}"
         for eye in ("left", "right"):
@@ -1505,6 +1659,10 @@ class OpenXrVulkanPresenter(
             bool(active),
             reason or "active",
             metadata.get("vulkan_output_sync"),
+            metadata.get("vulkan_input_path"),
+            metadata.get("vulkan_compute_input_color_space"),
+            metadata.get("vulkan_compute_output_image_format"),
+            metadata.get("vulkan_compute_output_image_encoding"),
             int(getattr(output_frame.left_eye, "width", 0)) if output_frame else 0,
             int(getattr(output_frame.left_eye, "height", 0)) if output_frame else 0,
             target_extent,
@@ -1513,11 +1671,205 @@ class OpenXrVulkanPresenter(
             return
         self._last_filament_screen_image_status = status
         print(
-            "[OpenXRViewer] Filament screen image path: "
+            "[OpenXRViewer] Filament screen image "
             f"active={bool(active)} reason={reason or 'none'} "
-            f"sync={metadata.get('vulkan_output_sync', 'missing')} "
-            f"source={status[3]}x{status[4]} "
-            f"projection_target={target_extent or 'unknown'}",
+            f"vulkan_readback={metadata.get('vulkan_readback', 'missing')} "
+            f"vulkan_output_path={metadata.get('vulkan_output_path', 'missing')} "
+            f"vulkan_output_sync={metadata.get('vulkan_output_sync', 'missing')} "
+            f"vulkan_input_path={metadata.get('vulkan_input_path', 'missing')} "
+            f"vulkan_input_upload_ms={metadata.get('vulkan_input_upload_ms', 'missing')} "
+            f"vulkan_compute_input_color_space={metadata.get('vulkan_compute_input_color_space', 'missing')} "
+            f"vulkan_compute_output_image_format={metadata.get('vulkan_compute_output_image_format', 'missing')} "
+            f"vulkan_compute_output_image_encoding={metadata.get('vulkan_compute_output_image_encoding', 'missing')} "
+            f"source={status[7]}x{status[8]} "
+            f"projection_target={status[9] or 'unknown'}",
+            flush=True,
+        )
+
+    def _screen_footprint_pixels(
+        self,
+        view: Any,
+        swapchain_size: tuple[int, int],
+    ) -> tuple[float, float] | None:
+        """Project the Filament screen geometry into one eye's swapchain pixels."""
+
+        if self._filament_screen is None:
+            return None
+        try:
+            sc_w, sc_h = int(swapchain_size[0]), int(swapchain_size[1])
+            if sc_w <= 0 or sc_h <= 0:
+                return None
+            position, width, height, rotation = self._filament_screen
+            if width <= 0.0 or height <= 0.0:
+                return None
+
+            screen_pose = euler_to_mat4(
+                *(math.radians(float(value)) for value in rotation[:3])
+            ).astype(np.float64)
+            center = np.asarray(position, dtype=np.float64)
+            right = screen_pose[:3, 0].astype(np.float64)
+            up = screen_pose[:3, 1].astype(np.float64)
+            forward = np.cross(right, up)
+            half_width = float(width) * 0.5
+            half_height = float(height) * 0.5
+            if self._screen_curved:
+                segments = 48
+                half_angle = 0.72
+                radius = half_width / half_angle
+                points = []
+                for segment in range(segments + 1):
+                    t = segment / float(segments)
+                    angle = -half_angle + 2.0 * half_angle * t
+                    local_x = radius * math.sin(angle)
+                    local_z = radius * (1.0 - math.cos(angle))
+                    column_center = center + right * local_x + forward * local_z
+                    points.extend((
+                        column_center - up * half_height,
+                        column_center + up * half_height,
+                    ))
+                world_points = np.asarray(points, dtype=np.float64)
+            else:
+                world_points = np.asarray(
+                    (
+                        center - right * half_width - up * half_height,
+                        center + right * half_width - up * half_height,
+                        center + right * half_width + up * half_height,
+                        center - right * half_width + up * half_height,
+                    ),
+                    dtype=np.float64,
+                )
+
+            eye_pose = _xr_view_pose_to_model_mat4(view.pose).astype(np.float64)
+            view_matrix = np.linalg.inv(eye_pose)
+            homogeneous = np.concatenate(
+                (world_points, np.ones((len(world_points), 1), dtype=np.float64)),
+                axis=1,
+            )
+            camera_points = (view_matrix @ homogeneous.T).T[:, :3]
+            depth = -camera_points[:, 2]
+            valid = np.isfinite(depth) & (depth > 1e-6)
+            if not np.any(valid):
+                return None
+
+            fov = view.fov
+            tan_left = math.tan(float(fov.angle_left))
+            tan_right = math.tan(float(fov.angle_right))
+            tan_down = math.tan(float(fov.angle_down))
+            tan_up = math.tan(float(fov.angle_up))
+            if (
+                not all(math.isfinite(value) for value in (
+                    tan_left, tan_right, tan_down, tan_up,
+                ))
+                or tan_right <= tan_left
+                or tan_up <= tan_down
+            ):
+                return None
+            ndc_x = 2.0 * (
+                camera_points[valid, 0] / depth[valid] - tan_left
+            ) / (tan_right - tan_left) - 1.0
+            ndc_y = 2.0 * (
+                camera_points[valid, 1] / depth[valid] - tan_down
+            ) / (tan_up - tan_down) - 1.0
+            px = (ndc_x * 0.5 + 0.5) * sc_w
+            py = (ndc_y * 0.5 + 0.5) * sc_h
+            if len(px) == 0 or not np.all(np.isfinite((px, py))):
+                return None
+            footprint_w = max(
+                0.0,
+                min(float(np.max(px)), float(sc_w))
+                - max(float(np.min(px)), 0.0),
+            )
+            footprint_h = max(
+                0.0,
+                min(float(np.max(py)), float(sc_h))
+                - max(float(np.min(py)), 0.0),
+            )
+            return footprint_w, footprint_h
+        except (AttributeError, IndexError, TypeError, ValueError, np.linalg.LinAlgError):
+            return None
+
+    def _report_screen_resolution(
+        self,
+        views: list[Any],
+        output_frame: VulkanStereoOutputFrame | None,
+    ) -> None:
+        """Log source, projected screen, and OpenXR target pixel sizes once per state."""
+
+        if output_frame is None or self._filament_screen is None:
+            return
+        sources = (
+            (
+                int(getattr(output_frame.left_eye, "width", 0)),
+                int(getattr(output_frame.left_eye, "height", 0)),
+            ),
+            (
+                int(getattr(output_frame.right_eye, "width", 0)),
+                int(getattr(output_frame.right_eye, "height", 0)),
+            ),
+        )
+        targets = tuple(
+            (
+                int(getattr(eye, "width", 0)),
+                int(getattr(eye, "height", 0)),
+            )
+            for eye in self.swapchains[:2]
+        )
+        if len(views) < 2 or len(targets) < 2:
+            return
+        footprints = tuple(
+            self._screen_footprint_pixels(views[index], targets[index])
+            for index in range(2)
+        )
+        metadata = dict(output_frame.metadata or {})
+        render_size = metadata.get("render_size", metadata.get("source_render_size"))
+        if isinstance(render_size, (list, tuple)) and len(render_size) >= 2:
+            render_size_label = f"{int(render_size[0])}x{int(render_size[1])}"
+        else:
+            render_size_label = str(render_size or "unknown")
+        screen = self._filament_screen
+        status = (
+            sources,
+            targets,
+            render_size_label,
+            tuple(round(float(value), 3) for value in screen[0]),
+            round(float(screen[1]), 3),
+            round(float(screen[2]), 3),
+            tuple(round(float(value), 2) for value in screen[3]),
+            bool(self._screen_curved),
+        )
+        if status == self._last_screen_resolution_status:
+            return
+        self._last_screen_resolution_status = status
+
+        def format_size(size: tuple[int, int]) -> str:
+            return f"{size[0]}x{size[1]}"
+
+        def format_footprint(footprint: tuple[float, float] | None) -> str:
+            if footprint is None:
+                return "unknown"
+            return f"{round(footprint[0])}x{round(footprint[1])}"
+
+        def format_density(
+            source: tuple[int, int], footprint: tuple[float, float] | None
+        ) -> str:
+            if footprint is None or footprint[0] <= 0.0 or footprint[1] <= 0.0:
+                return "unknown"
+            return f"{source[0] / footprint[0]:.2f}x{source[1] / footprint[1]:.2f}"
+
+        print(
+            "[OpenXRViewer] screen resolution "
+            f"source_left={format_size(sources[0])} "
+            f"source_right={format_size(sources[1])} "
+            f"render_size={render_size_label} "
+            f"screen_footprint_left={format_footprint(footprints[0])} "
+            f"screen_footprint_right={format_footprint(footprints[1])} "
+            f"projection_target_left={format_size(targets[0])} "
+            f"projection_target_right={format_size(targets[1])} "
+            f"source_per_screen_pixel_left={format_density(sources[0], footprints[0])} "
+            f"source_per_screen_pixel_right={format_density(sources[1], footprints[1])} "
+            f"screen_m={float(screen[1]):.3f}x{float(screen[2]):.3f} "
+            f"distance_m={float(np.linalg.norm(np.asarray(screen[0], dtype=np.float64))):.3f} "
+            f"curved={bool(self._screen_curved)}",
             flush=True,
         )
 
@@ -1587,6 +1939,8 @@ class OpenXrVulkanPresenter(
                 setattr(self, anchor_attr, None)
                 setattr(self, rotation_attr, None)
                 setattr(self, screen_rotation_attr, None)
+                if index == 0:
+                    self._grip_screen_rotation_snapped_l = False
                 setattr(self, f"_screen_hit_grab_anchor_{suffix}", None)
                 continue
             if getattr(self, target_attr) is None:
@@ -1601,6 +1955,42 @@ class OpenXrVulkanPresenter(
                     setattr(self, target_attr, "keyboard")
                 elif hits[index] is not None:
                     setattr(self, target_attr, "screen")
+
+            if (
+                index == 0
+                and getattr(self, target_attr) == "screen"
+                and getattr(self, rotation_attr) is None
+                and grip_matrices[index] is not None
+                and self._filament_screen is not None
+            ):
+                # The old renderer records the left grip pose on the rising
+                # edge. Without this anchor the later 45-degree snap test can
+                # never observe wrist rotation.
+                setattr(
+                    self,
+                    rotation_attr,
+                    np.asarray(grip_matrices[index][:3, :3], dtype=np.float64).copy(),
+                )
+                screen_rotation = self._filament_screen[3]
+                normalized_roll = ((float(screen_rotation[2]) + 180.0) % 360.0) - 180.0
+                if abs(normalized_roll) < 45.0:
+                    base_roll = 0.0
+                elif 45.0 <= normalized_roll < 135.0:
+                    base_roll = 90.0
+                elif -135.0 < normalized_roll <= -45.0:
+                    base_roll = -90.0
+                else:
+                    base_roll = 0.0
+                setattr(
+                    self,
+                    screen_rotation_attr,
+                    (
+                        float(screen_rotation[0]),
+                        float(screen_rotation[1]),
+                        base_roll,
+                    ),
+                )
+                self._grip_screen_rotation_snapped_l = False
 
         both_grips = left_grip and right_grip
         if both_grips and not any(stick_active) and all(
@@ -1689,6 +2079,17 @@ class OpenXrVulkanPresenter(
                     self._set_filament_screen_pose(target_center, target_rotation)
                     if index == 0:
                         self._apply_grip_screen_rotation(index)
+        if (
+            right_grip
+            and not left_grip
+            and getattr(self, "_grip_target_r", None) == "screen"
+            and self._filament_screen is not None
+        ):
+            self._apply_right_grip_screen_distance(
+                float(inputs[1].get("joystick_y", 0.0) or 0.0),
+                dt=max(0.001, min(0.1, float(self._last_frame_dt))),
+                laser_hit=hits[1],
+            )
         for name, hand, hit, down_flag, up_flag in (
             ("left", inputs[0], hits[0], _MOUSEEVENTF_RIGHTDOWN, _MOUSEEVENTF_RIGHTUP),
             ("right", inputs[1], hits[1], _MOUSEEVENTF_LEFTDOWN, _MOUSEEVENTF_LEFTUP),
@@ -1944,11 +2345,23 @@ class OpenXrVulkanPresenter(
         self._initialized = False
         self._screen_ready_semaphore_abi_available = False
         self._last_filament_screen_image_status = None
+        self._last_screen_resolution_status = None
         self._clear_presenter_commands()
         self._drop_output_frames()
         self._has_presented_frame = False
         self._last_quad_layers = []
         self._last_screen_quad_layers = []
+        for host_image in tuple(
+            self._visual_regression_source_host_images.values()
+        ) + tuple(self._visual_regression_projection_host_images.values()):
+            try:
+                host_image.close()
+            except Exception:
+                pass
+        self._visual_regression_source_host_images.clear()
+        self._visual_regression_projection_host_images.clear()
+        self._visual_regression_capture_eyes.clear()
+        self._visual_regression_capture_failed = False
         self._source_frame_wait_logged = False
         self._accept_output = False
         self._filament_animation_origin = None
@@ -2260,11 +2673,34 @@ class OpenXrVulkanPresenter(
     ) -> None:
         """Convert and publish inference output while owning the Vulkan context."""
 
+        debug_info = dict(getattr(runtime_result, "debug_info", None) or {})
+        requested_backend = (
+            "vulkan_zero_copy"
+            if getattr(runtime_result, "vulkan_compute_request", None) is not None
+            else (
+                "vulkan_host"
+                if str(debug_info.get("stereo_compute_backend", "")).strip().lower()
+                == "vulkan"
+                else None
+            )
+        )
+        if (
+            self._output_adapter is not None
+            and requested_backend is not None
+            and getattr(self._output_adapter, "backend_name", None) != requested_backend
+        ):
+            close = getattr(self._output_adapter, "close", None)
+            if callable(close):
+                close()
+            self._output_adapter = None
         if self._output_adapter is None:
             from app_runtime.gpu_producer import create_gpu_producer_adapter
 
             try:
-                self._output_adapter = create_gpu_producer_adapter(self)
+                self._output_adapter = create_gpu_producer_adapter(
+                    self,
+                    backend=requested_backend,
+                )
                 self._output_adapter_error = None
             except Exception as exc:
                 message = f"{type(exc).__name__}: {exc}"
@@ -2374,6 +2810,13 @@ class OpenXrVulkanPresenter(
             return
         callback = metadata.get("_vulkan_output_release")
         if callable(callback):
+            fallback_timeline = metadata.get("_vulkan_fallback_copy_timeline")
+            if fallback_timeline is not None:
+                try:
+                    callback(frame.frame_id, wait_for_timeline=int(fallback_timeline))
+                    return
+                except TypeError:
+                    pass
             callback(frame.frame_id)
 
     def release_displayed_output_for_reuse(self, slot_index: int) -> bool:
@@ -2948,6 +3391,7 @@ class OpenXrVulkanPresenter(
                     xr.SwapchainImageWaitInfo(timeout=xr.INFINITE_DURATION),
             )
             screen_image_projection = self._can_use_filament_screen_image(output_frame)
+            self._report_screen_resolution(views, output_frame)
             self._report_filament_screen_image_status(
                 output_frame,
                 screen_image_projection,
@@ -2961,6 +3405,7 @@ class OpenXrVulkanPresenter(
                     else None,
                 )
             for eye_index, (eye, image_index) in enumerate(acquired_images):
+                screen_source = None
                 if self.filament_bridge is not None:
                     bridge = self.filament_bridge
                     bridge.set_active_eye(eye_index)
@@ -3003,6 +3448,23 @@ class OpenXrVulkanPresenter(
                     bridge.set_acquired_image(image_index)
                     bridge.begin_frame()
                     bridge.end_frame()
+                    if isinstance(output_frame, VulkanStereoOutputFrame):
+                        self._maybe_capture_visual_regression_frame(
+                            output_frame,
+                            eye_index=eye_index,
+                            source_resource=(
+                                screen_source
+                                if isinstance(screen_source, VulkanImageResource)
+                                else getattr(screen_source, "resource", None)
+                            ),
+                            projection_resource=eye.resources[image_index],
+                            source_layout=self.vulkan.vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                            source_access_mask=self.vulkan.vk.VK_ACCESS_SHADER_READ_BIT,
+                            source_stage_mask=(
+                                self.vulkan.vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                                | self.vulkan.vk.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+                            ),
+                        )
                     if screen_image_projection and hasattr(
                         bridge, "get_finished_drawing_semaphore"
                     ):
@@ -3016,10 +3478,27 @@ class OpenXrVulkanPresenter(
                             if eye_index == 0
                             else output_frame.right_eye
                         )
-                        self.vulkan.copy_image(
+                        copy_timeline = self.vulkan.copy_image(
                             source,
                             eye.resources[image_index],
                             wait_for_timeline=output_frame.ready_timeline,
+                        )
+                        output_frame.metadata["_vulkan_fallback_copy_timeline"] = max(
+                            int(output_frame.metadata.get("_vulkan_fallback_copy_timeline", 0)),
+                            int(copy_timeline),
+                        )
+                        self._maybe_capture_visual_regression_frame(
+                            output_frame,
+                            eye_index=eye_index,
+                            source_resource=(
+                                source
+                                if isinstance(source, VulkanImageResource)
+                                else getattr(source, "resource", None)
+                            ),
+                            projection_resource=eye.resources[image_index],
+                            source_layout=self.vulkan.vk.VK_IMAGE_LAYOUT_GENERAL,
+                            source_access_mask=self.vulkan.vk.VK_ACCESS_MEMORY_WRITE_BIT,
+                            source_stage_mask=self.vulkan.vk.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                         )
                     else:
                         image_address = _ctypes_handle_address(eye.images[image_index].image)
@@ -3067,6 +3546,180 @@ class OpenXrVulkanPresenter(
         return OpenXrCompositionBuilder(xr, self.reference_space).projection_layer(
             composition_views, self.swapchains
         )
+
+    @staticmethod
+    def _save_visual_regression_host_image(
+        host_image: VulkanHostImage,
+        output_path: Path,
+    ) -> None:
+        """Save raw Vulkan pixels as an RGB diagnostic without changing them."""
+        from PIL import Image
+
+        pixels = host_image.read_rgba()
+        vk = host_image.vk
+        if int(host_image.format) in {
+            int(vk.VK_FORMAT_B8G8R8A8_UNORM),
+            int(vk.VK_FORMAT_B8G8R8A8_SRGB),
+        }:
+            pixels = pixels[..., [2, 1, 0, 3]]
+        Image.fromarray(pixels[..., :3].copy(), mode="RGB").save(output_path)
+
+    def _maybe_capture_visual_regression_frame(
+        self,
+        output_frame: VulkanStereoOutputFrame,
+        *,
+        eye_index: int,
+        source_resource: VulkanImageResource | None,
+        projection_resource: VulkanImageResource | None,
+        source_layout: int,
+        source_access_mask: int,
+        source_stage_mask: int,
+    ) -> None:
+        """Capture input/output/projection stages once from the live XR frame."""
+        if self._visual_regression_capture_failed:
+            return
+        metadata = output_frame.metadata or {}
+        output_dir_text = str(metadata.get("visual_regression_dir", "")).strip()
+        if not output_dir_text:
+            # Runtime visual regression is opt-in. Without producer metadata
+            # there is no explicit capture request, so do not read back or
+            # write projection images during normal rendering.
+            return
+        if not output_dir_text or self.vulkan is None:
+            return
+        eye = int(eye_index)
+        if eye in self._visual_regression_capture_eyes:
+            return
+        if source_resource is None or projection_resource is None:
+            self._visual_regression_capture_failed = True
+            print(
+                "[OpenXRViewer] visual regression capture skipped: "
+                "production source or projection resource is unavailable",
+                flush=True,
+            )
+            return
+        try:
+            from stereo_runtime.stage_visual_regression import _write_contact_sheet
+
+            output_dir = Path(output_dir_text)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            source_host_image = self._visual_regression_source_host_images.get(eye)
+            if source_host_image is None:
+                source_host_image = VulkanHostImage(
+                    self.vulkan,
+                    int(source_resource.width),
+                    int(source_resource.height),
+                    format=int(source_resource.format),
+                    label=f"visual-regression-live-source-eye-{eye}",
+                )
+                self._visual_regression_source_host_images[eye] = source_host_image
+            projection_host_image = self._visual_regression_projection_host_images.get(eye)
+            if projection_host_image is None:
+                projection_host_image = VulkanHostImage(
+                    self.vulkan,
+                    int(projection_resource.width),
+                    int(projection_resource.height),
+                    format=int(projection_resource.format),
+                    label=f"visual-regression-live-projection-eye-{eye}",
+                )
+                self._visual_regression_projection_host_images[eye] = projection_host_image
+
+            # Native Filament owns the projection render pass and the
+            # producer may have registered the output state through a
+            # different path. Normalize only the Python-side tracker for this
+            # diagnostic copy; this does not submit a Vulkan barrier.
+            vk = self.vulkan.vk
+            self.vulkan.register_image_state(
+                source_resource.image,
+                ImageState(
+                    layout=int(source_layout),
+                    access_mask=int(source_access_mask),
+                    stage_mask=int(source_stage_mask),
+                    queue_family_index=self.vulkan.queue_family_index,
+                ),
+            )
+            self.vulkan.register_image_state(
+                projection_resource.image,
+                ImageState(
+                    layout=int(vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL),
+                    access_mask=int(vk.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT),
+                    stage_mask=int(vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT),
+                    queue_family_index=self.vulkan.queue_family_index,
+                )
+            )
+
+            source_timeline = self.vulkan.copy_image(
+                source_resource,
+                source_host_image.resource,
+            )
+            self.vulkan.wait_for_timeline(source_timeline)
+            self._save_visual_regression_host_image(
+                source_host_image,
+                output_dir / f"03_vulkan_output_{'left' if eye == 0 else 'right'}_eye.png",
+            )
+
+            try:
+                projection_timeline = self.vulkan.copy_image(
+                    projection_resource,
+                    projection_host_image.resource,
+                )
+            except VulkanCapabilityError as first_exc:
+                # Some OpenXR runtimes leave the Python-side swapchain state
+                # stale after Filament's native render pass. Reassert the
+                # known completed color-attachment state and retry once.
+                self.vulkan.register_image_state(
+                    projection_resource.image,
+                    ImageState(
+                        layout=int(vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL),
+                        access_mask=int(vk.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT),
+                        stage_mask=int(vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT),
+                        queue_family_index=self.vulkan.queue_family_index,
+                    ),
+                )
+                try:
+                    projection_timeline = self.vulkan.copy_image(
+                        projection_resource,
+                        projection_host_image.resource,
+                    )
+                except Exception as retry_exc:
+                    raise VulkanCapabilityError(
+                        "projection image diagnostic copy failed after state retry: "
+                        f"first={type(first_exc).__name__}: {first_exc}; "
+                        f"retry={type(retry_exc).__name__}: {retry_exc}"
+                    ) from retry_exc
+            self.vulkan.wait_for_timeline(projection_timeline)
+            self._save_visual_regression_host_image(
+                projection_host_image,
+                output_dir / f"06_openxr_projection_{'left' if eye == 0 else 'right'}_eye.png",
+            )
+            self._visual_regression_capture_eyes.add(eye)
+            if len(self._visual_regression_capture_eyes) >= min(2, len(self.swapchains)):
+                manifest = {
+                    "frame_id": int(output_frame.frame_id),
+                    "source_stage": "vulkan_output_image",
+                    "projection_stage": "openxr_projection_swapchain",
+                    "readback": "temporary_host_image",
+                    "color_space": str(output_frame.color_space),
+                    "image_origin": str(output_frame.image_origin),
+                    "source_size": [int(source_resource.width), int(source_resource.height)],
+                    "projection_size": [int(projection_resource.width), int(projection_resource.height)],
+                }
+                (output_dir / "visual_regression_runtime_manifest.json").write_text(
+                    json.dumps(manifest, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                _write_contact_sheet(output_dir)
+                print(
+                    f"[OpenXRViewer] automatic visual regression capture saved: {output_dir}",
+                    flush=True,
+                )
+        except Exception as exc:
+            self._visual_regression_capture_failed = True
+            print(
+                "[OpenXRViewer] automatic visual regression capture failed: "
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
 
     def _ensure_initialized(self) -> None:
         if not self._initialized:

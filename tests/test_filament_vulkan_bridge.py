@@ -130,8 +130,11 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "bridge_set_renderable_layer(bridge, bridge->screen_entity, 1, true);" in source
     assert "bool screen_in_scene = false;" in source
     assert "The sampler is required by the material" in source
-    assert "TextureSampler::MinFilter::LINEAR" in source
+    assert "TextureSampler::MinFilter::LINEAR_MIPMAP_LINEAR" in source
     assert "TextureSampler::MagFilter::LINEAR" in source
+    assert "screen_texture_sampler.setAnisotropy(16.0f)" in source
+    context_source = (bridge_dir / "bridge_context.cpp").read_text(encoding="utf-8")
+    assert "eye.view->setAntiAliasing(filament::AntiAliasing::NONE);" in context_source
     assert "filament_bridge_set_screen_ready_semaphore" in facade
     assert "filament_bridge_set_screen_curved" in facade
     assert "kScreenSegments = 48" in source

@@ -46,6 +46,59 @@ class VulkanStereoFusedParams:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class VulkanLayeredStereoParams:
+    """Push constants matching d2s_stereo_layered.comp."""
+
+    depth_strength: float = 2.0
+    max_disparity_px: float = 96.0
+    convergence: float = 0.0
+    edge_threshold: float = 0.04
+    fill_strength: float = 1.0
+    fill_radius: int = 3
+    mask_feather_radius: int = 3
+    symmetric: bool = True
+    layers: int = 2
+    softness: float = 0.08
+    foreground_scale: float = 1.0
+    midground_scale: float = 1.0
+    background_scale: float = 1.0
+    edge_dilation: int = 2
+    screen_edge_suppression: int = 0
+    hole_fill_mode: int = 0
+    occlusion_enabled: bool = True
+
+    def pack(self, width: int, height: int) -> bytes:
+        if int(width) < 1 or int(height) < 1:
+            raise ValueError("Vulkan stereo dimensions must be positive")
+        if int(self.layers) < 1 or int(self.layers) > 4:
+            raise ValueError("Vulkan layered stereo supports one to four layers")
+        if min(int(self.fill_radius), int(self.mask_feather_radius), int(self.edge_dilation)) < 0:
+            raise ValueError("Vulkan layered stereo radii must be non-negative")
+        return struct.pack(
+            "<IIfffffIIIIffffIIII",
+            int(width),
+            int(height),
+            float(self.depth_strength),
+            float(self.max_disparity_px),
+            float(self.convergence),
+            float(self.edge_threshold),
+            float(self.fill_strength),
+            int(self.fill_radius),
+            int(self.mask_feather_radius),
+            1 if self.symmetric else 0,
+            int(self.layers),
+            float(self.softness),
+            float(self.foreground_scale),
+            float(self.midground_scale),
+            float(self.background_scale),
+            int(self.edge_dilation),
+            int(self.screen_edge_suppression),
+            int(self.hole_fill_mode),
+            1 if self.occlusion_enabled else 0,
+        )
+
+
 class VulkanStereoFusedPass:
     """Single-dispatch baseline stereo synthesis for Vulkan Compute.
 
@@ -195,3 +248,44 @@ class VulkanStereoFusedPass:
 
     def __exit__(self, exc_type, exc, traceback) -> None:
         self.close()
+
+
+class VulkanLayeredStereoPass(VulkanStereoFusedPass):
+    """Layered stereo synthesis pass for quality_4k and hq_4k modes."""
+
+    PUSH_CONSTANTS_SIZE = 76
+
+    def __init__(
+        self,
+        context: Any,
+        *,
+        width: int,
+        height: int,
+        shader_path: str | Path = "shaders/d2s_stereo_layered.spv",
+    ) -> None:
+        super().__init__(context, width=width, height=height, shader_path=shader_path)
+
+    def submit(
+        self,
+        rgb: Any,
+        depth: Any,
+        left_eye: Any,
+        right_eye: Any,
+        occlusion_mask: Any,
+        *,
+        params: VulkanLayeredStereoParams,
+        frame_id: int,
+        config_version: int,
+        ready_timeline: int | None = None,
+    ) -> int:
+        return super().submit(
+            rgb,
+            depth,
+            left_eye,
+            right_eye,
+            occlusion_mask,
+            params=params,  # type: ignore[arg-type]
+            frame_id=frame_id,
+            config_version=config_version,
+            ready_timeline=ready_timeline,
+        )

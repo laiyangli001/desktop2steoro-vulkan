@@ -6,8 +6,18 @@
 
 ### 已实现
 
+- 按旧工程恢复手柄屏幕操作：右 Grip+右摇杆 Y 沿头部到屏幕的径向距离移动，并使用旧工程指数加速曲线（0.35–3.0 m/s、死区 0.15）；左 Grip 按下时记录手柄旋转锚点，腕部旋转超过 45° 后将屏幕 Roll 吸附旋转 90°。
+- 修正 CUDA 外部 semaphore 输出的 Filament 诊断元数据：明确报告 `vulkan_readback=none` 和 `vulkan_output_path=presenter_owned_storage_image`，避免直连路径已激活却显示为 `missing`。
+- 修正右 Grip+右摇杆前后方向：按当前 Vulkan 输入层的 Y 轴约定恢复旧工程符号，摇杆向前时屏幕远离头部，向后时靠近头部。
+- 修正 Vulkan Compute 零拷贝未生成 request 的条件：移除已完成分层视差迁移后仍残留的 `layered_parallax_not_supported` 守门条件；即使普通 Vulkan backend 已经初始化，OpenXR 也优先生成 Presenter-owned `vulkan_compute_request`。
+- 修复 Vulkan host fallback 对 OpenXR `HxWx4` 眼图的尺寸识别，将 `(2160, 3840, 4)` 正确解析为 `3840x2160`，避免输出转换异常退出。
+- 修复 OpenXR cinema 全合成路径丢失 `vulkan_compute_request`：运行时不再先走 `process_rgb_frame` 再包装 OpenXR 结果，统一通过 `process_openxr_frame` 保留 Presenter-owned Vulkan zero-copy request，避免每帧约 1 秒的 host-visible 回读。
+- 为 zero-copy 实机验证固定运行条件：`src/settings.yaml` 使用 `Stereo Compute Backend: vulkan`、关闭 `Temporal`/`Auto Scene Reset`，OpenXR 预变形默认开启；Presenter 状态日志现在直接打印 `vulkan_readback`、`vulkan_output_path`、`vulkan_output_sync` 和 `active`，便于确认是否真正进入 Presenter-owned Vulkan image 路径。
 - 收紧 Filament 外部屏幕图像路径的运行时诊断：CUDA producer 现在发布外部 semaphore 请求是否被环境变量或 Bridge ABI 阻止、初始化异常及最终 active 状态；Presenter 记录 direct screen path 的具体回退原因，不再把 zero-copy 未启动静默表现成普通 GPU copy。
 - 修复 Filament 直接采样源图像的租约生命周期：显示中的 Vulkan ring slot 会保持到新帧替换或关闭，环形缓冲即将复用该 slot 时由 Presenter 先完成 finished semaphore 后再释放，避免 Filament 仍在采样时被 CUDA 覆盖而产生模糊。
+- 修正 Vulkan zero-copy 投影屏幕发白：Compute 输出是 `VK_FORMAT_R8G8B8A8_UNORM` storage image、Filament 外部纹理是线性 `RGBA8`，shader 现在先将显示参考 sRGB 输入解码到线性光再执行 warp/补洞和写入；OpenXR sRGB 目标仍只做最终一次编码。
+- 优化 4K layered shader 的安全路径：移除未使用的重复 `occlusion_at` 计算，遮挡搜索命中 edge 后提前结束，并在 `mask==0` 时跳过 `box_average`/方向补洞；有洞像素的 warp、补洞窗口和 blend 公式不变。当前中心+四方向羽化采样属于有边缘画质风险的近似，仍需实机重点检查斜向破洞。
+- 实测 RTX 4K 后撤回 Triton 的简单 mask-predicated 补洞改法：无洞、10% 破洞、全破洞分别约为原 kernel 的 `0.92x`、`0.38x`、`0.83x`，额外分支控制抵消了屏蔽加载收益；Triton 保持原 kernel，后续若优化需采用稀疏索引/专用 active-pixel 两阶段方案并重新基准。
 - 恢复旧工程的头显推荐屏幕几何：OpenXR Link 读取 GUI 的 `XR Headset Model`，按对应最佳观看距离和 60° 水平视场自动计算 16:9 屏幕宽高；Pico 4 / 4 Ultra 为 `23.09m × 12.99m @ 20m`，不再使用固定的 `16m × 9m @ 16m`。
 - 对齐旧工程 OpenXR 工具交互：菜单键循环为“FPS → FPS+屏幕左侧竖向操作指南 → 全隐藏”，屏幕指南改用 `build_team_help_rgba`，不再误用手柄双列指南。
 - 恢复旧工程键盘头向和激光命中点拖屏逻辑：键盘每帧以头部为目标重新朝向，单手 Grip 保持激光命中的屏幕局部锚点，手柄平移或旋转都能拖动屏幕；补回激光终点光圈显示。
@@ -19,19 +29,34 @@
 - 按旧工程恢复 reference-space change pending 处理：运行时重定位后重建共享基础空间，重新应用 profile pose，并清空旧头部缓存，避免屏幕、手柄和投影视图使用不同坐标系。
 - 按旧工程补齐曲面屏圆柱射线求交和 UV 到曲面世界坐标转换；左 Grip 同时支持旧工程的左右摇杆旋转，键盘轨道不再错误要求 stick click。
 - 修正平面屏激光命中的旧工程 UV 方向：下边缘为 `v=0`、上边缘为 `v=1`，命中点拖动和 Quad 光圈与实际屏幕纹理保持同一上下方向。
+- 恢复旧工程激光屏幕边缘吸附：平滑射线越过有限屏幕、原始姿态射线也未命中但仍处于边缘 6° 释放锥内时，使用无限屏幕平面 UV 夹到最近边缘，并将激光和交互命中保持在该边缘。
 - 新增第一版 Vulkan Compute 立体合成融合 pass：单次 dispatch 完成视差计算、左右眼水平 warp、遮挡边缘膨胀、方向感知补洞和边缘保护；深度模型推理路径保持由各厂商后端负责。
 - 新增 `vulkan_stereo_benchmark.py` 和 Vulkan smoke 校验；Windows RTX 3090 的 3840×2160 初测为约 `31.34 ms / 31.9 FPS`，同机现有 CUDA/Triton `fast_plus` 端到端初测约 `26.29 ms / 38.0 FPS`。该结果是首版融合计算对比，尚不代表最终零拷贝端到端性能。
 - 明确立体合成后端选择：`auto/vendor` 先做真实 Triton kernel 探测；NVIDIA 走 CUDA Triton，AMD 走 ROCm/Windows Triton，只有探测失败或厂商不是 NVIDIA/AMD 时才走 Vulkan Compute。显式 `vulkan` 可在 NVIDIA、AMD、Intel 全部使用 Vulkan Compute，且不改变深度模型推理后端。
 - 统一 Triton 运行时门控：视差、warp、遮挡、补洞、时域和输出阶段不再直接用 `is_cuda` 判断厂商，统一读取 GPU vendor；NVIDIA 与 AMD 使用同一套 Triton kernel 源码，Intel 等其它厂商不会误进入 Triton。
 - CUDA 12.8 profile 改为稳定配套：PyTorch `2.11.0`、torchvision `0.26.0`、Linux Triton 3.6 系列和 Windows `triton-windows==3.6.0.post26`；AMD ROCm7 profile 保留独立 nightly 配套版本。Torch/Triton 升级需要重新验证 TensorRT、深度推理和 Triton kernel。
-- 实际升级嵌入式 Python 到 `torch==2.11.0+cu128`、`torchvision==0.26.0+cu128`、`triton-windows==3.6.0.post26`；RTX 3090 / CUDA 12.8 / TensorRT 10.14.1 导入和 Triton kernel 探测均通过。全量测试最终为 `603 passed, 6 warnings`。
+- 实际升级嵌入式 Python 到 `torch==2.11.0+cu128`、`torchvision==0.26.0+cu128`、`triton-windows==3.6.0.post26`；RTX 3090 / CUDA 12.8 / TensorRT 10.14.1 导入和 Triton kernel 探测均通过。依赖与 Vulkan layered 接入完成后的全量测试为 `610 passed, 6 warnings`。
+- 将 Vulkan fused stereo pass 接入 `StereoRuntime` 的 `fast_plus` 生产路径：`Stereo Compute Backend=auto` 在真实 Triton 探测失败或厂商不支持时选择 Vulkan，显式 `vulkan` 可在 NVIDIA、AMD、Intel 上运行同一套 Vulkan 视差/warp/遮挡/补洞 shader；NVIDIA/AMD 仍保持 Triton 优先。
+- 新增 `VulkanHostOutputAdapter`，Vulkan fallback 的左右眼结果可通过 Presenter 自有 Vulkan host image 输出，不再因没有 CUDA/HIP interop 而静默丢帧；该兼容路径使用同步 GPU copy/Quad Layer，不伪装成 Filament zero-copy semaphore 路径。
+- 新增独立 `d2s_stereo_layered` Vulkan Compute pass，并接入 `quality_4k/hq_4k`；按现有分层合成逻辑执行深度分层权重、逐层水平 warp、遮挡膨胀、屏幕边缘抑制和 balanced/directional 补洞，未将高质量模式错误降级为 `fast_plus`。
+- 为 Vulkan Compute 和 host fallback 增加分段耗时诊断：分别记录 host upload、Vulkan submit/wait、host readback、输出 wait 和输出 upload；当前路径仍明确标记为 host-visible fallback，未伪装成 zero-copy。
+- 完成 Vulkan Compute 的真正输出零拷贝链路：新增 `d2s_stereo_layered_output.comp/.spv` 和 `VulkanStereoImagePass`，在 Presenter-owned Vulkan context 中直接把左右眼写入持久化外部 `VkImage`，不再读取 Vulkan 输出 buffer 到 CPU，也不再由 CPU 重新上传左右眼像素。
+- 新增 `VulkanZeroCopyOutputAdapter` 和 `VulkanComputeRequest`：推理线程只发布 RGB/Depth/参数请求，Presenter 线程完成 Compute submit、`GENERAL -> SHADER_READ_ONLY_OPTIMAL` barrier、per-eye visible semaphore 以及 Filament finished/release 状态机；不支持直接外部采样时仍显式走 GPU copy 回退。
+- 完成 NVIDIA CUDA 到 Vulkan Compute 输入的 GPU 互操作第一阶段：RGB/Depth 使用可导出的 Vulkan storage buffer、CUDA external memory mapped buffer 和 external ready semaphore，Presenter 不再执行每帧 Tensor `.cpu()` 与 host-visible storage buffer 上传；不支持 CUDA external buffer 时明确回退并在日志中报告 `vulkan_input_path=host_visible_buffer`。
+- Filament 屏幕状态日志新增 `vulkan_input_path` 与 `vulkan_input_upload_ms`，用于区分真正的 CUDA external buffer 输入和兼容性 host 上传路径。
+- 优化 `d2s_stereo_layered_output` 的 4K 热点：无空洞像素不再执行补洞采样，遮挡羽化避免嵌套 7×7 重复膨胀；RTX 3090 实测 CUDA external input 约 `0.1–0.2ms`，均匀/单边缘深度 steady-state 约 `10ms`，随机高边缘压力场景约 `61ms`，后续仍需用实机深度帧验证画质与稳定 FPS。
+- 增加 Vulkan timeline 主机等待接口，保护输入 buffer 重用和 fallback source image release，不使用逐眼 `vkDeviceWaitIdle` 作为正常同步；同步契约和 CUDA external buffer 输入、host-visible 显式回退的范围已写入三份规范与需求矩阵。
 
 ### 验证结果
 
 - `src/python3/python.exe -m pytest -q tests/test_openxr_vulkan.py tests/test_cuda_vulkan_interop.py tests/test_runtime_output.py`：105 passed，2 warnings。
 - `src/python3/python.exe -m pytest -q tests/test_openxr_behavior_parity.py tests/test_openxr_vulkan.py`：107 passed，2 warnings。
-- `src/python3/python.exe -m pytest -q`：603 passed，6 warnings。
+- `src/python3/python.exe -m pytest -q`：618 passed，6 warnings。
 - 当前 Windows Bridge 能力探针：外部屏幕图像、Vulkan external image、ready semaphore、finished semaphore、async submit 均为可用；CUDA runtime external semaphore API 也可见。
+- 真实 Vulkan runtime 小帧验证：`StereoRuntime(stereo_compute_backend="vulkan")` 完成 Vulkan context 创建、fused dispatch、同步和左右眼读回；Vulkan host output adapter 在真实 Vulkan context 上创建并上传 8×4 左右眼图像成功。
+- 真实 Vulkan layered runtime 小帧验证：`d2s_stereo_layered.spv` 在 NVIDIA RTX 3090 上完成 16×32、3 层 dispatch，左右眼和遮挡 mask 尺寸正确且均为有限值。
+- 真实 Vulkan direct-image smoke：`d2s_stereo_layered_output.spv` 在外部 device-local `VkImage` 上完成左右眼 dispatch，状态转换到 `SHADER_READ_ONLY_OPTIMAL`，输出元数据为 `vulkan_readback=none`、`vulkan_output_sync=vulkan_compute_external_semaphore`；Presenter `VulkanZeroCopyOutputAdapter` ring smoke 通过。
+- Vulkan 接入回归测试全部通过；覆盖自动后端切换、OpenXR prewarp 接入、Vulkan runtime integration 和 host output adapter。
 
 ## 2026-07-24
 

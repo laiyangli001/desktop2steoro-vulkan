@@ -685,6 +685,7 @@ class VulkanContext:
         self,
         resource: Any,
         *,
+        wait_for_timeline: int | None = None,
         wait_semaphore: Any | None = None,
         signal_semaphore: Any | None = None,
     ) -> int:
@@ -732,6 +733,7 @@ class VulkanContext:
         timeline_value = self.submit_on(
             "graphics",
             record,
+            wait_for_timeline=wait_for_timeline,
             wait_semaphore=wait_semaphore,
             signal_semaphore=signal_semaphore,
         )
@@ -1013,6 +1015,37 @@ class VulkanContext:
         with self._lock:
             if not self._closed and self.device is not None:
                 self.vk.vkDeviceWaitIdle(self.device)
+
+    def wait_for_timeline(self, value: int, *, timeout_ns: int = 10_000_000_000) -> None:
+        """Wait on this context's timeline without forcing a device-wide idle."""
+        target = int(value)
+        if target <= 0:
+            return
+        with self._lock:
+            self._ensure_open()
+            if self._timeline_semaphore is None:
+                self.vk.vkDeviceWaitIdle(self.device)
+                return
+            wait_fn = getattr(self.vk, "vkWaitSemaphores", None)
+            wait_info_type = getattr(self.vk, "VkSemaphoreWaitInfo", None)
+            wait_info_structure = getattr(self.vk, "VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO", None)
+            if wait_fn is None or wait_info_type is None or wait_info_structure is None:
+                self.vk.vkDeviceWaitIdle(self.device)
+                return
+            result = wait_fn(
+                self.device,
+                wait_info_type(
+                    sType=wait_info_structure,
+                    semaphoreCount=1,
+                    pSemaphores=[self._timeline_semaphore],
+                    pValues=[target],
+                ),
+                int(timeout_ns),
+            )
+            if result is not None and int(result) != int(self.vk.VK_SUCCESS):
+                raise VulkanCapabilityError(
+                    f"timed out waiting for Vulkan timeline value {target}: {result}"
+                )
 
     def close(self) -> None:
         with self._lock:

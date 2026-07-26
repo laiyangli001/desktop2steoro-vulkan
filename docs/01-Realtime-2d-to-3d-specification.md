@@ -313,9 +313,9 @@ CaptureFrame {
 
 ### 6.3 阶段 3：RGB 预处理
 
-Vulkan Compute 完成格式转换、色彩空间线性化和尺寸调整，输出 `Linear RGB`。当输入尺寸和格式已满足要求时允许消除无意义 pass。
+Vulkan Compute 的颜色处理必须服从输入/输出契约，而不是隐式执行 tone mapping。当前产品的桌面捕捉是 SDR sRGB：运行时保留显示参考 RGB 的数值语义，尺寸和张量布局调整不改变颜色。只有捕捉 metadata 明确声明 HDR 时，才允许在明确的 HDR→SDR 输出阶段执行一次指定的 transfer function/tone mapping；未知色彩空间必须记录告警并拒绝猜测。
 
-HDR 输入必须依据捕获 metadata 执行明确的 transfer function 和 tone mapping。任何未知色彩空间必须记录告警，不得默认把 HDR 当作 sRGB。
+立体 Compute 的直接输出阶段写入显示参考的 RGBA8 `VkImage`，并标记 `color_space=srgb`。由于 Vulkan storage image 使用 `VK_FORMAT_R8G8B8A8_UNORM`、Filament 外部纹理使用线性 `RGBA8`，shader 必须在 warp/补洞前将显示参考 sRGB 解码为线性光；这不是 HDR/tone mapping，而是为线性采样所需的明确 transfer-function 转换。传统 sRGB 图像路径仍由 Filament 在 `SRGB8_A8` 采样边界只解码一次。
 
 ### 6.3.1 颜色空间与显示编码规范
 
@@ -328,7 +328,7 @@ HDR 输入必须依据捕获 metadata 执行明确的 transfer function 和 tone
 3. OpenXR Projection Layer 的颜色交换链必须使用 API 对应的 sRGB 格式（Vulkan 优先 `VK_FORMAT_R8G8B8A8_SRGB`，允许运行时支持的等价 BGRA sRGB 格式）。不得以 UNORM 作为静默回退；运行时没有可用 sRGB 格式时必须失败并报告原因。
 4. Filament 场景、PBR 材质、灯光和环境在 Rec.709/D65 线性工作空间计算。场景曝光只能通过 Filament ColorGrading/相机显示变换实现，不得修改 glTF `baseColorFactor` 伪装成曝光。
 5. Tone mapping 只允许作用于明确声明为场景 HDR 的主场景 View；ACES 不是通用的颜色校正，也不得作用于显示参考的屏幕、UI、激光或其他 LDR 内容。
-6. 显示参考屏幕纹理必须以 sRGB Vulkan 图像导入并以 `SRGB8_A8` 采样，完成一次 sRGB 解码；屏幕和激光使用无后处理 View 直接写入 sRGB 目标。激光必须不透明，alpha 不得被用作颜色变淡机制。
+6. 显示参考屏幕纹理必须与采样语义匹配：传统路径以 sRGB Vulkan 图像导入并以 `SRGB8_A8` 采样，完成一次 sRGB 解码；Vulkan Compute storage image 路径以 `VK_FORMAT_R8G8B8A8_UNORM` 写入 shader 已线性化的值，并以线性 `RGBA8` 采样。两者最终都只写入 sRGB 目标一次；激光必须不透明，alpha 不得被用作颜色变淡机制。
 7. 任何手动亮度、对比度、饱和度、Gamma、色温和色调控制都必须有明确配置来源；中性值必须是恒等变换，默认运行路径不得隐式启用。
 
 规范依据：Khronos [OpenXR XrSwapchain 颜色格式规则](https://registry.khronos.org/OpenXR/specs/1.0/man/html/XrSwapchain.html)、[Vulkan 格式语义](https://registry.khronos.org/vulkan/specs/latest/registry.html)、[glTF 2.0](https://github.com/KhronosGroup/glTF/tree/main/specification/2.0) 和 [Filament HDR/线性渲染及色调管理](https://github.com/google/filament)。
@@ -412,6 +412,8 @@ Stereo Warp 使用反向采样生成 Left Eye 和 Right Eye，并写出原始 di
 ### 6.9 阶段 9：遮挡与空洞修补
 
 实时默认采用方向性、边缘感知的多轮 Compute Pass：mask 膨胀、背景方向搜索、候选颜色选择和羽化合成。修补不得跨越明确的前景深度边缘，也不得改变未被 mask 标记的有效区域。
+
+4K layered output 必须先完成当前像素的 warp，再仅在羽化 mask 大于零时执行邻域补洞；无 mask 像素不得执行 box average 或方向候选计算。遮挡搜索允许在已经确认 edge 的局部提前结束，但羽化采样近似只能作为性能策略，必须单独验证斜向边缘和羽化外圈，不得把近似结果视为与完整窗口严格等价。
 
 大面积生成式补图不进入默认实时管线。若未来提供离线质量模式，必须使用独立产品模式和资源预算。
 
@@ -508,24 +510,24 @@ xrWaitFrame
 运行时屏幕图像不得使用单个可变纹理作为跨线程共享缓冲。Vulkan 主路径必须为左右眼分别创建有界的输出图像环，默认容量为 3，可在 2 至 4 之间配置：
 
 ```text
-Left  VkImage[0..N-1]  <- CUDA external memory import once per slot
-Right VkImage[0..N-1]  <- CUDA external memory import once per slot
-                         |
-                         +-> Filament Texture cache, one import per VkImage
+Left  VkImage[0..N-1]  <- Vulkan Compute storage image, or CUDA/HIP producer import
+Right VkImage[0..N-1]  <- Vulkan Compute storage image, or CUDA/HIP producer import
+                          |
+                          +-> Filament Texture cache, one import per VkImage
 ```
 
-每个环槽的 Vulkan image、image view、CUDA external-memory mapping 和 Filament Texture 必须保持稳定。这里的“屏幕源图像”是推理/合成输出、由 Filament 屏幕材质采样的图像，不是 OpenXR 眼睛输出交换链图像；两者必须使用不同的同步契约。正常帧不得执行以下操作：
+每个环槽的 Vulkan image、image view 和 Filament Texture 必须保持稳定；CUDA/HIP 只有在作为 producer 时才额外维护 external-memory mapping。这里的“屏幕源图像”是推理/合成输出、由 Filament 屏幕材质采样的图像，不是 OpenXR 眼睛输出交换链图像；两者必须使用不同的同步契约。正常帧不得执行以下操作：
 
 - 重新创建或销毁运行时屏幕纹理；
 - 为每帧分配新的 external-memory handle；
 - 将 GPU 图像回读到 CPU；
 - 用 `vkDeviceWaitIdle`、`vkQueueWaitIdle` 或 `flushAndWait` 作为每眼同步。
 
-每张屏幕源图像的持久化记录至少包含：`VkImage`、格式、extent、当前 `VkImageLayout`、producer queue family、consumer queue family、ring slot、producer-ready point 和 consumer-release point。帧生命周期固定为：选择可复用槽位 -> CUDA 写入 -> producer signal -> Vulkan barrier 将图像转换为 `VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL` 并完成 queue ownership transfer -> Filament 采样对应的持久化外部纹理 -> graphics completion signal -> release queue ownership/barrier -> 生产端回收槽位。槽位在 graphics completion 前不得被 CUDA 重写。`set_screen_ready_semaphore`（或后续等价 ABI）只表示屏幕源图像 producer-ready，不得被用作 OpenXR 输出目标完成信号；Filament 输出目标必须使用独立的 render-finished/present 同步。
+每张屏幕源图像的持久化记录至少包含：`VkImage`、格式、extent、当前 `VkImageLayout`、producer queue family、consumer queue family、ring slot、producer-ready point 和 consumer-release point。Vulkan Compute 零拷贝输出的帧生命周期固定为：选择可复用槽位 -> Presenter context 上传 RGB/Depth 输入 buffer -> Compute 直接写左右眼 storage image -> timeline wait + Vulkan barrier 将图像转换为 `VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL` -> signal per-eye visible semaphore -> Filament 采样对应的持久化外部纹理 -> Filament render-finished -> release barrier 返回 `GENERAL` -> 槽位回收。此处“零拷贝”特指立体眼图像输出不经过 CPU 回读或 CPU 重新上传；当前输入 buffer 上传是运行时线程与 Presenter context 隔离下的兼容边界，后续可由 GPU external input 替换。CUDA/HIP producer 仍使用 external memory/semaphore 版本的同一状态机。槽位在 graphics completion 前不得被 Compute 或 CUDA/HIP 重写。`set_screen_ready_semaphore`（或后续等价 ABI）只表示屏幕源图像 producer-ready，不得被用作 OpenXR 输出目标完成信号；Filament 输出目标必须使用独立的 render-finished/present 同步。
 
 直接把 Vulkan 外部图像交给 Filament 采样是 Vulkan 主路径的目标优化，不得因为当前 Bridge 不完整而永久关闭。每个源 `VkImage` 只允许创建一次对应的 Filament 外部纹理；正常帧只更新材质绑定和槽位状态，不重复 import、复制或回读。若平台不支持安全的 external memory、external semaphore/timeline、layout transition、queue ownership transfer 或 Filament 外部纹理接入，运行时必须在能力探测阶段或首次绑定失败时记录原因，并自动退回一次 GPU copy 的屏幕路径/Quad Layer；不得把不完整的同步契约直接提交给 Filament，也不得崩溃。
 
-平台、CUDA Runtime 或旧 Bridge ABI 不支持完整源图像同步时，才允许退回 `cudaStreamSynchronize` 兼容安全栅栏。该降级必须显式标记为兼容路径，不能伪装成零拷贝；输出槽位仍须通过 producer lease 和 consumer completion 保护，直到 Filament 完成采样后才可复用。
+平台、CUDA Runtime 或旧 Bridge ABI 不支持完整源图像同步时，才允许退回已显式标记的 GPU copy/host-visible 兼容路径；该降级不能伪装成零拷贝。CUDA/HIP 的 `cudaStreamSynchronize` 仅用于其 external semaphore 不可用的兼容情况。无论哪种降级，输出槽位仍须通过 producer lease 和 consumer completion 保护，直到 Filament 完成采样后才可复用。
 
 Filament Bridge 必须缓存每眼所有已导入的环槽纹理，并只更新当前材质绑定。Projection Layer 两眼应先完成 acquire/wait，再批量提交，整帧只执行一次必要的完成等待，随后统一 release 两眼 OpenXR 图像。
 
@@ -612,7 +614,7 @@ capture_ready(frame_id)
 -> present_released(frame_id)
 ```
 
-Vulkan 内部同步优先使用 Timeline Semaphore + Synchronization2。与 CUDA/HIP 交界使用平台支持的 external semaphore。只在无法表达 timeline 的外部 API 上使用 binary semaphore。
+Vulkan 内部同步优先使用 Timeline Semaphore + Synchronization2。Vulkan Compute 直接输出使用 Compute submit timeline + per-eye visible binary semaphore；与 CUDA/HIP 交界使用平台支持的 external semaphore。只在无法表达 timeline 的外部 API 上使用 binary semaphore。
 
 图像槽位的同步点必须随输出契约传递，至少包含 `frame_id`、`ring_slot`、producer ready point、consumer completion point 和 image ownership。`ready_timeline=None` 只能表示当前兼容路径已在发布前完成 CUDA stream 同步，不得被解释为 GPU 工作已经没有依赖。
 

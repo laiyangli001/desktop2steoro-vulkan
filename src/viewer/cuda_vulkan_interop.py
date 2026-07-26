@@ -65,6 +65,14 @@ class _ExternalMipmappedArrayDesc(ctypes.Structure):
     ]
 
 
+class _ExternalMemoryBufferDesc(ctypes.Structure):
+    _fields_ = [
+        ("offset", ctypes.c_size_t),
+        ("size", ctypes.c_size_t),
+        ("flags", ctypes.c_uint),
+    ]
+
+
 class _ExternalSemaphoreHandleDesc(ctypes.Structure):
     _fields_ = [
         ("type", ctypes.c_int),
@@ -113,6 +121,13 @@ class _CudaSlot:
         self.array = array
 
 
+class _CudaBufferSlot:
+    def __init__(self, target: Any, external_memory: ctypes.c_void_p, pointer: ctypes.c_void_p):
+        self.target = target
+        self.external_memory = external_memory
+        self.pointer = pointer
+
+
 class _CudaSemaphore:
     def __init__(self, target: VulkanExportableSemaphore, external: ctypes.c_void_p):
         self.target = target
@@ -130,6 +145,7 @@ class CudaVulkanImageImporter:
     def __init__(self, *, cudart_path: str | None = None) -> None:
         self._cudart = self._load_cudart(cudart_path)
         self._slots: dict[int, _CudaSlot] = {}
+        self._buffer_slots: dict[int, _CudaBufferSlot] = {}
         self._semaphores: dict[int, _CudaSemaphore] = {}
 
     @property
@@ -180,8 +196,22 @@ class CudaVulkanImageImporter:
         lib.cudaExternalMemoryGetMappedMipmappedArray.restype = ctypes.c_int
         lib.cudaGetMipmappedArrayLevel.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p, ctypes.c_uint]
         lib.cudaGetMipmappedArrayLevel.restype = ctypes.c_int
+        lib.cudaExternalMemoryGetMappedBuffer.argtypes = [
+            ctypes.POINTER(ctypes.c_void_p),
+            ctypes.c_void_p,
+            ctypes.POINTER(_ExternalMemoryBufferDesc),
+        ]
+        lib.cudaExternalMemoryGetMappedBuffer.restype = ctypes.c_int
         lib.cudaMemcpy2DToArrayAsync.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_int, ctypes.c_void_p]
         lib.cudaMemcpy2DToArrayAsync.restype = ctypes.c_int
+        lib.cudaMemcpyAsync.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_size_t,
+            ctypes.c_int,
+            ctypes.c_void_p,
+        ]
+        lib.cudaMemcpyAsync.restype = ctypes.c_int
         lib.cudaDestroyExternalMemory.argtypes = [ctypes.c_void_p]
         lib.cudaDestroyExternalMemory.restype = ctypes.c_int
         import_external = getattr(lib, "cudaImportExternalSemaphore", None)
@@ -309,6 +339,80 @@ class CudaVulkanImageImporter:
         )
         return resource
 
+    def register_buffer(self, target: Any) -> None:
+        """Import an exportable Vulkan storage buffer into CUDA once."""
+        key = id(target)
+        if key in self._buffer_slots:
+            return
+        handle = getattr(target, "export_handle", None)
+        allocation_size = int(getattr(target, "allocation_size", 0))
+        if handle is None or allocation_size < 1:
+            raise CudaVulkanInteropError("exportable Vulkan buffer has no memory handle")
+        desc = _ExternalMemoryHandleDesc(
+            type=self._CUDA_OPAQUE_WIN32 if os.name == "nt" else self._CUDA_OPAQUE_FD,
+            size=allocation_size,
+            flags=0,
+        )
+        if os.name == "nt":
+            desc.handle.win32.handle = ctypes.c_void_p(int(handle))
+        else:
+            desc.handle.fd = int(handle)
+        external_memory = ctypes.c_void_p()
+        self._check(
+            self._cudart.cudaImportExternalMemory(
+                ctypes.byref(external_memory), ctypes.byref(desc)
+            ),
+            "cudaImportExternalMemory(buffer)",
+        )
+        mapped_desc = _ExternalMemoryBufferDesc(
+            offset=0,
+            size=allocation_size,
+            flags=0,
+        )
+        pointer = ctypes.c_void_p()
+        try:
+            self._check(
+                self._cudart.cudaExternalMemoryGetMappedBuffer(
+                    ctypes.byref(pointer), external_memory, ctypes.byref(mapped_desc)
+                ),
+                "cudaExternalMemoryGetMappedBuffer",
+            )
+        except Exception:
+            self._cudart.cudaDestroyExternalMemory(external_memory)
+            raise
+        target.close_export_handle()
+        self._buffer_slots[key] = _CudaBufferSlot(target, external_memory, pointer)
+
+    def copy_tensor_to_buffer(
+        self, tensor: Any, target: Any, *, stream: int | None = None
+    ) -> None:
+        """Copy a contiguous CUDA float tensor directly into an imported buffer."""
+        self.register_buffer(target)
+        if getattr(tensor, "device", None) is None or str(tensor.device.type) != "cuda":
+            raise CudaVulkanInteropError("CUDA Vulkan buffer copy requires a CUDA tensor")
+        if str(getattr(tensor, "dtype", "")) != "torch.float32":
+            raise CudaVulkanInteropError("CUDA Vulkan buffer copy requires torch.float32")
+        if not bool(tensor.is_contiguous()):
+            raise CudaVulkanInteropError("CUDA Vulkan buffer copy requires a contiguous tensor")
+        byte_count = int(tensor.numel()) * 4
+        if byte_count > int(getattr(target, "size", 0)):
+            raise CudaVulkanInteropError("CUDA tensor does not fit in the Vulkan buffer")
+        if stream is None:
+            import torch
+
+            stream = int(torch.cuda.current_stream(device=tensor.device).cuda_stream)
+        slot = self._buffer_slots[id(target)]
+        self._check(
+            self._cudart.cudaMemcpyAsync(
+                slot.pointer,
+                ctypes.c_void_p(int(tensor.data_ptr())),
+                byte_count,
+                self._CUDA_MEMCPY_DEVICE_TO_DEVICE,
+                ctypes.c_void_p(int(stream)),
+            ),
+            "cudaMemcpyAsync(buffer)",
+        )
+
     def synchronize(self, *, stream: int | None = None) -> None:
         if stream is None:
             import torch
@@ -411,6 +515,12 @@ class CudaVulkanImageImporter:
                 "cudaDestroyExternalSemaphore",
             )
         self._semaphores.clear()
+        for slot in tuple(self._buffer_slots.values()):
+            self._check(
+                self._cudart.cudaDestroyExternalMemory(slot.external_memory),
+                "cudaDestroyExternalMemory(buffer)",
+            )
+        self._buffer_slots.clear()
         for slot in tuple(self._slots.values()):
             self._check(self._cudart.cudaDestroyExternalMemory(slot.external_memory), "cudaDestroyExternalMemory")
         self._slots.clear()
