@@ -2,6 +2,24 @@
 
 本文件记录项目重大更新和每日工作收尾。新记录按日期倒序追加；每个工作日结束时更新“已实现”“验证结果”“未决事项”和“下一项内容”。
 
+## 2026-07-27
+
+### 已实现
+
+- 修正 OpenXR projection 输出的左右眼资源顺序；普通 SBS Vulkan 路径保持原有合成顺序，不复用 OpenXR 专用交换逻辑。
+- 新增 `d2s_stereo_layered_tiled.comp/.spv` 作为 `quality_4k` 的并行 tiled reference shader：保持原有五个 storage buffer、76 字节 push constant 和立体合成公式，仅将深度邻域缓存到 workgroup shared memory，供 warp、遮挡、羽化和补洞采样复用。
+- `VulkanStereoComputeBackend` 新增可选 `layered_shader_path`，默认仍使用 `d2s_stereo_layered.spv`；tiled shader 当前只作为对照和性能基准路径，不改变生产默认选择。
+- 将 tiled reference shader 登记到 `shaders/manifest.json`，并通过 `glslc` 编译和 `spirv-val` 校验。
+
+### 验证结果
+
+- 3840×2160 同参数对照：原 layered shader 与 tiled reference 的左右眼及遮挡 mask 最大绝对差异均为 `0`。
+- Vulkan 相关回归测试：`21 passed`；此前扩展的 OpenXR、runtime、synthesis 和 Vulkan 集成测试：`109 passed`。
+
+### 未决事项
+
+- tiled reference 尚未替换生产 shader；下一步使用稀疏破洞、密集边缘和真实深度帧分别比较 GPU dispatch 时间、画质和端到端 FPS，再决定是否进入生产路径。
+
 ## 2026-07-26
 
 ### 已实现
