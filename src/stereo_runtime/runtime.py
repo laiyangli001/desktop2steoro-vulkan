@@ -1306,8 +1306,12 @@ class StereoRuntime:
                     skip_sbs_output=True,
                 )
                 if vulkan_stereo is not None:
-                    left_eye = vulkan_stereo.left_eye
-                    right_eye = vulkan_stereo.right_eye
+                    # The generic Vulkan SBS pass uses the synthesis eye
+                    # convention. OpenXR's legacy projection path uses the
+                    # opposite resource order, so normalize it here before
+                    # handing the eyes to the OpenXR presenter.
+                    left_eye = vulkan_stereo.right_eye
+                    right_eye = vulkan_stereo.left_eye
                     output_format = "openxr_eye_views"
                     render_backend = dict(vulkan_stereo.debug_info)
                     render_backend["vulkan_openxr_prewarp"] = 1

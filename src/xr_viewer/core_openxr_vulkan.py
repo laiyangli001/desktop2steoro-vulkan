@@ -259,6 +259,7 @@ class OpenXrVulkanPresenter(
         self._screen_ready_semaphore_abi_available = False
         self._last_filament_screen_image_status = None
         self._last_screen_resolution_status = None
+        self._last_screen_resolution_log_t = 0.0
         self._controller_hdr_lighting = False
         self._last_filament_screen_light = None
         self._filament_fill_light_color = self.config.filament_fill_light_color
@@ -377,6 +378,11 @@ class OpenXrVulkanPresenter(
         self._tool_overlay_sbs_window_frames = 0
         self._tool_overlay_last_output_id: int | None = None
         self._controller_callout_rgba: np.ndarray | None = None
+        # Legacy screen OSD state. These are rendered as Quad layers above
+        # the virtual screen, never inside the projection scene.
+        self._preset_name_overlay: str | None = None
+        self._preset_osd_show_t = -999.0
+        self._screen_osd_show_t = -999.0
         # Legacy OpenXR shortcut state is kept in the presenter so both the
         # Vulkan projection path and future Quad Layer overlays read one state.
         self._keyboard_visible = False
@@ -407,6 +413,8 @@ class OpenXrVulkanPresenter(
         self._kb_held_key_r = None
         self._kb_held_mods_l = None
         self._kb_held_mods_r = None
+        self._haptic_last_l = 0.0
+        self._haptic_last_r = 0.0
         self._grip_l_now = False
         self._grip_r_now = False
         self._pointer_state = {"left": "idle", "right": "idle"}
@@ -418,6 +426,8 @@ class OpenXrVulkanPresenter(
         self._keyboard_position_offset = np.zeros(3, dtype=np.float64)
         self._keyboard_rotation_offset = np.zeros(2, dtype=np.float64)
         self._keyboard_grab_anchor = None
+        self._kb_grab_local_l = None
+        self._kb_grab_local_r = None
         self._screen_resize_anchor = None
         self._grip_target_l = None
         self._grip_target_r = None
@@ -862,6 +872,11 @@ class OpenXrVulkanPresenter(
             height,
             rotation,
         )
+        self._preset_name_overlay = (
+            f"{_name}  {float(width):.2f} x {float(height):.2f} m"
+            f"  @ {float(distance):.2f} m"
+        )
+        self._preset_osd_show_t = time.perf_counter()
         if self.filament_bridge is not None:
             self.filament_bridge.set_screen(position, width, height, rotation)
 
@@ -882,6 +897,8 @@ class OpenXrVulkanPresenter(
             self._keyboard_visible = not self._keyboard_visible
             self._keyboard_position_offset[:] = 0.0
             self._keyboard_grab_anchor = None
+            self._kb_grab_local_l = None
+            self._kb_grab_local_r = None
             if self._keyboard_visible:
                 screen_width = float(self._filament_screen[1]) if self._filament_screen else 2.4
                 self._keyboard_width = max(0.3, screen_width * 0.8)
@@ -894,6 +911,8 @@ class OpenXrVulkanPresenter(
                     self._filament_screen = self._filament_screen_initial
                     if self.filament_bridge is not None:
                         self.filament_bridge.set_screen(*self._filament_screen)
+                    self._preset_name_overlay = "Screen Reset"
+                    self._preset_osd_show_t = time.perf_counter()
             else:
                 self._shortcut_screen_preset_index = 5
                 self._apply_shortcut_screen_preset(5)
@@ -910,6 +929,10 @@ class OpenXrVulkanPresenter(
             bridge.set_screen_curved(self._screen_curved)
             if self._filament_screen is not None:
                 bridge.set_screen(*self._filament_screen)
+            self._preset_name_overlay = (
+                "Curved Screen" if self._screen_curved else "Flat Screen"
+            )
+            self._preset_osd_show_t = time.perf_counter()
         elif action == "toggle_background":
             if self._filament_skybox_brightness > 0.0:
                 self._shortcut_saved_skybox_brightness = (
@@ -1032,6 +1055,7 @@ class OpenXrVulkanPresenter(
             float(rotation[2]),
         )
         self._filament_screen = (position, width, height, next_rotation)
+        self._screen_osd_show_t = time.perf_counter()
         if self.filament_bridge is not None:
             self.filament_bridge.set_screen(*self._filament_screen)
 
@@ -1057,6 +1081,7 @@ class OpenXrVulkanPresenter(
             next_height,
             rotation,
         )
+        self._screen_osd_show_t = time.perf_counter()
         if self.filament_bridge is not None:
             self.filament_bridge.set_screen(*self._filament_screen)
 
@@ -1139,10 +1164,60 @@ class OpenXrVulkanPresenter(
         self._controller_calibration_mode = False
         print(f"[OpenXRViewer] Controller calibration saved: {profile_path}", flush=True)
 
-    def _pulse_haptic(self, *args, **kwargs) -> None:
-        # Haptics are optional in the Vulkan migration; keyboard input remains
-        # independent of runtime-specific vibration support.
-        return None
+    def _pulse_haptic(
+        self,
+        hand_path_str="/user/hand/right",
+        *,
+        amplitude=0.18,
+        duration_s=0.018,
+        min_interval_s=0.045,
+    ) -> bool:
+        """Send a short controller haptic pulse; failures are non-fatal."""
+        action = getattr(self, "_act_haptic", None)
+        xr = getattr(self, "xr", None)
+        session = getattr(self, "session", None)
+        if session is None:
+            session = getattr(self, "_xr_session", None)
+        if action is None or xr is None or session is None:
+            return False
+
+        now = time.perf_counter()
+        last_attr = (
+            "_haptic_last_l"
+            if hand_path_str == "/user/hand/left"
+            else "_haptic_last_r"
+        )
+        if now - float(getattr(self, last_attr, 0.0) or 0.0) < float(min_interval_s):
+            return False
+
+        try:
+            path = getattr(
+                self,
+                "_path_left" if hand_path_str == "/user/hand/left" else "_path_right",
+                None,
+            )
+            if path is None:
+                instance = getattr(self, "instance", None)
+                if instance is None:
+                    instance = getattr(self, "_xr_instance", None)
+                if instance is None:
+                    return False
+                path = xr.string_to_path(instance, hand_path_str)
+            duration_ns = max(1, int(float(duration_s) * 1_000_000_000))
+            vibration = xr.HapticVibration(
+                duration=duration_ns,
+                frequency=xr.FREQUENCY_UNSPECIFIED,
+                amplitude=max(0.0, min(1.0, float(amplitude))),
+            )
+            xr.apply_haptic_feedback(
+                session,
+                xr.HapticActionInfo(action=action, subaction_path=path),
+                vibration,
+            )
+            setattr(self, last_attr, now)
+            return True
+        except Exception:
+            return False
 
     def _press_key(self, key, key_idx, held_key_attr, held_mods_attr):
         return self._press_key_impl(key, key_idx, held_key_attr, held_mods_attr)
@@ -1588,6 +1663,7 @@ class OpenXrVulkanPresenter(
             float(rotation[2]),
         )
         self._set_filament_screen_pose(next_position, next_rotation)
+        self._screen_osd_show_t = time.perf_counter()
 
     def _filament_screen_image_gate_reason(
         self, output_frame: VulkanStereoOutputFrame | None
@@ -1793,7 +1869,7 @@ class OpenXrVulkanPresenter(
         views: list[Any],
         output_frame: VulkanStereoOutputFrame | None,
     ) -> None:
-        """Log source, projected screen, and OpenXR target pixel sizes once per state."""
+        """Log meaningful screen pixel changes without reporting every pose update."""
 
         if output_frame is None or self._filament_screen is None:
             return
@@ -1827,19 +1903,35 @@ class OpenXrVulkanPresenter(
         else:
             render_size_label = str(render_size or "unknown")
         screen = self._filament_screen
+
+        def quantize_pixels(value: float, step: int = 16) -> int:
+            return int(round(float(value) / float(step)) * step)
+
+        # Head motion changes the projected footprint by a few pixels every frame.
+        # Keep the diagnostic useful while ignoring that sub-resolution jitter.
+        footprint_status = tuple(
+            None
+            if footprint is None
+            else tuple(quantize_pixels(value) for value in footprint)
+            for footprint in footprints
+        )
         status = (
             sources,
             targets,
             render_size_label,
-            tuple(round(float(value), 3) for value in screen[0]),
-            round(float(screen[1]), 3),
-            round(float(screen[2]), 3),
-            tuple(round(float(value), 2) for value in screen[3]),
+            footprint_status,
+            round(float(screen[1]), 2),
+            round(float(screen[2]), 2),
+            round(float(np.linalg.norm(np.asarray(screen[0], dtype=np.float64))), 2),
             bool(self._screen_curved),
         )
         if status == self._last_screen_resolution_status:
             return
+        now = time.perf_counter()
+        if now - float(self._last_screen_resolution_log_t) < 1.0:
+            return
         self._last_screen_resolution_status = status
+        self._last_screen_resolution_log_t = now
 
         def format_size(size: tuple[int, int]) -> str:
             return f"{size[0]}x{size[1]}"
@@ -1927,7 +2019,6 @@ class OpenXrVulkanPresenter(
             or abs(float(inputs[1].get("joystick_y", 0.0))) > self._input_deadzone(),
         )
         grip_matrices = (self._grip_mat_l, self._grip_mat_r)
-        aim_matrices = (self._aim_mat_l, self._aim_mat_r)
         grip_values = (left_grip, right_grip)
         for index, suffix in enumerate(("l", "r")):
             target_attr = f"_grip_target_{suffix}"
@@ -1939,18 +2030,18 @@ class OpenXrVulkanPresenter(
                 setattr(self, anchor_attr, None)
                 setattr(self, rotation_attr, None)
                 setattr(self, screen_rotation_attr, None)
+                setattr(self, f"_kb_grab_local_{suffix}", None)
                 if index == 0:
                     self._grip_screen_rotation_snapped_l = False
                 setattr(self, f"_screen_hit_grab_anchor_{suffix}", None)
                 continue
             if getattr(self, target_attr) is None:
-                keyboard_hit = False
-                aim = aim_matrices[index]
-                ray_origin, ray_direction = self._controller_interaction_ray(index)
-                if self._keyboard_visible and aim is not None:
-                    keyboard_hit = self._keyboard_plane_hit(
-                        ray_origin, ray_direction
-                    ) != (None, None)
+                # Match the legacy rising-edge latch: a highlighted key is
+                # sufficient to select the keyboard, even if the ray is in a
+                # key gap on the next frame.
+                keyboard_hit = self._keyboard_visible and getattr(
+                    self, f"_kb_hover_{suffix}"
+                ) is not None
                 if keyboard_hit:
                     setattr(self, target_attr, "keyboard")
                 elif hits[index] is not None:
@@ -2031,15 +2122,61 @@ class OpenXrVulkanPresenter(
                     setattr(self, anchor_attr, None)
                     setattr(self, rotation_attr, None)
                     setattr(self, f"_screen_hit_grab_anchor_{suffix}", None)
+                    setattr(self, f"_kb_grab_local_{suffix}", None)
                     continue
-                grip_position = grip_matrices[index][:3, 3].astype(np.float64)
                 target = getattr(self, f"_grip_target_{suffix}")
                 if target == "keyboard":
-                    anchor = getattr(self, anchor_attr)
-                    if anchor is None:
-                        anchor = self._keyboard_pose_mat4()[:3, 3] - grip_position
-                        setattr(self, anchor_attr, anchor)
-                    self._set_keyboard_world_position(grip_position + anchor)
+                    # Port the legacy keyboard grip-to-move behavior: keep
+                    # the laser's original keyboard-local point attached
+                    # while moving the panel on a sphere around the head.
+                    ray_origin, ray_direction = self._controller_interaction_ray(index)
+                    if ray_origin is None or ray_direction is None:
+                        continue
+                    keyboard_pose = self._keyboard_pose_mat4()
+                    normal = keyboard_pose[:3, 2].astype(np.float64)
+                    denominator = float(np.dot(normal, ray_direction))
+                    if abs(denominator) < 1e-6:
+                        continue
+                    distance = float(
+                        np.dot(normal, keyboard_pose[:3, 3] - ray_origin)
+                        / denominator
+                    )
+                    if distance < 0.05:
+                        continue
+                    hit_world = (
+                        np.asarray(ray_origin, dtype=np.float64)
+                        + np.asarray(ray_direction, dtype=np.float64) * distance
+                    )
+                    local_hit = np.linalg.inv(keyboard_pose) @ np.append(
+                        hit_world, 1.0
+                    )
+                    keyboard_local_attr = f"_kb_grab_local_{suffix}"
+                    keyboard_local = getattr(self, keyboard_local_attr)
+                    if keyboard_local is None:
+                        setattr(
+                            self,
+                            keyboard_local_attr,
+                            np.asarray(local_hit[:2], dtype=np.float64),
+                        )
+                        continue
+
+                    desired_center = (
+                        hit_world
+                        - keyboard_pose[:3, 0] * float(keyboard_local[0])
+                        - keyboard_pose[:3, 1] * float(keyboard_local[1])
+                    )
+                    if self._head_position_w is not None:
+                        head = np.asarray(self._head_position_w, dtype=np.float64)
+                        current_radius_vector = keyboard_pose[:3, 3] - head
+                        current_radius = float(np.linalg.norm(current_radius_vector))
+                        desired_radius_vector = desired_center - head
+                        desired_radius = float(np.linalg.norm(desired_radius_vector))
+                        if current_radius > 1e-6 and desired_radius > 1e-6:
+                            desired_center = (
+                                head
+                                + desired_radius_vector / desired_radius * current_radius
+                            )
+                    self._set_keyboard_world_position(desired_center)
                 elif target == "screen" and self._filament_screen is not None:
                     # Match the legacy renderer: the point selected by the
                     # visible laser stays attached to the same screen-local
@@ -2346,6 +2483,7 @@ class OpenXrVulkanPresenter(
         self._screen_ready_semaphore_abi_available = False
         self._last_filament_screen_image_status = None
         self._last_screen_resolution_status = None
+        self._last_screen_resolution_log_t = 0.0
         self._clear_presenter_commands()
         self._drop_output_frames()
         self._has_presented_frame = False
@@ -4065,13 +4203,47 @@ class OpenXrVulkanPresenter(
         if self._keyboard_visible:
             keyboard_width = float(self._keyboard_width)
             keyboard_height = float(self._keyboard_height)
+            hover_indices = tuple(
+                sorted(
+                    index
+                    for index in (self._kb_hover_l, self._kb_hover_r)
+                    if index is not None
+                )
+            )
+            held_indices = tuple(
+                sorted(
+                    index
+                    for index in (self._kb_held_key_l, self._kb_held_key_r)
+                    if index is not None
+                )
+            )
+            modifier_vks = {0x10: "shift", 0x11: "ctrl", 0x12: "alt", 0x5B: "win"}
+            locked_indices = [
+                index
+                for index, key in enumerate(self._keyboard_keys)
+                if key.vk in modifier_vks
+                and bool(self._mod_state[modifier_vks[key.vk]][0])
+            ]
+            if self._caps_lock:
+                locked_indices.extend(
+                    index
+                    for index, key in enumerate(self._keyboard_keys)
+                    if key.vk == 0x14
+                )
+            locked_indices = tuple(sorted(set(locked_indices)))
             keyboard_cache_key = (
-                bool(self._kb_show_shifted), keyboard_width, keyboard_height
+                bool(self._kb_show_shifted), keyboard_width, keyboard_height,
+                hover_indices, held_indices, locked_indices,
             )
             rgba = self._tool_quad_texture_cache.get("keyboard")
             if rgba is None or self._tool_quad_texture_keys.get("keyboard") != keyboard_cache_key:
                 rgba, self._keyboard_keys = build_keyboard_rgba(
-                    self._kb_show_shifted, keyboard_width, keyboard_height
+                    self._kb_show_shifted,
+                    keyboard_width,
+                    keyboard_height,
+                    hover_indices=hover_indices,
+                    held_indices=held_indices,
+                    locked_indices=locked_indices,
                 )
                 self._tool_quad_texture_cache["keyboard"] = rgba
                 self._tool_quad_texture_keys["keyboard"] = keyboard_cache_key
@@ -4092,6 +4264,50 @@ class OpenXrVulkanPresenter(
         )
         screen_pose = self._filament_screen_pose_mat4()
         screen_distance = float(np.linalg.norm(screen_pose[:3, 3] - head))
+        now = float(self._frame_now or time.perf_counter())
+        osd_lines = []
+        if (
+            self._preset_name_overlay
+            and now - float(self._preset_osd_show_t) < 5.0
+        ):
+            osd_lines.append(str(self._preset_name_overlay))
+        if now - float(self._screen_osd_show_t) < 2.5:
+            osd_lines.append(
+                f"Screen {width:.2f}m @ {screen_distance:.2f}m"
+            )
+        if osd_lines:
+            # Keep the OSD at the same relative size as the reference 2.4 m
+            # screen. A fixed world-space size becomes unreadably small on
+            # the large legacy screen presets.
+            osd_scale = max(0.5, width / 2.4)
+            osd_width = 0.65 * osd_scale
+            osd_height = 0.08 * osd_scale
+            osd_key = (
+                "screen_osd",
+                tuple(osd_lines),
+                round(width, 3),
+                round(height, 3),
+            )
+            osd_rgba = self._tool_quad_texture_cache.get("screen_osd")
+            if (
+                osd_rgba is None
+                or self._tool_quad_texture_keys.get("screen_osd") != osd_key
+            ):
+                osd_rgba = build_short_osd_rgba(osd_lines, width=768, height=96)
+                self._tool_quad_texture_cache["screen_osd"] = osd_rgba
+                self._tool_quad_texture_keys["screen_osd"] = osd_key
+            osd_local = np.eye(4, dtype=np.float64)
+            osd_local[:3, 3] = (0.0, height / 2.0 + osd_height, 0.0)
+            osd_position, osd_rotation = self._screen_overlay_pose(osd_local)
+            specs.append(
+                (
+                    "screen_osd",
+                    osd_rgba,
+                    osd_position,
+                    (osd_width, osd_height),
+                    osd_rotation,
+                )
+            )
         fps_key = (
             "fps", language, environment_mode, round(width, 3), round(height, 3),
             round(self._tool_overlay_xr_fps, 1), round(self._tool_overlay_sbs_fps, 1),

@@ -1,5 +1,5 @@
 Capture Mode: Monitor
-Monitor Index: 3
+Monitor Index: 2
 Window Title: ''
 Show FPS: false
 Model List:
@@ -466,7 +466,7 @@ Model List:
     resolutions:
     - 1536
 Depth Model: Distill-Any-Depth-Base
-Depth Strength: 0.25
+Depth Strength: 0.3
 Depth Quick: Standard
 Depth Resolution: 518
 Anti-aliasing: 1
@@ -481,9 +481,10 @@ Dynamic Convergence: false
 Dynamic Convergence Strength: 0.0
 Stereo Preset: cinema
 Stereo Quality: quality_4k
+Stereo Compute Backend: auto
 Parallax Budget Preset: standard
-Temporal: true
-Temporal Strength: 0.25
+Temporal: false
+Temporal Strength: 0.0
 Auto Scene Reset: true
 Scene Reset Threshold: 0.22
 Edge Dilation: 1
@@ -492,7 +493,7 @@ Hole Fill Mode: balanced
 Hole Fill Radius: 1
 Hole Fill Strength: 0.6
 Edge Threshold: 0.04
-Cross Eyed: false
+Cross Eyed: true
 Anaglyph Method: red_cyan
 Color Brightness: 1.0
 Color Contrast: 1.0
@@ -535,12 +536,15 @@ Stereo Mix: null
 CRF: 20
 Audio Delay: -0.15
 Controller Model: PICO
-Environment Model: 3D_Artemis
+Environment Model: Default
 Lossless Scaling Support: false
 Capture Tool: WindowsCaptureCUDA
 Fill 16:9: true
 Fix Viewer Aspect: false
-Stereo Output: 2
+Stereo Output: 1
 Show Log Panel: true
+OpenXR Color Mode: sRGB
 OpenVINO: null
 Synthetic View: quality_4k
+Filament Scene Exposure: 2.0
+Filament Skybox Brightness: 1.0

@@ -1,0 +1,298 @@
+#version 450
+
+// Reference tiled implementation for the generic quality_4k Vulkan SBS path.
+// It keeps the original buffer and push-constant ABI, but caches the depth
+// neighborhood used by edge, dilation, feathering, and fill decisions in a
+// workgroup tile. RGB samples remain global because disparity can be wide.
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer RgbBuffer {
+    float rgb[];
+};
+
+layout(set = 0, binding = 1, std430) readonly buffer DepthBuffer {
+    float depth[];
+};
+
+layout(set = 0, binding = 2, std430) writeonly buffer LeftBuffer {
+    float left_eye[];
+};
+
+layout(set = 0, binding = 3, std430) writeonly buffer RightBuffer {
+    float right_eye[];
+};
+
+layout(set = 0, binding = 4, std430) writeonly buffer MaskBuffer {
+    float occlusion_mask[];
+};
+
+layout(push_constant) uniform LayeredStereoParams {
+    uint width;
+    uint height;
+    float depth_strength;
+    float max_disparity_px;
+    float convergence;
+    float edge_threshold;
+    float fill_strength;
+    uint fill_radius;
+    uint mask_feather_radius;
+    uint symmetric;
+    uint layers;
+    float softness;
+    float foreground_scale;
+    float midground_scale;
+    float background_scale;
+    uint edge_dilation;
+    uint screen_edge_suppression;
+    uint hole_fill_mode;
+    uint occlusion_enabled;
+} params;
+
+const int TILE_SIZE = 16;
+const int TILE_HALO = 7;
+const int SHARED_EXTENT = TILE_SIZE + TILE_HALO * 2;
+
+shared float shared_depth[SHARED_EXTENT][SHARED_EXTENT];
+
+uint pixel_count() {
+    return params.width * params.height;
+}
+
+int clamp_x(int x) {
+    return clamp(x, 0, int(params.width) - 1);
+}
+
+int clamp_y(int y) {
+    return clamp(y, 0, int(params.height) - 1);
+}
+
+uint pixel_index(int x, int y) {
+    return uint(clamp_y(y)) * params.width + uint(clamp_x(x));
+}
+
+float global_depth_at(int x, int y) {
+    return clamp(depth[pixel_index(x, y)], 0.0, 1.0);
+}
+
+float tile_depth_at(int sx, int sy) {
+    return clamp(shared_depth[sy][sx], 0.0, 1.0);
+}
+
+float layered_depth_scale(float value) {
+    float normalized = clamp(value, 0.0, 1.0);
+    float background_weight = clamp((0.5 - normalized) * 2.0, 0.0, 1.0);
+    float foreground_weight = clamp((normalized - 0.5) * 2.0, 0.0, 1.0);
+    float midground_weight = clamp(1.0 - background_weight - foreground_weight, 0.0, 1.0);
+    return background_weight * max(params.background_scale, 0.0)
+        + midground_weight * max(params.midground_scale, 0.0)
+        + foreground_weight * max(params.foreground_scale, 0.0);
+}
+
+float shift_from_depth(float value) {
+    float response = value - params.convergence;
+    response *= layered_depth_scale(value);
+    return -response * max(params.depth_strength, 0.0) * params.max_disparity_px * 0.5;
+}
+
+float tile_shift_at(int sx, int sy) {
+    return shift_from_depth(tile_depth_at(sx, sy));
+}
+
+float layer_weight(float value, uint layer_index) {
+    uint count = clamp(params.layers, 1u, 4u);
+    if (count == 1u) {
+        return 1.0;
+    }
+    float center = float(layer_index) / float(count - 1u);
+    float softness = max(params.softness, 1.0e-4);
+    float normalized = clamp(value, 0.0, 1.0);
+    return exp(-((normalized - center) * (normalized - center)) / softness);
+}
+
+float layer_shift_scale(uint layer_index) {
+    uint count = clamp(params.layers, 1u, 4u);
+    return 0.75 + 0.25 * float(layer_index + 1u) / float(count);
+}
+
+float reflect_coordinate(float coordinate, float extent) {
+    if (extent <= 1.0) {
+        return 0.0;
+    }
+    float period = 2.0 * (extent - 1.0);
+    float value = mod(coordinate, period);
+    if (value < 0.0) {
+        value += period;
+    }
+    return value <= extent - 1.0 ? value : period - value;
+}
+
+vec3 rgb_at(uint pixel) {
+    uint plane = pixel_count();
+    return vec3(rgb[pixel], rgb[plane + pixel], rgb[2 * plane + pixel]);
+}
+
+vec3 sample_rgb(float x, float y) {
+    float reflected_x = reflect_coordinate(x, float(params.width));
+    float reflected_y = reflect_coordinate(y, float(params.height));
+    int x0 = int(floor(reflected_x));
+    int y0 = int(floor(reflected_y));
+    int x1 = min(x0 + 1, int(params.width) - 1);
+    int y1 = min(y0 + 1, int(params.height) - 1);
+    float tx = reflected_x - float(x0);
+    float ty = reflected_y - float(y0);
+    vec3 top = mix(rgb_at(pixel_index(x0, y0)), rgb_at(pixel_index(x1, y0)), tx);
+    vec3 bottom = mix(rgb_at(pixel_index(x0, y1)), rgb_at(pixel_index(x1, y1)), tx);
+    return mix(top, bottom, ty);
+}
+
+vec3 layered_warp_at(int x, int y, int sx, int sy, float eye_sign) {
+    float value = tile_depth_at(sx, sy);
+    float shift = tile_shift_at(sx, sy);
+    uint count = clamp(params.layers, 1u, 4u);
+    vec3 total = vec3(0.0);
+    float total_weight = 0.0;
+    for (uint layer_index = 0u; layer_index < 4u; ++layer_index) {
+        if (layer_index >= count) {
+            break;
+        }
+        float weight = layer_weight(value, layer_index);
+        total += sample_rgb(float(x) + shift * layer_shift_scale(layer_index) * eye_sign, float(y)) * weight;
+        total_weight += weight;
+    }
+    return total / max(total_weight, 1.0e-6);
+}
+
+float max_shift_magnitude() {
+    float scale = max(params.depth_strength, 0.0) * params.max_disparity_px * 0.5;
+    return max(max(abs(params.convergence * scale), abs((1.0 - params.convergence) * scale)), 1.0e-6);
+}
+
+float edge_at(int sx, int sy) {
+    float center_depth = tile_depth_at(sx, sy);
+    float right_depth = tile_depth_at(sx + 1, sy);
+    float down_depth = tile_depth_at(sx, sy + 1);
+    float center_shift = abs(tile_shift_at(sx, sy));
+    float right_shift = abs(tile_shift_at(sx + 1, sy));
+    float down_shift = abs(tile_shift_at(sx, sy + 1));
+    float depth_edge = abs(right_depth - center_depth) + abs(down_depth - center_depth);
+    float shift_edge = abs(right_shift - center_shift) + abs(down_shift - center_shift);
+    return (depth_edge > params.edge_threshold || shift_edge / max_shift_magnitude() > 0.05)
+        ? 1.0
+        : 0.0;
+}
+
+float dilated_occlusion_at(int sx, int sy) {
+    if (params.occlusion_enabled == 0u) {
+        return 0.0;
+    }
+    int radius = min(int(params.edge_dilation), 3);
+    float found = 0.0;
+    for (int dy = -3; dy <= 3; ++dy) {
+        for (int dx = -3; dx <= 3; ++dx) {
+            if (abs(dx) <= radius && abs(dy) <= radius) {
+                found = max(found, edge_at(sx + dx, sy + dy));
+            }
+        }
+    }
+    return found;
+}
+
+float feathered_mask_at(int sx, int sy) {
+    int radius = min(int(params.mask_feather_radius), 3);
+    if (radius <= 0) {
+        return dilated_occlusion_at(sx, sy);
+    }
+    float total = 0.0;
+    float count = 0.0;
+    for (int dy = -3; dy <= 3; ++dy) {
+        for (int dx = -3; dx <= 3; ++dx) {
+            if (abs(dx) <= radius && abs(dy) <= radius) {
+                total += dilated_occlusion_at(sx + dx, sy + dy);
+                count += 1.0;
+            }
+        }
+    }
+    return total / max(count, 1.0);
+}
+
+vec3 box_average(int x, int y, int sx, int sy, float eye_sign) {
+    int radius = min(int(params.fill_radius), 3);
+    vec3 total = vec3(0.0);
+    float count = 0.0;
+    for (int dy = -3; dy <= 3; ++dy) {
+        for (int dx = -3; dx <= 3; ++dx) {
+            if (abs(dx) <= radius && abs(dy) <= radius) {
+                total += layered_warp_at(x + dx, y + dy, sx + dx, sy + dy, eye_sign);
+                count += 1.0;
+            }
+        }
+    }
+    return total / max(count, 1.0);
+}
+
+vec3 fill_eye(int x, int y, int sx, int sy, float eye_sign, float mask) {
+    vec3 original = layered_warp_at(x, y, sx, sy, eye_sign);
+    vec3 blurred = box_average(x, y, sx, sy, eye_sign);
+    if (params.hole_fill_mode == 0u) {
+        return mix(original, blurred, clamp(mask * params.fill_strength, 0.0, 1.0));
+    }
+
+    float left_depth = tile_depth_at(sx - 1, sy);
+    float right_depth = tile_depth_at(sx + 1, sy);
+    bool reliable = abs(right_depth - left_depth) > params.edge_threshold;
+    vec3 directional = right_depth < left_depth
+        ? layered_warp_at(x + 1, y, sx + 1, sy, eye_sign)
+        : layered_warp_at(x - 1, y, sx - 1, sy, eye_sign);
+    vec3 content_aware = reliable ? directional * 0.75 + blurred * 0.25 : blurred;
+    float current_luma = dot(original, vec3(0.299, 0.587, 0.114));
+    float left_luma = dot(layered_warp_at(x - 1, y, sx - 1, sy, eye_sign), vec3(0.299, 0.587, 0.114));
+    float up_luma = dot(layered_warp_at(x, y - 1, sx, sy - 1, eye_sign), vec3(0.299, 0.587, 0.114));
+    float protection = clamp((max(abs(current_luma - left_luma), abs(current_luma - up_luma)) - 0.20) / 0.30, 0.0, 1.0);
+    float blend = clamp(mask * params.fill_strength * (1.0 - protection * 0.70), 0.0, 1.0);
+    return mix(original, content_aware, blend);
+}
+
+bool screen_edge_suppressed(int x, int y) {
+    int border = int(params.screen_edge_suppression);
+    return border > 0 && (x < border || y < border || x >= int(params.width) - border || y >= int(params.height) - border);
+}
+
+void main() {
+    uint local_index = gl_LocalInvocationIndex;
+    int group_x = int(gl_WorkGroupID.x) * TILE_SIZE;
+    int group_y = int(gl_WorkGroupID.y) * TILE_SIZE;
+    for (uint index = local_index; index < uint(SHARED_EXTENT * SHARED_EXTENT); index += 256u) {
+        int tile_x = int(index % uint(SHARED_EXTENT));
+        int tile_y = int(index / uint(SHARED_EXTENT));
+        shared_depth[tile_y][tile_x] = global_depth_at(
+            group_x + tile_x - TILE_HALO,
+            group_y + tile_y - TILE_HALO
+        );
+    }
+    barrier();
+
+    uint x = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+    if (x >= params.width || y >= params.height) {
+        return;
+    }
+    int ix = int(x);
+    int iy = int(y);
+    int sx = int(gl_LocalInvocationID.x) + TILE_HALO;
+    int sy = int(gl_LocalInvocationID.y) + TILE_HALO;
+    float mask = screen_edge_suppressed(ix, iy) ? 0.0 : dilated_occlusion_at(sx, sy);
+    float fill_mask = screen_edge_suppressed(ix, iy) ? 0.0 : feathered_mask_at(sx, sy);
+    uint pixel = pixel_index(ix, iy);
+    uint plane = pixel_count();
+    vec3 left = fill_eye(ix, iy, sx, sy, 1.0, fill_mask);
+    float right_sign = params.symmetric != 0u ? -1.0 : -0.9;
+    vec3 right = fill_eye(ix, iy, sx, sy, right_sign, fill_mask);
+    left_eye[pixel] = left.r;
+    left_eye[plane + pixel] = left.g;
+    left_eye[2 * plane + pixel] = left.b;
+    right_eye[pixel] = right.r;
+    right_eye[plane + pixel] = right.g;
+    right_eye[2 * plane + pixel] = right.b;
+    occlusion_mask[pixel] = mask;
+}

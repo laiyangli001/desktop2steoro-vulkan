@@ -209,6 +209,7 @@ class FPSBreakdown:
             f"cap={rate('capture'):.1f} raw={rate('raw_get'):.1f} "
             f"overwrite={rate('raw_overwritten'):.1f} drain_drop={rate('raw_dropped_stale'):.1f} "
             f"runtime={rate('runtime'):.1f} rt_overwrite={rate('runtime_overwrite'):.1f} "
+            f"rt_motion_skip={rate('runtime_motion_skip'):.1f} "
             f"rt_backpressure_drop={rate('runtime_drop_backpressure'):.1f} "
             f"rt_cuda_inflight_drop={rate('runtime_drop_cuda_inflight'):.1f} "
             f"rt_pending_cuda={rate('runtime_pending_cuda'):.1f} "

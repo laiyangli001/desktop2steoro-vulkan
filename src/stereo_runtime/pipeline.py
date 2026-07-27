@@ -407,7 +407,9 @@ def _runtime_max_algorithm_fps(ctx: RuntimePipelineContext) -> float:
 
 
 def _runtime_motion_gate_enabled(ctx: RuntimePipelineContext) -> bool:
-    default = "0"
+    # OpenXR reuses the last submitted stereo frame during low motion,
+    # matching the legacy presenter and avoiding redundant depth/compute work.
+    default = "1"
     return str(os.environ.get("D2S_RUNTIME_MOTION_GATE", default) or default).strip().lower() in {
         "1",
         "true",

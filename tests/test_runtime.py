@@ -503,6 +503,10 @@ def test_fast_plus_fused_uses_resolved_parallax_budget_contract():
     assert "effective_ipd_m" not in fused_source
     assert "max_shift_ratio" not in fused_source
     assert "width *" not in fused_source
+    assert "_fast_plus_hole_ratio_probe_kernel" in fused_source
+    assert "_fast_plus_active_mask_kernel" in fused_source
+    assert "_fast_plus_sparse_fill_kernel" in fused_source
+    assert "D2S_TRITON_SPARSE_HOLE_THRESHOLD" in fused_source
     assert "max_disparity_px=float(budget.max_disparity_px)" in runtime_source
     assert 'depth_strength=max(0.0, float(getattr(stereo_config, "depth_strength", 1.0)))' in runtime_source
 

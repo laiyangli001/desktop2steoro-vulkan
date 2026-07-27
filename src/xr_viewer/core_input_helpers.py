@@ -1,6 +1,5 @@
 import ctypes
 import math
-import time
 
 import numpy as np
 
@@ -13,6 +12,32 @@ from .windows_input import (
 
 
 class CoreInputHelpersMixin:
+    def _release_locked_modifiers(self) -> None:
+        """Release modifiers that were left toggled when the keyboard hides."""
+        for modifier_name, virtual_key in (
+            ("shift", 0x10),
+            ("ctrl", 0x11),
+            ("alt", 0x12),
+            ("win", 0x5B),
+        ):
+            if self._mod_state[modifier_name][0]:
+                self._toggle_modifier_key(modifier_name, virtual_key)
+
+    def _toggle_modifier_key(self, modifier_name, virtual_key) -> None:
+        """Toggle a modifier key between a real key-down and key-up state."""
+        state = self._mod_state[modifier_name]
+        kbd = ctypes.windll.user32.keybd_event
+        if state[0]:
+            kbd(virtual_key, 0, _KEYEVENTF_KEYUP, 0)
+            state[0] = False
+        else:
+            kbd(virtual_key, 0, 0, 0)
+            state[0] = True
+        # Keep the legacy three-slot state shape for callers that inspect it,
+        # but modifier toggles no longer use double-tap timing.
+        state[1] = False
+        state[2] = 0.0
+
     def _send_arrow_impl(self, value, neg_dir, pos_dir):
         """Send arrow key hold/release based on stick value. Only fires on edge transitions."""
         VK_MAP = {'up': 0x26, 'down': 0x28, 'left': 0x25, 'right': 0x27}
@@ -62,23 +87,28 @@ class CoreInputHelpersMixin:
         use_shift = shift_on ^ self._caps_lock
         vk_to_use = key.shifted_vk if use_shift else key.vk
         need_shift = use_shift and vk_to_use == key.vk
-        if ctrl_on:
+        shift_dn = bool(need_shift and not sh[0])
+        ctrl_dn = bool(ctrl_on and not ct[0])
+        alt_dn = bool(alt_on and not al[0])
+        win_dn = bool(win_on and not wn[0])
+        if ctrl_dn:
             kbd(VK_CTRL, 0, 0, 0)
-        if need_shift:
+        if shift_dn:
             kbd(VK_SHIFT, 0, 0, 0)
-        if alt_on:
+        if alt_dn:
             kbd(VK_ALT, 0, 0, 0)
-        if win_on:
+        if win_dn:
             kbd(VK_WIN, 0, 0, 0)
         kbd(vk_to_use, 0, 0, 0)
         setattr(self, held_key_attr, key_idx)
-        setattr(self, held_mods_attr, (need_shift, ctrl_on, alt_on, win_on, vk_to_use))
+        setattr(self, held_mods_attr, (shift_dn, ctrl_dn, alt_dn, win_dn, vk_to_use))
 
     def _handle_keyboard_input(self):
         """Send Windows keystrokes when a controller trigger fires on a keyboard key."""
         if not self._keyboard_visible:
             self._kb_hover_l = None
             self._kb_hover_r = None
+            self._release_locked_modifiers()
             return
         CLICK_THRESH = 0.7
         RELEASE_THRESH = 0.3
@@ -175,8 +205,6 @@ class CoreInputHelpersMixin:
                         kbd(VK_SHIFT, 0, _KEYEVENTF_KEYUP, 0)
                     if ctrl_dn:
                         kbd(VK_CTRL, 0, _KEYEVENTF_KEYUP, 0)
-                    for name in ('shift', 'ctrl', 'alt', 'win'):
-                        self._mod_state[name][0] = False
                     setattr(self, held_key_attr, None)
                     setattr(self, held_mods_attr, None)
                     held_key = None
@@ -190,21 +218,7 @@ class CoreInputHelpersMixin:
                         setattr(self, trig_prev_attr, trig_now)
                         continue
                 if mod_name is not None:
-                    double_tap_window = 0.4
-                    now_t = time.monotonic()
-                    state = self._mod_state[mod_name]
-                    if state[1]:
-                        state[0] = False
-                        state[1] = False
-                    elif state[0]:
-                        state[0] = False
-                        _send_key(key.vk)
-                    elif (now_t - state[2]) < double_tap_window:
-                        state[0] = False
-                        state[1] = True
-                    else:
-                        state[0] = True
-                    state[2] = now_t
+                    self._toggle_modifier_key(mod_name, key.vk)
                 elif key.vk == VK_CAPS:
                     self._caps_lock = not self._caps_lock
                 else:

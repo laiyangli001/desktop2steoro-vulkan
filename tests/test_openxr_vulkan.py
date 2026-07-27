@@ -12,6 +12,8 @@ import pytest
 import vulkan as vk
 import xr
 
+from xr_viewer import core_input_helpers
+from xr_viewer.core_input_helpers import CoreInputHelpersMixin
 from viewer.vulkan_context import (
     ImageState,
     ImageStateTracker,
@@ -38,7 +40,7 @@ from xr_viewer.core_openxr_vulkan import (
     _update_filament_camera,
 )
 from xr_viewer.controller_models import controller_button_local_position
-from xr_viewer.overlay_textures import build_controller_callout_rgba
+from xr_viewer.overlay_textures import build_controller_callout_rgba, build_keyboard_rgba
 from xr_viewer.xr_math import _xr_quat_to_mat4
 
 
@@ -452,6 +454,112 @@ def test_controller_callout_uses_projection_layer_not_quad_layer() -> None:
     assert "_tool_overlay_sbs_fps" in source
     assert "self._update_tool_overlay_metrics(output_frame)" in source
     assert "actual_fps=self._tool_overlay_xr_fps" in source
+
+
+def test_keyboard_quad_tracks_hover_and_held_indices() -> None:
+    source = (Path(__file__).resolve().parents[1] /
+              "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
+
+    assert "hover_indices = tuple(" in source
+    assert "held_indices = tuple(" in source
+    assert "hover_indices=hover_indices" in source
+    assert "held_indices=held_indices" in source
+    assert "hover_indices, held_indices," in source
+
+
+def test_locked_keyboard_modifier_is_orange() -> None:
+    _rgba, keys = build_keyboard_rgba(False, 1.0, 0.5)
+    ctrl_index = next(index for index, key in enumerate(keys) if key.vk == 0x11)
+    rgba, keys = build_keyboard_rgba(
+        False,
+        1.0,
+        0.5,
+        locked_indices=(ctrl_index,),
+    )
+    key = keys[ctrl_index]
+    cx = int(round((key.rect_uv[0] + key.rect_uv[2]) * 0.5 * rgba.shape[1]))
+    cy = int(round((key.rect_uv[1] + key.rect_uv[3]) * 0.5 * rgba.shape[0]))
+
+    assert tuple(rgba[cy, cx]) == (240, 145, 35, 255)
+
+
+def test_keyboard_haptic_pulse_uses_legacy_action_and_rate_limit() -> None:
+    calls = []
+
+    class FakeXR:
+        FREQUENCY_UNSPECIFIED = -1.0
+
+        class HapticVibration:
+            def __init__(self, **values):
+                self.values = values
+
+        class HapticActionInfo:
+            def __init__(self, **values):
+                self.values = values
+
+        @staticmethod
+        def apply_haptic_feedback(session, action_info, vibration):
+            calls.append((session, action_info.values, vibration.values))
+
+    presenter = OpenXrVulkanPresenter()
+    presenter.xr = FakeXR()
+    presenter.session = object()
+    presenter._act_haptic = object()
+    presenter._path_right = 42
+
+    assert presenter._pulse_haptic(
+        "/user/hand/right", amplitude=0.18, duration_s=0.018, min_interval_s=10.0
+    ) is True
+    assert presenter._pulse_haptic(
+        "/user/hand/right", amplitude=0.18, duration_s=0.018, min_interval_s=10.0
+    ) is False
+    assert len(calls) == 1
+    assert calls[0][1]["subaction_path"] == 42
+    assert calls[0][2] == {
+        "duration": 18_000_000,
+        "frequency": -1.0,
+        "amplitude": 0.18,
+    }
+
+
+def test_keyboard_modifier_clicks_toggle_real_key_state_for_combinations(monkeypatch) -> None:
+    events = []
+
+    class FakeUser32:
+        @staticmethod
+        def keybd_event(virtual_key, _scan_code, flags, _extra):
+            events.append((virtual_key, flags))
+
+    monkeypatch.setattr(
+        core_input_helpers.ctypes,
+        "windll",
+        SimpleNamespace(user32=FakeUser32()),
+    )
+
+    class Host(CoreInputHelpersMixin):
+        pass
+
+    host = Host()
+    host._mod_state = {
+        "shift": [False, False, 0.0],
+        "ctrl": [False, False, 0.0],
+        "alt": [False, False, 0.0],
+        "win": [False, False, 0.0],
+    }
+    host._caps_lock = False
+
+    host._toggle_modifier_key("ctrl", 0x11)
+    assert host._mod_state["ctrl"][0] is True
+    assert events == [(0x11, 0)]
+
+    key = SimpleNamespace(vk=0x41, shifted_vk=0x41)
+    host._press_key_impl(key, 7, "held_key", "held_mods")
+    assert events == [(0x11, 0), (0x41, 0)]
+    assert host.held_mods == (False, False, False, False, 0x41)
+
+    host._toggle_modifier_key("ctrl", 0x11)
+    assert host._mod_state["ctrl"][0] is False
+    assert events[-1] == (0x11, core_input_helpers._KEYEVENTF_KEYUP)
 
 
 def test_tool_overlay_metrics_snapshot_latency_with_fps_window() -> None:
@@ -870,11 +978,46 @@ def test_vulkan_shortcuts_cycle_screen_preset_and_background() -> None:
     assert position == pytest.approx((0.0, 0.0, -20.0))
     assert width == pytest.approx(22.0)
     assert height == pytest.approx(12.375)
+    assert presenter._preset_name_overlay.startswith('1000" IMAX')
+    assert presenter._preset_osd_show_t > 0.0
 
     presenter._dispatch_controller_shortcut("toggle_background")
     assert presenter._filament_skybox_brightness == pytest.approx(0.0)
     presenter._dispatch_controller_shortcut("toggle_background")
     assert presenter._filament_skybox_brightness == pytest.approx(1.0)
+
+
+def test_screen_adjustment_osd_is_submitted_as_quad_layer() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_screen = (
+        (0.0, 0.0, -2.0), 2.4, 1.35, (0.0, 0.0, 0.0)
+    )
+    presenter._head_position_w = np.asarray((0.0, 0.0, 0.0), dtype=np.float64)
+    presenter._screen_osd_show_t = -999.0
+    presenter._adjust_shortcut_screen_size(0.1, 0.0)
+    presenter._frame_now = presenter._screen_osd_show_t
+    presenter.xr = object()
+    presenter.session = object()
+    presenter.vulkan = object()
+    presenter._cursor_overlay_specs = lambda *_args: []
+    presenter._upload_tool_quad = lambda *args: args
+
+    specs = presenter._render_tool_quad_layers()
+
+    osd_specs = [spec for spec in specs if spec[0] == "screen_osd"]
+    assert len(osd_specs) == 1
+    osd_scale = 2.5 / 2.4
+    assert osd_specs[0][3] == pytest.approx((0.65 * osd_scale, 0.08 * osd_scale))
+    assert osd_specs[0][2][1] > presenter._filament_screen[0][1]
+
+    presenter._filament_screen = (
+        (0.0, 0.0, -20.0), 4.8, 2.7, (0.0, 0.0, 0.0)
+    )
+    presenter._screen_osd_show_t = presenter._frame_now
+    large_specs = presenter._render_tool_quad_layers()
+    large_osd = [spec for spec in large_specs if spec[0] == "screen_osd"]
+
+    assert large_osd[0][3] == pytest.approx((1.3, 0.16))
 
 
 def test_vulkan_reset_screen_restores_initial_size_and_pose() -> None:
@@ -908,6 +1051,42 @@ def test_right_grip_moves_screen_without_resizing_it() -> None:
     assert position == pytest.approx((0.2, 0.0, -2.0))
     assert width == pytest.approx(2.4)
     assert height == pytest.approx(1.35)
+
+
+def test_right_grip_moves_keyboard_using_laser_local_anchor() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_screen = (
+        (0.0, 0.0, -2.0), 2.4, 1.35, (0.0, 0.0, 0.0)
+    )
+    presenter._head_position_w = np.asarray((0.0, 0.0, 0.0), dtype=np.float64)
+    presenter._keyboard_visible = True
+    presenter._kb_hover_r = 0
+    presenter._aim_mat_r = np.eye(4, dtype=np.float32)
+    presenter._grip_mat_r = np.eye(4, dtype=np.float32)
+    presenter._controller_inputs = ({}, {"grip": 1.0})
+
+    initial_pose = presenter._keyboard_pose_mat4()
+    ray = {
+        "origin": initial_pose[:3, 3] - initial_pose[:3, 2],
+        "direction": initial_pose[:3, 2].copy(),
+    }
+    presenter._controller_interaction_ray = lambda _hand: (
+        ray["origin"], ray["direction"]
+    )
+
+    presenter._handle_vulkan_pointer_input()
+    assert presenter._grip_target_r == "keyboard"
+    assert presenter._kb_grab_local_r is not None
+
+    ray["origin"] = (
+        initial_pose[:3, 3]
+        + initial_pose[:3, 0] * 0.3
+        - initial_pose[:3, 2]
+    )
+    presenter._handle_vulkan_pointer_input()
+
+    moved_position = presenter._keyboard_pose_mat4()[:3, 3]
+    assert moved_position[0] > 0.1
 
 
 def test_right_grip_drag_orbits_screen_around_head_and_faces_head() -> None:
@@ -1495,6 +1674,40 @@ def test_screen_resolution_log_reports_source_and_projected_pixels(capsys) -> No
     assert "screen_footprint_left=500x250" in output
     assert "projection_target_left=1000x1000" in output
     assert "source_per_screen_pixel_left=7.68x8.64" in output
+
+
+def test_screen_resolution_log_ignores_pose_jitter(capsys) -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_screen = ((0.0, 0.0, -2.0), 2.0, 1.0, (0.0, 0.0, 0.0))
+    presenter.swapchains = [
+        SimpleNamespace(width=1000, height=1000),
+        SimpleNamespace(width=1000, height=1000),
+    ]
+    view = SimpleNamespace(
+        pose=SimpleNamespace(
+            position=SimpleNamespace(x=0.0, y=0.0, z=0.0),
+            orientation=SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0),
+        ),
+        fov=SimpleNamespace(
+            angle_left=-math.pi / 4.0,
+            angle_right=math.pi / 4.0,
+            angle_down=-math.pi / 4.0,
+            angle_up=math.pi / 4.0,
+        ),
+    )
+    frame = SimpleNamespace(
+        left_eye=SimpleNamespace(width=3840, height=2160),
+        right_eye=SimpleNamespace(width=3840, height=2160),
+        metadata={"render_size": (3840, 2160)},
+    )
+
+    presenter._report_screen_resolution([view, view], frame)
+    capsys.readouterr()
+
+    presenter._filament_screen = ((0.001, 0.0, -2.0), 2.0, 1.0, (0.0, 0.0, 0.0))
+    presenter._report_screen_resolution([view, view], frame)
+
+    assert capsys.readouterr().out == ""
 
 
 def test_filament_screen_status_reports_presenter_owned_cuda_image(capsys) -> None:

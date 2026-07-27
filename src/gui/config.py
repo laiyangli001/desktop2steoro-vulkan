@@ -116,7 +116,7 @@ DEFAULTS = {
     "Dynamic Convergence Strength": 0.0,
     "Stereo Preset": "cinema",
     "Stereo Quality": "quality_4k",
-    "Stereo Compute Backend": "vulkan",
+    "Stereo Compute Backend": "auto",
     "Parallax Budget Preset": "standard",
     "Temporal": False,
     "Temporal Strength": 0.0,

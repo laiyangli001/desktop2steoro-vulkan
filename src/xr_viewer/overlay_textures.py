@@ -27,10 +27,11 @@ def load_overlay_font(size, font_type=None, *, prefer_cjk=False):
     return ImageFont.load_default()
 
 
-def build_keyboard_rgba(show_shifted, keyboard_width, keyboard_height, font_type=None, *, hover_indices=(), held_indices=(), hover_points=()):
+def build_keyboard_rgba(show_shifted, keyboard_width, keyboard_height, font_type=None, *, hover_indices=(), held_indices=(), locked_indices=(), hover_points=()):
     """Build the validated keyboard texture content for any renderer."""
     hover_indices = set(i for i in hover_indices if i is not None)
     held_indices = set(i for i in held_indices if i is not None)
+    locked_indices = set(i for i in locked_indices if i is not None)
     hover_points = tuple(p for p in hover_points if p is not None)
     tw, th = _KB_TEX_W, _KB_TEX_H
     row_h = th / len(_KB_ROWS)
@@ -65,11 +66,24 @@ def build_keyboard_rgba(show_shifted, keyboard_width, keyboard_height, font_type
 
             key_index = len(keys)
             is_held = key_index in held_indices
+            is_locked = key_index in locked_indices
             is_hover = key_index in hover_indices
+            if is_locked:
+                key_fill = (240, 145, 35, 255)
+                key_outline = (255, 220, 130, 255)
+            elif is_held:
+                key_fill = (92, 122, 170, 255)
+                key_outline = (245, 248, 255, 255)
+            elif is_hover:
+                key_fill = (72, 92, 125, 255)
+                key_outline = (245, 248, 255, 255)
+            else:
+                key_fill = (60, 62, 70, 255)
+                key_outline = (130, 132, 140, 255)
             draw.rectangle(
                 [px + pad, py0 + pad, px_end - pad, py1 - pad],
-                fill=(92, 122, 170, 255) if is_held else (72, 92, 125, 255) if is_hover else (60, 62, 70, 255),
-                outline=(245, 248, 255, 255) if is_held or is_hover else (130, 132, 140, 255),
+                fill=key_fill,
+                outline=key_outline,
             )
 
             display_label = shifted_label if show_shifted and shifted_label is not None else label

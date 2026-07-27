@@ -209,8 +209,11 @@ void main() {
     int ix = int(x);
     int iy = int(y);
     float fill_mask = screen_edge_suppressed(ix, iy) ? 0.0 : feathered_mask_at(ix, iy);
-    vec3 left = clamp(fill_eye(ix, iy, 1.0, fill_mask), 0.0, 1.0);
-    float right_sign = params.symmetric != 0u ? -1.0 : -0.9;
+    // OpenXR's legacy projection path samples the left eye with -1 and the
+    // right eye with +1. Keep this output-image path aligned with that
+    // contract; the generic SBS Vulkan pass has a separate convention.
+    vec3 left = clamp(fill_eye(ix, iy, -1.0, fill_mask), 0.0, 1.0);
+    float right_sign = params.symmetric != 0u ? 1.0 : 0.9;
     vec3 right = clamp(fill_eye(ix, iy, right_sign, fill_mask), 0.0, 1.0);
     imageStore(left_eye, ivec2(ix, iy), vec4(left, 1.0));
     imageStore(right_eye, ivec2(ix, iy), vec4(right, 1.0));

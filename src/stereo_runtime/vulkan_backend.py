@@ -293,11 +293,15 @@ class VulkanStereoComputeBackend:
         *,
         context: Any | None = None,
         shader_path: str | Path | None = None,
+        layered_shader_path: str | Path | None = None,
     ) -> None:
         self._owns_context = context is None
         self.context = context
         self.shader_path = Path(shader_path) if shader_path is not None else (
             Path(__file__).resolve().parents[2] / "shaders" / "d2s_stereo_fused.spv"
+        )
+        self.layered_shader_path = Path(layered_shader_path) if layered_shader_path is not None else (
+            self.shader_path.with_name("d2s_stereo_layered.spv")
         )
         self._pass: VulkanStereoFusedPass | None = None
         self._buffers: tuple[VulkanStorageBuffer, ...] = ()
@@ -350,12 +354,11 @@ class VulkanStereoComputeBackend:
         self._close_pass_resources()
         if self.context is None or getattr(self.context, "closed", False):
             raise VulkanStereoBackendUnavailable("Vulkan Compute context is closed")
-        shader_path = self.shader_path.with_name("d2s_stereo_layered.spv")
         self._layered_pass = VulkanLayeredStereoPass(
             self.context,
             width=shape[1],
             height=shape[0],
-            shader_path=shader_path,
+            shader_path=self.layered_shader_path,
         )
         sizes = self._layered_pass.buffer_sizes
         self._layered_buffers = tuple(
@@ -495,6 +498,7 @@ class VulkanStereoComputeBackend:
             "vulkan_device": self.device_name,
             "vulkan_submit_timeline": int(timeline),
             "vulkan_readback": "host_visible_storage_buffer",
+            "vulkan_layered_shader": self.layered_shader_path.name,
             "vulkan_host_upload_ms": upload_ms,
             "vulkan_submit_wait_ms": submit_wait_ms,
             "vulkan_host_readback_ms": readback_ms,

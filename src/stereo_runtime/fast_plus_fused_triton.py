@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import torch
 import triton
 import triton.language as tl
@@ -216,6 +218,243 @@ def _fast_plus_half_sbs_uint8_kernel(
     tl.store(out + offsets, value.to(tl.uint8), mask=active)
 
 
+@triton.jit
+def _fast_plus_warp_only_half_sbs_uint8_kernel(
+    rgb,
+    depth,
+    out,
+    total: tl.constexpr,
+    width: tl.constexpr,
+    height: tl.constexpr,
+    half_width: tl.constexpr,
+    pixels: tl.constexpr,
+    convergence: tl.constexpr,
+    max_disparity_px: tl.constexpr,
+    depth_strength: tl.constexpr,
+    block: tl.constexpr,
+):
+    """Render the complete SBS image without the expensive hole-fill branch."""
+
+    offsets = tl.program_id(0) * block + tl.arange(0, block)
+    active = offsets < total
+    pixel = offsets % pixels
+    y = pixel // width
+    x = pixel - y * width
+    channel = offsets // pixels
+    use_left = x < half_width
+    src_x_out = tl.where(use_left, x, x - half_width)
+    target_x0 = src_x_out * 2
+    target_x1 = _clamp_i32(target_x0 + 1, 0, width - 1)
+    eye_sign = tl.where(use_left, 1.0, -1.0)
+    v0 = _sample_eye(
+        rgb,
+        depth,
+        channel,
+        y,
+        target_x0,
+        eye_sign,
+        width,
+        height,
+        pixels,
+        convergence,
+        max_disparity_px,
+        depth_strength,
+    )
+    v1 = _sample_eye(
+        rgb,
+        depth,
+        channel,
+        y,
+        target_x1,
+        eye_sign,
+        width,
+        height,
+        pixels,
+        convergence,
+        max_disparity_px,
+        depth_strength,
+    )
+    value = tl.minimum(tl.maximum((v0 + v1) * 0.5, 0.0), 1.0) * 255.0
+    tl.store(out + offsets, value.to(tl.uint8), mask=active)
+
+
+@triton.jit
+def _fast_plus_hole_ratio_probe_kernel(
+    depth,
+    out,
+    total: tl.constexpr,
+    width: tl.constexpr,
+    height: tl.constexpr,
+    half_width: tl.constexpr,
+    probe_width: tl.constexpr,
+    probe_height: tl.constexpr,
+    convergence: tl.constexpr,
+    max_disparity_px: tl.constexpr,
+    depth_strength: tl.constexpr,
+    edge_threshold: tl.constexpr,
+    shift_edge_threshold_px: tl.constexpr,
+    block: tl.constexpr,
+):
+    """Estimate the hole ratio on a small regular grid before full compaction."""
+
+    offsets = tl.program_id(0) * block + tl.arange(0, block)
+    active = offsets < total
+    probe_x = offsets % probe_width
+    probe_y = offsets // probe_width
+    x = (probe_x * half_width) // probe_width
+    y = (probe_y * height) // probe_height
+    target_x0 = x * 2
+    target_x1 = _clamp_i32(target_x0 + 1, 0, width - 1)
+    found = _mask_at(
+        depth,
+        y,
+        target_x0,
+        width,
+        height,
+        convergence,
+        max_disparity_px,
+        depth_strength,
+        edge_threshold,
+        shift_edge_threshold_px,
+    )
+    found = found | _mask_at(
+        depth,
+        y,
+        target_x1,
+        width,
+        height,
+        convergence,
+        max_disparity_px,
+        depth_strength,
+        edge_threshold,
+        shift_edge_threshold_px,
+    )
+    tl.store(out + offsets, found.to(tl.uint8), mask=active)
+
+
+@triton.jit
+def _fast_plus_active_mask_kernel(
+    depth,
+    out,
+    total: tl.constexpr,
+    width: tl.constexpr,
+    height: tl.constexpr,
+    half_width: tl.constexpr,
+    convergence: tl.constexpr,
+    max_disparity_px: tl.constexpr,
+    depth_strength: tl.constexpr,
+    edge_threshold: tl.constexpr,
+    shift_edge_threshold_px: tl.constexpr,
+    block: tl.constexpr,
+):
+    """Build one active-pixel flag per output eye pixel for sparse filling."""
+
+    offsets = tl.program_id(0) * block + tl.arange(0, block)
+    active = offsets < total
+    y = offsets // half_width
+    x = offsets - y * half_width
+    target_x0 = x * 2
+    target_x1 = _clamp_i32(target_x0 + 1, 0, width - 1)
+    found = _mask_at(
+        depth,
+        y,
+        target_x0,
+        width,
+        height,
+        convergence,
+        max_disparity_px,
+        depth_strength,
+        edge_threshold,
+        shift_edge_threshold_px,
+    )
+    found = found | _mask_at(
+        depth,
+        y,
+        target_x1,
+        width,
+        height,
+        convergence,
+        max_disparity_px,
+        depth_strength,
+        edge_threshold,
+        shift_edge_threshold_px,
+    )
+    tl.store(out + offsets, found.to(tl.uint8), mask=active)
+
+
+@triton.jit
+def _fast_plus_sparse_fill_kernel(
+    rgb,
+    depth,
+    active_pixels,
+    out,
+    total: tl.constexpr,
+    active_count,
+    channels: tl.constexpr,
+    width: tl.constexpr,
+    height: tl.constexpr,
+    half_width: tl.constexpr,
+    pixels: tl.constexpr,
+    convergence: tl.constexpr,
+    max_disparity_px: tl.constexpr,
+    depth_strength: tl.constexpr,
+    edge_threshold: tl.constexpr,
+    shift_edge_threshold_px: tl.constexpr,
+    block: tl.constexpr,
+):
+    """Apply the expensive directional fill only to compacted hole pixels."""
+
+    offsets = tl.program_id(0) * block + tl.arange(0, block)
+    active = offsets < total
+    active_slot = offsets % active_count
+    channel_eye = offsets // active_count
+    eye = channel_eye // channels
+    channel = channel_eye - eye * channels
+    pixel = tl.load(active_pixels + active_slot, mask=active, other=0).to(tl.int32)
+    y = pixel // half_width
+    x = pixel - y * half_width
+    target_x0 = x * 2
+    target_x1 = _clamp_i32(target_x0 + 1, 0, width - 1)
+    eye_sign = tl.where(eye == 0, 1.0, -1.0)
+
+    v0 = _filled_eye(
+        rgb,
+        depth,
+        channel,
+        y,
+        target_x0,
+        eye_sign,
+        width,
+        height,
+        pixels,
+        convergence,
+        max_disparity_px,
+        depth_strength,
+        edge_threshold,
+        shift_edge_threshold_px,
+    )
+    v1 = _filled_eye(
+        rgb,
+        depth,
+        channel,
+        y,
+        target_x1,
+        eye_sign,
+        width,
+        height,
+        pixels,
+        convergence,
+        max_disparity_px,
+        depth_strength,
+        edge_threshold,
+        shift_edge_threshold_px,
+    )
+    value = tl.minimum(tl.maximum((v0 + v1) * 0.5, 0.0), 1.0) * 255.0
+    out_pixel = eye * half_width + x
+    out_offset = channel * pixels + y * width + out_pixel
+    tl.store(out + out_offset, value.to(tl.uint8), mask=active)
+
+
 def can_use_fast_plus_fused_half_sbs_uint8(rgb: torch.Tensor, depth: torch.Tensor) -> bool:
     return (
         triton_runtime_available(rgb.device)
@@ -230,6 +469,99 @@ def can_use_fast_plus_fused_half_sbs_uint8(rgb: torch.Tensor, depth: torch.Tenso
         and rgb.shape[-2:] == depth.shape[-2:]
         and rgb.shape[-1] % 2 == 0
     )
+
+
+def _sparse_hole_threshold() -> float:
+    try:
+        value = float(os.environ.get("D2S_TRITON_SPARSE_HOLE_THRESHOLD", "0.08"))
+    except (TypeError, ValueError):
+        value = 0.08
+    return max(0.0, min(1.0, value))
+
+
+def _sparse_probe_size() -> int:
+    try:
+        value = int(os.environ.get("D2S_TRITON_SPARSE_PROBE_SIZE", "64"))
+    except (TypeError, ValueError):
+        value = 64
+    return max(16, min(128, value))
+
+
+def _sparse_min_pixels() -> int:
+    try:
+        value = int(os.environ.get("D2S_TRITON_SPARSE_MIN_PIXELS", "1048576"))
+    except (TypeError, ValueError):
+        value = 1048576
+    return max(0, value)
+
+
+def _estimate_hole_ratio(
+    depth: torch.Tensor,
+    *,
+    width: int,
+    height: int,
+    half_width: int,
+    convergence: float,
+    max_disparity_px: float,
+    depth_strength: float,
+    edge_threshold: float,
+    shift_edge_threshold_px: float,
+) -> float:
+    probe_size = _sparse_probe_size()
+    probe_width = min(probe_size, half_width)
+    probe_height = min(probe_size, height)
+    total = probe_height * probe_width
+    probe = torch.empty((total,), device=depth.device, dtype=torch.uint8)
+    block = 256
+    _fast_plus_hole_ratio_probe_kernel[(triton.cdiv(total, block),)](
+        depth,
+        probe,
+        total,
+        width,
+        height,
+        half_width,
+        probe_width,
+        probe_height,
+        float(convergence),
+        float(max_disparity_px),
+        float(depth_strength),
+        float(edge_threshold),
+        float(shift_edge_threshold_px),
+        block,
+    )
+    return float(probe.sum().item()) / float(total)
+
+
+def _compact_active_pixels(
+    depth: torch.Tensor,
+    *,
+    width: int,
+    height: int,
+    half_width: int,
+    convergence: float,
+    max_disparity_px: float,
+    depth_strength: float,
+    edge_threshold: float,
+    shift_edge_threshold_px: float,
+) -> torch.Tensor:
+    total = height * half_width
+    mask = torch.empty((total,), device=depth.device, dtype=torch.uint8)
+    block = 256
+    _fast_plus_active_mask_kernel[(triton.cdiv(total, block),)](
+        depth,
+        mask,
+        total,
+        width,
+        height,
+        half_width,
+        float(convergence),
+        float(max_disparity_px),
+        float(depth_strength),
+        float(edge_threshold),
+        float(shift_edge_threshold_px),
+        block,
+    )
+    return torch.nonzero(mask, as_tuple=False).flatten()
 
 
 def make_fast_plus_fused_half_sbs_uint8(
@@ -252,6 +584,90 @@ def make_fast_plus_fused_half_sbs_uint8(
     max_possible_shift = max(0.0, float(max_disparity_px)) * depth_strength * 0.5
     shift_edge_threshold_px = max(0.20, max_possible_shift * 0.05)
     block = 256
+    # On small frames, the probe and compaction launches cost more than the
+    # fill work they can save. Keep the original dense kernel for that case.
+    if height * half_width < _sparse_min_pixels():
+        grid = (triton.cdiv(total, block),)
+        _fast_plus_half_sbs_uint8_kernel[grid](
+            rgb,
+            depth,
+            out,
+            total,
+            width,
+            height,
+            half_width,
+            pixels,
+            float(convergence),
+            float(max_disparity_px),
+            float(depth_strength),
+            float(edge_threshold),
+            float(shift_edge_threshold_px),
+            block,
+        )
+        return out
+    probe_ratio = _estimate_hole_ratio(
+        depth,
+        width=width,
+        height=height,
+        half_width=half_width,
+        convergence=convergence,
+        max_disparity_px=max_disparity_px,
+        depth_strength=depth_strength,
+        edge_threshold=edge_threshold,
+        shift_edge_threshold_px=shift_edge_threshold_px,
+    )
+    if probe_ratio < _sparse_hole_threshold():
+        active_pixels = _compact_active_pixels(
+            depth,
+            width=width,
+            height=height,
+            half_width=half_width,
+            convergence=convergence,
+            max_disparity_px=max_disparity_px,
+            depth_strength=depth_strength,
+            edge_threshold=edge_threshold,
+            shift_edge_threshold_px=shift_edge_threshold_px,
+        )
+        active_count = int(active_pixels.numel())
+        actual_ratio = active_count / float(height * half_width)
+        if active_count and actual_ratio < _sparse_hole_threshold():
+            warp_total = out.numel()
+            _fast_plus_warp_only_half_sbs_uint8_kernel[(triton.cdiv(warp_total, block),)](
+                rgb,
+                depth,
+                out,
+                warp_total,
+                width,
+                height,
+                half_width,
+                pixels,
+                float(convergence),
+                float(max_disparity_px),
+                float(depth_strength),
+                block,
+            )
+            sparse_total = active_count * channels * 2
+            _fast_plus_sparse_fill_kernel[(triton.cdiv(sparse_total, block),)](
+                rgb,
+                depth,
+                active_pixels,
+                out,
+                sparse_total,
+                active_count,
+                channels,
+                width,
+                height,
+                half_width,
+                pixels,
+                float(convergence),
+                float(max_disparity_px),
+                float(depth_strength),
+                float(edge_threshold),
+                float(shift_edge_threshold_px),
+                block,
+            )
+            return out
+
     grid = (triton.cdiv(total, block),)
     _fast_plus_half_sbs_uint8_kernel[grid](
         rgb,

@@ -80,6 +80,60 @@ def test_vulkan_output_shader_decodes_srgb_before_unorm_store():
     assert "if (found >= 1.0) return 1.0;" in shader
 
 
+def test_vulkan_openxr_output_shader_uses_legacy_openxr_eye_order():
+    shader = (
+        Path(__file__).resolve().parents[1]
+        / "shaders"
+        / "d2s_stereo_layered_output.comp"
+    ).read_text(encoding="utf-8")
+
+    assert "fill_eye(ix, iy, -1.0, fill_mask)" in shader
+    assert "params.symmetric != 0u ? 1.0 : 0.9" in shader
+
+
+def test_vulkan_generic_sbs_shader_keeps_synthesis_eye_order():
+    shader = (
+        Path(__file__).resolve().parents[1]
+        / "shaders"
+        / "d2s_stereo_layered.comp"
+    ).read_text(encoding="utf-8")
+
+    assert "fill_eye(ix, iy, 1.0" in shader
+    assert "params.symmetric != 0u ? -1.0 : -0.9" in shader
+
+
+def test_vulkan_tiled_reference_shader_keeps_layered_pass_abi():
+    shader = (
+        Path(__file__).resolve().parents[1]
+        / "shaders"
+        / "d2s_stereo_layered_tiled.comp"
+    ).read_text(encoding="utf-8")
+    backend_source = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "stereo_runtime"
+        / "vulkan_backend.py"
+    ).read_text(encoding="utf-8")
+
+    assert "layout(local_size_x = 16, local_size_y = 16" in shader
+    assert "shared float shared_depth" in shader
+    assert "layout(set = 0, binding = 4, std430) writeonly buffer MaskBuffer" in shader
+    assert "layered_shader_path" in backend_source
+    assert "d2s_stereo_layered.spv" in backend_source
+
+
+def test_vulkan_fallback_openxr_output_normalizes_generic_eye_order():
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "stereo_runtime"
+        / "runtime.py"
+    ).read_text(encoding="utf-8")
+
+    assert "left_eye = vulkan_stereo.right_eye" in source
+    assert "right_eye = vulkan_stereo.left_eye" in source
+
+
 def test_openxr_depth_temporal_is_disabled_with_stereo_temporal(monkeypatch):
     monkeypatch.setenv("D2S_OPENXR_RGB_DEPTH_TEMPORAL_ALPHA", "0.9")
     config = StereoRuntimeConfig(

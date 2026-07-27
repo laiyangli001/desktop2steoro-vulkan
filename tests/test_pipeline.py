@@ -3,7 +3,23 @@ import threading
 from types import SimpleNamespace
 from pathlib import Path
 
-from stereo_runtime.pipeline import RuntimePipelineLoop, _enable_openxr_depth_cuda_graph_if_needed
+from stereo_runtime.pipeline import (
+    RuntimePipelineLoop,
+    _enable_openxr_depth_cuda_graph_if_needed,
+    _runtime_motion_gate_enabled,
+)
+
+
+def test_openxr_motion_gate_is_enabled_by_default(monkeypatch):
+    monkeypatch.delenv("D2S_RUNTIME_MOTION_GATE", raising=False)
+
+    assert _runtime_motion_gate_enabled(SimpleNamespace(run_mode="OpenXR")) is True
+
+
+def test_motion_gate_can_be_disabled_explicitly(monkeypatch):
+    monkeypatch.setenv("D2S_RUNTIME_MOTION_GATE", "0")
+
+    assert _runtime_motion_gate_enabled(SimpleNamespace(run_mode="OpenXR")) is False
 
 
 def test_openxr_pipeline_keeps_deferred_vulkan_request_path():
