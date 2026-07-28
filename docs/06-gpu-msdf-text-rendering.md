@@ -83,11 +83,11 @@ UV, and RGBA color; Filament reconstructs coverage from the MSDF median and
 channels contain distance data rather than display colors. A Bridge binary
 without these optional symbols continues to use the legacy Quad Layer path.
 
-For small headset overlays, the shader uses a 1.5-pixel minimum screen range
-and a 1.15 edge-sharpness factor. The OSD layout scale is 0.6 instead of 0.5;
-the logical 512px screen-adjustment panel still fits the complete text run.
-This keeps thin strokes separated without changing glyph coordinates or atlas
-ordering.
+For small headset overlays, the shader keeps the derivative-based MSDF
+transition neutral: the minimum screen range is 1.0 pixel and the
+edge-sharpness factor is 1.0. The OSD layout scale remains 0.5, matching the
+legacy bitmap path. This avoids enlarging glyphs or merging small CJK counters
+when the text is rasterized at the actual OpenXR projection resolution.
 
 When the optional ABI is present, the OpenXR Presenter decodes and uploads all
 atlas pages once during Filament initialization. Text content and pose updates

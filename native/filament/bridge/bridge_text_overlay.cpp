@@ -13,10 +13,10 @@ constexpr uint32_t kMaxVertices = kMaxGlyphsPerPage * 4;
 constexpr uint32_t kMaxIndices = kMaxGlyphsPerPage * 6;
 
 const char* kMsdfShader = R"FILAMENT(
-    // Small VR overlays need a narrower transition than the default one-pixel
-    // fallback, otherwise thin strokes merge into their neighbors.
-    const float kMinimumScreenPxRange = 1.5;
-    const float kEdgeSharpness = 1.15;
+    // Keep the derivative-based MSDF transition neutral. Artificially
+    // increasing this range makes small CJK counters merge in the headset.
+    const float kMinimumScreenPxRange = 1.0;
+    const float kEdgeSharpness = 1.0;
 
     float median(float r, float g, float b) {
         return max(min(r, g), min(max(r, g), b));

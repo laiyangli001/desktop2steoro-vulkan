@@ -4448,8 +4448,8 @@ class OpenXrVulkanPresenter(
             if use_msdf_text:
                 transform = np.asarray(screen_pose @ osd_local, dtype=np.float32)
                 if screen_osd_active:
-                    # Keep the small OSD above the screen readable in the headset.
-                    scale = 0.6
+                    # Match the legacy OSD glyph size before MSDF migration.
+                    scale = 0.5
                     runs = (
                         ("Size", (150.0, 158.0, 185.0, 255.0)),
                         (
@@ -4482,7 +4482,7 @@ class OpenXrVulkanPresenter(
                 else:
                     label = "Preset"
                     value = str(self._preset_name_overlay)
-                    scale = 0.6
+                    scale = 0.5
                     label_width = self._msdf_font_atlas.text_advance(label, scale=scale)
                     value_width = self._msdf_font_atlas.text_advance(value, scale=scale)
                     x = (768.0 - label_width - 8.0 - value_width) / 2.0
