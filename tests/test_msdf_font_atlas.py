@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 import numpy as np
 
@@ -7,11 +8,23 @@ from xr_viewer.msdf_font_atlas import MsdfFontAtlas
 
 def test_bundled_msdf_atlas_has_all_pages_and_glyphs():
     atlas = MsdfFontAtlas()
-    assert len(atlas.pages) == 3
+    assert 3 <= len(atlas.pages) <= 4
     assert len(atlas.glyphs) >= 3500
     assert atlas.page_width > 0
     assert atlas.page_height > 0
     assert all(atlas.page_path(index).is_file() for index in range(len(atlas.pages)))
+
+
+def test_bundled_msdf_atlas_uses_charset_ordered_grid():
+    atlas = MsdfFontAtlas()
+    metadata = json.loads(
+        (atlas.root / "d2s_overlay_msdf.json").read_text(encoding="utf-8")
+    )
+    for index, glyph in enumerate(metadata["chars"]):
+        slot = index % 1024
+        assert glyph["page"] == index // 1024
+        assert int(glyph["x"]) // 64 == slot % 32
+        assert int(glyph["y"]) // 64 == slot // 32
 
 
 def test_msdf_layout_keeps_page_and_uv_metadata():

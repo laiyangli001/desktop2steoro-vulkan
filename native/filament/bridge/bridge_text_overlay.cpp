@@ -22,8 +22,15 @@ const char* kMsdfShader = R"FILAMENT(
         float3 msdf_sample = texture(materialParams_atlas, getUV0()).rgb;
         float signed_distance = median(
                 msdf_sample.r, msdf_sample.g, msdf_sample.b) - 0.5;
-        float smoothing = max(fwidth(signed_distance), 0.0001);
-        float coverage = clamp(0.5 + signed_distance / smoothing, 0.0, 1.0);
+        // Convert the atlas distance range into screen pixels. A plain
+        // fwidth(distance) becomes unstable when the VR overlay is small.
+        float2 atlas_size = float2(2042.0, 2032.0);
+        float2 unit_range = float2(4.0) / atlas_size;
+        float2 screen_tex_size = 1.0 / max(fwidth(getUV0()), float2(0.000001));
+        float screen_px_range = max(
+                0.5 * dot(unit_range, screen_tex_size), 1.0);
+        float coverage = clamp(
+                screen_px_range * signed_distance + 0.5, 0.0, 1.0);
         float4 vertex_color = getColor();
         float alpha = vertex_color.a * coverage;
         material.baseColor = float4(vertex_color.rgb * alpha, alpha);
@@ -183,6 +190,10 @@ int bridge_text_overlay_set_page_texture(
                 delete[] static_cast<uint8_t*>(buffer);
             });
     page.texture->setImage(*bridge->engine, 0, std::move(descriptor));
+    page.sampler.setMinFilter(filament::TextureSampler::MinFilter::LINEAR);
+    page.sampler.setMagFilter(filament::TextureSampler::MagFilter::LINEAR);
+    page.sampler.setWrapModeS(filament::TextureSampler::WrapMode::CLAMP_TO_EDGE);
+    page.sampler.setWrapModeT(filament::TextureSampler::WrapMode::CLAMP_TO_EDGE);
     page.material_instance->setParameter("atlas", page.texture, page.sampler);
     return 1;
 }

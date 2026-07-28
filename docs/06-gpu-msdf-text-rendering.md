@@ -18,6 +18,14 @@ The generated files are:
 - `src/xr_viewer/fonts/d2s_overlay_msdf.*.png`: RGB MSDF atlas pages
 - `src/xr_viewer/fonts/d2s_overlay_msdf.json`: glyph metrics and page layout
 
+The checked-in atlas is repacked by `scripts/tools/repack_msdf_grid.py` after
+MSDF generation. It uses fixed 64x64 cells and the source charset order from
+`overlay_charset.txt`, filling each page left-to-right and top-to-bottom. This
+is intentionally different from MaxRects size optimization: the atlas is
+human-inspectable and deterministic, while runtime lookup still uses Unicode
+glyph IDs. The RGB color pattern is MSDF distance data and is not intended to
+look like normal black-and-white text.
+
 The texture is sampled as linear data. The fragment shader reconstructs the
 glyph coverage from the median of the RGB channels, then applies the overlay
 color and alpha. Text layout and glyph instance updates remain lightweight
@@ -35,6 +43,10 @@ Generate the atlas:
 
 ```powershell
 ./scripts/tools/generate_msdf_overlay_font.ps1
+
+python scripts/tools/repack_msdf_grid.py \
+  src/xr_viewer/fonts/d2s_overlay_msdf.0.png \
+  src/xr_viewer/fonts/grid-repacked
 ```
 
 The production font must be distributed under a license compatible with the

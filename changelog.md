@@ -642,3 +642,9 @@
 - 对齐旧工程 Projection Layer 屏幕路径：屏幕仍作为场景几何体参与每眼投影渲染，纹理按 Vulkan image handle 缓存复用，不改为单张 2D 合成层。
 - 按旧工程的异步提交边界优化 Projection Layer：左右眼 `end_frame` 只提交 Filament 工作，整帧两眼完成后统一等待一次，避免每眼一次 `flushAndWait` 串行阻塞；旧 Bridge 二进制仍保留兼容路径，需 CI 重编译后生效。
 - 增加 CUDA/Vulkan/Filament external semaphore 路径：每个输出槽位创建可导出的 Vulkan binary semaphore，CUDA copy 完成后异步 signal，Filament Bridge 在目标 swapchain acquire 时等待对应 semaphore；平台或运行库不支持时自动退回 CUDA stream 同步。
+## Unreleased
+
+- Repacked the MSDF atlas into fixed 64x64 cells in the charset order, with
+  deterministic left-to-right and top-to-bottom pages.
+- Improved native MSDF coverage calculation for small VR OSD glyphs and forced
+  linear atlas filtering with edge clamping.
