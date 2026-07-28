@@ -19,8 +19,9 @@ const char* kMsdfShader = R"FILAMENT(
 
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
-        float3 sample = texture(materialParams_atlas, getUV0()).rgb;
-        float signed_distance = median(sample.r, sample.g, sample.b) - 0.5;
+        float3 msdf_sample = texture(materialParams_atlas, getUV0()).rgb;
+        float signed_distance = median(
+                msdf_sample.r, msdf_sample.g, msdf_sample.b) - 0.5;
         float smoothing = max(fwidth(signed_distance), 0.0001);
         float coverage = clamp(0.5 + signed_distance / smoothing, 0.0, 1.0);
         float4 vertex_color = getColor();
