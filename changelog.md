@@ -3,6 +3,7 @@
 本文件记录项目重大更新和每日工作收尾。新记录按日期倒序追加；每个工作日结束时更新“已实现”“验证结果”“未决事项”和“下一项内容”。
 
 ## 2026-07-27
+- 修复 MSDF Filament 材质编译失败：`sample` 在目标 GLSL 兼容编译器中是保留字，已改为 `msdf_sample`；三平台 Bridge 远程构建和二进制回写成功。
 - Started the GPU text migration contract: imported the requested `3500.txt` UI charset (3,958 unique characters), defined paged MSDF atlas generation and shared linear atlas sampling requirements, and kept an explicit legacy Quad Layer fallback while the native Bridge ABI is being added.
 - Generated the first three-page MSDF atlas from the complete UI charset; verified 3,959 glyph records and 2042x2032 atlas pages.
 - Moved the MSDF runtime assets into `src/xr_viewer/fonts/` so packaged OpenXR runtime resources do not depend on repository-root asset paths.
