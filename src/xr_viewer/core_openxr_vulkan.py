@@ -3200,8 +3200,10 @@ class OpenXrVulkanPresenter(
                         visible=False,
                     )
         except Exception as exc:
+            self._msdf_font_atlas = None
             print(
-                "[OpenXRViewer] MSDF text submit failed; retaining legacy overlay: "
+                "[OpenXRViewer] MSDF text disabled after submit failure; "
+                "retaining legacy overlay: "
                 f"{type(exc).__name__}: {exc}",
                 flush=True,
             )

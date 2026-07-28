@@ -4,6 +4,7 @@
 
 ## 2026-07-27
 - 修复 MSDF Filament 材质编译失败：`sample` 在目标 GLSL 兼容编译器中是保留字，已改为 `msdf_sample`；三平台 Bridge 远程构建和二进制回写成功。
+- 修复 MSDF 空页提交：零长度 NumPy 缓冲改用 `tobytes(order="C")`，并在首次提交失败后关闭 MSDF 路径，避免每帧重复报错刷屏并恢复旧 Quad Layer。
 - Started the GPU text migration contract: imported the requested `3500.txt` UI charset (3,958 unique characters), defined paged MSDF atlas generation and shared linear atlas sampling requirements, and kept an explicit legacy Quad Layer fallback while the native Bridge ABI is being added.
 - Generated the first three-page MSDF atlas from the complete UI charset; verified 3,959 glyph records and 2042x2032 atlas pages.
 - Moved the MSDF runtime assets into `src/xr_viewer/fonts/` so packaged OpenXR runtime resources do not depend on repository-root asset paths.

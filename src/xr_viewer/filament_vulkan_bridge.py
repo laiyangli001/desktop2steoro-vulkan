@@ -420,7 +420,7 @@ class FilamentVulkanBridge:
         if getattr(rgba, "ndim", 0) != 3 or rgba.shape[2] != 4:
             raise ValueError("MSDF atlas page must be HxWx4 RGBA")
         height, width = int(rgba.shape[0]), int(rgba.shape[1])
-        payload = bytes(memoryview(rgba).cast("B"))
+        payload = _array_payload(rgba)
         buffer = ctypes.create_string_buffer(payload)
         self._check_result(
             self._library.filament_bridge_set_text_overlay_page_texture(
@@ -448,8 +448,8 @@ class FilamentVulkanBridge:
             raise ValueError("MSDF vertices must be contiguous")
         if hasattr(indices, "flags") and not indices.flags.c_contiguous:
             raise ValueError("MSDF indices must be contiguous")
-        vertex_payload = bytes(memoryview(vertices).cast("B"))
-        index_payload = bytes(memoryview(indices).cast("B"))
+        vertex_payload = _array_payload(vertices)
+        index_payload = _array_payload(indices)
         vertex_buffer = ctypes.create_string_buffer(vertex_payload)
         index_buffer = ctypes.create_string_buffer(index_payload)
         self._check_result(
@@ -908,3 +908,11 @@ def _as_pointer_value(value: Any) -> int:
         return int(vk.ffi.cast("uintptr_t", value))
     except (ImportError, TypeError, ValueError):
         return int(ctypes.cast(value, ctypes.c_void_p).value or 0)
+
+
+def _array_payload(value: Any) -> bytes:
+    """Serialize NumPy buffers safely, including zero-length arrays."""
+    tobytes = getattr(value, "tobytes", None)
+    if tobytes is not None:
+        return bytes(tobytes(order="C"))
+    return bytes(memoryview(value).cast("B"))
