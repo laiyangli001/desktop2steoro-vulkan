@@ -534,6 +534,7 @@ def test_keyboard_modifier_clicks_toggle_real_key_state_for_combinations(monkeyp
         core_input_helpers.ctypes,
         "windll",
         SimpleNamespace(user32=FakeUser32()),
+        raising=False,
     )
 
     class Host(CoreInputHelpersMixin):

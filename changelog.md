@@ -3,6 +3,9 @@
 本文件记录项目重大更新和每日工作收尾。新记录按日期倒序追加；每个工作日结束时更新“已实现”“验证结果”“未决事项”和“下一项内容”。
 
 ## 2026-07-27
+- 修复 Requirements Compliance 在 Linux runner 上的 Windows 键盘状态机测试：
+  `ctypes.windll` 仅在 Windows 存在，测试现在显式允许注入 FakeUser32，仍完整验证
+  修饰键、普通按键和释放状态，不改变生产代码。
 - Tuned the MSDF headset OSD for small projected text: increased the OSD
   layout scale from 0.5 to 0.6 and sharpened the Filament coverage fallback
   with a 1.5-pixel minimum range and 1.15 edge factor, without changing atlas
