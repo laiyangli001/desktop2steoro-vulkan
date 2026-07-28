@@ -3,6 +3,10 @@
 本文件记录项目重大更新和每日工作收尾。新记录按日期倒序追加；每个工作日结束时更新“已实现”“验证结果”“未决事项”和“下一项内容”。
 
 ## 2026-07-27
+- Tuned the MSDF headset OSD for small projected text: increased the OSD
+  layout scale from 0.5 to 0.6 and sharpened the Filament coverage fallback
+  with a 1.5-pixel minimum range and 1.15 edge factor, without changing atlas
+  coordinates or the top-left-to-Filament UV contract.
 - Added a local MSDF JSON-coordinate preview tool so OSD layout can be checked
   before OpenXR hardware testing.
 - Corrected MSDF V-coordinate adaptation for Filament's bottom-left texture

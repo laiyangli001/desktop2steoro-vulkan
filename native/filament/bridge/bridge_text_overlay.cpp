@@ -13,6 +13,11 @@ constexpr uint32_t kMaxVertices = kMaxGlyphsPerPage * 4;
 constexpr uint32_t kMaxIndices = kMaxGlyphsPerPage * 6;
 
 const char* kMsdfShader = R"FILAMENT(
+    // Small VR overlays need a narrower transition than the default one-pixel
+    // fallback, otherwise thin strokes merge into their neighbors.
+    const float kMinimumScreenPxRange = 1.5;
+    const float kEdgeSharpness = 1.15;
+
     float median(float r, float g, float b) {
         return max(min(r, g), min(max(r, g), b));
     }
@@ -28,7 +33,8 @@ const char* kMsdfShader = R"FILAMENT(
         float2 unit_range = float2(4.0) / atlas_size;
         float2 screen_tex_size = 1.0 / max(fwidth(getUV0()), float2(0.000001));
         float screen_px_range = max(
-                0.5 * dot(unit_range, screen_tex_size), 1.0);
+                0.5 * dot(unit_range, screen_tex_size),
+                kMinimumScreenPxRange) * kEdgeSharpness;
         float coverage = clamp(
                 screen_px_range * signed_distance + 0.5, 0.0, 1.0);
         float4 vertex_color = getColor();
