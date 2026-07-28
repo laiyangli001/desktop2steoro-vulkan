@@ -30,6 +30,21 @@ The texture is sampled as linear data. The fragment shader reconstructs the
 glyph coverage from the median of the RGB channels, then applies the overlay
 color and alpha. Text layout and glyph instance updates remain lightweight
 metadata updates; the atlas is uploaded once and shared by all overlays.
+The JSON atlas uses top-left image coordinates; the Python geometry adapter
+flips only the V coordinate at the Filament boundary, where V=0 is bottom.
+
+Use the local JSON-coordinate preview before testing OpenXR:
+
+```powershell
+$env:PYTHONPATH = "src"
+& .\src\python3\python.exe scripts/tools/preview_msdf_text.py `
+  --output .tmp/msdf_text_preview.png
+```
+
+The preview reconstructs glyph coverage from JSON coordinates and labels each
+glyph with its Unicode codepoint, page, and atlas position. It separates
+charset/UV metadata problems from Filament shader and Vulkan presentation
+problems.
 
 ## Reproducible generation
 

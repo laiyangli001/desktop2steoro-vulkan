@@ -24,7 +24,7 @@ const char* kMsdfShader = R"FILAMENT(
                 msdf_sample.r, msdf_sample.g, msdf_sample.b) - 0.5;
         // Convert the atlas distance range into screen pixels. A plain
         // fwidth(distance) becomes unstable when the VR overlay is small.
-        float2 atlas_size = float2(2042.0, 2032.0);
+        float2 atlas_size = float2(2048.0, 2048.0);
         float2 unit_range = float2(4.0) / atlas_size;
         float2 screen_tex_size = 1.0 / max(fwidth(getUV0()), float2(0.000001));
         float screen_px_range = max(
@@ -33,7 +33,7 @@ const char* kMsdfShader = R"FILAMENT(
                 screen_px_range * signed_distance + 0.5, 0.0, 1.0);
         float4 vertex_color = getColor();
         float alpha = vertex_color.a * coverage;
-        material.baseColor = float4(vertex_color.rgb * alpha, alpha);
+        material.baseColor = float4(vertex_color.rgb, alpha);
     }
 )FILAMENT";
 

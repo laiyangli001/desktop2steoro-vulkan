@@ -51,3 +51,16 @@ def test_msdf_page_and_geometry_match_native_buffer_contract():
     assert vertices.flags.c_contiguous
     assert indices.dtype == np.uint16
     assert indices.flags.c_contiguous
+
+
+def test_msdf_geometry_adapts_top_left_atlas_to_filament_bottom_left_uv():
+    atlas = MsdfFontAtlas()
+    instance = atlas.layout("A")[0]
+    geometry = atlas.build_geometry(
+        "A",
+        transform=np.eye(4, dtype=np.float32),
+        pixel_scale=(0.001, 0.001),
+    )
+    vertices, _indices = geometry[instance.page]
+    assert tuple(vertices[0, 3:5]) == (instance.uv_min[0], instance.uv_max[1])
+    assert tuple(vertices[2, 3:5]) == (instance.uv_min[0], instance.uv_min[1])

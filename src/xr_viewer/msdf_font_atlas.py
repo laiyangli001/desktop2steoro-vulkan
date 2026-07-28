@@ -179,10 +179,12 @@ class MsdfFontAtlas:
                 base = glyph_index * 4
                 vertices[base : base + 4, :3] = (matrix @ local.T).T[:, :3]
                 vertices[base : base + 4, 3:5] = (
-                    (instance.uv_min[0], instance.uv_min[1]),
-                    (instance.uv_max[0], instance.uv_min[1]),
+                    # Filament uses V=0 at the bottom; atlas metadata uses
+                    # top-left image coordinates, so adapt at this boundary.
                     (instance.uv_min[0], instance.uv_max[1]),
                     (instance.uv_max[0], instance.uv_max[1]),
+                    (instance.uv_min[0], instance.uv_min[1]),
+                    (instance.uv_max[0], instance.uv_min[1]),
                 )
                 vertices[base : base + 4, 5:9] = rgba
                 offset = glyph_index * 6
