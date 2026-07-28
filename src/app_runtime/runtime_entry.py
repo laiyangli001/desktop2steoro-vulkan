@@ -31,6 +31,7 @@ from utils import (
     _get_settings,
     shutdown_event,
 )
+from utils.xr_headset_presets import DEFAULT_XR_HEADSET_MODEL
 
 from .runtime_callbacks import RuntimeCallbacks
 from .runtime_context import (
@@ -118,6 +119,11 @@ def _openxr_filament_config(settings: dict) -> dict[str, object]:
             settings.get("OpenXR Color Mode", "sRGB")
         ).strip().lower(),
         "controller_model": str(settings.get("Controller Model", "PICO")),
+        # The GUI selection is the source of the headset sampling tier. The
+        # OpenXR runtime recommendation remains only the swapchain cap.
+        "headset_model": str(
+            settings.get("XR Headset Model", DEFAULT_XR_HEADSET_MODEL)
+        ),
         "filament_bridge_path": bridge_path,
         "filament_glb_path": configured_glb or (
             str(glb_path) if glb_path is not None else None

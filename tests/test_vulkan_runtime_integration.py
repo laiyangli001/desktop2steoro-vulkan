@@ -80,6 +80,30 @@ def test_vulkan_output_shader_decodes_srgb_before_unorm_store():
     assert "if (found >= 1.0) return 1.0;" in shader
 
 
+def test_vulkan_msdf_quad_shader_is_a_gpu_atlas_to_storage_image_pass():
+    shader = (
+        Path(__file__).resolve().parents[1]
+        / "shaders"
+        / "d2s_msdf_quad.comp"
+    ).read_text(encoding="utf-8")
+    assert "readonly uniform image2D msdf_atlas" in shader
+    assert "writeonly uniform image2D quad_output" in shader
+    assert "median3(sampleMsdf" in shader
+    assert "imageStore(" in shader
+    assert "srgbToLinear" in shader
+
+
+def test_vulkan_msdf_quad_request_keeps_one_quad_texture_contract():
+    from viewer.vulkan_msdf_quad import VulkanMsdfQuadRequest
+
+    request = VulkanMsdfQuadRequest(
+        width=512,
+        height=78,
+        runs=({"text": "Size", "x": 10.0, "y": 18.0, "scale": 0.58},),
+    )
+    assert request.shape == (78, 512, 4)
+
+
 def test_vulkan_openxr_output_shader_uses_legacy_openxr_eye_order():
     shader = (
         Path(__file__).resolve().parents[1]

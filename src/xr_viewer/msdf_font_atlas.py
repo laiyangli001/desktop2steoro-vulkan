@@ -45,6 +45,8 @@ class MsdfFontAtlas:
         self.page_width = int(common.get("scaleW", 0))
         self.page_height = int(common.get("scaleH", 0))
         self.line_height = float(common.get("lineHeight", 0.0))
+        distance_field = metadata.get("distanceField") or {}
+        self.distance_range = float(distance_field.get("distanceRange", 4.0))
         self.pages = tuple(str(page) for page in metadata.get("pages", ()))
         if self.page_width <= 0 or self.page_height <= 0 or not self.pages:
             raise ValueError("MSDF atlas metadata has invalid page dimensions")
@@ -71,6 +73,7 @@ class MsdfFontAtlas:
             raise ValueError("MSDF atlas contains no glyphs")
         self.glyphs = glyphs
         self.fallback = glyphs.get(ord("?")) or next(iter(glyphs.values()))
+        self._page_cache: dict[int, np.ndarray] = {}
 
     def layout(
         self,
@@ -116,10 +119,14 @@ class MsdfFontAtlas:
 
     def page_rgba(self, page: int) -> np.ndarray:
         """Decode one atlas page once before handing it to the GPU Bridge."""
+        if page in self._page_cache:
+            return self._page_cache[page]
         from PIL import Image
 
         with Image.open(self.page_path(page)) as image:
-            return np.asarray(image.convert("RGBA"), dtype=np.uint8).copy()
+            pixels = np.asarray(image.convert("RGBA"), dtype=np.uint8).copy()
+        self._page_cache[page] = pixels
+        return pixels
 
     def text_advance(self, text: str, *, scale: float = 1.0) -> float:
         """Return the atlas-layout advance used to center a text run."""

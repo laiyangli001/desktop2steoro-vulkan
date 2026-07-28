@@ -542,6 +542,32 @@ LDR display View: virtual screen + UI/laser -> no post-processing/tone mapping -
 
 主场景 View 不得看见 LDR 显示层图元；LDR View 不得启用场景 ColorGrading。两个 View 必须在同一帧先提交主场景、再提交 LDR 显示层，并共享相机、深度和目标 viewport。
 
+#### 8.2.2.1 输入屏幕与头显分辨率矩阵
+
+屏幕采样档位必须由两个 GUI/运行时事实共同决定：
+
+| 输入屏幕归一化档位 | GUI 选择的头显采样档位 |
+|---|---|
+| 1K | 2K |
+| 2K | 4K |
+| 4K | 8K |
+
+头显档位来自 GUI 的 `XR Headset Model`，每个型号只维护一个明确的应用采样档位；它是采样策略档位，不宣称替代厂商面板的精确像素规格。输入档位优先使用捕捉链的实际 `capture_size`，没有该元数据时才使用处理后眼图尺寸。非 16:9 输入按最长边近似归入 1920/2560/3840 三个标准档位，但不得因此裁剪、拉伸或改写实际源图像宽高。
+
+矩阵计算为 `recommended_headset = input_tier × 2`，实际有效档位为 `min(GUI_headset_tier, recommended_headset)`。匹配档位保持源纹素 footprint；当高分辨率输入进入较低档头显时才按比例增加面积预滤。OpenXR runtime 推荐交换链尺寸只是最终硬件/运行时上限，不得覆盖 GUI 头显选择或改变输入档位语义。
+
+输入档位的归档规则如下：
+
+| 实际输入尺寸示例 | 输入档位 | 处理要求 |
+|---|---:|---|
+| 1280×720、1920×1080 | 1K | 保留实际宽高，按 1K 档参与矩阵 |
+| 2048×1080、2560×1440、2560×1600 | 2K | 保留实际宽高，按 2K 档参与矩阵 |
+| 3440×1440、3840×2160、4096×2160 | 4K | 保留实际宽高，按 4K 档参与矩阵 |
+
+四个尺寸的职责必须分开：`XR Headset Model` 决定头显采样策略档位；`capture_size` 决定输入屏幕档位；处理后眼图尺寸用于实际纹理绑定；OpenXR recommended extent 只决定交换链是否允许该输出尺寸。输入档位只能决定过滤预算，不能通过插值制造输入中不存在的细节，也不能把非 16:9 源图像强制变成 16:9。
+
+预滤比例定义为 `filter_scale = max(1, input_tier / effective_tier)`。因此 1K→2K、2K→4K、4K→8K 的匹配路径均为 `1.0`，不会因矩阵额外变糊；例如 4K 输入选择 2K 头显时为 `2.0`，只执行一次有界面积预滤以降低缩小混叠。该预滤不改变颜色空间、不执行 tone mapping、不改变 UV 和原始源图像。
+
 ### 8.3 Composition Layer
 
 - 主场景使用 `XrCompositionLayerProjection`。

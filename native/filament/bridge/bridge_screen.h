@@ -16,6 +16,7 @@ int bridge_screen_set_curved(FilamentBridge* bridge, int curved);
 int bridge_screen_set_light(
         FilamentBridge* bridge,
         float red, float green, float blue, float intensity);
+int bridge_screen_set_sampling(FilamentBridge* bridge, float filter_scale);
 int bridge_screen_set_image(
         FilamentBridge* bridge, const void* image,
         uint32_t width, uint32_t height, int32_t format);

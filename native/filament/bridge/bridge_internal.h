@@ -304,6 +304,13 @@ struct FilamentBridge {
     std::array<filament::Texture*, 2> screen_textures{};
     std::array<std::vector<ScreenTextureSlot>, 2> screen_texture_cache;
     filament::TextureSampler screen_texture_sampler;
+    // Keep the legacy screen-quality sharpening strength explicit. The
+    // external Vulkan image has one mip level, so the screen material uses a
+    // footprint-aware filter followed by this bounded RCAS pass.
+    float screen_filter_sharpness = 0.35f;
+    // Matrix-selected prefilter scale for lower-tier headsets. A value of
+    // one preserves the source texel footprint exactly.
+    float screen_filter_scale = 1.0f;
     std::vector<PreviewScreenVertex> screen_vertices;
     std::vector<uint16_t> screen_indices;
     bool screen_curved = false;

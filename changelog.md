@@ -2,14 +2,23 @@
 
 本文件记录项目重大更新和每日工作收尾。新记录按日期倒序追加；每个工作日结束时更新“已实现”“验证结果”“未决事项”和“下一项内容”。
 
+## 2026-07-29
+- 新增 GUI 头显型号驱动的 2K/4K/8K 屏幕采样档位，并按实际输入屏幕 `capture_size` 将 1K/2K/4K 输入映射到 2K/4K/8K 推荐头显。
+- 非 16:9 输入仅按最长边近似归档，不裁剪、不拉伸实际源图像；匹配档位保持原始纹素 footprint，低档头显接收高档输入时才启用有界面积预滤。
+- OpenXR runtime recommended extent 仅作为交换链上限，不再覆盖 GUI 头显选择；新增 Filament Bridge `set_screen_sampling` ABI。
+- 验证：屏幕采样策略、头显预设、runtime 配置、OpenXR Vulkan 和 Filament Bridge 测试共 166 项通过；原生 Bridge 仍需 GitHub Actions 三平台远程构建。
+- 已将上述输入/头显矩阵、非 16:9 归档、尺寸职责边界、预滤公式和 Bridge ABI 验收条件补入两份正式规格书及需求矩阵。
+- 全量 Python 回归测试通过：680 passed；提交内容包含本轮规格书、采样策略、Bridge ABI、MSDF Quad 和既有未提交改动。
+
 ## 2026-07-27
 - 修复 Requirements Compliance 在 Linux runner 上的 Windows 键盘状态机测试：
   `ctypes.windll` 仅在 Windows 存在，测试现在显式允许注入 FakeUser32，仍完整验证
   修饰键、普通按键和释放状态，不改变生产代码。
-- Tuned the MSDF headset OSD for small projected text: increased the OSD
-  layout scale from 0.5 to 0.6 and sharpened the Filament coverage fallback
-  with a 1.5-pixel minimum range and 1.15 edge factor, without changing atlas
-  coordinates or the top-left-to-Filament UV contract.
+- The screen size/distance and preset OSD now decode the bundled MSDF atlas
+  in a Vulkan compute shader, writing the glyph coverage and background into a
+  Quad-sized storage image before copying it into one OpenXR Quad Layer. This
+  removes the unreadable Projection/Quad split while keeping the OSD text on
+  the real GPU MSDF path.
 - Added a local MSDF JSON-coordinate preview tool so OSD layout can be checked
   before OpenXR hardware testing.
 - Corrected MSDF V-coordinate adaptation for Filament's bottom-left texture
@@ -23,14 +32,38 @@
   linear GPU textures and packed glyph geometry is updated on the Presenter
   thread. Existing Quad Layer bitmap rendering remains the compatibility
   fallback until rebuilt Bridge artifacts are deployed.
-- The Presenter now uploads the bundled MSDF atlas pages once during Bridge
-  initialization when the optional ABI is available; page decoding and GPU
-  texture allocation are excluded from the per-frame overlay path.
-- Migrated the first visible overlay path: screen size/distance and preset OSD
-  backgrounds remain cached Quad Layers while their colored text is submitted
-  as MSDF world-space glyph geometry when the new ABI is available. FPS,
-  keyboard and controller-help overlays intentionally remain on the legacy
-  path until their backgrounds and update policies are migrated.
+- The Presenter uploads the shared MSDF atlas once to a resident Vulkan
+  storage image and submits only changed glyph metrics to the compute pass.
+  The native Filament MSDF Projection ABI is not used for this Quad-only text
+  path; keyboard and laser cursor textures remain on their existing Quad path.
+- OSD Quad canvases now size themselves from MSDF text advance and atlas line
+  height, then preserve that aspect ratio while scaling with the virtual screen.
+- FPS and both screen/controller operation-guide panels now submit their text
+  as GPU MSDF runs into the same Quad-layer intermediate; keyboard and laser
+  cursor textures remain unchanged.
+- Menu and B overlay state machines are now mutually exclusive. The screen-side
+  guide keeps the full current screen height, and its MSDF text uses the same
+  canvas proportion so the guide content fills the background instead of
+  becoming a tiny centered block.
+- Restored live FPS-panel resolution values: XR now uses the first eye
+  swapchain size and Screen uses the current per-eye output render size instead
+  of the temporary `0x0` placeholders. Resolution changes invalidate the
+  cached MSDF panel text.
+- Restored the complete vertical Menu operation guide: the one-column MSDF
+  layout now renders every legacy guide row instead of applying the controller
+  panel's two-column split and dropping the second half.
+- FPS now reads the runtime `depth_strength` metadata instead of displaying a
+  hard-coded `0.00`. Depth adjustment, reset, and 2D/3D controller shortcuts
+  also trigger a legacy-style Quad OSD for 2.5 seconds; the stereo toggle uses
+  the legacy `3D mode on/off` message while depth changes show `Depth Strength`.
+  Controller changes are reflected immediately from the accepted runtime target;
+  older in-flight output frames cannot overwrite the new OSD value.
+- Right-grip/right-stick screen distance and size controls now use only the
+  hold-time acceleration curve; the generic guide dispatcher no longer adds a
+  second fixed-speed delta in the same XR frame.
+- Right-grip screen distance and size controls start at 0.10 m/s, accelerate
+  linearly with hold time, and reach 10.0 m/s after five seconds. Releasing or
+  reversing the stick resets the ramp for precise adjustment.
 
 ### 已实现
 

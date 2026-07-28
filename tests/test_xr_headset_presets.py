@@ -15,6 +15,9 @@ def test_xr_headset_presets_match_reference_screen_sizes():
 
     assert DEFAULT_XR_HEADSET_MODEL == "Pico 4 / 4 Ultra"
     assert XR_HEADSET_HORIZONTAL_FOV_DEG == 60.0
+    assert pico.resolution_tier_k == 4
+    assert resolve_xr_headset_preset("Pimax Crystal / Light").resolution_tier_k == 8
+    assert resolve_xr_headset_preset("Meta Quest 2").resolution_tier_k == 2
     assert (pico.distance_m, pico.width_m, pico.height_m, pico.diagonal_in) == (20.0, 23.09, 12.99, 1043)
     assert (quest.distance_m, quest.width_m, quest.height_m, quest.diagonal_in) == (1.3, 1.50, 0.84, 68)
     assert (xreal.distance_m, xreal.width_m, xreal.height_m, xreal.diagonal_in) == (4.0, 4.62, 2.60, 209)

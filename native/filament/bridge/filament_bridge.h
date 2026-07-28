@@ -126,6 +126,10 @@ FILAMENT_BRIDGE_API int filament_bridge_set_screen_curved(
 FILAMENT_BRIDGE_API int filament_bridge_set_screen_light(
         FilamentBridge* bridge,
         float red, float green, float blue, float intensity);
+// Set the matrix-selected source prefilter scale. One means no additional
+// prefiltering beyond the projected source footprint.
+FILAMENT_BRIDGE_API int filament_bridge_set_screen_sampling(
+        FilamentBridge* bridge, float filter_scale);
 // image is a borrowed Vulkan VkImage owned by the runtime output adapter.
 FILAMENT_BRIDGE_API int filament_bridge_set_screen_image(
         FilamentBridge* bridge, const void* image,

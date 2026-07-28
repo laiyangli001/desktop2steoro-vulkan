@@ -130,9 +130,15 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "bridge_set_renderable_layer(bridge, bridge->screen_entity, 1, true);" in source
     assert "bool screen_in_scene = false;" in source
     assert "The sampler is required by the material" in source
-    assert "TextureSampler::MinFilter::LINEAR_MIPMAP_LINEAR" in source
+    assert "TextureSampler::MinFilter::LINEAR" in source
     assert "TextureSampler::MagFilter::LINEAR" in source
     assert "screen_texture_sampler.setAnisotropy(16.0f)" in source
+    assert "screen-footprint filtering explicitly" in source
+    assert 'parameter("screenTexelSize"' in source
+    assert 'parameter("screenFilterScale"' in source
+    assert 'parameter("screenSharpness"' in source
+    assert "screen_rcas" in source
+    assert "fwidth(uv)" in source
     context_source = (bridge_dir / "bridge_context.cpp").read_text(encoding="utf-8")
     assert "eye.view->setAntiAliasing(filament::AntiAliasing::NONE);" in context_source
     assert "filament_bridge_set_screen_ready_semaphore" in facade
@@ -204,6 +210,7 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert ".intensity(kLegacyAmbientLux)" in source
     assert "filament_bridge_set_ambient_light" in facade
     assert "filament_bridge_set_screen_light" in facade
+    assert "filament_bridge_set_screen_sampling" in facade
     assert "LightManager::Type::FOCUSED_SPOT" in source
     assert "bridge->screen_light_direction = -forward;" in source
     assert "std::sqrt(width * width + height * height)" in source

@@ -34,6 +34,8 @@ from xr_viewer.core_openxr_vulkan import (
     OpenXrVulkanPresenter,
     OpenXrVulkanUnavailableError,
     _EyeSwapchain,
+    _layout_msdf_osd_runs,
+    _build_msdf_help_panel,
     _scaled_dimension,
     _select_swapchain_format,
     _select_vulkan_api_version,
@@ -41,6 +43,9 @@ from xr_viewer.core_openxr_vulkan import (
 )
 from xr_viewer.controller_models import controller_button_local_position
 from xr_viewer.overlay_textures import build_controller_callout_rgba, build_keyboard_rgba
+from xr_viewer.msdf_font_atlas import MsdfFontAtlas
+from viewer.controller_help import get_controller_help_rows
+from viewer.vulkan_msdf_quad import VulkanMsdfQuadRequest
 from xr_viewer.xr_math import _xr_quat_to_mat4
 
 
@@ -233,6 +238,7 @@ def test_openxr_defaults_to_validated_srgb_projection_target() -> None:
     assert OpenXrVulkanConfig().swapchain_color_mode == "srgb"
     assert OpenXrVulkanConfig().controller_model == "PICO"
     assert OpenXrVulkanConfig().controller_guide_max_distance == pytest.approx(0.4)
+    assert OpenXrVulkanConfig().headset_model == "Pico 4 / 4 Ultra"
 
 
 def test_presenter_config_keeps_default_screen_geometry() -> None:
@@ -581,9 +587,109 @@ def test_tool_overlay_metrics_snapshot_latency_with_fps_window() -> None:
     presenter._frame_now = 11.05
     frame.frame_id = 3
     frame.timestamp = 11.0
+    frame.metadata = {"depth_strength": 1.75}
     presenter._update_tool_overlay_metrics(frame)
     assert presenter._tool_overlay_xr_fps == pytest.approx(3.0 / 1.05)
     assert presenter._tool_overlay_latency_ms == pytest.approx(50.0)
+    assert presenter._tool_overlay_depth_strength == pytest.approx(1.75)
+
+
+def test_depth_shortcut_triggers_quad_osd_with_runtime_value() -> None:
+    presenter = OpenXrVulkanPresenter(
+        on_controller_shortcut=lambda _action, **_values: True
+    )
+    presenter._dispatch_controller_shortcut(
+        "adjust_depth_strength", delta=0.25
+    )
+    assert presenter._depth_osd_show_t > 0.0
+
+    presenter._filament_screen = (
+        (0.0, 0.0, -2.0), 2.4, 1.35, (0.0, 0.0, 0.0)
+    )
+    presenter._head_position_w = np.asarray((0.0, 0.0, 0.0), dtype=np.float64)
+    presenter._tool_overlay_depth_strength = 1.75
+    presenter._depth_osd_show_t = 1.0
+    presenter._frame_now = 1.1
+    presenter.xr = object()
+    presenter.session = object()
+    presenter.vulkan = object()
+    presenter._msdf_font_atlas = MsdfFontAtlas()
+    presenter._vulkan_msdf_quad_renderer = object()
+    presenter._cursor_overlay_specs = lambda *_args: []
+    presenter._upload_tool_quad = lambda *args: args
+
+    specs = presenter._render_tool_quad_layers()
+    depth_osd = next(spec for spec in specs if spec[0] == "depth_osd")
+    assert isinstance(depth_osd[1], VulkanMsdfQuadRequest)
+    assert any(run["text"] == "Depth Strength" for run in depth_osd[1].runs)
+    assert any(run["text"] == "1.75" for run in depth_osd[1].runs)
+
+
+def test_toggle_stereo_shortcut_uses_legacy_mode_message() -> None:
+    presenter = OpenXrVulkanPresenter(
+        on_controller_shortcut=lambda _action, **_values: True
+    )
+    presenter._tool_overlay_depth_strength = 1.75
+    presenter._dispatch_controller_shortcut("toggle_stereo")
+
+    assert presenter._depth_osd_message == "3D mode off"
+    assert presenter._depth_osd_show_t > 0.0
+
+
+def test_depth_osd_uses_synchronous_runtime_value_before_output_frame() -> None:
+    snapshot = SimpleNamespace(depth_strength=1.75)
+
+    class RuntimeShortcut:
+        context = SimpleNamespace(
+            openxr_state=SimpleNamespace(runtime_settings_snapshot=snapshot)
+        )
+
+        def handle(self, action, **values):
+            assert action == "adjust_depth_strength"
+            snapshot.depth_strength += float(values["delta"])
+            return True
+
+    callback = RuntimeShortcut()
+    presenter = OpenXrVulkanPresenter(on_controller_shortcut=callback.handle)
+    presenter._tool_overlay_depth_strength = 1.75
+    presenter._dispatch_controller_shortcut(
+        "adjust_depth_strength", delta=0.25
+    )
+
+    assert presenter._tool_overlay_depth_strength == pytest.approx(2.0)
+    assert presenter._tool_overlay_depth_strength_pending == pytest.approx(2.0)
+
+    stale_frame = SimpleNamespace(
+        frame_id=1, timestamp=0.0, metadata={"depth_strength": 1.75}
+    )
+    presenter._frame_now = 1.0
+    presenter._update_tool_overlay_metrics(stale_frame)
+    assert presenter._tool_overlay_depth_strength == pytest.approx(2.0)
+
+    fresh_frame = SimpleNamespace(
+        frame_id=2, timestamp=0.0, metadata={"depth_strength": 2.0}
+    )
+    presenter._update_tool_overlay_metrics(fresh_frame)
+    assert presenter._tool_overlay_depth_strength == pytest.approx(2.0)
+    assert presenter._tool_overlay_depth_strength_pending is None
+
+
+def test_fps_overlay_resolution_uses_live_xr_and_output_sizes() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter.swapchains = [SimpleNamespace(width=3648, height=3648)]
+    output_frame = SimpleNamespace(
+        left_eye=SimpleNamespace(width=3840, height=2160),
+        metadata={"render_size": (3840, 2160)},
+    )
+
+    assert presenter._overlay_resolution_sizes(output_frame) == (
+        (3648, 3648),
+        (3840, 2160),
+    )
+    assert presenter._overlay_resolution_sizes(None) == (
+        (3648, 3648),
+        (3840, 2160),
+    )
 
 
 def test_filament_controller_guide_tracks_geometry_and_visibility() -> None:
@@ -928,6 +1034,58 @@ def test_menu_panel_cycle_keeps_fps_when_vertical_screen_guide_is_shown() -> Non
     assert presenter._screen_operation_guide_visible is False
 
 
+def test_menu_and_b_panel_cycles_do_not_leave_the_other_guide_visible() -> None:
+    presenter = OpenXrVulkanPresenter()
+
+    presenter._dispatch_controller_shortcut("cycle_status_panel")
+    presenter._dispatch_controller_shortcut("cycle_status_panel")
+    assert presenter._screen_operation_guide_visible is True
+
+    presenter._dispatch_controller_shortcut("cycle_hand_panel")
+    assert presenter._hand_fps_visible is True
+    assert presenter._hand_operation_guide_visible is False
+    assert presenter._screen_operation_guide_visible is False
+    assert presenter._fps_overlay_visible is False
+
+
+def test_screen_operation_guide_keeps_screen_height_and_scales_text() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_screen = (
+        (0.0, 0.0, -20.0), 23.09, 12.988, (0.0, 0.0, 0.0)
+    )
+    presenter._head_position_w = np.asarray((0.0, 0.0, 0.0), dtype=np.float64)
+    presenter._screen_operation_guide_visible = True
+    presenter.xr = object()
+    presenter.session = object()
+    presenter.vulkan = object()
+    presenter._msdf_font_atlas = MsdfFontAtlas()
+    presenter._vulkan_msdf_quad_renderer = object()
+    presenter._cursor_overlay_specs = lambda *_args: []
+    presenter._upload_tool_quad = lambda *args: args
+
+    specs = presenter._render_tool_quad_layers()
+    guide = next(spec for spec in specs if spec[0] == "screen_help")
+
+    assert guide[3][1] == pytest.approx(12.988)
+    assert isinstance(guide[1], VulkanMsdfQuadRequest)
+    assert max(run["scale"] for run in guide[1].runs) == pytest.approx(
+        21.0 / presenter._msdf_font_atlas.line_height
+    )
+
+
+def test_vertical_msdf_operation_guide_contains_all_legacy_rows() -> None:
+    rows, _environment_rows = get_controller_help_rows("CN")
+    request = _build_msdf_help_panel(
+        MsdfFontAtlas(), rows, two_columns=False
+    )
+    rendered_text = {str(run["text"]) for run in request.runs}
+
+    for row in rows:
+        for text in row[:3]:
+            if text:
+                assert text in rendered_text
+
+
 def test_keyboard_pose_faces_head_independently_of_profile_screen_rotation() -> None:
     presenter = OpenXrVulkanPresenter()
     presenter._filament_screen = (
@@ -1018,6 +1176,116 @@ def test_screen_adjustment_osd_is_submitted_as_quad_layer() -> None:
     large_osd = [spec for spec in large_specs if spec[0] == "screen_osd"]
 
     assert large_osd[0][3] == pytest.approx((4.8 * 0.03 * (512.0 / 78.0), 4.8 * 0.03))
+
+
+def test_screen_osd_keeps_text_in_quad_texture_when_msdf_abi_exists() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_screen = (
+        (0.0, 0.0, -2.0), 2.4, 1.35, (0.0, 0.0, 0.0)
+    )
+    presenter._head_position_w = np.asarray((0.0, 0.0, 0.0), dtype=np.float64)
+    presenter._screen_osd_show_t = 1.0
+    presenter._frame_now = 1.1
+    presenter.xr = object()
+    presenter.session = object()
+    presenter.vulkan = object()
+    presenter.filament_bridge = SimpleNamespace(text_overlay_abi_available=True)
+    presenter._msdf_font_atlas = MsdfFontAtlas()
+    presenter._cursor_overlay_specs = lambda *_args: []
+    presenter._upload_tool_quad = lambda *args: args
+    presenter._submit_msdf_text_runs = lambda *_args: pytest.fail(
+        "screen OSD must not submit Projection-layer MSDF geometry"
+    )
+
+    specs = presenter._render_tool_quad_layers()
+    osd = next(spec for spec in specs if spec[0] == "screen_osd")
+
+    # The panel itself has alpha 210; text glyphs have alpha 255. Seeing 255
+    # proves the complete text+background bitmap was kept in the Quad layer.
+    assert int(np.max(osd[1][..., 3])) == 255
+
+
+def test_screen_osd_selects_gpu_msdf_request_for_quad_upload() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_screen = (
+        (0.0, 0.0, -2.0), 2.4, 1.35, (0.0, 0.0, 0.0)
+    )
+    presenter._head_position_w = np.asarray((0.0, 0.0, 0.0), dtype=np.float64)
+    presenter._screen_osd_show_t = 1.0
+    presenter._frame_now = 1.1
+    presenter.xr = object()
+    presenter.session = object()
+    presenter.vulkan = object()
+    presenter._msdf_font_atlas = MsdfFontAtlas()
+    presenter._vulkan_msdf_quad_renderer = object()
+    presenter._cursor_overlay_specs = lambda *_args: []
+    presenter._upload_tool_quad = lambda *args: args
+
+    specs = presenter._render_tool_quad_layers()
+    osd = next(spec for spec in specs if spec[0] == "screen_osd")
+
+    assert isinstance(osd[1], VulkanMsdfQuadRequest)
+    assert osd[1].height < 78
+    assert osd[1].width < 512
+    assert osd[1].width > osd[1].height
+    assert osd[3][0] / osd[3][1] == pytest.approx(
+        osd[1].width / osd[1].height
+    )
+
+
+def test_fps_and_operation_guides_select_gpu_msdf_quad_requests() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_screen = (
+        (0.0, 0.0, -2.0), 2.4, 1.35, (0.0, 0.0, 0.0)
+    )
+    presenter._head_position_w = np.asarray((0.0, 0.0, 0.0), dtype=np.float64)
+    presenter._frame_now = 1.1
+    presenter._fps_overlay_visible = True
+    presenter._screen_operation_guide_visible = True
+    presenter._hand_operation_guide_visible = True
+    presenter.xr = object()
+    presenter.session = object()
+    presenter.vulkan = object()
+    presenter._msdf_font_atlas = MsdfFontAtlas()
+    presenter._vulkan_msdf_quad_renderer = object()
+    presenter._controller_overlay_pose = lambda *_args: (
+        (0.0, 0.0, -0.5),
+        (0.0, 0.0, 0.0, 1.0),
+    )
+    presenter._cursor_overlay_specs = lambda *_args: []
+    presenter._upload_tool_quad = lambda *args: args
+
+    specs = presenter._render_tool_quad_layers()
+    by_name = {
+        spec[0]: spec[1]
+        for spec in specs
+        if spec[0] in {"screen_fps", "screen_help", "hand_help"}
+    }
+
+    assert set(by_name) == {"screen_fps", "screen_help", "hand_help"}
+    assert all(isinstance(value, VulkanMsdfQuadRequest) for value in by_name.values())
+    assert all(value.width > 0 and value.height > 0 for value in by_name.values())
+
+
+def test_msdf_osd_canvas_width_follows_text_advance() -> None:
+    atlas = MsdfFontAtlas()
+    short_width, short_height, _ = _layout_msdf_osd_runs(
+        atlas,
+        (
+            {"text": "Preset", "color": (255, 255, 255, 255)},
+            {"text": "A", "color": (0, 255, 255, 255)},
+        ),
+    )
+    long_width, long_height, _ = _layout_msdf_osd_runs(
+        atlas,
+        (
+            {"text": "Preset", "color": (255, 255, 255, 255)},
+            {"text": "Headset Recommended", "color": (0, 255, 255, 255)},
+        ),
+    )
+
+    assert long_width > short_width
+    assert long_height == short_height
 
 
 def test_vulkan_reset_screen_restores_initial_size_and_pose() -> None:
@@ -1247,8 +1515,12 @@ def test_right_grip_stick_y_uses_legacy_accelerated_radial_distance() -> None:
         laser_hit=(0.5, 0.5, 2.0),
     )
 
+    first_frame_speed = (
+        presenter._screen_control_min_speed
+        + presenter._screen_control_acceleration / 90.0
+    )
     assert presenter._filament_screen[0] == pytest.approx(
-        (0.0, 0.0, -2.0 - 3.0 / 90.0)
+        (0.0, 0.0, -2.0 - first_frame_speed / 90.0)
     )
 
 
@@ -1260,12 +1532,59 @@ def test_right_grip_stick_x_resizes_screen_without_22m_cap() -> None:
 
     presenter._apply_right_grip_screen_resize(
         1.0,
-        dt=1.0,
+        dt=5.0,
         laser_hit=(0.5, 0.5, 2.0),
     )
 
-    assert presenter._filament_screen[1] == pytest.approx(23.2)
-    assert presenter._filament_screen[2] == pytest.approx(12.375 * 23.2 / 22.0)
+    expected_width = 22.0 + presenter._screen_control_max_speed * 5.0
+    assert presenter._filament_screen[1] == pytest.approx(expected_width)
+    assert presenter._filament_screen[2] == pytest.approx(
+        12.375 * expected_width / 22.0
+    )
+
+
+def test_screen_control_speed_ramps_from_precision_to_ten_meters_per_second() -> None:
+    presenter = OpenXrVulkanPresenter()
+
+    first = presenter._screen_hold_speed(
+        1.0, dt=1.0 / 90.0, control="size"
+    )
+    one_second = presenter._screen_hold_speed(
+        1.0, dt=1.0 - 1.0 / 90.0, control="size"
+    )
+    five_seconds = presenter._screen_hold_speed(
+        1.0, dt=4.0, control="size"
+    )
+
+    assert first == pytest.approx(
+        presenter._screen_control_min_speed
+        + presenter._screen_control_acceleration / 90.0
+    )
+    assert one_second == pytest.approx(2.08)
+    assert five_seconds == pytest.approx(10.0)
+
+
+def test_pointer_exponential_resize_is_not_followed_by_fixed_guide_delta() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_screen = (
+        (0.0, 0.0, -2.0), 2.4, 1.35, (0.0, 0.0, 0.0)
+    )
+    presenter._head_position_w = np.asarray((0.0, 0.0, 0.0), dtype=np.float64)
+
+    presenter._apply_right_grip_screen_distance(
+        -0.5,
+        dt=1.0 / 90.0,
+        laser_hit=(0.5, 0.5, 2.0),
+    )
+    expected_position = presenter._filament_screen[0]
+
+    presenter._right_grip_screen_pointer_applied = True
+    presenter._dispatch_controller_shortcut(
+        "resize_screen", width_delta=0.6, distance_delta=0.5
+    )
+
+    assert presenter._filament_screen[0] == pytest.approx(expected_position)
+    assert presenter._filament_screen[1] == pytest.approx(2.4)
 
 
 def test_right_grip_wrist_rotation_does_not_rotate_screen() -> None:

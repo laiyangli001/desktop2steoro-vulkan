@@ -14,6 +14,9 @@ class XRHeadsetPreset:
     category: str
     display_name: str
     distance_m: float
+    # Application sampling tier, not a claim about a vendor's exact panel
+    # specification. It is selected by the GUI headset model.
+    resolution_tier_k: int
 
     @property
     def width_m(self) -> float:
@@ -29,27 +32,27 @@ class XRHeadsetPreset:
 
 
 XR_HEADSET_PRESETS = (
-    XRHeadsetPreset("Meta Quest 2", "vr", "Meta Quest 2", 1.3),
-    XRHeadsetPreset("Meta Quest 3", "vr", "Meta Quest 3", 1.3),
-    XRHeadsetPreset("Meta Quest Pro", "vr", "Meta Quest Pro", 1.1),
-    XRHeadsetPreset("Pico 4 / 4 Ultra", "vr", "Pico 4 / 4 Ultra", 20.0),
-    XRHeadsetPreset("Pico Neo 3", "vr", "Pico Neo 3", 1.5),
-    XRHeadsetPreset("HTC VIVE XR Elite", "vr", "HTC VIVE XR Elite", 20.0),
-    XRHeadsetPreset("HTC VIVE Focus 3 / Vision", "vr", "HTC VIVE Focus 3 / Vision", 1.5),
-    XRHeadsetPreset("HTC VIVE Pro / Cosmos", "vr", "HTC VIVE Pro / Cosmos", 1.5),
-    XRHeadsetPreset("Valve Index", "vr", "Valve Index", 1.5),
-    XRHeadsetPreset("Pimax Crystal / Light", "vr", "Pimax Crystal / Light", 1.0),
-    XRHeadsetPreset("Pimax 8K/5K/Artisan", "vr", "Pimax 8K/5K/Artisan", 1.5),
-    XRHeadsetPreset("DPVR E4 / E3", "vr", "DPVR E4 / E3", 1.0),
-    XRHeadsetPreset("Sony PS VR2", "vr", "Sony PS VR2", 2.0),
-    XRHeadsetPreset("Apple Vision Pro", "vr", "Apple Vision Pro", 1.5),
-    XRHeadsetPreset("Varjo Aero / XR-3", "vr", "Varjo Aero / XR-3", 1.5),
-    XRHeadsetPreset("Viture One / Pro / Lite", "ar", "Viture One / Pro / Lite", 3.0),
-    XRHeadsetPreset("RayNeo Air 2 / 3 / 2s / Plus", "ar", "RayNeo Air 2 / 3 / 2s / Plus", 4.0),
-    XRHeadsetPreset("XREAL Air / Air 2 / Pro", "ar", "XREAL Air / Air 2 / Pro", 4.0),
-    XRHeadsetPreset("Rokid Max / Max Pro / AR Lite", "ar", "Rokid Max / Max Pro / AR Lite", 6.0),
-    XRHeadsetPreset("Huawei Vision Glass", "ar", "Huawei Vision Glass", 4.0),
-    XRHeadsetPreset("Thunderobot Air 1S", "ar", "Thunderobot Air 1S", 4.0),
+    XRHeadsetPreset("Meta Quest 2", "vr", "Meta Quest 2", 1.3, 2),
+    XRHeadsetPreset("Meta Quest 3", "vr", "Meta Quest 3", 1.3, 4),
+    XRHeadsetPreset("Meta Quest Pro", "vr", "Meta Quest Pro", 1.1, 4),
+    XRHeadsetPreset("Pico 4 / 4 Ultra", "vr", "Pico 4 / 4 Ultra", 20.0, 4),
+    XRHeadsetPreset("Pico Neo 3", "vr", "Pico Neo 3", 1.5, 4),
+    XRHeadsetPreset("HTC VIVE XR Elite", "vr", "HTC VIVE XR Elite", 20.0, 4),
+    XRHeadsetPreset("HTC VIVE Focus 3 / Vision", "vr", "HTC VIVE Focus 3 / Vision", 1.5, 4),
+    XRHeadsetPreset("HTC VIVE Pro / Cosmos", "vr", "HTC VIVE Pro / Cosmos", 1.5, 2),
+    XRHeadsetPreset("Valve Index", "vr", "Valve Index", 1.5, 2),
+    XRHeadsetPreset("Pimax Crystal / Light", "vr", "Pimax Crystal / Light", 1.0, 8),
+    XRHeadsetPreset("Pimax 8K/5K/Artisan", "vr", "Pimax 8K/5K/Artisan", 1.5, 8),
+    XRHeadsetPreset("DPVR E4 / E3", "vr", "DPVR E4 / E3", 1.0, 4),
+    XRHeadsetPreset("Sony PS VR2", "vr", "Sony PS VR2", 2.0, 4),
+    XRHeadsetPreset("Apple Vision Pro", "vr", "Apple Vision Pro", 1.5, 8),
+    XRHeadsetPreset("Varjo Aero / XR-3", "vr", "Varjo Aero / XR-3", 1.5, 8),
+    XRHeadsetPreset("Viture One / Pro / Lite", "ar", "Viture One / Pro / Lite", 3.0, 2),
+    XRHeadsetPreset("RayNeo Air 2 / 3 / 2s / Plus", "ar", "RayNeo Air 2 / 3 / 2s / Plus", 4.0, 2),
+    XRHeadsetPreset("XREAL Air / Air 2 / Pro", "ar", "XREAL Air / Air 2 / Pro", 4.0, 2),
+    XRHeadsetPreset("Rokid Max / Max Pro / AR Lite", "ar", "Rokid Max / Max Pro / AR Lite", 6.0, 2),
+    XRHeadsetPreset("Huawei Vision Glass", "ar", "Huawei Vision Glass", 4.0, 2),
+    XRHeadsetPreset("Thunderobot Air 1S", "ar", "Thunderobot Air 1S", 4.0, 2),
 )
 
 _PRESETS_BY_KEY = {preset.key: preset for preset in XR_HEADSET_PRESETS}

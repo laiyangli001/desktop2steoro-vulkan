@@ -859,6 +859,16 @@ native/filament/bridge/
 
 虚拟屏幕材质采样 Left/Right Eye 或 SBS 对应区域。每眼 View 必须选择正确 eye texture/UV，不通过 cross-eyed 旧兼容参数猜测顺序。
 
+Presenter 启动时从 `XR Headset Model` 解析 2K/4K/8K 应用采样档位，并从输出帧元数据中的 `capture_size` 获取 GUI“输入屏幕”的实际输入尺寸。输入尺寸按最长边近似归入 1K/2K/4K；矩阵固定为 `1K→2K`、`2K→4K`、`4K→8K`，有效档位取 GUI 头显档位与矩阵推荐档位的较小值。非 16:9 只影响档位归类，屏幕 UV、源图像宽高和显示纵横比保持原值。匹配路径的 Filament screen sampler 不追加预滤；源分辨率高于选定头显档位时，Bridge 通过 `filament_bridge_set_screen_sampling` 追加有界面积预滤。OpenXR recommended extent 仅用于 swapchain 创建上限。
+
+实现必须保留以下运行时数据边界：
+
+1. `headset_model` 使用 GUI 保存的稳定型号 key，不使用显示字符串反向猜测实际分辨率；型号表中的 `resolution_tier_k` 是应用采样策略字段。
+2. `capture_size` 优先于处理后 eye image 尺寸，用于判断输入是 1K、2K 还是 4K；缺失时才回退到 eye image 尺寸。输入尺寸变化必须使采样策略重新计算，但不得重建源图像纹理，除非源图像 extent 本身发生变化。
+3. 采样计划至少记录 `input_tier_k`、`headset_tier_k`、`recommended_headset_tier_k`、`effective_tier_k`、`filter_scale` 和 `mode`，并在这些值变化时记录一次诊断日志，禁止每帧刷屏。
+4. `filter_scale=1` 表示源纹素 footprint 与投影 `fwidth` 的最大值；大于 1 时仅扩大有限面积预滤 footprint。该参数不得改变 sRGB/linear 契约、不得加入 ACES/Reinhard 等 tone mapping，也不得修改源图像的像素值。
+5. Bridge 不支持 `filament_bridge_set_screen_sampling` 时必须报告 `bridge_sampling=unavailable`，保留兼容路径；新 ABI 必须通过三平台远程构建后才可实机验收为 active。
+
 屏幕变换、距离、曲率和可见性由 `SceneFrameState` 提供。交互状态与渲染资源分离，手柄拖动只更新下一帧 transform snapshot。
 
 手柄状态同样由 Python OpenXR Presenter 管理，Bridge 只消费每帧快照。Presenter 必须分别维护左右手 Grip/Aim 有效性、上一帧姿态和最后移动时间；Grip 跟踪无效时立即隐藏对应模型和激光，连续 5 秒无位置或方向变化时自动隐藏，恢复移动后重新显示。激光使用 Aim 负 Z、旧工程标定偏移和稳定滤波，在共享 Filament Scene 的 Projection Layer 中绘制，不得提交为 Quad Layer；视觉契约为两张交叉锥形面和沿射线方向流动的蓝至红循环渐变。模型显隐、激光显隐、按键动画和姿态更新必须逐手独立；按键动画使用 GLB `_value/_min/_max` 节点、输入平滑和四元数旋转插值，任一可选 ABI 缺失不得阻断基础控制器 GLB 加载。`_value/_min/_max` 是 WebXR Input Profiles 的控制器变换契约，不得因节点本身不可渲染而丢弃；Bridge 应先枚举资产节点，再以打包 GLB 的完整节点名集合执行 `getFirstEntityByName` 回退，并逐型号测试所有完整三元组。摇杆、触控板和 thumbrest 的 touch 状态必须从 OpenXR action 传入动画层；为保持稳定 C ABI，可使用 `button_mask` 的版本化空闲位承载布尔状态，但不得把 touch 错当成 click。

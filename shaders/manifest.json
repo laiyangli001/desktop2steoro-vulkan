@@ -103,6 +103,21 @@
       "precision": "fp32"
     },
     {
+      "name": "d2s_msdf_quad",
+      "source": "d2s_msdf_quad.comp",
+      "spirv": "d2s_msdf_quad.spv",
+      "stage": "compute",
+      "entry": "main",
+      "workgroup": [8, 8, 1],
+      "descriptor_bindings": [
+        {"set": 0, "binding": 0, "kind": "storage_image", "access": "read_only", "format": "rgba8"},
+        {"set": 0, "binding": 1, "kind": "storage_image", "access": "write_only", "format": "rgba8"},
+        {"set": 0, "binding": 2, "kind": "storage_buffer", "access": "read_only", "format": null}
+      ],
+      "push_constants_size": 64,
+      "precision": "fp32"
+    },
+    {
       "name": "d2s_stereo_layered_tiled_reference",
       "source": "d2s_stereo_layered_tiled.comp",
       "spirv": "d2s_stereo_layered_tiled.spv",

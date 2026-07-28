@@ -8,6 +8,88 @@ from .laser_params import CURSOR_RING_INNER_RATIO
 from viewer.controller_help import get_controller_help_rows
 
 
+def build_msdf_text_osd_rgba(
+    atlas,
+    *,
+    size=(512, 78),
+    runs=(),
+    background=(32, 32, 36, 210),
+    radius=12,
+):
+    """Decode the offline MSDF atlas into one complete Quad Layer texture."""
+    ow, oh = int(size[0]), int(size[1])
+    if ow <= 0 or oh <= 0:
+        raise ValueError("MSDF OSD dimensions must be positive")
+    image = Image.new("RGBA", (ow, oh), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle(
+        [0, 0, ow - 1, oh - 1], radius=int(radius), fill=tuple(background)
+    )
+    rgba = np.array(image, dtype=np.uint8, copy=True, order="C")
+    distance_range = max(1.0, float(getattr(atlas, "distance_range", 4.0)))
+    page_cache = {}
+
+    def page_pixels(page):
+        if page not in page_cache:
+            page_cache[page] = np.asarray(atlas.page_rgba(page), dtype=np.uint8)
+        return page_cache[page]
+
+    def blend_glyph(instance, color):
+        x0 = int(round(instance.position[0]))
+        y0 = int(round(instance.position[1]))
+        dst_w = max(1, int(round(instance.size[0])))
+        dst_h = max(1, int(round(instance.size[1])))
+        if instance.size[0] <= 0.0 or instance.size[1] <= 0.0:
+            return
+        page = page_pixels(int(instance.page))
+        src_x0 = max(0, int(round(instance.uv_min[0] * atlas.page_width)))
+        src_y0 = max(0, int(round(instance.uv_min[1] * atlas.page_height)))
+        src_x1 = min(atlas.page_width, int(round(instance.uv_max[0] * atlas.page_width)))
+        src_y1 = min(atlas.page_height, int(round(instance.uv_max[1] * atlas.page_height)))
+        if src_x1 <= src_x0 or src_y1 <= src_y0:
+            return
+        crop = Image.fromarray(page[src_y0:src_y1, src_x0:src_x1, :3], mode="RGB")
+        crop = crop.resize((dst_w, dst_h), Image.Resampling.BILINEAR)
+        msdf = np.asarray(crop, dtype=np.float32) / 255.0
+        median = np.median(msdf, axis=2)
+        screen_px_range = max(1.0, min(16.0, dst_h / distance_range))
+        coverage = np.clip((median - 0.5) * screen_px_range + 0.5, 0.0, 1.0)
+        color_rgba = np.asarray(color, dtype=np.float32)
+        if color_rgba.shape != (4,):
+            raise ValueError("MSDF text color must contain four components")
+        source_alpha = coverage * (color_rgba[3] / 255.0)
+        dst_x0, dst_y0 = max(0, x0), max(0, y0)
+        dst_x1, dst_y1 = min(ow, x0 + dst_w), min(oh, y0 + dst_h)
+        if dst_x1 <= dst_x0 or dst_y1 <= dst_y0:
+            return
+        sx0, sy0 = dst_x0 - x0, dst_y0 - y0
+        sx1, sy1 = sx0 + dst_x1 - dst_x0, sy0 + dst_y1 - dst_y0
+        source_alpha = source_alpha[sy0:sy1, sx0:sx1]
+        destination = rgba[dst_y0:dst_y1, dst_x0:dst_x1].astype(np.float32) / 255.0
+        destination_alpha = destination[..., 3]
+        output_alpha = source_alpha + destination_alpha * (1.0 - source_alpha)
+        safe_alpha = np.maximum(output_alpha, 1e-6)
+        source_rgb = color_rgba[:3] / 255.0
+        destination[..., :3] = (
+            source_rgb[None, None, :] * source_alpha[..., None]
+            + destination[..., :3] * destination_alpha[..., None] * (1.0 - source_alpha[..., None])
+        ) / safe_alpha[..., None]
+        destination[..., 3] = output_alpha
+        rgba[dst_y0:dst_y1, dst_x0:dst_x1] = np.clip(
+            destination * 255.0 + 0.5, 0.0, 255.0
+        ).astype(np.uint8)
+
+    for run in runs:
+        instances = atlas.layout(
+            str(run.get("text", "")),
+            origin=(float(run.get("x", 0.0)), float(run.get("y", 0.0))),
+            scale=float(run.get("scale", 1.0)),
+        )
+        for instance in instances:
+            blend_glyph(instance, run.get("color", (255, 255, 255, 255)))
+    return np.ascontiguousarray(rgba)
+
+
 def load_overlay_font(size, font_type=None, *, prefer_cjk=False):
     candidates = []
     if prefer_cjk:

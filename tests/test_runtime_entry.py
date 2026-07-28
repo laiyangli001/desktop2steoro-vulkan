@@ -46,6 +46,7 @@ def test_openxr_filament_screen_geometry_follows_gui_headset_model() -> None:
 
     assert config["filament_screen_distance"] == 20.0
     assert config["filament_screen_width"] == 23.09
+    assert config["headset_model"] == "Pico 4 / 4 Ultra"
 
 
 def test_openxr_environment_uses_selected_folder_and_profile_glb(tmp_path: Path) -> None:

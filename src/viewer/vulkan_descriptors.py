@@ -268,13 +268,29 @@ class VulkanStorageBuffer:
 
 
 class VulkanStorageImage:
-    def __init__(self, context: Any, width: int = 1, height: int = 1) -> None:
+    def __init__(
+        self,
+        context: Any,
+        width: int = 1,
+        height: int = 1,
+        *,
+        format: int | None = None,
+        usage: int | None = None,
+        queue_role: str = "compute",
+    ) -> None:
         if int(width) < 1 or int(height) < 1:
             raise ValueError("storage image dimensions must be positive")
         self.context = context
         self.vk = context.vk
         self.width = int(width)
         self.height = int(height)
+        self.format = int(format or self.vk.VK_FORMAT_R8G8B8A8_UNORM)
+        self.usage = int(usage or self.vk.VK_IMAGE_USAGE_STORAGE_BIT)
+        if not self.usage & self.vk.VK_IMAGE_USAGE_STORAGE_BIT:
+            raise ValueError("VulkanStorageImage usage must include STORAGE_BIT")
+        self.queue_role = str(queue_role).lower()
+        if self.queue_role not in ("graphics", "compute", "transfer"):
+            raise ValueError("VulkanStorageImage queue_role is invalid")
         self.image = None
         self.memory = None
         self.view = None
@@ -293,13 +309,13 @@ class VulkanStorageImage:
             vk.VkImageCreateInfo(
                 sType=vk.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
                 imageType=vk.VK_IMAGE_TYPE_2D,
-                format=vk.VK_FORMAT_R8G8B8A8_UNORM,
+                format=self.format,
                 extent=vk.VkExtent3D(width=self.width, height=self.height, depth=1),
                 mipLevels=1,
                 arrayLayers=1,
                 samples=vk.VK_SAMPLE_COUNT_1_BIT,
                 tiling=vk.VK_IMAGE_TILING_OPTIMAL,
-                usage=vk.VK_IMAGE_USAGE_STORAGE_BIT,
+                usage=self.usage,
                 sharingMode=sharing_mode,
                 queueFamilyIndexCount=len(sharing_families) if len(sharing_families) > 1 else 0,
                 pQueueFamilyIndices=sharing_families if len(sharing_families) > 1 else None,
@@ -337,7 +353,7 @@ class VulkanStorageImage:
                 sType=vk.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
                 image=self.image,
                 viewType=vk.VK_IMAGE_VIEW_TYPE_2D,
-                format=vk.VK_FORMAT_R8G8B8A8_UNORM,
+                format=self.format,
                 subresourceRange=vk.VkImageSubresourceRange(
                     aspectMask=vk.VK_IMAGE_ASPECT_COLOR_BIT,
                     baseMipLevel=0,
@@ -354,15 +370,33 @@ class VulkanStorageImage:
             raise VulkanDescriptorError("storage image view is unavailable")
         return self.view
 
-    def transition_to_general(self) -> int:
+    def transition_to_general(
+        self,
+        *,
+        role: str | None = None,
+        dst_access_mask: int | None = None,
+    ) -> int:
         vk = self.vk
+        queue_role = str(role or self.queue_role).lower()
+        if queue_role not in ("graphics", "compute", "transfer"):
+            raise ValueError("VulkanStorageImage transition queue role is invalid")
+        image_state = self.context.image_state(self.image)
+        old_layout = int(image_state.layout)
+        old_access_mask = int(image_state.access_mask)
+        old_stage_mask = int(image_state.stage_mask or vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT)
+        target_access_mask = int(
+            dst_access_mask
+            if dst_access_mask is not None
+            else vk.VK_ACCESS_SHADER_WRITE_BIT
+        )
+        target_queue_family = self.context.queue_family(queue_role)
 
         def record(command_buffer: Any) -> None:
             barrier = vk.VkImageMemoryBarrier(
                 sType=vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                srcAccessMask=0,
-                dstAccessMask=vk.VK_ACCESS_SHADER_WRITE_BIT,
-                oldLayout=vk.VK_IMAGE_LAYOUT_UNDEFINED,
+                srcAccessMask=old_access_mask,
+                dstAccessMask=target_access_mask,
+                oldLayout=old_layout,
                 newLayout=vk.VK_IMAGE_LAYOUT_GENERAL,
                 srcQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
                 dstQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
@@ -377,7 +411,7 @@ class VulkanStorageImage:
             )
             vk.vkCmdPipelineBarrier(
                 command_buffer,
-                vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                old_stage_mask,
                 vk.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                 0,
                 0,
@@ -388,16 +422,16 @@ class VulkanStorageImage:
                 [barrier],
             )
 
-        timeline_value = self.context.submit_on("compute", record)
+        timeline_value = self.context.submit_on(queue_role, record)
         from viewer.vulkan_context import ImageState
 
         self.context.register_image_state(
             self.image,
             ImageState(
                 layout=vk.VK_IMAGE_LAYOUT_GENERAL,
-                access_mask=vk.VK_ACCESS_SHADER_WRITE_BIT,
+                access_mask=target_access_mask,
                 stage_mask=vk.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                queue_family_index=self.context.compute_queue_family_index,
+                queue_family_index=target_queue_family,
             ),
         )
         return timeline_value

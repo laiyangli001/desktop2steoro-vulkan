@@ -58,6 +58,7 @@ class FilamentVulkanBridge:
         self._ambient_light_abi_available = False
         self._screen_ready_semaphore_abi_available = False
         self._finished_drawing_semaphore_abi_available = False
+        self._screen_sampling_abi_available = False
         self._async_submit_abi_available = False
         self._configure_abi()
         self._handle: ctypes.c_void_p | None = None
@@ -560,6 +561,21 @@ class FilamentVulkanBridge:
             "set_screen_light",
         )
 
+    def set_screen_sampling(self, filter_scale: float) -> None:
+        self._ensure_loaded()
+        if not self._screen_sampling_abi_available:
+            return
+        self._check_result(
+            self._library.filament_bridge_set_screen_sampling(
+                self._handle, float(filter_scale)
+            ),
+            "set_screen_sampling",
+        )
+
+    @property
+    def screen_sampling_abi_available(self) -> bool:
+        return self._screen_sampling_abi_available
+
     def set_screen_image(
         self, image: Any, *, width: int, height: int, format: int
     ) -> None:
@@ -823,6 +839,13 @@ class FilamentVulkanBridge:
             ]
             set_screen_light.restype = ctypes.c_int
             self._screen_light_abi_available = True
+        set_screen_sampling = getattr(
+            library, "filament_bridge_set_screen_sampling", None
+        )
+        if set_screen_sampling is not None:
+            set_screen_sampling.argtypes = [ctypes.c_void_p, ctypes.c_float]
+            set_screen_sampling.restype = ctypes.c_int
+            self._screen_sampling_abi_available = True
         if hasattr(library, "filament_bridge_set_screen_image"):
             library.filament_bridge_set_screen_image.argtypes = [
                 ctypes.c_void_p,
