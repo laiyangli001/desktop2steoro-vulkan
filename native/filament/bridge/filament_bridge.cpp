@@ -8,6 +8,7 @@
 #include "bridge_material.h"
 #include "bridge_scene.h"
 #include "bridge_screen.h"
+#include "bridge_text_overlay.h"
 #include "preview_bridge.h"
 
 FilamentBridge* filament_bridge_create_vulkan(
@@ -131,6 +132,22 @@ int filament_bridge_set_controller_guide_texture(
 int filament_bridge_set_controller_guide(
         FilamentBridge* bridge, const float* matrix16, int visible) {
     return bridge_controller_guide_set(bridge, matrix16, visible);
+}
+
+int filament_bridge_set_text_overlay_page_texture(
+        FilamentBridge* bridge, uint32_t page,
+        const uint8_t* rgba, uint32_t width, uint32_t height) {
+    return bridge_text_overlay_set_page_texture(
+            bridge, page, rgba, width, height);
+}
+
+int filament_bridge_set_text_overlay_page_vertices(
+        FilamentBridge* bridge, uint32_t page,
+        const float* vertices, uint32_t vertex_count,
+        const uint16_t* indices, uint32_t index_count, int visible) {
+    return bridge_text_overlay_set_page_vertices(
+            bridge, page, vertices, vertex_count,
+            indices, index_count, visible);
 }
 
 int filament_bridge_set_scene_exposure(

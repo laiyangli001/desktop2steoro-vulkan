@@ -84,6 +84,7 @@ add_library(filament_bridge SHARED
     bridge_scene.cpp
     bridge_controller.cpp
     bridge_controller_guide.cpp
+    bridge_text_overlay.cpp
     bridge_laser.cpp
     bridge_screen.cpp
     bridge_material.cpp

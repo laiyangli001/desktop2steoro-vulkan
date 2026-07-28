@@ -6,12 +6,20 @@ from pathlib import Path
 from stereo_runtime.pipeline import (
     RuntimePipelineLoop,
     _enable_openxr_depth_cuda_graph_if_needed,
+    _motion_sample,
+    _motion_score,
     _runtime_motion_gate_enabled,
 )
 
 
-def test_openxr_motion_gate_is_enabled_by_default(monkeypatch):
+def test_openxr_motion_gate_matches_legacy_default(monkeypatch):
     monkeypatch.delenv("D2S_RUNTIME_MOTION_GATE", raising=False)
+
+    assert _runtime_motion_gate_enabled(SimpleNamespace(run_mode="OpenXR")) is False
+
+
+def test_motion_gate_can_be_enabled_explicitly(monkeypatch):
+    monkeypatch.setenv("D2S_RUNTIME_MOTION_GATE", "1")
 
     assert _runtime_motion_gate_enabled(SimpleNamespace(run_mode="OpenXR")) is True
 
@@ -20,6 +28,17 @@ def test_motion_gate_can_be_disabled_explicitly(monkeypatch):
     monkeypatch.setenv("D2S_RUNTIME_MOTION_GATE", "0")
 
     assert _runtime_motion_gate_enabled(SimpleNamespace(run_mode="OpenXR")) is False
+
+
+def test_motion_sample_is_snapshot_when_input_storage_is_reused():
+    import torch
+
+    frame = torch.zeros((1, 3, 36, 64), dtype=torch.float32)
+    previous = _motion_sample(frame)
+    frame.fill_(1.0)
+    current = _motion_sample(frame)
+
+    assert _motion_score(previous, current) == 1.0
 
 
 def test_openxr_pipeline_keeps_deferred_vulkan_request_path():

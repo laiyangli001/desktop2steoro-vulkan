@@ -1006,8 +1006,7 @@ def test_screen_adjustment_osd_is_submitted_as_quad_layer() -> None:
 
     osd_specs = [spec for spec in specs if spec[0] == "screen_osd"]
     assert len(osd_specs) == 1
-    osd_scale = 2.5 / 2.4
-    assert osd_specs[0][3] == pytest.approx((0.65 * osd_scale, 0.08 * osd_scale))
+    assert osd_specs[0][3] == pytest.approx((2.5 * 0.03 * (512.0 / 78.0), 2.5 * 0.03))
     assert osd_specs[0][2][1] > presenter._filament_screen[0][1]
 
     presenter._filament_screen = (
@@ -1017,7 +1016,7 @@ def test_screen_adjustment_osd_is_submitted_as_quad_layer() -> None:
     large_specs = presenter._render_tool_quad_layers()
     large_osd = [spec for spec in large_specs if spec[0] == "screen_osd"]
 
-    assert large_osd[0][3] == pytest.approx((1.3, 0.16))
+    assert large_osd[0][3] == pytest.approx((4.8 * 0.03 * (512.0 / 78.0), 4.8 * 0.03))
 
 
 def test_vulkan_reset_screen_restores_initial_size_and_pose() -> None:
@@ -1250,6 +1249,22 @@ def test_right_grip_stick_y_uses_legacy_accelerated_radial_distance() -> None:
     assert presenter._filament_screen[0] == pytest.approx(
         (0.0, 0.0, -2.0 - 3.0 / 90.0)
     )
+
+
+def test_right_grip_stick_x_resizes_screen_without_22m_cap() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_screen = (
+        (0.0, 0.0, -2.0), 22.0, 12.375, (0.0, 0.0, 0.0)
+    )
+
+    presenter._apply_right_grip_screen_resize(
+        1.0,
+        dt=1.0,
+        laser_hit=(0.5, 0.5, 2.0),
+    )
+
+    assert presenter._filament_screen[1] == pytest.approx(23.2)
+    assert presenter._filament_screen[2] == pytest.approx(12.375 * 23.2 / 22.0)
 
 
 def test_right_grip_wrist_rotation_does_not_rotate_screen() -> None:
@@ -1704,7 +1719,7 @@ def test_screen_resolution_log_ignores_pose_jitter(capsys) -> None:
     presenter._report_screen_resolution([view, view], frame)
     capsys.readouterr()
 
-    presenter._filament_screen = ((0.001, 0.0, -2.0), 2.0, 1.0, (0.0, 0.0, 0.0))
+    view.pose.position.x = 1.0
     presenter._report_screen_resolution([view, view], frame)
 
     assert capsys.readouterr().out == ""

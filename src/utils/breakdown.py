@@ -63,7 +63,8 @@ class FPSBreakdown:
         }
         self.last_log = time.perf_counter()
         self.log_count = 0
-        self.log_limit = 10
+        self.log_limit = 1
+        self.log_delay = 15.0
 
     def inc(self, name: str, amount: int | float = 1) -> None:
         if not self.enabled:
@@ -167,13 +168,12 @@ class FPSBreakdown:
         if not self.enabled:
             return
         now = time.perf_counter() if now is None else now
+        if self.log_count >= self.log_limit:
+            return
         elapsed = now - self.last_log
-        if elapsed < 1.0:
+        if elapsed < self.log_delay:
             return
         with self.lock:
-            if self.log_count >= self.log_limit:
-                self.last_log = now
-                return
             self.log_count += 1
             stats = dict(self.stats)
             for key in list(self.stats.keys()):

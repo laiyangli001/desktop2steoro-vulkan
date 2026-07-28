@@ -69,6 +69,50 @@ def test_child_log_line_splits_embedded_fps_record(caplog):
     ]
 
 
+def test_child_descriptor_validation_details_are_summarized(caplog):
+    from gui.process import GUIProcessMixin
+
+    class Harness(GUIProcessMixin):
+        pass
+
+    harness = Harness()
+    detail = "Descriptor set (handle=4294967295) binding=0 was set between begin/endRenderPass"
+    with caplog.at_level(logging.INFO, logger="child"):
+        harness._log_child_line(detail)
+        harness._log_child_line(detail.replace("binding=0", "binding=1"))
+
+    records = [record for record in caplog.records if record.name == "child"]
+    assert len(records) == 1
+    assert records[0].message == (
+        "[VulkanValidation] Descriptor bindings were updated between "
+        "render-pass begin/end; repeated binding details suppressed."
+    )
+
+
+def test_child_filament_frame_details_are_summarized(caplog):
+    from gui.process import GUIProcessMixin
+
+    class Harness(GUIProcessMixin):
+        pass
+
+    harness = Harness()
+    with caplog.at_level(logging.INFO, logger="child"):
+        harness._log_child_line(
+            "[FilamentBridge] acquired eye=0 index=0 image=00000001 result=1"
+        )
+        harness._log_child_line(
+            "[FilamentBridge] begin eye=0 renderer=00000002 swapchain=00000003 active=1"
+        )
+        harness._log_child_line("[FilamentBridge] end eye=0")
+
+    records = [record for record in caplog.records if record.name == "child"]
+    assert len(records) == 1
+    assert records[0].message == (
+        "[FilamentBridge] Eye acquire/render/end frame diagnostics are active; "
+        "repeated per-frame details suppressed."
+    )
+
+
 def test_i18n_locale_completeness():
     """All locale keys must match EN keys."""
     from utils.i18n import MESSAGES

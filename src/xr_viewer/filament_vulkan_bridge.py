@@ -49,6 +49,7 @@ class FilamentVulkanBridge:
         self._controller_visibility_abi_available = False
         self._laser_abi_available = False
         self._controller_guide_abi_available = False
+        self._text_overlay_abi_available = False
         self._screen_image_abi_available = False
         self._vulkan_external_image_abi_available = False
         self._screen_curved_abi_available = False
@@ -77,6 +78,10 @@ class FilamentVulkanBridge:
     @property
     def controller_guide_abi_available(self) -> bool:
         return self._controller_guide_abi_available
+
+    @property
+    def text_overlay_abi_available(self) -> bool:
+        return self._text_overlay_abi_available
 
     @property
     def controller_visibility_abi_available(self) -> bool:
@@ -405,6 +410,61 @@ class FilamentVulkanBridge:
             "set_controller_guide",
         )
 
+    def set_text_overlay_page_texture(self, page: int, rgba) -> None:
+        """Upload one MSDF atlas page; the native Bridge owns the GPU copy."""
+        self._ensure_loaded()
+        if not self._text_overlay_abi_available:
+            return
+        if int(page) < 0 or int(page) >= 4:
+            raise ValueError("MSDF atlas page must be in the range 0..3")
+        if getattr(rgba, "ndim", 0) != 3 or rgba.shape[2] != 4:
+            raise ValueError("MSDF atlas page must be HxWx4 RGBA")
+        height, width = int(rgba.shape[0]), int(rgba.shape[1])
+        payload = bytes(memoryview(rgba).cast("B"))
+        buffer = ctypes.create_string_buffer(payload)
+        self._check_result(
+            self._library.filament_bridge_set_text_overlay_page_texture(
+                self._handle, int(page), buffer, width, height
+            ),
+            "set_text_overlay_page_texture",
+        )
+
+    def set_text_overlay_page(
+        self, page: int, vertices, indices, *, visible: bool
+    ) -> None:
+        """Submit packed world-space MSDF vertices on the Presenter thread."""
+        self._ensure_loaded()
+        if not self._text_overlay_abi_available:
+            return
+        if getattr(vertices, "ndim", 0) != 2 or vertices.shape[1] != 9:
+            raise ValueError("MSDF vertices must have shape (N, 9)")
+        if getattr(indices, "ndim", 0) != 1:
+            raise ValueError("MSDF indices must be a one-dimensional array")
+        if getattr(vertices, "itemsize", 0) != ctypes.sizeof(ctypes.c_float):
+            raise ValueError("MSDF vertices must use float32 storage")
+        if getattr(indices, "itemsize", 0) != ctypes.sizeof(ctypes.c_uint16):
+            raise ValueError("MSDF indices must use uint16 storage")
+        if hasattr(vertices, "flags") and not vertices.flags.c_contiguous:
+            raise ValueError("MSDF vertices must be contiguous")
+        if hasattr(indices, "flags") and not indices.flags.c_contiguous:
+            raise ValueError("MSDF indices must be contiguous")
+        vertex_payload = bytes(memoryview(vertices).cast("B"))
+        index_payload = bytes(memoryview(indices).cast("B"))
+        vertex_buffer = ctypes.create_string_buffer(vertex_payload)
+        index_buffer = ctypes.create_string_buffer(index_payload)
+        self._check_result(
+            self._library.filament_bridge_set_text_overlay_page_vertices(
+                self._handle,
+                int(page),
+                vertex_buffer,
+                int(vertices.shape[0]),
+                index_buffer,
+                int(indices.shape[0]),
+                int(bool(visible)),
+            ),
+            "set_text_overlay_page",
+        )
+
     def set_scene_exposure(self, exposure_ev: float) -> None:
         self._ensure_loaded()
         self._check_result(
@@ -686,6 +746,25 @@ class FilamentVulkanBridge:
             ]
             guide_pose.restype = ctypes.c_int
             self._controller_guide_abi_available = True
+        text_texture = getattr(
+            library, "filament_bridge_set_text_overlay_page_texture", None
+        )
+        text_vertices = getattr(
+            library, "filament_bridge_set_text_overlay_page_vertices", None
+        )
+        if text_texture is not None and text_vertices is not None:
+            text_texture.argtypes = [
+                ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p,
+                ctypes.c_uint32, ctypes.c_uint32,
+            ]
+            text_texture.restype = ctypes.c_int
+            text_vertices.argtypes = [
+                ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p,
+                ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32,
+                ctypes.c_int,
+            ]
+            text_vertices.restype = ctypes.c_int
+            self._text_overlay_abi_available = True
         library.filament_bridge_set_scene_exposure.argtypes = [
             ctypes.c_void_p, ctypes.c_float
         ]

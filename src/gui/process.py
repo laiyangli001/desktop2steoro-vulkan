@@ -39,6 +39,16 @@ _PROGRESS_PERCENT_RE = re.compile(r"(?P<percent>\d{1,3}(?:\.\d+)?)%")
 _TQDM_AMOUNT_RE = re.compile(r"\|\s*(?P<completed>[^/\[\]|]+)\s*/\s*(?P<total>[^\[\]|]+)")
 _TQDM_TIMING_RE = re.compile(r"\[(?P<elapsed>[^<,\]]+)(?:<(?P<eta>[^,\]]+))?(?:,\s*(?P<speed>[^\]]+))?\]")
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+_VULKAN_DESCRIPTOR_DETAIL_RE = re.compile(
+    r"^Descriptor set \(handle=\d+\) binding=\d+ was set between begin/endRenderPass$"
+)
+_FILAMENT_FRAME_DETAIL_RE = re.compile(
+    r"^\[FilamentBridge\] (?:"
+    r"acquired eye=\d+ index=\d+ image=\w+ result=1|"
+    r"begin eye=\d+ renderer=\w+ swapchain=\w+ active=1|"
+    r"end eye=\d+"
+    r")$"
+)
 _LOG_FILE_LINE_RE = re.compile(r"^\[(?P<asctime>\d\d:\d\d:\d\d)\] \[(?P<level>[A-Z]+)\] \[(?P<name>[^\]]+)\] (?P<message>.*)$")
 _LEGACY_LOG_FILE_LINE_RE = re.compile(r"^\[(?P<asctime>\d\d:\d\d:\d\d)\] \[(?P<name>[^\]]+)\] (?P<message>.*)$")
 _PROGRESS_PREFIX = "[D2S_PROGRESS] "
@@ -486,6 +496,22 @@ class GUIProcessMixin:
     def _log_child_line(self, line):
         text = str(line or "").strip()
         if not text:
+            return
+        if _VULKAN_DESCRIPTOR_DETAIL_RE.match(text):
+            if not getattr(self, "_vulkan_descriptor_summary_logged", False):
+                self._vulkan_descriptor_summary_logged = True
+                child_logger.info(
+                    "[VulkanValidation] Descriptor bindings were updated between "
+                    "render-pass begin/end; repeated binding details suppressed."
+                )
+            return
+        if _FILAMENT_FRAME_DETAIL_RE.match(text):
+            if not getattr(self, "_filament_frame_summary_logged", False):
+                self._filament_frame_summary_logged = True
+                child_logger.info(
+                    "[FilamentBridge] Eye acquire/render/end frame diagnostics "
+                    "are active; repeated per-frame details suppressed."
+                )
             return
         # stdout and stderr are merged by the child process pipe. A producer
         # can write the next tagged record before the previous record reaches

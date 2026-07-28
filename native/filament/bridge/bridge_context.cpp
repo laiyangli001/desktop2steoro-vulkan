@@ -7,6 +7,7 @@
 #include "bridge_material.h"
 #include "bridge_scene.h"
 #include "bridge_screen.h"
+#include "bridge_text_overlay.h"
 
 void bridge_set_error(FilamentBridge* bridge, const char* message) {
     if (bridge) {
@@ -128,6 +129,7 @@ void bridge_context_destroy(FilamentBridge* bridge) {
     }
     bridge_laser_destroy(bridge);
     bridge_controller_guide_destroy(bridge);
+    bridge_text_overlay_destroy(bridge);
     bridge_screen_destroy(bridge);
     for (auto& eye : bridge->eyes) {
         if (eye.renderer && bridge->engine) {

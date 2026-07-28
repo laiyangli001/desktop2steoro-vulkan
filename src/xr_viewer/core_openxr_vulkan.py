@@ -59,9 +59,12 @@ from .overlay_textures import (
     build_help_rgba,
     build_team_help_rgba,
     build_keyboard_rgba,
+    build_screen_adjust_osd_rgba,
+    build_screen_preset_osd_rgba,
     build_short_osd_rgba,
 )
 from .keyboard_layout import _KB_TEX_H, _KB_TEX_W
+from .msdf_font_atlas import MsdfFontAtlas
 from .windows_input import (
     _MOUSEEVENTF_LEFTDOWN,
     _MOUSEEVENTF_LEFTUP,
@@ -259,7 +262,6 @@ class OpenXrVulkanPresenter(
         self._screen_ready_semaphore_abi_available = False
         self._last_filament_screen_image_status = None
         self._last_screen_resolution_status = None
-        self._last_screen_resolution_log_t = 0.0
         self._controller_hdr_lighting = False
         self._last_filament_screen_light = None
         self._filament_fill_light_color = self.config.filament_fill_light_color
@@ -378,6 +380,7 @@ class OpenXrVulkanPresenter(
         self._tool_overlay_sbs_window_frames = 0
         self._tool_overlay_last_output_id: int | None = None
         self._controller_callout_rgba: np.ndarray | None = None
+        self._msdf_font_atlas: MsdfFontAtlas | None = None
         # Legacy screen OSD state. These are rendered as Quad layers above
         # the virtual screen, never inside the projection scene.
         self._preset_name_overlay: str | None = None
@@ -458,8 +461,11 @@ class OpenXrVulkanPresenter(
         self._shortcut_screen_preset_index = 5
         self._shortcut_saved_skybox_brightness = self._filament_skybox_brightness
         self._shortcut_light_levels = (0.0, 0.5, 1.0)
-        # Match the legacy right-grip distance control: the speed grows
-        # exponentially with thumbstick deflection and reaches 3 m/s.
+        # Match the legacy right-grip stick controls: both resize and distance
+        # use exponential thumbstick speed curves.
+        self._size_speed_base = 0.18
+        self._size_speed_max = 1.2
+        self._size_speed_exp = 3.0
         self._dist_speed_base = 0.35
         self._dist_speed_max = 3.0
         self._dist_speed_exp = 3.0
@@ -661,8 +667,15 @@ class OpenXrVulkanPresenter(
             error = f"{type(exc).__name__}: {exc}"
             if error != self._last_controller_input_error:
                 self._last_controller_input_error = error
+                if type(exc).__name__ == "SessionNotFocused":
+                    message = (
+                        "[OpenXRViewer] Controller input deferred: "
+                        "OpenXR session is not focused"
+                    )
+                else:
+                    message = f"[OpenXRViewer] Controller input update failed: {error}"
                 print(
-                    f"[OpenXRViewer] Controller input update failed: {error}",
+                    message,
                     flush=True,
                 )
         xr.begin_frame(self.session)
@@ -1065,7 +1078,7 @@ class OpenXrVulkanPresenter(
         if self._filament_screen is None:
             return
         position, width, height, rotation = self._filament_screen
-        next_width = max(0.3, min(22.0, float(width) + width_delta))
+        next_width = max(0.3, float(width) + width_delta)
         next_height = next_width * float(height) / max(float(width), 1e-6)
         head = np.asarray(
             self._head_position_w if self._head_position_w is not None else (0, 0, 0),
@@ -1665,6 +1678,38 @@ class OpenXrVulkanPresenter(
         self._set_filament_screen_pose(next_position, next_rotation)
         self._screen_osd_show_t = time.perf_counter()
 
+    def _apply_right_grip_screen_resize(
+        self, joystick_x: float, *, dt: float, laser_hit: Any
+    ) -> None:
+        """Resize the screen with the legacy exponential right-stick curve."""
+        if (
+            self._filament_screen is None
+            or laser_hit is None
+            or abs(float(joystick_x)) <= self._input_deadzone()
+        ):
+            return
+        speed = self._stick_exp_speed(
+            float(joystick_x),
+            self._size_speed_base,
+            self._size_speed_max,
+            self._size_speed_exp,
+            self._input_deadzone(),
+        )
+        if speed <= 0.0:
+            return
+        position, width, height, rotation = self._filament_screen
+        next_width = max(0.3, float(width) + math.copysign(speed * dt, float(joystick_x)))
+        next_height = next_width * float(height) / max(float(width), 1e-6)
+        self._filament_screen = (
+            tuple(float(value) for value in position),
+            next_width,
+            next_height,
+            rotation,
+        )
+        self._screen_osd_show_t = time.perf_counter()
+        if self.filament_bridge is not None:
+            self.filament_bridge.set_screen(*self._filament_screen)
+
     def _filament_screen_image_gate_reason(
         self, output_frame: VulkanStereoOutputFrame | None
     ) -> str | None:
@@ -1869,7 +1914,7 @@ class OpenXrVulkanPresenter(
         views: list[Any],
         output_frame: VulkanStereoOutputFrame | None,
     ) -> None:
-        """Log meaningful screen pixel changes without reporting every pose update."""
+        """Log screen pixel dimensions once per actual resolution configuration."""
 
         if output_frame is None or self._filament_screen is None:
             return
@@ -1904,34 +1949,16 @@ class OpenXrVulkanPresenter(
             render_size_label = str(render_size or "unknown")
         screen = self._filament_screen
 
-        def quantize_pixels(value: float, step: int = 16) -> int:
-            return int(round(float(value) / float(step)) * step)
-
-        # Head motion changes the projected footprint by a few pixels every frame.
-        # Keep the diagnostic useful while ignoring that sub-resolution jitter.
-        footprint_status = tuple(
-            None
-            if footprint is None
-            else tuple(quantize_pixels(value) for value in footprint)
-            for footprint in footprints
-        )
-        status = (
+        # The projected footprint is useful in the message, but it is view-dependent
+        # and must not decide whether a resolution diagnostic is emitted.
+        resolution_status = (
             sources,
             targets,
             render_size_label,
-            footprint_status,
-            round(float(screen[1]), 2),
-            round(float(screen[2]), 2),
-            round(float(np.linalg.norm(np.asarray(screen[0], dtype=np.float64))), 2),
-            bool(self._screen_curved),
         )
-        if status == self._last_screen_resolution_status:
+        if resolution_status == self._last_screen_resolution_status:
             return
-        now = time.perf_counter()
-        if now - float(self._last_screen_resolution_log_t) < 1.0:
-            return
-        self._last_screen_resolution_status = status
-        self._last_screen_resolution_log_t = now
+        self._last_screen_resolution_status = resolution_status
 
         def format_size(size: tuple[int, int]) -> str:
             return f"{size[0]}x{size[1]}"
@@ -2222,9 +2249,15 @@ class OpenXrVulkanPresenter(
             and getattr(self, "_grip_target_r", None) == "screen"
             and self._filament_screen is not None
         ):
+            input_dt = max(0.001, min(0.1, float(self._last_frame_dt)))
+            self._apply_right_grip_screen_resize(
+                float(inputs[1].get("joystick_x", 0.0) or 0.0),
+                dt=input_dt,
+                laser_hit=hits[1],
+            )
             self._apply_right_grip_screen_distance(
                 float(inputs[1].get("joystick_y", 0.0) or 0.0),
-                dt=max(0.001, min(0.1, float(self._last_frame_dt))),
+                dt=input_dt,
                 laser_hit=hits[1],
             )
         for name, hand, hit, down_flag, up_flag in (
@@ -3034,6 +3067,7 @@ class OpenXrVulkanPresenter(
             glb_path = self.config.filament_glb_path
             if glb_path:
                 bridge.load_glb(asset_reads["environment"].result())
+            self._initialize_msdf_text_atlas(bridge)
             if (
                 self._controller_brand is not None
                 and getattr(bridge, "controller_abi_available", True)
@@ -3104,6 +3138,75 @@ class OpenXrVulkanPresenter(
             raise
         finally:
             file_reader.shutdown(wait=True)
+
+    def _initialize_msdf_text_atlas(self, bridge: Any) -> None:
+        """Upload atlas pages once; leave legacy Quad Layers as fallback."""
+        if not getattr(bridge, "text_overlay_abi_available", False):
+            return
+        try:
+            atlas = MsdfFontAtlas()
+            for page in range(len(atlas.pages)):
+                bridge.set_text_overlay_page_texture(page, atlas.page_rgba(page))
+        except Exception as exc:
+            self._msdf_font_atlas = None
+            print(
+                "[OpenXRViewer] MSDF text ABI unavailable at runtime; "
+                f"using legacy Quad Layers ({type(exc).__name__}: {exc})",
+                flush=True,
+            )
+            return
+        self._msdf_font_atlas = atlas
+        print(
+            "[OpenXRViewer] MSDF text atlas uploaded: "
+            f"pages={len(atlas.pages)} glyphs={len(atlas.glyphs)}",
+            flush=True,
+        )
+
+    def _submit_msdf_text_runs(self, runs: list[dict[str, Any]]) -> bool:
+        """Submit merged MSDF runs; return false when the legacy path is needed."""
+        bridge = self.filament_bridge
+        atlas = self._msdf_font_atlas
+        if bridge is None or atlas is None or not getattr(
+            bridge, "text_overlay_abi_available", False
+        ):
+            return False
+        grouped: dict[int, list[tuple[np.ndarray, np.ndarray]]] = {}
+        try:
+            for run in runs:
+                geometry = atlas.build_geometry(**run)
+                for page, buffers in geometry.items():
+                    grouped.setdefault(page, []).append(buffers)
+            for page in range(len(atlas.pages)):
+                buffers = grouped.get(page, ())
+                if buffers:
+                    vertices = np.ascontiguousarray(
+                        np.concatenate([item[0] for item in buffers], axis=0),
+                        dtype=np.float32,
+                    )
+                    index_parts = []
+                    vertex_offset = 0
+                    for item_vertices, item_indices in buffers:
+                        index_parts.append(item_indices.astype(np.uint32) + vertex_offset)
+                        vertex_offset += int(item_vertices.shape[0])
+                    indices = np.ascontiguousarray(
+                        np.concatenate(index_parts).astype(np.uint16), dtype=np.uint16
+                    )
+                    bridge.set_text_overlay_page(page, vertices, indices, visible=True)
+                else:
+                    bridge.set_text_overlay_page(
+                        page,
+                        np.zeros((0, 9), dtype=np.float32),
+                        np.zeros(0, dtype=np.uint16),
+                        visible=False,
+                    )
+        except Exception as exc:
+            print(
+                "[OpenXRViewer] MSDF text submit failed; retaining legacy overlay: "
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            return False
+        return True
 
     def _start_filament_file_reads(
         self,
@@ -4199,6 +4302,12 @@ class OpenXrVulkanPresenter(
         language = self._overlay_language()
         environment_mode = self._operation_guide_environment_mode()
         specs = []
+        msdf_runs: list[dict[str, Any]] = []
+        use_msdf_text = bool(
+            self._msdf_font_atlas is not None
+            and self.filament_bridge is not None
+            and getattr(self.filament_bridge, "text_overlay_abi_available", False)
+        )
 
         if self._keyboard_visible:
             keyboard_width = float(self._keyboard_width)
@@ -4265,39 +4374,65 @@ class OpenXrVulkanPresenter(
         screen_pose = self._filament_screen_pose_mat4()
         screen_distance = float(np.linalg.norm(screen_pose[:3, 3] - head))
         now = float(self._frame_now or time.perf_counter())
-        osd_lines = []
-        if (
+        preset_osd_active = (
             self._preset_name_overlay
             and now - float(self._preset_osd_show_t) < 5.0
-        ):
-            osd_lines.append(str(self._preset_name_overlay))
-        if now - float(self._screen_osd_show_t) < 2.5:
-            osd_lines.append(
-                f"Screen {width:.2f}m @ {screen_distance:.2f}m"
-            )
-        if osd_lines:
-            # Keep the OSD at the same relative size as the reference 2.4 m
-            # screen. A fixed world-space size becomes unreadably small on
-            # the large legacy screen presets.
-            osd_scale = max(0.5, width / 2.4)
-            osd_width = 0.65 * osd_scale
-            osd_height = 0.08 * osd_scale
-            osd_key = (
-                "screen_osd",
-                tuple(osd_lines),
-                round(width, 3),
-                round(height, 3),
-            )
-            osd_rgba = self._tool_quad_texture_cache.get("screen_osd")
-            if (
-                osd_rgba is None
-                or self._tool_quad_texture_keys.get("screen_osd") != osd_key
-            ):
-                osd_rgba = build_short_osd_rgba(osd_lines, width=768, height=96)
-                self._tool_quad_texture_cache["screen_osd"] = osd_rgba
-                self._tool_quad_texture_keys["screen_osd"] = osd_key
+        )
+        screen_osd_active = now - float(self._screen_osd_show_t) < 2.5
+        if preset_osd_active or screen_osd_active:
+            # Match the legacy screen OSD: dark rounded panel, grey labels,
+            # cyan values, and a centered text group.
+            if screen_osd_active:
+                osd_key = (
+                    "screen_adjust_osd",
+                    round(width, 2),
+                    round(screen_distance, 2),
+                    use_msdf_text,
+                )
+                osd_rgba = self._tool_quad_texture_cache.get("screen_osd")
+                if (
+                    osd_rgba is None
+                    or self._tool_quad_texture_keys.get("screen_osd") != osd_key
+                ):
+                    osd_rgba = build_screen_adjust_osd_rgba(
+                        width,
+                        screen_distance,
+                        size=(512, 78),
+                        draw_text=not use_msdf_text,
+                    )
+                    self._tool_quad_texture_cache["screen_osd"] = osd_rgba
+                    self._tool_quad_texture_keys["screen_osd"] = osd_key
+                osd_height = width * 0.03
+                osd_width = osd_height * (512.0 / 78.0)
+            else:
+                osd_key = (
+                    "preset_osd",
+                    str(self._preset_name_overlay),
+                    round(width, 3),
+                    round(height, 3),
+                    use_msdf_text,
+                )
+                osd_rgba = self._tool_quad_texture_cache.get("screen_osd")
+                if (
+                    osd_rgba is None
+                    or self._tool_quad_texture_keys.get("screen_osd") != osd_key
+                ):
+                    osd_rgba = build_screen_preset_osd_rgba(
+                        str(self._preset_name_overlay),
+                        size=(768, 78),
+                        draw_text=not use_msdf_text,
+                    )
+                    self._tool_quad_texture_cache["screen_osd"] = osd_rgba
+                    self._tool_quad_texture_keys["screen_osd"] = osd_key
+                osd_height = width * 0.03
+                osd_width = osd_height * (768.0 / 78.0)
             osd_local = np.eye(4, dtype=np.float64)
-            osd_local[:3, 3] = (0.0, height / 2.0 + osd_height, 0.0)
+            # Keep the legacy gap between the screen edge and the centered OSD.
+            osd_local[:3, 3] = (
+                0.0,
+                height / 2.0 + width * 0.016 + osd_height / 2.0,
+                0.0,
+            )
             osd_position, osd_rotation = self._screen_overlay_pose(osd_local)
             specs.append(
                 (
@@ -4308,6 +4443,60 @@ class OpenXrVulkanPresenter(
                     osd_rotation,
                 )
             )
+            if use_msdf_text:
+                transform = np.asarray(screen_pose @ osd_local, dtype=np.float32)
+                if screen_osd_active:
+                    scale = 0.5
+                    runs = (
+                        ("Size", (150.0, 158.0, 185.0, 255.0)),
+                        (
+                            f"{width:.2f} x {width * 9.0 / 16.0:.2f} m",
+                            (0.0, 210.0, 230.0, 255.0),
+                        ),
+                        ("Dist", (150.0, 158.0, 185.0, 255.0)),
+                        (f"{screen_distance:.2f} m", (0.0, 210.0, 230.0, 255.0)),
+                    )
+                    widths = [
+                        self._msdf_font_atlas.text_advance(text, scale=scale)
+                        for text, _color in runs
+                    ]
+                    cursor = (512.0 - sum(widths) - 8.0 * (len(runs) - 1)) / 2.0
+                    for (text, color), run_width in zip(runs, widths):
+                        msdf_runs.append(
+                            {
+                                "text": text,
+                                "transform": transform,
+                                "pixel_scale": (osd_width / 512.0, osd_height / 78.0),
+                                "origin": (
+                                    cursor - 256.0,
+                                    23.0 - 39.0,
+                                ),
+                                "scale": scale,
+                                "color": tuple(component / 255.0 for component in color),
+                            }
+                        )
+                        cursor += run_width + 8.0
+                else:
+                    label = "Preset"
+                    value = str(self._preset_name_overlay)
+                    scale = 0.5
+                    label_width = self._msdf_font_atlas.text_advance(label, scale=scale)
+                    value_width = self._msdf_font_atlas.text_advance(value, scale=scale)
+                    x = (768.0 - label_width - 8.0 - value_width) / 2.0
+                    for text, offset, color in (
+                        (label, x, (150.0, 158.0, 185.0, 255.0)),
+                        (value, x + label_width + 8.0, (0.0, 210.0, 230.0, 255.0)),
+                    ):
+                        msdf_runs.append(
+                            {
+                                "text": text,
+                                "transform": transform,
+                                "pixel_scale": (osd_width / 768.0, osd_height / 78.0),
+                                "origin": (offset - 384.0, 23.0 - 39.0),
+                                "scale": scale,
+                                "color": tuple(component / 255.0 for component in color),
+                            }
+                        )
         fps_key = (
             "fps", language, environment_mode, round(width, 3), round(height, 3),
             round(self._tool_overlay_xr_fps, 1), round(self._tool_overlay_sbs_fps, 1),
@@ -4412,6 +4601,9 @@ class OpenXrVulkanPresenter(
             self._tool_quad_texture_cache["laser_cursor"] = cursor_rgba
             self._tool_quad_texture_keys["laser_cursor"] = ("legacy_cursor_ring", 64)
         specs.extend(self._cursor_overlay_specs(cursor_rgba, screen_pose, head))
+
+        if use_msdf_text:
+            self._submit_msdf_text_runs(msdf_runs)
 
         return [self._upload_tool_quad(*spec) for spec in specs]
 

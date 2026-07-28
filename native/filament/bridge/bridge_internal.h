@@ -57,6 +57,24 @@ struct PreviewScreenVertex {
     filament::math::float2 uv;
 };
 
+struct MsdfTextVertex {
+    filament::math::float3 position;
+    filament::math::float2 uv;
+    filament::math::float4 color;
+};
+
+struct MsdfTextPage {
+    utils::Entity entity;
+    filament::Material* material = nullptr;
+    filament::MaterialInstance* material_instance = nullptr;
+    filament::Texture* texture = nullptr;
+    filament::TextureSampler sampler;
+    filament::VertexBuffer* vertex_buffer = nullptr;
+    filament::IndexBuffer* index_buffer = nullptr;
+    std::vector<MsdfTextVertex> vertices;
+    std::vector<uint16_t> indices;
+};
+
 class OpenXrVulkanPlatform final : public VulkanPlatform {
 public:
     struct ExternalSwapChain final : Platform::SwapChain {
@@ -308,6 +326,7 @@ struct FilamentBridge {
     filament::IndexBuffer* controller_guide_index_buffer = nullptr;
     std::array<PreviewScreenVertex, 4> controller_guide_vertices{};
     std::array<uint16_t, 6> controller_guide_indices{};
+    std::array<MsdfTextPage, 4> text_pages{};
     std::array<FilamentEyeTarget, 2> eyes;
     uint32_t active_eye = 0;
     std::vector<uint8_t> glb_bytes;

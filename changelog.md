@@ -3,9 +3,34 @@
 本文件记录项目重大更新和每日工作收尾。新记录按日期倒序追加；每个工作日结束时更新“已实现”“验证结果”“未决事项”和“下一项内容”。
 
 ## 2026-07-27
+- Started the GPU text migration contract: imported the requested `3500.txt` UI charset (3,958 unique characters), defined paged MSDF atlas generation and shared linear atlas sampling requirements, and kept an explicit legacy Quad Layer fallback while the native Bridge ABI is being added.
+- Generated the first three-page MSDF atlas from the complete UI charset; verified 3,959 glyph records and 2042x2032 atlas pages.
+- Moved the MSDF runtime assets into `src/xr_viewer/fonts/` so packaged OpenXR runtime resources do not depend on repository-root asset paths.
+- Added the first native MSDF text-overlay ABI: atlas pages are uploaded as
+  linear GPU textures and packed glyph geometry is updated on the Presenter
+  thread. Existing Quad Layer bitmap rendering remains the compatibility
+  fallback until rebuilt Bridge artifacts are deployed.
+- The Presenter now uploads the bundled MSDF atlas pages once during Bridge
+  initialization when the optional ABI is available; page decoding and GPU
+  texture allocation are excluded from the per-frame overlay path.
+- Migrated the first visible overlay path: screen size/distance and preset OSD
+  backgrounds remain cached Quad Layers while their colored text is submitted
+  as MSDF world-space glyph geometry when the new ABI is available. FPS,
+  keyboard and controller-help overlays intentionally remain on the legacy
+  path until their backgrounds and update policies are migrated.
 
 ### 已实现
 
+- 按旧工程恢复屏幕上方尺寸/距离 OSD：使用 512x78 深灰圆角面板、灰色标签、青色数值和 24px 字体，整组文字居中，并沿用屏幕宽度比例与顶部间距。
+- 修正右 Grip + 右摇杆屏幕调节：恢复旧工程的 X 轴指数加速缩放，移除 22m 硬上限；Y 轴距离调节统一使用 0.35-3.0 m/s 的指数速度曲线。
+
+- 修复 OpenXR 运动门控导致 SBS 更新过慢：对可复用的捕获/GPU 输入缓冲区建立独立运动采样快照，且恢复旧工程默认关闭 motion gate；输入未变化时复用上一帧仍可通过 `D2S_RUNTIME_MOTION_GATE=1` 显式启用。
+- 将 OpenXR 未获得焦点时的手柄输入日志改为 `Controller input deferred`，避免把正常的 `SessionNotFocused` 状态误标为失败。
+- 清理 CUDA external semaphore 正常状态日志：无实际错误时不再输出 `error=none`，仅在同步初始化确实失败时追加错误信息。
+- 将 `FPSBreakdown` 从每秒输出改为稳定运行 15 秒后输出一次，避免持续刷屏且不影响内部统计。
+- 将 Vulkan validation layer 重复的 descriptor binding 明细合并为一条摘要，避免启动日志输出几十行相同类型诊断。
+- 将 FilamentBridge 每帧左右眼 `acquired/begin/end` 正常明细合并为一条摘要，避免持续输出渲染循环日志。
+- 修复 OpenXR 屏幕分辨率诊断刷屏：只在源图像分辨率、交换链目标尺寸或 render size 发生变化时输出，头显位姿导致的投影 footprint 变化不再触发日志。
 - 修正 OpenXR projection 输出的左右眼资源顺序；普通 SBS Vulkan 路径保持原有合成顺序，不复用 OpenXR 专用交换逻辑。
 - 新增 `d2s_stereo_layered_tiled.comp/.spv` 作为 `quality_4k` 的并行 tiled reference shader：保持原有五个 storage buffer、76 字节 push constant 和立体合成公式，仅将深度邻域缓存到 workgroup shared memory，供 warp、遮挡、羽化和补洞采样复用。
 - `VulkanStereoComputeBackend` 新增可选 `layered_shader_path`，默认仍使用 `d2s_stereo_layered.spv`；tiled shader 当前只作为对照和性能基准路径，不改变生产默认选择。
@@ -13,6 +38,7 @@
 
 ### 验证结果
 
+- `tests/test_pipeline.py`: `8 passed`；Vulkan/CUDA 相关回归测试：`32 passed, 2 warnings`；`py_compile` 和 `git diff --check` 通过。
 - 3840×2160 同参数对照：原 layered shader 与 tiled reference 的左右眼及遮挡 mask 最大绝对差异均为 `0`。
 - Vulkan 相关回归测试：`21 passed`；此前扩展的 OpenXR、runtime、synthesis 和 Vulkan 集成测试：`109 passed`。
 

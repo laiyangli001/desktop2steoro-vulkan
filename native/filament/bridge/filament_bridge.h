@@ -92,6 +92,16 @@ FILAMENT_BRIDGE_API int filament_bridge_set_controller_guide_texture(
 FILAMENT_BRIDGE_API int filament_bridge_set_controller_guide(
         FilamentBridge* bridge, const float* matrix16, int visible);
 
+// MSDF text is submitted as world-space glyph quads. The atlas page texture
+// is uploaded once, while vertices are updated on the Presenter thread.
+FILAMENT_BRIDGE_API int filament_bridge_set_text_overlay_page_texture(
+        FilamentBridge* bridge, uint32_t page,
+        const uint8_t* rgba, uint32_t width, uint32_t height);
+FILAMENT_BRIDGE_API int filament_bridge_set_text_overlay_page_vertices(
+        FilamentBridge* bridge, uint32_t page,
+        const float* vertices, uint32_t vertex_count,
+        const uint16_t* indices, uint32_t index_count, int visible);
+
 FILAMENT_BRIDGE_API int filament_bridge_set_scene_exposure(
         FilamentBridge* bridge, float exposure_ev);
 FILAMENT_BRIDGE_API int filament_bridge_set_skybox_brightness(

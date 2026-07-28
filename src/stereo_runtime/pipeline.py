@@ -407,9 +407,9 @@ def _runtime_max_algorithm_fps(ctx: RuntimePipelineContext) -> float:
 
 
 def _runtime_motion_gate_enabled(ctx: RuntimePipelineContext) -> bool:
-    # OpenXR reuses the last submitted stereo frame during low motion,
-    # matching the legacy presenter and avoiding redundant depth/compute work.
-    default = "1"
+    # Keep the legacy default: frame reuse remains available as an explicit
+    # optimization, but must not throttle normal SBS updates by default.
+    default = "0"
     return str(os.environ.get("D2S_RUNTIME_MOTION_GATE", default) or default).strip().lower() in {
         "1",
         "true",
@@ -442,7 +442,9 @@ def _motion_sample(frame_rgb):
                 h, w = int(sample.shape[0]), int(sample.shape[1])
                 sample = sample[::max(1, h // 18), ::max(1, w // 32)]
             is_integer = not torch.is_floating_point(sample)
-            sample = sample.to(dtype=torch.float32)
+            # Capture/preprocess backends may reuse the same tensor storage for
+            # the next frame. Keep the motion reference independent of it.
+            sample = sample.to(dtype=torch.float32).clone()
             return sample / 255.0 if is_integer else sample
     except Exception:
         pass
@@ -458,7 +460,7 @@ def _motion_sample(frame_rgb):
             h, w = int(sample.shape[0]), int(sample.shape[1])
             sample = sample[::max(1, h // 18), ::max(1, w // 32)]
         is_integer = np.issubdtype(sample.dtype, np.integer)
-        sample = sample.astype("float32", copy=False)
+        sample = sample.astype("float32", copy=True)
         return sample / 255.0 if is_integer else sample
     except Exception:
         return None

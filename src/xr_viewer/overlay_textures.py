@@ -164,6 +164,81 @@ def build_short_osd_rgba(lines, font_type=None, *, width=768, height=96):
     return np.ascontiguousarray(np.asarray(img, dtype=np.uint8))
 
 
+def build_screen_adjust_osd_rgba(
+    screen_width,
+    screen_distance,
+    font_type=None,
+    *,
+    size=(512, 78),
+    draw_text=True,
+):
+    """Build the legacy centered screen size/distance OSD."""
+    ow, oh = int(size[0]), int(size[1])
+    img = Image.new("RGBA", (ow, oh), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.rounded_rectangle(
+        [0, 0, ow - 1, oh - 1],
+        radius=12,
+        fill=(32, 32, 36, 210),
+    )
+    if not draw_text:
+        return np.ascontiguousarray(np.asarray(img, dtype=np.uint8))
+    font = load_overlay_font(24, font_type, prefer_cjk=True)
+    bold_font = font
+    label_color = (150, 158, 185, 255)
+    value_color = (0, 210, 230, 255)
+    size_value = f"{float(screen_width):.2f} x {float(screen_width) * 9.0 / 16.0:.2f} m"
+    distance_value = f"{float(screen_distance):.2f} m"
+    parts = (
+        ("Size", label_color, bold_font),
+        (size_value, value_color, font),
+        ("Dist", label_color, bold_font),
+        (distance_value, value_color, font),
+    )
+    gap = 8
+    widths = [_text_width(draw, text, part_font) for text, _color, part_font in parts]
+    total_width = sum(widths) + gap * (len(parts) - 1)
+    x = max(0, (ow - total_width) // 2)
+    y = (oh - 32) // 2
+    for (text, color, part_font), part_width in zip(parts, widths):
+        draw.text((x, y), text, font=part_font, fill=color)
+        x += part_width + gap
+    return np.ascontiguousarray(np.asarray(img, dtype=np.uint8))
+
+
+def build_screen_preset_osd_rgba(
+    preset_label,
+    font_type=None,
+    *,
+    size=(768, 78),
+    draw_text=True,
+):
+    """Build the legacy centered screen preset OSD."""
+    ow, oh = int(size[0]), int(size[1])
+    img = Image.new("RGBA", (ow, oh), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.rounded_rectangle(
+        [0, 0, ow - 1, oh - 1],
+        radius=12,
+        fill=(32, 32, 36, 210),
+    )
+    if not draw_text:
+        return np.ascontiguousarray(np.asarray(img, dtype=np.uint8))
+    label_font = load_overlay_font(24, font_type, prefer_cjk=True)
+    value_font = label_font
+    label_color = (150, 158, 185, 255)
+    value_color = (0, 210, 230, 255)
+    label = "Preset"
+    gap = 8
+    label_width = _text_width(draw, label, label_font)
+    value_width = _text_width(draw, str(preset_label), value_font)
+    x = max(0, (ow - label_width - gap - value_width) // 2)
+    y = (oh - 32) // 2
+    draw.text((x, y), label, font=label_font, fill=label_color)
+    draw.text((x + label_width + gap, y), str(preset_label), font=value_font, fill=value_color)
+    return np.ascontiguousarray(np.asarray(img, dtype=np.uint8))
+
+
 def _text_width(draw, text, font):
     try:
         return int(draw.textlength(text, font=font))

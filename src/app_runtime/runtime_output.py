@@ -376,15 +376,16 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
                 self._external_semaphore_request_enabled
             )
             if not self._logged_external_sync_mode:
-                print(
+                external_sync_message = (
                     "[VulkanOutput] CUDA external semaphore sync: "
                     f"requested={external_semaphore_requested} "
                     f"available={self.external_semaphore_enabled} "
                     f"active={use_external_semaphore} "
-                    f"blocked_reason={self._external_semaphore_request_reason or 'none'} "
-                    f"error={self._external_semaphore_error or 'none'}",
-                    flush=True,
+                    f"blocked_reason={self._external_semaphore_request_reason or 'none'}"
                 )
+                if self._external_semaphore_error:
+                    external_sync_message += f" error={self._external_semaphore_error}"
+                print(external_sync_message, flush=True)
                 self._logged_external_sync_mode = True
             if use_external_semaphore:
                 for eye_index, release_semaphore in (
