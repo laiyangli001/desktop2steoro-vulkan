@@ -4408,8 +4408,8 @@ class OpenXrVulkanPresenter(
             rgba = np.frombuffer(
                 capture(width, height), dtype=np.uint8
             ).reshape((height, width, 4))
-            # Filament RenderTarget readback uses a bottom-left origin.
-            rgba = np.flipud(rgba)
+            # Vulkan/Filament readback is already in the runtime's top-left
+            # image convention for this RenderTarget; do not flip it here.
             Image.fromarray(rgba[..., :3].copy(), mode="RGB").save(
                 output_dir
                 / f"07_filament_screen_{'left' if eye == 0 else 'right'}_eye.png"
