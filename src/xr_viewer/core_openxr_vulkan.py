@@ -3932,20 +3932,29 @@ class OpenXrVulkanPresenter(
                 rotation_deg = [float(view_pose.get("angle", 0.0)), 0.0, 0.0]
             rotation_rad = [math.radians(float(value)) for value in rotation_deg[:3]]
 
-            # view_poses are authored in environment world coordinates while
-            # the imported GLB and calibrated OpenXR space use GLB-local
-            # coordinates. Match the legacy viewer by applying the inverse
-            # model transform before rebasing the reference space.
-            model_matrix = euler_to_mat4(
-                *(math.radians(float(value)) for value in model_rotation_deg[:3])
-            ).astype(np.float32)
-            model_matrix[:3, 3] = np.asarray(model_position[:3], dtype=np.float32)
-            scale = np.asarray(model_scale[:3], dtype=np.float32)
-            model_matrix[:3, :3] = model_matrix[:3, :3] @ np.diag(scale)
-            glb_position = (
-                np.linalg.inv(model_matrix)
-                @ np.append(world_position_vec, 1.0)
-            )[:3]
+            pose_space = str(
+                view_pose.get(
+                    "view_pose_space",
+                    view_pose.get("pose_space", profile.get("view_pose_space", "world")),
+                )
+            ).strip().lower()
+            if pose_space in {"scene", "glb", "local"}:
+                glb_position = world_position_vec
+            else:
+                # view_poses are authored in environment world coordinates while
+                # the imported GLB and calibrated OpenXR space use GLB-local
+                # coordinates. Match the legacy viewer by applying the inverse
+                # model transform before rebasing the reference space.
+                model_matrix = euler_to_mat4(
+                    *(math.radians(float(value)) for value in model_rotation_deg[:3])
+                ).astype(np.float32)
+                model_matrix[:3, 3] = np.asarray(model_position[:3], dtype=np.float32)
+                scale = np.asarray(model_scale[:3], dtype=np.float32)
+                model_matrix[:3, :3] = model_matrix[:3, :3] @ np.diag(scale)
+                glb_position = (
+                    np.linalg.inv(model_matrix)
+                    @ np.append(world_position_vec, 1.0)
+                )[:3]
         except (TypeError, ValueError, KeyError) as exc:
             raise ValueError("Filament profile view pose contains invalid values") from exc
 

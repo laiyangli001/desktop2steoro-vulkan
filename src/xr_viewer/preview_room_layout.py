@@ -175,14 +175,32 @@ def _profile_model_matrix(profile):
     return _mat_from_trs(model_pos, model_rot, model_scale)
 
 
+def _view_pose_space(profile, view):
+    space = None
+    if isinstance(view, dict):
+        space = view.get("view_pose_space", view.get("pose_space"))
+    if not space:
+        space = profile.get("view_pose_space", "world")
+    return str(space).strip().lower()
+
+
+def _view_pose_uses_scene_space(profile, view):
+    return _view_pose_space(profile, view) in {"scene", "glb", "local"}
+
+
 def _pose_position_in_scene(profile, view):
-    world_position = np.asarray(_pose_position(view, [0.0, 1.2, 0.0]), dtype="f4")
+    position = np.asarray(_pose_position(view, [0.0, 1.2, 0.0]), dtype="f4")
+    if _view_pose_uses_scene_space(profile, view):
+        return position.astype("f4").tolist()
+    world_position = position
     scene_position = np.linalg.inv(_profile_model_matrix(profile)) @ np.append(world_position, 1.0)
     return scene_position[:3].astype("f4").tolist()
 
 
-def _scene_position_in_profile(profile, position):
+def _scene_position_in_profile(profile, view, position):
     scene_position = np.asarray(position, dtype="f4")
+    if _view_pose_uses_scene_space(profile, view):
+        return scene_position.astype("f4").tolist()
     world_position = _profile_model_matrix(profile) @ np.append(scene_position, 1.0)
     return world_position[:3].astype("f4").tolist()
 
@@ -265,7 +283,7 @@ def main():
     preview.set_fill_light(fill_light_color, fill_light_intensity, fill_light_direction)
     preview.set_skybox_brightness(skybox_brightness)
 
-    # Profile positions are stored in world coordinates; Filament renders the raw GLB scene.
+    # Profile positions are usually world-space; older rooms may explicitly store GLB-local seats.
     view_pos = _pose_position_in_scene(profile, view_pose)
     if args.center_view:
         print("--center-view is ignored by the Filament preview; use VIEW controls to adjust the profile seat.")
@@ -467,7 +485,7 @@ def main():
                 rot,
             )
         if changed_view:
-            _set_pose_position(view_pose, _scene_position_in_profile(profile, view_pos))
+            _set_pose_position(view_pose, _scene_position_in_profile(profile, view_pose, view_pos))
             _set_pose_rotation_deg(view_pose, view_rot_deg)
             view_rot = [math.radians(v) for v in view_rot_deg]
 

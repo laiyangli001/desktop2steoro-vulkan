@@ -9,6 +9,12 @@
 - 验证：屏幕采样策略、头显预设、runtime 配置、OpenXR Vulkan 和 Filament Bridge 测试共 166 项通过；原生 Bridge 仍需 GitHub Actions 三平台远程构建。
 - 已将上述输入/头显矩阵、非 16:9 归档、尺寸职责边界、预滤公式和 Bridge ABI 验收条件补入两份正式规格书及需求矩阵。
 - 全量 Python 回归测试通过：680 passed；提交内容包含本轮规格书、采样策略、Bridge ABI、MSDF Quad 和既有未提交改动。
+- 修复 `3d_bedroom/environment.glb` 的 glTF scene root：移除重复挂到 scene root 的非根节点，避免 Filament desktop preview 报 `Unable to parse glTF file`。
+- 为旧房间 profile 增加 `view_pose_space=scene` 兼容：`3d_bedroom` 的座位坐标按 GLB 原始场景坐标解释，不再被 `model_position` 逆变换推到房间外；预览和 OpenXR profile 加载路径保持一致。
+- 预览工具保存座位时同步遵守 `view_pose_space`，避免移动座位后把旧房间 profile 再写回成错误坐标。
+- `npx --yes @gltf-transform/cli validate src/xr_viewer/environments/3d_bedroom/environment.glb`: `No errors found`。
+- `src/python3/python.exe -m py_compile src/xr_viewer/preview_room_layout.py src/xr_viewer/core_openxr_vulkan.py` 通过。
+- `3d_bedroom` 预览相机计算结果保持为 GLB scene 坐标 `[0.0018, 0.7381, 0.0202]`，不再变成 `[0.0018, 1.7381, 3.0202]`。
 
 ## 2026-07-27
 - 修复 Requirements Compliance 在 Linux runner 上的 Windows 键盘状态机测试：
