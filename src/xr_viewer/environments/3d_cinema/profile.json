@@ -1,7 +1,7 @@
 {
   "display_name": {
-    "EN": "3D_Home",
-    "CN": "3D_空中的家"
+    "EN": "3D_Cinema",
+    "CN": "3D_巨幕影院"
   },
   "glb": "environment.glb",
   "model_position": [
@@ -10,16 +10,16 @@
     0
   ],
   "_bounds_center": [
-    -1.15,
-    99,
-    -0.65
+    0.0,
+    16.3071,
+    0.0
   ],
   "_bounds_size": [
-    198,
-    198,
-    198
+    45.16,
+    29.1314,
+    46.8749
   ],
-  "_bounds_radius": 171.47,
+  "_bounds_radius": 35.6557,
   "model_rotation_deg": [
     0.0,
     0.0,
@@ -30,13 +30,6 @@
     1,
     1
   ],
-  "skybox": {
-    "nodes": [
-      "Models_Home2__Skybox360"
-    ],
-    "force_opaque": true,
-    "double_sided": true
-  },
   "env_exposure": 0.5,
   "env_gamma": 2.2,
   "env_emissive_strength": 10.0,
@@ -56,8 +49,8 @@
     -0.55
   ],
   "xr_render_scale": 1.0,
-  "xr_projection_near": 0.1,
-  "xr_projection_far": 2000.0,
+  "xr_projection_near": 0.03,
+  "xr_projection_far": 100.0,
   "screen_quality_filter": false,
   "screen_quality_sharpness": 0.35,
   "screen_quality_oversample": 1.0,
@@ -110,51 +103,51 @@
   "view_poses": [
     {
       "name": "Center View",
-      "x": -2.0874,
-      "y": 101.2519,
-      "z": 0.1331,
-      "angle": 179.88,
+      "x": 0.3367,
+      "y": 12.1992,
+      "z": 1.4071,
+      "angle": 179.76,
       "rotation_deg": [
-        179.88,
-        -0.92,
+        179.76,
+        -1.8,
         0.0
       ]
     },
     {
       "name": "Front View",
-      "x": -1,
-      "y": 169,
-      "z": 274,
-      "angle": 180,
+      "x": -0.171,
+      "y": 6.9214,
+      "z": 8.0,
+      "angle": 180.0,
       "rotation_deg": [
-        180,
-        0,
-        0
+        180.0,
+        0.0,
+        0.0
       ]
     },
     {
-      "name": "Overview",
-      "x": -1,
-      "y": 408,
-      "z": 377,
-      "angle": 180,
+      "name": "Back View",
+      "x": -0.171,
+      "y": 11.0814,
+      "z": -10.0,
+      "angle": 180.0,
       "rotation_deg": [
-        180,
-        -22,
-        0
+        180.0,
+        0.0,
+        0.0
       ]
     }
   ],
   "screen": {
     "allow_controller_move": true,
-    "width": 90.5689,
+    "width": 43.093,
     "position": [
-      -4.8329,
-      109.4808,
-      58.9607
+      -0.171,
+      14.7363,
+      23.7175
     ],
     "rotation_deg": [
-      -180.0,
+      0.0,
       0.0,
       0.0
     ],

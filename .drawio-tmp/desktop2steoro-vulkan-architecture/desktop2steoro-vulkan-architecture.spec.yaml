@@ -1,0 +1,261 @@
+meta:
+  profile: engineering-review
+  theme: arch-dark
+  source: generated
+  layout: hierarchical
+  canvas: 1600x1040
+  title: Desktop2Stereo Vulkan 程序架构
+  description: Python 主控、GPU 立体合成、Vulkan Presenter、OpenXR 与 Filament Bridge 的运行时边界
+nodes:
+  - id: gui
+    label: |-
+      Flet GUI
+      配置/状态
+    type: user
+    module: app_control
+    position:
+      x: 150
+      'y': 150
+  - id: runtime_entry
+    label: |-
+      Runtime Entry
+      app_runtime
+    type: service
+    module: app_control
+    position:
+      x: 360
+      'y': 150
+  - id: command_queue
+    label: |-
+      Command Queue
+      control commands
+    type: queue
+    module: app_control
+    position:
+      x: 570
+      'y': 150
+  - id: capture
+    label: |-
+      Capture Adapter
+      Windows Monitor
+    type: service
+    module: gpu_producer
+    position:
+      x: 150
+      'y': 360
+  - id: inference
+    label: |-
+      Inference
+      CUDA/ROCm/TensorRT
+    type: process
+    module: gpu_producer
+    position:
+      x: 380
+      'y': 360
+  - id: compute_backend
+    label: |-
+      GPU Producer
+      Triton/Vulkan
+    type: process
+    module: gpu_producer
+    position:
+      x: 640
+      'y': 360
+  - id: stereo_graph
+    label: |-
+      Stereo Graph
+      SPIR-V passes
+    type: process
+    module: gpu_producer
+    position:
+      x: 900
+      'y': 360
+  - id: vulkan_context
+    label: |-
+      Vulkan Context
+      Device/Sync/Pools
+    type: service
+    module: presenter
+    position:
+      x: 1140
+      'y': 360
+  - id: output_contract
+    label: |-
+      Output Contract
+      sRGB/top-left
+    type: document
+    module: presenter
+    position:
+      x: 1380
+      'y': 360
+  - id: presenter_thread
+    label: |-
+      Presenter Thread
+      frame executor
+    type: process
+    module: presenter
+    position:
+      x: 1140
+      'y': 570
+  - id: openxr
+    label: |-
+      OpenXR Viewer
+      frame/composition
+    type: service
+    module: xr_render
+    position:
+      x: 1380
+      'y': 570
+  - id: external_images
+    label: |-
+      VkImage Ring
+      ready/release
+    type: database
+    module: presenter
+    position:
+      x: 900
+      'y': 760
+  - id: filament_bridge
+    label: |-
+      Filament Bridge
+      Engine/Scene/Views
+    type: service
+    module: xr_render
+    position:
+      x: 1140
+      'y': 760
+  - id: scene_assets
+    label: |-
+      Scene Assets
+      GLB/Screen/Input
+    type: document
+    module: xr_render
+    position:
+      x: 1380
+      'y': 760
+  - id: composition
+    label: |-
+      Composition
+      Projection/Quad
+    type: service
+    position:
+      x: 1140
+      'y': 930
+  - id: headset
+    label: |-
+      XR Runtime
+      PICO/Quest
+    type: terminal
+    position:
+      x: 1380
+      'y': 930
+  - id: opengl_fallback
+    label: |-
+      OpenGL Fallback
+      compatibility
+    type: terminal
+    position:
+      x: 380
+      'y': 570
+  - id: legend_control
+    label: Control
+    type: service
+    size: small
+    position:
+      x: 180
+      'y': 1010
+  - id: legend_data
+    label: GPU data
+    type: queue
+    size: small
+    position:
+      x: 340
+      'y': 1010
+  - id: legend_external
+    label: External
+    type: terminal
+    size: small
+    position:
+      x: 500
+      'y': 1010
+edges:
+  - from: gui
+    to: runtime_entry
+    type: primary
+  - from: runtime_entry
+    to: command_queue
+    type: data
+  - from: capture
+    to: inference
+    type: data
+  - from: inference
+    to: compute_backend
+    type: data
+  - from: compute_backend
+    to: stereo_graph
+    type: primary
+  - from: stereo_graph
+    to: external_images
+    type: data
+  - from: command_queue
+    to: presenter_thread
+    type: primary
+  - from: vulkan_context
+    to: presenter_thread
+    type: dependency
+  - from: output_contract
+    to: presenter_thread
+    type: dependency
+  - from: presenter_thread
+    to: external_images
+    type: data
+  - from: external_images
+    to: filament_bridge
+    type: data
+  - from: presenter_thread
+    to: openxr
+    type: primary
+  - from: filament_bridge
+    to: scene_assets
+    type: dependency
+  - from: filament_bridge
+    to: composition
+    type: primary
+  - from: openxr
+    to: composition
+    type: primary
+  - from: composition
+    to: headset
+    type: primary
+  - from: compute_backend
+    to: opengl_fallback
+    type: optional
+modules:
+  - id: app_control
+    label: 应用控制与后台线程
+    style:
+      fillColor: none
+      strokeColor: '#22D3EE'
+      dashed: true
+      dashPattern: 8 4
+  - id: gpu_producer
+    label: GPU 立体生产路径
+    style:
+      fillColor: none
+      strokeColor: '#34D399'
+      dashed: true
+      dashPattern: 8 4
+  - id: presenter
+    label: Vulkan Presenter 线程
+    style:
+      fillColor: none
+      strokeColor: '#FBBF24'
+      dashed: true
+      dashPattern: 8 4
+  - id: xr_render
+    label: OpenXR 与 Filament 渲染
+    style:
+      fillColor: none
+      strokeColor: '#A78BFA'
+      dashed: true
+      dashPattern: 8 4

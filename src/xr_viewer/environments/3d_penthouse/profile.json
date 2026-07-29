@@ -1,7 +1,7 @@
 {
   "display_name": {
-    "EN": "3D_Home",
-    "CN": "3D_空中的家"
+    "EN": "3D_Penthouse",
+    "CN": "3D_复式公寓"
   },
   "glb": "environment.glb",
   "model_position": [
@@ -10,16 +10,16 @@
     0
   ],
   "_bounds_center": [
-    -1.15,
-    99,
-    -0.65
+    1.6081,
+    99.0,
+    -1.2278
   ],
   "_bounds_size": [
-    198,
-    198,
-    198
+    198.0,
+    198.0,
+    198.0
   ],
-  "_bounds_radius": 171.47,
+  "_bounds_radius": 171.473,
   "model_rotation_deg": [
     0.0,
     0.0,
@@ -32,7 +32,7 @@
   ],
   "skybox": {
     "nodes": [
-      "Models_Home2__Skybox360"
+      "Models_Penthouse__model__Skybox360"
     ],
     "force_opaque": true,
     "double_sided": true
@@ -56,8 +56,8 @@
     -0.55
   ],
   "xr_render_scale": 1.0,
-  "xr_projection_near": 0.1,
-  "xr_projection_far": 2000.0,
+  "xr_projection_near": 0.03,
+  "xr_projection_far": 250.0,
   "screen_quality_filter": false,
   "screen_quality_sharpness": 0.35,
   "screen_quality_oversample": 1.0,
@@ -110,48 +110,48 @@
   "view_poses": [
     {
       "name": "Center View",
-      "x": -2.0874,
-      "y": 101.2519,
-      "z": 0.1331,
-      "angle": 179.88,
+      "x": 1.6525,
+      "y": 99.641,
+      "z": -0.7848,
+      "angle": 178.08,
       "rotation_deg": [
-        179.88,
-        -0.92,
+        178.08,
+        -0.2,
         0.0
       ]
     },
     {
-      "name": "Front View",
-      "x": -1,
-      "y": 169,
-      "z": 274,
-      "angle": 180,
+      "name": "First Floor",
+      "x": 0.0,
+      "y": 99.72,
+      "z": -1.8,
+      "angle": 180.0,
       "rotation_deg": [
-        180,
-        0,
-        0
+        180.0,
+        14.8,
+        0.0
       ]
     },
     {
-      "name": "Overview",
-      "x": -1,
-      "y": 408,
-      "z": 377,
-      "angle": 180,
+      "name": "Second Floor",
+      "x": 0.0,
+      "y": 102.96,
+      "z": -1.8,
+      "angle": 180.0,
       "rotation_deg": [
-        180,
-        -22,
-        0
+        180.0,
+        -19.2,
+        0.0
       ]
     }
   ],
   "screen": {
     "allow_controller_move": true,
-    "width": 90.5689,
+    "width": 4.1604,
     "position": [
-      -4.8329,
-      109.4808,
-      58.9607
+      1.5184,
+      99.8862,
+      3.1966
     ],
     "rotation_deg": [
       -180.0,

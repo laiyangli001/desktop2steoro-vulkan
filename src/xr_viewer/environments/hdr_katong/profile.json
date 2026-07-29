@@ -1,4 +1,8 @@
 {
+  "display_name": {
+    "EN": "HDR_Cartoon",
+    "CN": "HDR_卡通世界"
+  },
   "environment_type": "panorama",
   "background": {
     "type": "equirectangular",

@@ -1,4 +1,8 @@
 {
+  "display_name": {
+    "EN": "HDR_Universe",
+    "CN": "HDR_浩瀚宇宙"
+  },
   "environment_type": "panorama",
   "background": {
     "type": "equirectangular",
