@@ -137,6 +137,11 @@ FILAMENT_BRIDGE_API int filament_bridge_set_screen_sampling_mode(
 FILAMENT_BRIDGE_API int filament_bridge_set_screen_image(
         FilamentBridge* bridge, const void* image,
         uint32_t width, uint32_t height, int32_t format);
+// Read back the fixed-camera, screen-only sampled result. This diagnostic API
+// is valid between begin_frame and end_frame and writes RGBA8 pixels.
+FILAMENT_BRIDGE_API int filament_bridge_capture_screen_rgba(
+        FilamentBridge* bridge, uint8_t* rgba,
+        uint32_t width, uint32_t height);
 // Reports whether this Bridge is backed by a Filament Vulkan backend that
 // supports sampling an application-owned VkImage as a material texture.
 FILAMENT_BRIDGE_API int filament_bridge_vulkan_external_image_abi_available(

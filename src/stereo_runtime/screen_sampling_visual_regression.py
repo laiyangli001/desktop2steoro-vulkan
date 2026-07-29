@@ -58,19 +58,25 @@ def compare_screen_sampling_capture_dirs(
     mip_dir: str | Path,
     *,
     output_dir: str | Path | None = None,
-    stage: str = "06_openxr_projection",
+    stage: str = "07_filament_screen",
     eyes: tuple[str, ...] = _DEFAULT_EYES,
     verify_source: bool = True,
 ) -> dict[str, Any]:
     """Compare real runtime PNGs captured with legacy and MIP sampling.
 
-    The default stage is the final OpenXR projection swapchain. The earlier
-    ``03_vulkan_output`` stage is available for checking that both runs used
-    the same producer image, but it is not a post-sampling comparison.
+    The default stage is the fixed-camera Filament screen-only readback. It
+    excludes OpenXR pose, projection, and controller composition effects.
+    ``06_openxr_projection`` remains available for end-to-end diagnostics, and
+    ``03_vulkan_output`` checks whether both runs used the same producer image.
     """
-    if stage not in {"03_vulkan_output", "06_openxr_projection"}:
+    if stage not in {
+        "03_vulkan_output",
+        "06_openxr_projection",
+        "07_filament_screen",
+    }:
         raise ValueError(
-            "stage must be '03_vulkan_output' or '06_openxr_projection'"
+            "stage must be '03_vulkan_output', '06_openxr_projection', "
+            "or '07_filament_screen'"
         )
     old_root = Path(legacy_dir)
     new_root = Path(mip_dir)

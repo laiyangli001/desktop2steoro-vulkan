@@ -217,7 +217,9 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "filament_bridge_set_screen_light" in facade
     assert "filament_bridge_set_screen_sampling" in facade
     assert "filament_bridge_set_screen_sampling_mode" in facade
+    assert "filament_bridge_capture_screen_rgba" in facade
     assert "bridge_screen_set_sampling_mode" in source
+    assert "bridge_screen_capture_rgba" in source
     assert "LightManager::Type::FOCUSED_SPOT" in source
     assert "bridge->screen_light_direction = -forward;" in source
     assert "std::sqrt(width * width + height * height)" in source

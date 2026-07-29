@@ -1,12 +1,66 @@
 #include "bridge_screen.h"
 #include "bridge_internal.h"
 
+#include <backend/PixelBufferDescriptor.h>
+
 namespace {
 
 constexpr uint32_t kScreenSegments = 48;
 constexpr float kCurvedHalfAngle = 0.72f;
 constexpr float kLegacyScreenCandelaScale = 1200.0f;
 constexpr uint8_t kScreenMipCopyLayer = 2;
+
+void destroy_screen_capture_target(FilamentBridge* bridge) {
+    if (!bridge || !bridge->engine) return;
+    if (bridge->screen_capture_render_target) {
+        bridge->engine->destroy(bridge->screen_capture_render_target);
+        bridge->screen_capture_render_target = nullptr;
+    }
+    if (bridge->screen_capture_texture) {
+        bridge->engine->destroy(bridge->screen_capture_texture);
+        bridge->screen_capture_texture = nullptr;
+    }
+    bridge->screen_capture_width = 0;
+    bridge->screen_capture_height = 0;
+}
+
+bool ensure_screen_capture_target(
+        FilamentBridge* bridge, uint32_t width, uint32_t height) {
+    if (!bridge || !bridge->engine || width == 0 || height == 0) return false;
+    if (bridge->screen_capture_texture && bridge->screen_capture_render_target &&
+            bridge->screen_capture_width == width &&
+            bridge->screen_capture_height == height) {
+        return true;
+    }
+    destroy_screen_capture_target(bridge);
+    using Usage = filament::Texture::Usage;
+    const auto usage = static_cast<Usage>(
+            static_cast<uint16_t>(Usage::COLOR_ATTACHMENT) |
+            static_cast<uint16_t>(Usage::BLIT_SRC));
+    auto* texture = filament::Texture::Builder()
+            .width(width).height(height).levels(1)
+            .format(filament::Texture::InternalFormat::SRGB8_A8)
+            .sampler(filament::Texture::Sampler::SAMPLER_2D)
+            .usage(usage)
+            .build(*bridge->engine);
+    if (!texture) {
+        bridge_set_error(bridge, "Filament could not create screen capture texture");
+        return false;
+    }
+    auto* target = filament::RenderTarget::Builder()
+            .texture(filament::RenderTarget::AttachmentPoint::COLOR, texture)
+            .build(*bridge->engine);
+    if (!target) {
+        bridge->engine->destroy(texture);
+        bridge_set_error(bridge, "Filament could not create screen capture target");
+        return false;
+    }
+    bridge->screen_capture_texture = texture;
+    bridge->screen_capture_render_target = target;
+    bridge->screen_capture_width = width;
+    bridge->screen_capture_height = height;
+    return true;
+}
 
 void destroy_screen_mip_target(FilamentBridge* bridge, uint32_t eye_index) {
     if (!bridge || eye_index >= bridge->screen_mip_textures.size()) return;
@@ -113,6 +167,7 @@ bool ensure_screen_mip_target(
 
 void bridge_screen_destroy(FilamentBridge* bridge) {
     if (!bridge || !bridge->engine) return;
+    destroy_screen_capture_target(bridge);
     if (bridge->scene && !bridge->screen_mip_copy_entity.isNull()) {
         bridge->scene->remove(bridge->screen_mip_copy_entity);
     }
@@ -617,5 +672,50 @@ int bridge_screen_prepare_frame(FilamentBridge* bridge) {
             static_cast<uint32_t>(mip_texture->getHeight())});
     bridge->renderer->render(bridge->screen_mip_copy_view);
     mip_texture->generateMipmaps(*bridge->engine);
+    return 1;
+}
+
+int bridge_screen_capture_rgba(
+        FilamentBridge* bridge, uint8_t* rgba,
+        uint32_t width, uint32_t height) {
+    if (!bridge || !bridge->engine || !bridge->renderer ||
+            !bridge->frame_active || !rgba || width == 0 || height == 0 ||
+            !bridge->screen_mip_copy_view ||
+            bridge->active_eye >= bridge->screen_source_textures.size()) {
+        return 0;
+    }
+    auto* source = bridge->screen_source_textures[bridge->active_eye];
+    if (!source || !ensure_screen_capture_target(bridge, width, height)) {
+        return 0;
+    }
+    const bool use_mip = bridge->screen_mip_experiment_enabled &&
+            bridge->screen_mip_ready[bridge->active_eye] &&
+            bridge->screen_mip_textures[bridge->active_eye];
+    auto* sampled = use_mip
+            ? bridge->screen_mip_textures[bridge->active_eye]
+            : source;
+    bridge->screen_mip_copy_material_instance->setParameter(
+            "screenTexture", sampled,
+            use_mip ? bridge->screen_texture_sampler
+                    : bridge->screen_source_texture_sampler);
+    bridge->screen_mip_copy_material_instance->setParameter(
+            "screenTexelSize", filament::math::float2{
+                    1.0f / static_cast<float>(source->getWidth()),
+                    1.0f / static_cast<float>(source->getHeight())});
+    bridge->screen_mip_copy_view->setRenderTarget(
+            bridge->screen_capture_render_target);
+    bridge->screen_mip_copy_view->setViewport(filament::Viewport{
+            0, 0, width, height});
+    bridge->renderer->render(bridge->screen_mip_copy_view);
+    filament::backend::PixelBufferDescriptor pixels(
+            rgba, static_cast<size_t>(width) * height * 4,
+            filament::backend::PixelBufferDescriptor::PixelDataFormat::RGBA,
+            filament::backend::PixelBufferDescriptor::PixelDataType::UBYTE);
+    bridge->renderer->readPixels(
+            bridge->screen_capture_render_target, 0, 0, width, height,
+            std::move(pixels));
+    // The caller owns the buffer. Waiting here guarantees that Filament has
+    // completed the asynchronous readback before the Python call returns.
+    bridge->engine->flushAndWait();
     return 1;
 }

@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
 
 from stereo_runtime.screen_sampling_visual_regression import (
     compare_screen_sampling_capture_dirs,
@@ -18,8 +22,12 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument(
         "--stage",
-        choices=("03_vulkan_output", "06_openxr_projection"),
-        default="06_openxr_projection",
+        choices=(
+            "03_vulkan_output",
+            "06_openxr_projection",
+            "07_filament_screen",
+        ),
+        default="07_filament_screen",
     )
     parser.add_argument(
         "--no-verify-source",

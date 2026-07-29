@@ -60,6 +60,7 @@ class FilamentVulkanBridge:
         self._finished_drawing_semaphore_abi_available = False
         self._screen_sampling_abi_available = False
         self._screen_sampling_mode_abi_available = False
+        self._screen_capture_abi_available = False
         self._async_submit_abi_available = False
         self._configure_abi()
         self._handle: ctypes.c_void_p | None = None
@@ -614,6 +615,27 @@ class FilamentVulkanBridge:
             "set_screen_image",
         )
 
+    def capture_screen_rgba(self, width: int, height: int) -> bytes:
+        """Read the fixed-camera, screen-only sampled result as RGBA8."""
+        self._ensure_loaded()
+        if not self._screen_capture_abi_available:
+            raise FilamentBridgeError(
+                "Filament Bridge screen capture ABI is unavailable; rebuild the CI artifact"
+            )
+        width = int(width)
+        height = int(height)
+        if width <= 0 or height <= 0:
+            raise ValueError("screen capture dimensions must be positive")
+        size = width * height * 4
+        buffer = ctypes.create_string_buffer(size)
+        self._check_result(
+            self._library.filament_bridge_capture_screen_rgba(
+                self._handle, buffer, width, height
+            ),
+            "capture_screen_rgba",
+        )
+        return bytes(buffer.raw)
+
     def set_screen_ready_semaphore(self, semaphore: Any) -> None:
         self._ensure_loaded()
         if not self._screen_ready_semaphore_abi_available:
@@ -875,6 +897,18 @@ class FilamentVulkanBridge:
             set_screen_sampling_mode.argtypes = [ctypes.c_void_p, ctypes.c_int]
             set_screen_sampling_mode.restype = ctypes.c_int
             self._screen_sampling_mode_abi_available = True
+        capture_screen = getattr(
+            library, "filament_bridge_capture_screen_rgba", None
+        )
+        if capture_screen is not None:
+            capture_screen.argtypes = [
+                ctypes.c_void_p,
+                ctypes.POINTER(ctypes.c_uint8),
+                ctypes.c_uint32,
+                ctypes.c_uint32,
+            ]
+            capture_screen.restype = ctypes.c_int
+            self._screen_capture_abi_available = True
         if hasattr(library, "filament_bridge_set_screen_image"):
             library.filament_bridge_set_screen_image.argtypes = [
                 ctypes.c_void_p,

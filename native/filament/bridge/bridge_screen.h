@@ -22,3 +22,6 @@ int bridge_screen_set_image(
         FilamentBridge* bridge, const void* image,
         uint32_t width, uint32_t height, int32_t format);
 int bridge_screen_prepare_frame(FilamentBridge* bridge);
+int bridge_screen_capture_rgba(
+        FilamentBridge* bridge, uint8_t* rgba,
+        uint32_t width, uint32_t height);
