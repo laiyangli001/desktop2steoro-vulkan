@@ -637,7 +637,7 @@ class FilamentVulkanBridge:
             ),
             "capture_screen_rgba",
         )
-        return bytes(buffer.raw)
+        return bytes(buffer)
 
     def set_screen_ready_semaphore(self, semaphore: Any) -> None:
         self._ensure_loaded()
