@@ -627,7 +627,10 @@ class FilamentVulkanBridge:
         if width <= 0 or height <= 0:
             raise ValueError("screen capture dimensions must be positive")
         size = width * height * 4
-        buffer = ctypes.create_string_buffer(size)
+        # The C ABI takes uint8_t*, so use a matching ctypes array instead of
+        # create_string_buffer (which produces c_char[] and fails argtype
+        # validation before the native readback is called).
+        buffer = (ctypes.c_uint8 * size)()
         self._check_result(
             self._library.filament_bridge_capture_screen_rgba(
                 self._handle, buffer, width, height
