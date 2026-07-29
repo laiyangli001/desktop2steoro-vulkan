@@ -191,97 +191,21 @@ int bridge_screen_set_sampling(FilamentBridge* bridge, float filter_scale) {
 int bridge_screen_create(FilamentBridge* bridge) {
     if (!bridge || !bridge->engine || !bridge->scene) return 0;
     bridge_screen_destroy(bridge);
-    // The external Vulkan image has exactly one mip level. Use the honest
-    // single-level filter here; declaring a mip filter does not create a mip
-    // pyramid and can make the driver choose an implementation-dependent LOD.
-    // The material below performs the screen-footprint filtering explicitly.
+    // The external Vulkan image has exactly one mip level. Use a single-level
+    // linear sampler and let Filament perform the ordinary hardware bilinear
+    // lookup. Experimental footprint filtering is intentionally not part of
+    // the default path until it has passed a visual A/B comparison.
     bridge->screen_texture_sampler = filament::TextureSampler(
             filament::TextureSampler::MinFilter::LINEAR,
             filament::TextureSampler::MagFilter::LINEAR,
             filament::TextureSampler::WrapMode::CLAMP_TO_EDGE);
-    // Keep anisotropy enabled for the rasterizer's projected footprint. It is
-    // only an additional hint here; it is not a substitute for a mip chain.
+    // Keep the legacy anisotropy hint. It is harmless for the single-level
+    // external image and preserves the existing sampler configuration.
     bridge->screen_texture_sampler.setAnisotropy(16.0f);
     const char* shader = R"FILAMENT(
-        float sat(float value) {
-            return clamp(value, 0.0, 1.0);
-        }
-
-        float rcp_safe(float value) {
-            return 1.0 / max(abs(value), 1e-6);
-        }
-
-        float luma2(float3 color) {
-            return color.b * 0.5 + (color.r * 0.5 + color.g);
-        }
-
-        float3 sample_screen_area(float2 uv, float2 footprint) {
-            // Keep the normal hardware bilinear path for 1:1 and magnified
-            // fragments. The four-corner area approximation is only needed
-            // when one output pixel covers multiple source pixels.
-            if (footprint.x <= materialParams.screenTexelSize.x * 1.5 &&
-                    footprint.y <= materialParams.screenTexelSize.y * 1.5) {
-                return texture(materialParams_screenTexture, uv).rgb;
-            }
-            float2 half_footprint = footprint * 0.5;
-            float2 lo = clamp(uv - half_footprint, float2(0.0), float2(1.0));
-            float2 hi = clamp(uv + half_footprint, float2(0.0), float2(1.0));
-            float2 a = float2(lo.x, lo.y);
-            float2 b = float2(hi.x, lo.y);
-            float2 c = float2(lo.x, hi.y);
-            float2 d = float2(hi.x, hi.y);
-            return 0.25 * (
-                    texture(materialParams_screenTexture, a).rgb +
-                    texture(materialParams_screenTexture, b).rgb +
-                    texture(materialParams_screenTexture, c).rgb +
-                    texture(materialParams_screenTexture, d).rgb);
-        }
-
-        float3 screen_rcas(float2 uv, float2 footprint) {
-            float3 b = sample_screen_area(uv + float2(0.0, -footprint.y), footprint);
-            float3 d = sample_screen_area(uv + float2(-footprint.x, 0.0), footprint);
-            float3 e = sample_screen_area(uv, footprint);
-            float3 f = sample_screen_area(uv + float2(footprint.x, 0.0), footprint);
-            float3 h = sample_screen_area(uv + float2(0.0, footprint.y), footprint);
-
-            float b_luma = luma2(b);
-            float d_luma = luma2(d);
-            float e_luma = luma2(e);
-            float f_luma = luma2(f);
-            float h_luma = luma2(h);
-            float nz = 0.25 * (b_luma + d_luma + f_luma + h_luma) - e_luma;
-            float l_max = max(max(max(b_luma, d_luma), max(e_luma, f_luma)), h_luma);
-            float l_min = min(min(min(b_luma, d_luma), min(e_luma, f_luma)), h_luma);
-            nz = sat(abs(nz) * rcp_safe(l_max - l_min));
-            nz = -0.5 * nz + 1.0;
-
-            float3 min4 = min(min(b, d), min(f, h));
-            float3 max4 = max(max(b, d), max(f, h));
-            float3 hit_min = min4 / max(4.0 * max4, float3(1e-6));
-            float3 hit_max = (float3(1.0) - max4) /
-                    min(4.0 * min4 - 4.0, float3(-1e-6));
-            float3 lobe_rgb = max(-hit_min, hit_max);
-            float lobe = max(max(lobe_rgb.r, lobe_rgb.g), lobe_rgb.b);
-            float rcas_limit = 0.25 - (1.0 / 16.0);
-            float sharpness_stops = mix(2.0, 0.0,
-                    sat(materialParams.screenSharpness));
-            float con = exp2(-sharpness_stops);
-            lobe = max(-rcas_limit, min(lobe, 0.0)) * con * nz;
-            float rcp_l = rcp_safe(4.0 * lobe + 1.0);
-            return clamp((lobe * b + lobe * d + lobe * h + lobe * f + e) * rcp_l,
-                    float3(0.0), float3(1.0));
-        }
-
         void material(inout MaterialInputs material) {
             prepareMaterial(material);
-            float2 uv = getUV0();
-            // fwidth is the exact projected UV footprint for this fragment.
-            // Clamp it to one source texel so magnification remains ordinary
-            // bilinear sampling instead of repeatedly sharpening a pixel.
-            float2 footprint = max(fwidth(uv),
-                    materialParams.screenTexelSize *
-                    materialParams.screenFilterScale);
-            material.baseColor = float4(screen_rcas(uv, footprint), 1.0);
+            material.baseColor = texture(materialParams_screenTexture, getUV0());
         }
     )FILAMENT";
     filamat::MaterialBuilder::init();
