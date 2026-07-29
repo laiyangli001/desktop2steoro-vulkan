@@ -20,3 +20,4 @@ int bridge_screen_set_sampling(FilamentBridge* bridge, float filter_scale);
 int bridge_screen_set_image(
         FilamentBridge* bridge, const void* image,
         uint32_t width, uint32_t height, int32_t format);
+int bridge_screen_prepare_frame(FilamentBridge* bridge);

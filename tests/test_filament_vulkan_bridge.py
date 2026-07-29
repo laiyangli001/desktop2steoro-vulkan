@@ -133,13 +133,16 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "TextureSampler::MinFilter::LINEAR" in source
     assert "TextureSampler::MagFilter::LINEAR" in source
     assert "screen_texture_sampler.setAnisotropy(16.0f)" in source
-    assert "Experimental footprint filtering is intentionally not part of" in source
+    assert "screen_mip_experiment_enabled = true" in source
     assert 'parameter("screenTexelSize"' in source
     assert 'parameter("screenFilterScale"' in source
     assert 'parameter("screenSharpness"' in source
     assert "material.baseColor = texture(materialParams_screenTexture, getUV0());" in source
     assert "screen_rcas" not in source
     assert "fwidth(uv)" not in source
+    assert "RenderTarget::Builder" in source
+    assert "generateMipmaps(*bridge->engine)" in source
+    assert "screen_mip_copy_view" in source
     context_source = (bridge_dir / "bridge_context.cpp").read_text(encoding="utf-8")
     assert "eye.view->setAntiAliasing(filament::AntiAliasing::NONE);" in context_source
     assert "filament_bridge_set_screen_ready_semaphore" in facade

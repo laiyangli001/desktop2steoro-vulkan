@@ -6,11 +6,142 @@ namespace {
 constexpr uint32_t kScreenSegments = 48;
 constexpr float kCurvedHalfAngle = 0.72f;
 constexpr float kLegacyScreenCandelaScale = 1200.0f;
+constexpr uint8_t kScreenMipCopyLayer = 2;
+
+void destroy_screen_mip_target(FilamentBridge* bridge, uint32_t eye_index) {
+    if (!bridge || eye_index >= bridge->screen_mip_textures.size()) return;
+    if (bridge->screen_mip_render_targets[eye_index]) {
+        bridge->engine->destroy(bridge->screen_mip_render_targets[eye_index]);
+        bridge->screen_mip_render_targets[eye_index] = nullptr;
+    }
+    if (bridge->screen_mip_textures[eye_index]) {
+        bridge->engine->destroy(bridge->screen_mip_textures[eye_index]);
+        bridge->screen_mip_textures[eye_index] = nullptr;
+    }
+    bridge->screen_mip_ready[eye_index] = false;
+}
+
+void bind_screen_display_texture(FilamentBridge* bridge, uint32_t eye_index) {
+    if (!bridge || eye_index >= bridge->screen_textures.size()) return;
+    const bool use_mip = bridge->screen_mip_ready[eye_index] &&
+            bridge->screen_mip_textures[eye_index];
+    filament::Texture* texture = use_mip
+            ? bridge->screen_mip_textures[eye_index]
+            : bridge->screen_source_textures[eye_index];
+    bridge->screen_textures[eye_index] = texture;
+    if (eye_index == bridge->active_eye) {
+        bridge->screen_texture = texture;
+    }
+    if (texture && bridge->screen_material_instance) {
+        bridge->screen_material_instance->setParameter(
+                "screenTexture", texture,
+                use_mip ? bridge->screen_texture_sampler
+                        : bridge->screen_source_texture_sampler);
+    }
+}
+
+void bind_screen_copy_source(
+        FilamentBridge* bridge, filament::Texture* source,
+        uint32_t width, uint32_t height) {
+    if (!bridge || !source || !bridge->screen_mip_copy_material_instance) return;
+    bridge->screen_mip_copy_material_instance->setParameter(
+            "screenTexture", source, bridge->screen_source_texture_sampler);
+    bridge->screen_mip_copy_material_instance->setParameter(
+            "screenTexelSize", filament::math::float2{
+                    1.0f / static_cast<float>(width),
+                    1.0f / static_cast<float>(height)});
+}
+
+bool ensure_screen_mip_target(
+        FilamentBridge* bridge, uint32_t eye_index,
+        uint32_t width, uint32_t height, int32_t format) {
+    if (!bridge || !bridge->engine || !bridge->screen_mip_experiment_enabled ||
+            !bridge->screen_mip_copy_view || bridge->screen_mip_copy_entity.isNull() ||
+            eye_index >= bridge->screen_mip_textures.size() ||
+            width == 0 || height == 0) {
+        return false;
+    }
+    auto* current = bridge->screen_mip_textures[eye_index];
+    if (current && bridge->screen_mip_render_targets[eye_index] &&
+            current->getWidth() == width && current->getHeight() == height) {
+        return true;
+    }
+    destroy_screen_mip_target(bridge, eye_index);
+    const auto texture_format = format == VK_FORMAT_R8G8B8A8_SRGB
+            ? filament::Texture::InternalFormat::SRGB8_A8
+            : filament::Texture::InternalFormat::RGBA8;
+    using Usage = filament::Texture::Usage;
+    const auto usage = static_cast<Usage>(
+            static_cast<uint16_t>(Usage::COLOR_ATTACHMENT) |
+            static_cast<uint16_t>(Usage::SAMPLEABLE) |
+            static_cast<uint16_t>(Usage::BLIT_SRC) |
+            static_cast<uint16_t>(Usage::BLIT_DST) |
+            static_cast<uint16_t>(Usage::GEN_MIPMAPPABLE));
+    uint32_t maximum = std::max(width, height);
+    uint8_t levels = 1;
+    while (maximum > 1 && levels < 255) {
+        maximum = (maximum + 1) / 2;
+        ++levels;
+    }
+    auto* texture = filament::Texture::Builder()
+            .width(width).height(height).levels(levels)
+            .format(texture_format)
+            .sampler(filament::Texture::Sampler::SAMPLER_2D)
+            .usage(usage)
+            .build(*bridge->engine);
+    if (!texture) {
+        bridge_set_error(bridge, "Filament could not create screen MIP texture");
+        return false;
+    }
+    auto* target = filament::RenderTarget::Builder()
+            .texture(filament::RenderTarget::AttachmentPoint::COLOR, texture)
+            .mipLevel(0)
+            .build(*bridge->engine);
+    if (!target) {
+        bridge->engine->destroy(texture);
+        bridge_set_error(bridge, "Filament could not create screen MIP render target");
+        return false;
+    }
+    bridge->screen_mip_textures[eye_index] = texture;
+    bridge->screen_mip_render_targets[eye_index] = target;
+    bridge->screen_mip_ready[eye_index] = true;
+    return true;
+}
 
 }  // namespace
 
 void bridge_screen_destroy(FilamentBridge* bridge) {
     if (!bridge || !bridge->engine) return;
+    if (bridge->scene && !bridge->screen_mip_copy_entity.isNull()) {
+        bridge->scene->remove(bridge->screen_mip_copy_entity);
+    }
+    if (!bridge->screen_mip_copy_entity.isNull()) {
+        bridge->engine->destroy(bridge->screen_mip_copy_entity);
+        bridge->screen_mip_copy_entity = {};
+    }
+    if (bridge->screen_mip_copy_view) {
+        bridge->engine->destroy(bridge->screen_mip_copy_view);
+        bridge->screen_mip_copy_view = nullptr;
+    }
+    if (bridge->screen_mip_copy_camera) {
+        bridge->engine->destroy(bridge->screen_mip_copy_camera->getEntity());
+        bridge->screen_mip_copy_camera = nullptr;
+    }
+    if (bridge->screen_mip_copy_vertex_buffer) {
+        bridge->engine->destroy(bridge->screen_mip_copy_vertex_buffer);
+        bridge->screen_mip_copy_vertex_buffer = nullptr;
+    }
+    if (bridge->screen_mip_copy_index_buffer) {
+        bridge->engine->destroy(bridge->screen_mip_copy_index_buffer);
+        bridge->screen_mip_copy_index_buffer = nullptr;
+    }
+    if (bridge->screen_mip_copy_material_instance) {
+        bridge->engine->destroy(bridge->screen_mip_copy_material_instance);
+        bridge->screen_mip_copy_material_instance = nullptr;
+    }
+    for (uint32_t eye_index = 0; eye_index < bridge->screen_mip_textures.size(); ++eye_index) {
+        destroy_screen_mip_target(bridge, eye_index);
+    }
     if (bridge->scene && bridge->screen_in_scene && !bridge->screen_entity.isNull()) {
         bridge->scene->remove(bridge->screen_entity);
     }
@@ -40,6 +171,7 @@ void bridge_screen_destroy(FilamentBridge* bridge) {
         }
         cache.clear();
     }
+    bridge->screen_source_textures = {};
     bridge->screen_textures = {};
     bridge->screen_texture = nullptr;
     if (bridge->screen_material) {
@@ -191,16 +323,19 @@ int bridge_screen_set_sampling(FilamentBridge* bridge, float filter_scale) {
 int bridge_screen_create(FilamentBridge* bridge) {
     if (!bridge || !bridge->engine || !bridge->scene) return 0;
     bridge_screen_destroy(bridge);
-    // The external Vulkan image has exactly one mip level. Use a single-level
-    // linear sampler and let Filament perform the ordinary hardware bilinear
-    // lookup. Experimental footprint filtering is intentionally not part of
-    // the default path until it has passed a visual A/B comparison.
+    // The screen sampler is used only for the internal MIP experiment texture.
+    // External producer images use screen_source_texture_sampler below because
+    // Filament external textures are restricted to LOD 0.
     bridge->screen_texture_sampler = filament::TextureSampler(
+            filament::TextureSampler::MinFilter::LINEAR_MIPMAP_LINEAR,
+            filament::TextureSampler::MagFilter::LINEAR,
+            filament::TextureSampler::WrapMode::CLAMP_TO_EDGE);
+    bridge->screen_source_texture_sampler = filament::TextureSampler(
             filament::TextureSampler::MinFilter::LINEAR,
             filament::TextureSampler::MagFilter::LINEAR,
             filament::TextureSampler::WrapMode::CLAMP_TO_EDGE);
-    // Keep the legacy anisotropy hint. It is harmless for the single-level
-    // external image and preserves the existing sampler configuration.
+    // Keep anisotropy on the real multi-level sampler. The source sampler is
+    // intentionally left at ordinary linear filtering for external images.
     bridge->screen_texture_sampler.setAnisotropy(16.0f);
     const char* shader = R"FILAMENT(
         void material(inout MaterialInputs material) {
@@ -296,6 +431,80 @@ int bridge_screen_create(FilamentBridge* bridge) {
     }
     // Display-referred screen content bypasses the HDR scene view.
     bridge_set_renderable_layer(bridge, bridge->screen_entity, 1, false);
+    bridge->screen_mip_copy_material_instance =
+            bridge->screen_material->createInstance();
+    bridge->screen_mip_copy_vertices = {
+            PreviewScreenVertex{{-1.0f, -1.0f, 0.0f}, {0.0f, 1.0f}},
+            PreviewScreenVertex{{-1.0f,  1.0f, 0.0f}, {0.0f, 0.0f}},
+            PreviewScreenVertex{{ 1.0f, -1.0f, 0.0f}, {1.0f, 1.0f}},
+            PreviewScreenVertex{{ 1.0f,  1.0f, 0.0f}, {1.0f, 0.0f}},
+    };
+    bridge->screen_mip_copy_indices = {0, 2, 1, 2, 3, 1};
+    bridge->screen_mip_copy_vertex_buffer = filament::VertexBuffer::Builder()
+            .vertexCount(static_cast<uint32_t>(bridge->screen_mip_copy_vertices.size()))
+            .bufferCount(1)
+            .attribute(filament::VertexAttribute::POSITION, 0,
+                    filament::VertexBuffer::AttributeType::FLOAT3,
+                    0, sizeof(PreviewScreenVertex))
+            .attribute(filament::VertexAttribute::UV0, 0,
+                    filament::VertexBuffer::AttributeType::FLOAT2,
+                    sizeof(float) * 3, sizeof(PreviewScreenVertex))
+            .build(*bridge->engine);
+    bridge->screen_mip_copy_index_buffer = filament::IndexBuffer::Builder()
+            .indexCount(static_cast<uint32_t>(bridge->screen_mip_copy_indices.size()))
+            .bufferType(filament::IndexBuffer::IndexType::USHORT)
+            .build(*bridge->engine);
+    if (!bridge->screen_mip_copy_material_instance ||
+            !bridge->screen_mip_copy_vertex_buffer ||
+            !bridge->screen_mip_copy_index_buffer) {
+        bridge_set_error(bridge, "Filament could not create screen MIP copy resources");
+        return 0;
+    }
+    bridge->screen_mip_copy_vertex_buffer->setBufferAt(*bridge->engine, 0,
+            filament::VertexBuffer::BufferDescriptor(
+                    bridge->screen_mip_copy_vertices.data(),
+                    bridge->screen_mip_copy_vertices.size() * sizeof(PreviewScreenVertex), nullptr));
+    bridge->screen_mip_copy_index_buffer->setBuffer(*bridge->engine,
+            filament::IndexBuffer::BufferDescriptor(
+                    bridge->screen_mip_copy_indices.data(),
+                    bridge->screen_mip_copy_indices.size() * sizeof(uint16_t), nullptr));
+    bridge->screen_mip_copy_entity = utils::EntityManager::get().create();
+    const auto copy_result = filament::RenderableManager::Builder(1)
+            .boundingBox({{-1.0f, -1.0f, -1.0f}, {1.0f, 1.0f, 1.0f}})
+            .material(0, bridge->screen_mip_copy_material_instance)
+            .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES,
+                    bridge->screen_mip_copy_vertex_buffer,
+                    bridge->screen_mip_copy_index_buffer,
+                    0, static_cast<uint32_t>(bridge->screen_mip_copy_indices.size()))
+            .priority(0).culling(false).castShadows(false).receiveShadows(false)
+            .build(*bridge->engine, bridge->screen_mip_copy_entity);
+    if (copy_result != filament::RenderableManager::Builder::Success) {
+        bridge_set_error(bridge, "Filament could not create screen MIP copy renderable");
+        return 0;
+    }
+    bridge->scene->addEntity(bridge->screen_mip_copy_entity);
+    bridge_set_renderable_layer(
+            bridge, bridge->screen_mip_copy_entity, kScreenMipCopyLayer, true);
+    bridge->screen_mip_copy_camera = bridge->engine->createCamera(
+            utils::EntityManager::get().create());
+    bridge->screen_mip_copy_view = bridge->engine->createView();
+    if (!bridge->screen_mip_copy_camera || !bridge->screen_mip_copy_view) {
+        bridge_set_error(bridge, "Filament could not create screen MIP copy view");
+        return 0;
+    }
+    bridge->screen_mip_copy_camera->setProjection(
+            filament::Camera::Projection::ORTHO,
+            -1.0, 1.0, -1.0, 1.0, 0.1, 10.0);
+    bridge->screen_mip_copy_camera->lookAt(
+            filament::math::float3{0.0f, 0.0f, 1.0f},
+            filament::math::float3{0.0f, 0.0f, 0.0f},
+            filament::math::float3{0.0f, 1.0f, 0.0f});
+    bridge->screen_mip_copy_view->setScene(bridge->scene);
+    bridge->screen_mip_copy_view->setCamera(bridge->screen_mip_copy_camera);
+    bridge->screen_mip_copy_view->setVisibleLayers(
+            0xff, static_cast<uint8_t>(1u << kScreenMipCopyLayer));
+    bridge->screen_mip_copy_view->setPostProcessingEnabled(false);
+    bridge->screen_mip_copy_view->setAntiAliasing(filament::AntiAliasing::NONE);
     // The sampler is required by the material. Keep the renderable detached
     // until a valid runtime Vulkan image has been imported.
     return 1;
@@ -314,14 +523,10 @@ int bridge_screen_set_image(FilamentBridge* bridge, const void* image,
     for (const auto& slot : bridge->screen_texture_cache[eye_index]) {
         if (slot.image == image && slot.width == width &&
                 slot.height == height && slot.format == format && slot.texture) {
-            bridge->screen_textures[eye_index] = slot.texture;
-            bridge->screen_texture = slot.texture;
-            bridge->screen_material_instance->setParameter(
-                    "screenTexture", slot.texture, bridge->screen_texture_sampler);
-            bridge->screen_material_instance->setParameter(
-                    "screenTexelSize", filament::math::float2{
-                            1.0f / static_cast<float>(width),
-                            1.0f / static_cast<float>(height)});
+            bridge->screen_source_textures[eye_index] = slot.texture;
+            bind_screen_copy_source(bridge, slot.texture, width, height);
+            ensure_screen_mip_target(bridge, eye_index, width, height, format);
+            bind_screen_display_texture(bridge, eye_index);
             if (!bridge->screen_in_scene && !bridge->screen_entity.isNull()) {
                 bridge->scene->addEntity(bridge->screen_entity);
                 bridge_set_renderable_layer(bridge, bridge->screen_entity, 1, true);
@@ -370,19 +575,34 @@ int bridge_screen_set_image(FilamentBridge* bridge, const void* image,
     }
     bridge->screen_texture_cache[eye_index].push_back(
             ScreenTextureSlot{image, texture, width, height, format});
-    bridge->screen_textures[eye_index] = texture;
-    bridge->screen_texture = texture;
-    bridge->screen_material_instance->setParameter(
-            "screenTexture", bridge->screen_texture,
-            bridge->screen_texture_sampler);
-    bridge->screen_material_instance->setParameter(
-            "screenTexelSize", filament::math::float2{
-                    1.0f / static_cast<float>(width),
-                    1.0f / static_cast<float>(height)});
+    bridge->screen_source_textures[eye_index] = texture;
+    bind_screen_copy_source(bridge, texture, width, height);
+    ensure_screen_mip_target(bridge, eye_index, width, height, format);
+    bind_screen_display_texture(bridge, eye_index);
     if (!bridge->screen_in_scene && !bridge->screen_entity.isNull()) {
         bridge->scene->addEntity(bridge->screen_entity);
         bridge_set_renderable_layer(bridge, bridge->screen_entity, 1, true);
         bridge->screen_in_scene = true;
     }
+    return 1;
+}
+
+int bridge_screen_prepare_frame(FilamentBridge* bridge) {
+    if (!bridge || !bridge->frame_active || !bridge->renderer ||
+            !bridge->screen_mip_experiment_enabled ||
+            bridge->active_eye >= bridge->screen_mip_textures.size() ||
+            !bridge->screen_mip_ready[bridge->active_eye] ||
+            !bridge->screen_mip_render_targets[bridge->active_eye] ||
+            !bridge->screen_source_textures[bridge->active_eye] ||
+            !bridge->screen_mip_copy_view) {
+        return 0;
+    }
+    auto* mip_texture = bridge->screen_mip_textures[bridge->active_eye];
+    auto* render_target = bridge->screen_mip_render_targets[bridge->active_eye];
+    bridge->screen_mip_copy_view->setRenderTarget(render_target);
+    bridge->screen_mip_copy_view->setViewport(filament::Viewport{
+            0, 0, mip_texture->getWidth(), mip_texture->getHeight()});
+    bridge->renderer->render(bridge->screen_mip_copy_view);
+    mip_texture->generateMipmaps(*bridge->engine);
     return 1;
 }

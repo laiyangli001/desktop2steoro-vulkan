@@ -25,6 +25,7 @@
 #include <filament/Material.h>
 #include <filament/MaterialInstance.h>
 #include <filament/RenderableManager.h>
+#include <filament/RenderTarget.h>
 #include <filament/Renderer.h>
 #include <filament/Scene.h>
 #include <filament/SwapChain.h>
@@ -301,9 +302,23 @@ struct FilamentBridge {
     bool screen_in_scene = false;
     bool passthrough_backdrop = false;
     filament::Texture* screen_texture = nullptr;
+    std::array<filament::Texture*, 2> screen_source_textures{};
     std::array<filament::Texture*, 2> screen_textures{};
     std::array<std::vector<ScreenTextureSlot>, 2> screen_texture_cache;
     filament::TextureSampler screen_texture_sampler;
+    filament::TextureSampler screen_source_texture_sampler;
+    std::array<filament::Texture*, 2> screen_mip_textures{};
+    std::array<filament::RenderTarget*, 2> screen_mip_render_targets{};
+    std::array<bool, 2> screen_mip_ready{};
+    filament::MaterialInstance* screen_mip_copy_material_instance = nullptr;
+    utils::Entity screen_mip_copy_entity;
+    filament::VertexBuffer* screen_mip_copy_vertex_buffer = nullptr;
+    filament::IndexBuffer* screen_mip_copy_index_buffer = nullptr;
+    filament::View* screen_mip_copy_view = nullptr;
+    filament::Camera* screen_mip_copy_camera = nullptr;
+    std::array<PreviewScreenVertex, 4> screen_mip_copy_vertices{};
+    std::array<uint16_t, 6> screen_mip_copy_indices{};
+    bool screen_mip_experiment_enabled = true;
     // Keep the legacy screen-quality sharpening strength explicit. The
     // external Vulkan image has one mip level, so the screen material uses a
     // footprint-aware filter followed by this bounded RCAS pass.

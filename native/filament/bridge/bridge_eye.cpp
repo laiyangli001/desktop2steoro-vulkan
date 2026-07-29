@@ -28,11 +28,23 @@ void bridge_eye_activate(FilamentBridge* bridge, uint32_t eye_index) {
     bridge->swapchain = eye.swapchain;
     bridge->external_swapchain = eye.external_swapchain;
     bridge->frame_active = eye.frame_active;
+    const bool use_mip = bridge->screen_mip_ready[eye_index] &&
+            bridge->screen_mip_textures[eye_index];
+    bridge->screen_textures[eye_index] = use_mip
+            ? bridge->screen_mip_textures[eye_index]
+            : bridge->screen_source_textures[eye_index];
     bridge->screen_texture = bridge->screen_textures[eye_index];
     if (bridge->screen_texture && bridge->screen_material_instance) {
         bridge->screen_material_instance->setParameter(
                 "screenTexture", bridge->screen_texture,
-                bridge->screen_texture_sampler);
+                use_mip ? bridge->screen_texture_sampler
+                        : bridge->screen_source_texture_sampler);
+    }
+    if (bridge->screen_mip_copy_material_instance &&
+            bridge->screen_source_textures[eye_index]) {
+        bridge->screen_mip_copy_material_instance->setParameter(
+                "screenTexture", bridge->screen_source_textures[eye_index],
+                bridge->screen_source_texture_sampler);
     }
 }
 
@@ -177,6 +189,7 @@ int bridge_eye_begin_frame(FilamentBridge* bridge) {
                 static_cast<void*>(bridge->swapchain), bridge->frame_active ? 1 : 0);
         std::fflush(stderr);
     }
+    bridge_screen_prepare_frame(bridge);
     bridge->renderer->render(bridge->view);
     return bridge->frame_active ? 1 : 0;
 }
