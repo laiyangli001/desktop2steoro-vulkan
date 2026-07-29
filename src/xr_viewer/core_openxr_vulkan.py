@@ -692,6 +692,7 @@ class OpenXrVulkanPresenter(
         self._visual_regression_capture_failed = False
         self._visual_regression_screen_capture_eyes: set[int] = set()
         self._visual_regression_screen_capture_failed = False
+        self._visual_regression_fixed_image_loaded = False
         self._visual_regression_source_host_images: dict[int, VulkanHostImage] = {}
         self._visual_regression_projection_host_images: dict[int, VulkanHostImage] = {}
         self._overlay_quad_entries: dict[str, dict[str, Any]] = {}
@@ -2963,6 +2964,7 @@ class OpenXrVulkanPresenter(
         self._visual_regression_capture_failed = False
         self._visual_regression_screen_capture_eyes.clear()
         self._visual_regression_screen_capture_failed = False
+        self._visual_regression_fixed_image_loaded = False
         self._source_frame_wait_logged = False
         self._accept_output = False
         self._filament_animation_origin = None
@@ -4211,6 +4213,11 @@ class OpenXrVulkanPresenter(
                 if self.filament_bridge is not None:
                     bridge = self.filament_bridge
                     bridge.set_active_eye(eye_index)
+                    fixed_image_loaded = False
+                    if isinstance(output_frame, VulkanStereoOutputFrame):
+                        fixed_image_loaded = self._maybe_load_visual_regression_fixed_image(
+                            bridge, output_frame
+                        )
                     _update_filament_camera(
                         bridge,
                         render_views[eye_index],
@@ -4237,13 +4244,15 @@ class OpenXrVulkanPresenter(
                         # screen material. The native bridge caches imported
                         # VkImages by handle, so this is not a per-frame
                         # texture allocation.
-                        bridge.set_screen_image(
-                            screen_source.image,
-                            width=screen_source.width,
-                            height=screen_source.height,
-                            format=screen_source.format,
-                        )
-                        bridge.set_screen_ready_semaphore(visible_semaphore)
+                        if not fixed_image_loaded:
+                            bridge.set_screen_image(
+                                screen_source.image,
+                                width=screen_source.width,
+                                height=screen_source.height,
+                                format=screen_source.format,
+                            )
+                        if not fixed_image_loaded:
+                            bridge.set_screen_ready_semaphore(visible_semaphore)
                     self._update_filament_controllers(bridge)
                     if hasattr(bridge, "apply_animations"):
                         bridge.apply_animations(animation_time)
@@ -4372,6 +4381,47 @@ class OpenXrVulkanPresenter(
             pixels = pixels[..., [2, 1, 0, 3]]
         Image.fromarray(pixels[..., :3].copy(), mode="RGB").save(output_path)
 
+    def _maybe_load_visual_regression_fixed_image(
+        self,
+        bridge: Any,
+        output_frame: VulkanStereoOutputFrame,
+    ) -> bool:
+        """Replay one immutable PNG so legacy/MIP captures share identical input."""
+        if self._visual_regression_fixed_image_loaded:
+            return True
+        metadata = output_frame.metadata or {}
+        image_path_text = str(metadata.get("visual_regression_fixed_image", "")).strip()
+        if not image_path_text:
+            return False
+        set_fixed_image = getattr(bridge, "set_fixed_screen_image", None)
+        if not callable(set_fixed_image):
+            print(
+                "[OpenXRViewer] fixed screen replay skipped: "
+                "Filament Bridge fixed image ABI is unavailable",
+                flush=True,
+            )
+            return False
+        try:
+            from PIL import Image
+
+            with Image.open(image_path_text) as image:
+                rgba = np.asarray(image.convert("RGBA"), dtype=np.uint8).copy()
+            set_fixed_image(rgba)
+            self._visual_regression_fixed_image_loaded = True
+            print(
+                "[OpenXRViewer] fixed screen replay enabled: "
+                f"{image_path_text} size={rgba.shape[1]}x{rgba.shape[0]}",
+                flush=True,
+            )
+            return True
+        except Exception as exc:
+            print(
+                "[OpenXRViewer] fixed screen replay failed: "
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            return False
+
     def _maybe_capture_filament_screen_frame(
         self,
         bridge: Any,
@@ -4434,6 +4484,9 @@ class OpenXrVulkanPresenter(
                         "screen_readback": "filament_render_target_rgba8",
                         "screen_sampling_mode": self._filament_screen_sampling_mode,
                         "screen_size": [width, height],
+                        "fixed_source_image": str(
+                            metadata.get("visual_regression_fixed_image", "")
+                        ),
                     }
                 )
                 manifest_path.write_text(

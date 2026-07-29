@@ -3,6 +3,8 @@
 
 #include <backend/PixelBufferDescriptor.h>
 
+#include <cstring>
+
 namespace {
 
 constexpr uint32_t kScreenSegments = 48;
@@ -194,6 +196,10 @@ void bridge_screen_destroy(FilamentBridge* bridge) {
     if (bridge->screen_mip_copy_material_instance) {
         bridge->engine->destroy(bridge->screen_mip_copy_material_instance);
         bridge->screen_mip_copy_material_instance = nullptr;
+    }
+    if (bridge->screen_fixed_source_texture) {
+        bridge->engine->destroy(bridge->screen_fixed_source_texture);
+        bridge->screen_fixed_source_texture = nullptr;
     }
     for (uint32_t eye_index = 0; eye_index < bridge->screen_mip_textures.size(); ++eye_index) {
         destroy_screen_mip_target(bridge, eye_index);
@@ -672,6 +678,55 @@ int bridge_screen_prepare_frame(FilamentBridge* bridge) {
             static_cast<uint32_t>(mip_texture->getHeight())});
     bridge->renderer->render(bridge->screen_mip_copy_view);
     mip_texture->generateMipmaps(*bridge->engine);
+    return 1;
+}
+
+int bridge_screen_set_fixed_image(
+        FilamentBridge* bridge, const uint8_t* rgba,
+        uint32_t width, uint32_t height) {
+    if (!bridge || !bridge->engine || !rgba || width == 0 || height == 0 ||
+            !bridge->screen_material_instance ||
+            !bridge->screen_mip_copy_material_instance) {
+        return 0;
+    }
+    if (bridge->screen_fixed_source_texture) {
+        bridge->engine->destroy(bridge->screen_fixed_source_texture);
+        bridge->screen_fixed_source_texture = nullptr;
+    }
+    auto* texture = filament::Texture::Builder()
+            .width(width).height(height).levels(1)
+            .format(filament::Texture::InternalFormat::SRGB8_A8)
+            .sampler(filament::Texture::Sampler::SAMPLER_2D)
+            .usage(filament::Texture::Usage::SAMPLEABLE)
+            .build(*bridge->engine);
+    if (!texture) {
+        bridge_set_error(bridge, "Filament could not create fixed screen texture");
+        return 0;
+    }
+    const size_t byte_count = static_cast<size_t>(width) * height * 4u;
+    auto* pixels = new uint8_t[byte_count];
+    std::memcpy(pixels, rgba, byte_count);
+    filament::Texture::PixelBufferDescriptor descriptor(
+            pixels, byte_count, filament::Texture::Format::RGBA,
+            filament::Texture::Type::UBYTE,
+            [](void* buffer, size_t, void*) {
+                delete[] static_cast<uint8_t*>(buffer);
+            });
+    texture->setImage(*bridge->engine, 0, std::move(descriptor));
+    bridge->screen_fixed_source_texture = texture;
+    for (uint32_t eye_index = 0;
+            eye_index < bridge->screen_source_textures.size(); ++eye_index) {
+        bridge->screen_source_textures[eye_index] = texture;
+        ensure_screen_mip_target(bridge, eye_index, width, height,
+                VK_FORMAT_R8G8B8A8_SRGB);
+    }
+    bind_screen_copy_source(bridge, texture, width, height);
+    bind_screen_display_texture(bridge, bridge->active_eye);
+    if (!bridge->screen_in_scene && !bridge->screen_entity.isNull()) {
+        bridge->scene->addEntity(bridge->screen_entity);
+        bridge_set_renderable_layer(bridge, bridge->screen_entity, 1, true);
+        bridge->screen_in_scene = true;
+    }
     return 1;
 }
 

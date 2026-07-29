@@ -316,6 +316,7 @@ struct FilamentBridge {
     filament::RenderTarget* screen_capture_render_target = nullptr;
     uint32_t screen_capture_width = 0;
     uint32_t screen_capture_height = 0;
+    filament::Texture* screen_fixed_source_texture = nullptr;
     filament::MaterialInstance* screen_mip_copy_material_instance = nullptr;
     utils::Entity screen_mip_copy_entity;
     filament::VertexBuffer* screen_mip_copy_vertex_buffer = nullptr;

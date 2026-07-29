@@ -1389,6 +1389,13 @@ class StereoRuntime:
         debug["runtime_output_dtype"] = _runtime_eye_dtype(left_eye, right_eye)
         if visual_regression_dir is not None:
             debug["visual_regression_dir"] = visual_regression_dir
+            fixed_image = (
+                Path(visual_regression_dir).parent
+                / "screen-reference"
+                / "00_capture_rgb.png"
+            )
+            if fixed_image.is_file():
+                debug["visual_regression_fixed_image"] = str(fixed_image)
         debug["cross_eyed"] = int(bool(getattr(stereo_config, "cross_eyed", False)))
         debug["hot_reload_class"] = self.last_settings_change_class
         debug["hot_reload_changed_fields"] = list(self.last_settings_changed_fields)
@@ -1552,6 +1559,15 @@ class StereoRuntime:
 
             out_dir.mkdir(parents=True, exist_ok=True)
             save_rgb(source_rgb.detach().float().clamp(0.0, 1.0), out_dir / "00_capture_rgb.png")
+            # Keep one immutable reference image shared by the legacy and MIP
+            # runs. The first regression run creates it; later runs replay it.
+            reference_path = out_dir.parent / "screen-reference" / "00_capture_rgb.png"
+            if not reference_path.is_file():
+                reference_path.parent.mkdir(parents=True, exist_ok=True)
+                save_rgb(
+                    source_rgb.detach().float().clamp(0.0, 1.0),
+                    reference_path,
+                )
             save_depth(raw_depth.detach().float().clamp(0.0, 1.0), out_dir / "01_raw_depth.png")
             save_depth(prepared_depth.detach().float().clamp(0.0, 1.0), out_dir / "02_prepared_depth.png")
             print(f"[StereoRuntime] OpenXR visual regression capture saved: {out_dir}", flush=True)

@@ -51,6 +51,7 @@ class FilamentVulkanBridge:
         self._controller_guide_abi_available = False
         self._text_overlay_abi_available = False
         self._screen_image_abi_available = False
+        self._fixed_screen_image_abi_available = False
         self._vulkan_external_image_abi_available = False
         self._screen_curved_abi_available = False
         self._screen_light_abi_available = False
@@ -615,6 +616,25 @@ class FilamentVulkanBridge:
             "set_screen_image",
         )
 
+    def set_fixed_screen_image(self, rgba) -> None:
+        """Upload one deterministic RGBA image for screen A/B regression."""
+        self._ensure_loaded()
+        if not self._fixed_screen_image_abi_available:
+            raise FilamentBridgeError(
+                "Filament Bridge fixed screen image ABI is unavailable; rebuild the CI artifact"
+            )
+        if getattr(rgba, "ndim", 0) != 3 or rgba.shape[2] != 4:
+            raise ValueError("fixed screen image must be HxWx4 RGBA")
+        height, width = int(rgba.shape[0]), int(rgba.shape[1])
+        payload = _array_payload(rgba)
+        buffer = ctypes.create_string_buffer(payload)
+        self._check_result(
+            self._library.filament_bridge_set_fixed_screen_image(
+                self._handle, buffer, width, height
+            ),
+            "set_fixed_screen_image",
+        )
+
     def capture_screen_rgba(self, width: int, height: int) -> bytes:
         """Read the fixed-camera, screen-only sampled result as RGBA8."""
         self._ensure_loaded()
@@ -922,6 +942,18 @@ class FilamentVulkanBridge:
             ]
             library.filament_bridge_set_screen_image.restype = ctypes.c_int
             self._screen_image_abi_available = True
+        fixed_screen_image = getattr(
+            library, "filament_bridge_set_fixed_screen_image", None
+        )
+        if fixed_screen_image is not None:
+            fixed_screen_image.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_uint32,
+                ctypes.c_uint32,
+            ]
+            fixed_screen_image.restype = ctypes.c_int
+            self._fixed_screen_image_abi_available = True
         external_image_abi = getattr(
             library, "filament_bridge_vulkan_external_image_abi_available", None
         )
