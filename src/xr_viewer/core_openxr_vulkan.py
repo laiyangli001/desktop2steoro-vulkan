@@ -426,6 +426,9 @@ class OpenXrVulkanConfig:
     filament_ambient_light_color: tuple[float, float, float] = (0.14, 0.13, 0.15)
     filament_screen_light_color: tuple[float, float, float] = (0.92, 0.96, 1.0)
     filament_screen_light_intensity: float = 3.5
+    # The normal path uses the internal Filament MIP chain. The legacy mode is
+    # retained only for controlled A/B visual regression captures.
+    filament_screen_sampling_mode: str = "mip"
     filament_fill_light_color: tuple[float, float, float] = (0.55, 0.55, 0.58)
     filament_fill_light_intensity: float = 1.0
     filament_fill_light_direction: tuple[float, float, float] = (-0.35, -1.0, -0.55)
@@ -576,6 +579,13 @@ class OpenXrVulkanPresenter(
         self._filament_screen_light_intensity = (
             self.config.filament_screen_light_intensity
         )
+        self._filament_screen_sampling_mode = str(
+            self.config.filament_screen_sampling_mode
+        ).strip().lower()
+        if self._filament_screen_sampling_mode not in {"legacy", "mip"}:
+            raise ValueError(
+                "filament_screen_sampling_mode must be 'legacy' or 'mip'"
+            )
         self._screen_ready_semaphore_abi_available = False
         self._last_filament_screen_image_status = None
         self._last_screen_resolution_status = None
@@ -3512,6 +3522,15 @@ class OpenXrVulkanPresenter(
             if self._filament_screen is not None:
                 position, width, height, rotation = self._filament_screen
                 bridge.create_screen()
+                if (
+                    getattr(bridge, "screen_sampling_mode_abi_available", False)
+                    and hasattr(bridge, "set_screen_sampling_mode")
+                ):
+                    bridge.set_screen_sampling_mode(self._filament_screen_sampling_mode)
+                elif self._filament_screen_sampling_mode == "legacy":
+                    raise RuntimeError(
+                        "legacy screen sampling A/B capture requires a rebuilt Filament Bridge"
+                    )
                 bridge.set_screen(position, width, height, rotation)
                 if hasattr(bridge, "set_screen_light"):
                     bridge.set_screen_light(
@@ -3521,7 +3540,7 @@ class OpenXrVulkanPresenter(
                 print(
                     "Filament screen loaded: "
                     f"position={position} size={width:.3f}x{height:.3f} "
-                    f"rotation={rotation}",
+                    f"rotation={rotation} sampling={self._filament_screen_sampling_mode}",
                     flush=True,
                 )
                 print(
@@ -4480,6 +4499,7 @@ class OpenXrVulkanPresenter(
                     "readback": "temporary_host_image",
                     "color_space": str(output_frame.color_space),
                     "image_origin": str(output_frame.image_origin),
+                    "screen_sampling_mode": self._filament_screen_sampling_mode,
                     "source_size": [int(source_resource.width), int(source_resource.height)],
                     "projection_size": [int(projection_resource.width), int(projection_resource.height)],
                 }

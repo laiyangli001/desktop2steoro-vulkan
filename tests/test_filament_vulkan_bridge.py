@@ -143,6 +143,7 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "RenderTarget::Builder" in source
     assert "generateMipmaps(*bridge->engine)" in source
     assert "screen_mip_copy_view" in source
+    assert "v=0 is the bottom edge" in source
     context_source = (bridge_dir / "bridge_context.cpp").read_text(encoding="utf-8")
     assert "eye.view->setAntiAliasing(filament::AntiAliasing::NONE);" in context_source
     assert "filament_bridge_set_screen_ready_semaphore" in facade
@@ -215,6 +216,8 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "filament_bridge_set_ambient_light" in facade
     assert "filament_bridge_set_screen_light" in facade
     assert "filament_bridge_set_screen_sampling" in facade
+    assert "filament_bridge_set_screen_sampling_mode" in facade
+    assert "bridge_screen_set_sampling_mode" in source
     assert "LightManager::Type::FOCUSED_SPOT" in source
     assert "bridge->screen_light_direction = -forward;" in source
     assert "std::sqrt(width * width + height * height)" in source

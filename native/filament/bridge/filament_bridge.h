@@ -130,6 +130,9 @@ FILAMENT_BRIDGE_API int filament_bridge_set_screen_light(
 // prefiltering beyond the projected source footprint.
 FILAMENT_BRIDGE_API int filament_bridge_set_screen_sampling(
         FilamentBridge* bridge, float filter_scale);
+// Select the legacy external-image sampler (0) or the internal MIP path (1).
+FILAMENT_BRIDGE_API int filament_bridge_set_screen_sampling_mode(
+        FilamentBridge* bridge, int use_mip);
 // image is a borrowed Vulkan VkImage owned by the runtime output adapter.
 FILAMENT_BRIDGE_API int filament_bridge_set_screen_image(
         FilamentBridge* bridge, const void* image,

@@ -23,7 +23,8 @@ void destroy_screen_mip_target(FilamentBridge* bridge, uint32_t eye_index) {
 
 void bind_screen_display_texture(FilamentBridge* bridge, uint32_t eye_index) {
     if (!bridge || eye_index >= bridge->screen_textures.size()) return;
-    const bool use_mip = bridge->screen_mip_ready[eye_index] &&
+    const bool use_mip = bridge->screen_mip_experiment_enabled &&
+            bridge->screen_mip_ready[eye_index] &&
             bridge->screen_mip_textures[eye_index];
     filament::Texture* texture = use_mip
             ? bridge->screen_mip_textures[eye_index]
@@ -320,6 +321,15 @@ int bridge_screen_set_sampling(FilamentBridge* bridge, float filter_scale) {
     return 1;
 }
 
+int bridge_screen_set_sampling_mode(FilamentBridge* bridge, int use_mip) {
+    if (!bridge) return 0;
+    bridge->screen_mip_experiment_enabled = use_mip != 0;
+    if (bridge->active_eye < bridge->screen_textures.size()) {
+        bind_screen_display_texture(bridge, bridge->active_eye);
+    }
+    return 1;
+}
+
 int bridge_screen_create(FilamentBridge* bridge) {
     if (!bridge || !bridge->engine || !bridge->scene) return 0;
     bridge_screen_destroy(bridge);
@@ -433,11 +443,13 @@ int bridge_screen_create(FilamentBridge* bridge) {
     bridge_set_renderable_layer(bridge, bridge->screen_entity, 1, false);
     bridge->screen_mip_copy_material_instance =
             bridge->screen_material->createInstance();
+    // Match the legacy screen mesh orientation: v=0 is the bottom edge and
+    // v=1 is the top edge. Reversing this pair mirrors the copied image.
     bridge->screen_mip_copy_vertices = {
-            PreviewScreenVertex{{-1.0f, -1.0f, 0.0f}, {0.0f, 1.0f}},
-            PreviewScreenVertex{{-1.0f,  1.0f, 0.0f}, {0.0f, 0.0f}},
-            PreviewScreenVertex{{ 1.0f, -1.0f, 0.0f}, {1.0f, 1.0f}},
-            PreviewScreenVertex{{ 1.0f,  1.0f, 0.0f}, {1.0f, 0.0f}},
+            PreviewScreenVertex{{-1.0f, -1.0f, 0.0f}, {0.0f, 0.0f}},
+            PreviewScreenVertex{{-1.0f,  1.0f, 0.0f}, {0.0f, 1.0f}},
+            PreviewScreenVertex{{ 1.0f, -1.0f, 0.0f}, {1.0f, 0.0f}},
+            PreviewScreenVertex{{ 1.0f,  1.0f, 0.0f}, {1.0f, 1.0f}},
     };
     bridge->screen_mip_copy_indices = {0, 2, 1, 2, 3, 1};
     bridge->screen_mip_copy_vertex_buffer = filament::VertexBuffer::Builder()

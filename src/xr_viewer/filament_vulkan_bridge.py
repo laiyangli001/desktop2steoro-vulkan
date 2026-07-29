@@ -59,6 +59,7 @@ class FilamentVulkanBridge:
         self._screen_ready_semaphore_abi_available = False
         self._finished_drawing_semaphore_abi_available = False
         self._screen_sampling_abi_available = False
+        self._screen_sampling_mode_abi_available = False
         self._async_submit_abi_available = False
         self._configure_abi()
         self._handle: ctypes.c_void_p | None = None
@@ -572,9 +573,30 @@ class FilamentVulkanBridge:
             "set_screen_sampling",
         )
 
+    def set_screen_sampling_mode(self, mode: str) -> None:
+        """Select the legacy external sampler or the internal MIP path."""
+        self._ensure_loaded()
+        normalized = str(mode).strip().lower()
+        if normalized not in {"legacy", "mip"}:
+            raise ValueError("screen sampling mode must be 'legacy' or 'mip'")
+        if not self._screen_sampling_mode_abi_available:
+            raise FilamentBridgeError(
+                "Filament Bridge screen sampling mode ABI is unavailable; rebuild the CI artifact"
+            )
+        self._check_result(
+            self._library.filament_bridge_set_screen_sampling_mode(
+                self._handle, int(normalized == "mip")
+            ),
+            "set_screen_sampling_mode",
+        )
+
     @property
     def screen_sampling_abi_available(self) -> bool:
         return self._screen_sampling_abi_available
+
+    @property
+    def screen_sampling_mode_abi_available(self) -> bool:
+        return self._screen_sampling_mode_abi_available
 
     def set_screen_image(
         self, image: Any, *, width: int, height: int, format: int
@@ -846,6 +868,13 @@ class FilamentVulkanBridge:
             set_screen_sampling.argtypes = [ctypes.c_void_p, ctypes.c_float]
             set_screen_sampling.restype = ctypes.c_int
             self._screen_sampling_abi_available = True
+        set_screen_sampling_mode = getattr(
+            library, "filament_bridge_set_screen_sampling_mode", None
+        )
+        if set_screen_sampling_mode is not None:
+            set_screen_sampling_mode.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            set_screen_sampling_mode.restype = ctypes.c_int
+            self._screen_sampling_mode_abi_available = True
         if hasattr(library, "filament_bridge_set_screen_image"):
             library.filament_bridge_set_screen_image.argtypes = [
                 ctypes.c_void_p,

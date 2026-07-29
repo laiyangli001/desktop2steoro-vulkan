@@ -1538,7 +1538,10 @@ class StereoRuntime:
     ) -> str | None:
         # Runtime visual regression is opt-in. The normal application path
         # must not perform host readback or write diagnostic images.
-        dump_dir = os.environ.get("D2S_OPENXR_RGB_DEPTH_DUMP_DIR", "").strip()
+        dump_dir = str(
+            self.config.openxr_visual_regression_dir
+            or os.environ.get("D2S_OPENXR_RGB_DEPTH_DUMP_DIR", "")
+        ).strip()
         if not dump_dir:
             return None
         out_dir = Path(dump_dir)

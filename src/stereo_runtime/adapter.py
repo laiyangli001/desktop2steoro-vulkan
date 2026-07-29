@@ -49,6 +49,8 @@ class StereoRuntimeConfig:
     trt_workspace_gb: int = 4
     use_cuda_graph: bool = False
     profile_sync: bool = False
+    # Optional program-controlled OpenXR visual regression output directory.
+    openxr_visual_regression_dir: str | Path | None = None
     depth_upsample: DepthUpsampleMode = "bilinear"
     depth_upsample_edge_strength: float = 0.35
     depth_strength: float = 2.0
@@ -232,6 +234,11 @@ def runtime_config_from_d2s_settings(
         force_rebuild_trt=bool(settings.get("Recompile TensorRT", False)),
         build_migraphx_graph=bool(settings.get("MIGraphX", False)),
         force_rebuild_migraphx=bool(settings.get("Recompile MIGraphX", False)),
+        openxr_visual_regression_dir=(
+            str(settings.get("OpenXR Visual Regression Directory")).strip()
+            if str(settings.get("OpenXR Visual Regression Directory", "")).strip()
+            else None
+        ),
         export_height=export_height,
         export_width=export_width,
         depth_strength=float(settings.get("Depth Strength", 2.0)),

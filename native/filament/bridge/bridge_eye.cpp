@@ -29,7 +29,8 @@ void bridge_eye_activate(FilamentBridge* bridge, uint32_t eye_index) {
     bridge->swapchain = eye.swapchain;
     bridge->external_swapchain = eye.external_swapchain;
     bridge->frame_active = eye.frame_active;
-    const bool use_mip = bridge->screen_mip_ready[eye_index] &&
+    const bool use_mip = bridge->screen_mip_experiment_enabled &&
+            bridge->screen_mip_ready[eye_index] &&
             bridge->screen_mip_textures[eye_index];
     bridge->screen_textures[eye_index] = use_mip
             ? bridge->screen_mip_textures[eye_index]

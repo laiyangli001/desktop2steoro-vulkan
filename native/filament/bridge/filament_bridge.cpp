@@ -210,6 +210,11 @@ int filament_bridge_set_screen_sampling(
     return bridge_screen_set_sampling(bridge, filter_scale);
 }
 
+int filament_bridge_set_screen_sampling_mode(
+        FilamentBridge* bridge, int use_mip) {
+    return bridge_screen_set_sampling_mode(bridge, use_mip);
+}
+
 int filament_bridge_set_screen_image(
         FilamentBridge* bridge, const void* image,
         uint32_t width, uint32_t height, int32_t format) {
