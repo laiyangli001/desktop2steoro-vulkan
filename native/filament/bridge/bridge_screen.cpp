@@ -697,7 +697,9 @@ int bridge_screen_set_fixed_image(
             .width(width).height(height).levels(1)
             .format(filament::Texture::InternalFormat::SRGB8_A8)
             .sampler(filament::Texture::Sampler::SAMPLER_2D)
-            .usage(filament::Texture::Usage::SAMPLEABLE)
+            // setImage() requires UPLOADABLE; DEFAULT includes both upload
+            // and sampling usage for this immutable regression source.
+            .usage(filament::Texture::Usage::DEFAULT)
             .build(*bridge->engine);
     if (!texture) {
         bridge_set_error(bridge, "Filament could not create fixed screen texture");
