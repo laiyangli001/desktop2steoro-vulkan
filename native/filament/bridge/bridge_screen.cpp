@@ -95,7 +95,7 @@ bool ensure_screen_mip_target(
     }
     auto* target = filament::RenderTarget::Builder()
             .texture(filament::RenderTarget::AttachmentPoint::COLOR, texture)
-            .mipLevel(0)
+            .mipLevel(filament::RenderTarget::AttachmentPoint::COLOR, 0)
             .build(*bridge->engine);
     if (!target) {
         bridge->engine->destroy(texture);
@@ -601,7 +601,8 @@ int bridge_screen_prepare_frame(FilamentBridge* bridge) {
     auto* render_target = bridge->screen_mip_render_targets[bridge->active_eye];
     bridge->screen_mip_copy_view->setRenderTarget(render_target);
     bridge->screen_mip_copy_view->setViewport(filament::Viewport{
-            0, 0, mip_texture->getWidth(), mip_texture->getHeight()});
+            0, 0, static_cast<uint32_t>(mip_texture->getWidth()),
+            static_cast<uint32_t>(mip_texture->getHeight())});
     bridge->renderer->render(bridge->screen_mip_copy_view);
     mip_texture->generateMipmaps(*bridge->engine);
     return 1;

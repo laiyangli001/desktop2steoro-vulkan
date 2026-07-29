@@ -1,6 +1,7 @@
 #include "bridge_eye.h"
 #include "bridge_internal.h"
 #include "bridge_material.h"
+#include "bridge_screen.h"
 
 #include <type_traits>
 
