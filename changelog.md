@@ -2,6 +2,12 @@
 
 本文件记录项目重大更新和每日工作收尾。新记录按日期倒序追加；每个工作日结束时更新“已实现”“验证结果”“未决事项”和“下一项内容”。
 
+## 2026-07-30
+- 补齐虚拟屏幕动态 MIP 采样的可验证闭环：native Bridge 记录每眼外部源图像绑定次数和 MIP 生成次数，并通过 `filament_bridge_get_screen_sampling_stats` C ABI 暴露给 Python。
+- `07_filament_screen_*.png` 捕获 manifest 现在写入 `screen_sampling_update=dynamic_per_frame_mip`、MIP 动态更新标记和每眼采样统计，便于确认每帧 `generateMipmaps()` 是否实际执行。
+- 修复屏幕采样视觉回归脚本的 manifest 识别：优先读取 `screen_sampling_runtime_manifest.json`，保留旧 `visual_regression_runtime_manifest.json` 回退，legacy/mip 对比不再误判 07 捕获缺少配置。
+- 已新增对应单元测试和 native 静态 ABI 断言；原生 Bridge 计数 ABI 需要 GitHub Actions 三平台远程构建后才能在实机日志/manifest 中出现真实数值。
+
 ## 2026-07-29
 - 新增 GUI 头显型号驱动的 2K/4K/8K 屏幕采样档位，并按实际输入屏幕 `capture_size` 将 1K/2K/4K 输入映射到 2K/4K/8K 推荐头显。
 - 非 16:9 输入仅按最长边近似归档，不裁剪、不拉伸实际源图像；匹配档位保持原始纹素 footprint，低档头显接收高档输入时才启用有界面积预滤。

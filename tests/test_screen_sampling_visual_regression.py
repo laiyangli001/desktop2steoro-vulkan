@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pytest
 from PIL import Image
@@ -38,6 +40,45 @@ def test_screen_sampling_comparison_is_pixel_exact_and_writes_heatmaps(tmp_path)
     assert result["source_verification"]["different_pixel_ratio"] == 0.0
     assert (mip / "screen_sampling_comparison/07_filament_screen_left_diff_heatmap.png").is_file()
     assert (mip / "screen_sampling_comparison/screen_sampling_pixel_comparison.json").is_file()
+
+
+def test_screen_sampling_comparison_validates_screen_sampling_manifest(tmp_path) -> None:
+    legacy = tmp_path / "legacy"
+    mip = tmp_path / "mip"
+    for root in (legacy, mip):
+        root.mkdir()
+        _write_eye(root / "03_vulkan_output_left_eye.png", 10)
+        _write_eye(root / "03_vulkan_output_right_eye.png", 10)
+        _write_eye(root / "06_openxr_projection_left_eye.png", 10)
+        _write_eye(root / "06_openxr_projection_right_eye.png", 10)
+        _write_eye(root / "07_filament_screen_left_eye.png", 10)
+        _write_eye(root / "07_filament_screen_right_eye.png", 10)
+    (legacy / "screen_sampling_runtime_manifest.json").write_text(
+        json.dumps(
+            {
+                "screen_sampling_mode": "legacy",
+                "screen_sampling_update": "legacy_lod0",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (mip / "screen_sampling_runtime_manifest.json").write_text(
+        json.dumps(
+            {
+                "screen_sampling_mode": "mip",
+                "screen_sampling_update": "dynamic_per_frame_mip",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = compare_screen_sampling_capture_dirs(legacy, mip)
+
+    assert result["manifest_status"]["legacy"].startswith("validated")
+    assert result["manifest_status"]["mip"].startswith("validated")
+    assert result["manifest_paths"]["mip"].endswith(
+        "screen_sampling_runtime_manifest.json"
+    )
 
 
 def test_screen_sampling_comparison_rejects_different_dimensions(tmp_path) -> None:

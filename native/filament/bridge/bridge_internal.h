@@ -310,6 +310,8 @@ struct FilamentBridge {
     std::array<filament::Texture*, 2> screen_mip_textures{};
     std::array<filament::RenderTarget*, 2> screen_mip_render_targets{};
     std::array<bool, 2> screen_mip_ready{};
+    std::array<uint64_t, 2> screen_source_bind_count{};
+    std::array<uint64_t, 2> screen_mip_generation_count{};
     // Fixed-camera diagnostic target for comparing the sampled virtual screen
     // without OpenXR pose, projection, or controller composition effects.
     filament::Texture* screen_capture_texture = nullptr;

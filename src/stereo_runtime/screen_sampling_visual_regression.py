@@ -11,6 +11,10 @@ from PIL import Image
 
 
 _DEFAULT_EYES = ("left", "right")
+_MANIFEST_CANDIDATES = (
+    "screen_sampling_runtime_manifest.json",
+    "visual_regression_runtime_manifest.json",
+)
 
 
 def _load_rgb(path: Path) -> np.ndarray:
@@ -53,6 +57,14 @@ def _save_heatmap(old: np.ndarray, new: np.ndarray, path: Path) -> None:
     Image.fromarray(heatmap, mode="RGB").save(path)
 
 
+def _load_capture_manifest(root: Path) -> tuple[Path | None, dict[str, Any]]:
+    for name in _MANIFEST_CANDIDATES:
+        path = root / name
+        if path.is_file():
+            return path, json.loads(path.read_text(encoding="utf-8"))
+    return None, {}
+
+
 def compare_screen_sampling_capture_dirs(
     legacy_dir: str | Path,
     mip_dir: str | Path,
@@ -87,22 +99,26 @@ def compare_screen_sampling_capture_dirs(
     )
     output.mkdir(parents=True, exist_ok=True)
     manifest_status: dict[str, str] = {}
+    manifest_paths: dict[str, str | None] = {}
     for label, root, expected in (
         ("legacy", old_root, "legacy"),
         ("mip", new_root, "mip"),
     ):
-        manifest_path = root / "visual_regression_runtime_manifest.json"
-        if not manifest_path.is_file():
+        manifest_path, manifest = _load_capture_manifest(root)
+        manifest_paths[label] = str(manifest_path) if manifest_path else None
+        if manifest_path is None:
             manifest_status[label] = "missing"
             continue
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         actual = str(manifest.get("screen_sampling_mode", "")).strip().lower()
         if actual and actual != expected:
             raise ValueError(
                 f"{label} capture manifest says screen_sampling_mode={actual!r}; "
                 f"expected {expected!r}"
             )
-        manifest_status[label] = "validated" if actual else "mode_missing"
+        suffix = f":{manifest_path.name}"
+        manifest_status[label] = (
+            f"validated{suffix}" if actual else f"mode_missing{suffix}"
+        )
     def compare_stage(stage_name: str) -> dict[str, dict[str, float | int]]:
         result_for_stage: dict[str, dict[str, float | int]] = {}
         for eye in eyes:
@@ -137,6 +153,7 @@ def compare_screen_sampling_capture_dirs(
         "legacy_dir": str(old_root.resolve()),
         "mip_dir": str(new_root.resolve()),
         "manifest_status": manifest_status,
+        "manifest_paths": manifest_paths,
         "pairs": pairs,
         "mean_channel_error": float(
             np.mean([float(metrics["mean_channel_error"]) for metrics in pairs.values()])

@@ -145,6 +145,9 @@ FILAMENT_BRIDGE_API int filament_bridge_set_fixed_screen_image(
 FILAMENT_BRIDGE_API int filament_bridge_capture_screen_rgba(
         FilamentBridge* bridge, uint8_t* rgba,
         uint32_t width, uint32_t height);
+FILAMENT_BRIDGE_API int filament_bridge_get_screen_sampling_stats(
+        FilamentBridge* bridge, uint32_t eye_index,
+        uint64_t* source_binds, uint64_t* mip_generations);
 // Reports whether this Bridge is backed by a Filament Vulkan backend that
 // supports sampling an application-owned VkImage as a material texture.
 FILAMENT_BRIDGE_API int filament_bridge_vulkan_external_image_abi_available(

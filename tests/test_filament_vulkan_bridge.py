@@ -153,6 +153,9 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "filament_bridge_set_passthrough_backdrop" in facade
     assert "skybox_entities" in source
     assert "float4{0.0f, 0.6f, 0.2f, 1.0f}" in source
+    assert "screen_source_bind_count" in source
+    assert "screen_mip_generation_count" in source
+    assert "bridge_screen_get_sampling_stats" in source
     assert "pending_ready_semaphore" in source
     assert "screen_texture_cache" in source
     assert "bridge->engine->flushAndWait();" in source
@@ -218,6 +221,7 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "filament_bridge_set_screen_sampling" in facade
     assert "filament_bridge_set_screen_sampling_mode" in facade
     assert "filament_bridge_capture_screen_rgba" in facade
+    assert "filament_bridge_get_screen_sampling_stats" in facade
     assert "filament_bridge_set_fixed_screen_image" in facade
     assert "bridge_screen_set_sampling_mode" in source
     assert "bridge_screen_capture_rgba" in source

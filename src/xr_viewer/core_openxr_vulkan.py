@@ -4415,31 +4415,48 @@ class OpenXrVulkanPresenter(
                 / f"07_filament_screen_{'left' if eye == 0 else 'right'}_eye.png"
             )
             self._visual_regression_screen_capture_eyes.add(eye)
+            manifest_path = output_dir / "screen_sampling_runtime_manifest.json"
+            manifest = {}
+            if manifest_path.is_file():
+                try:
+                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                except Exception:
+                    manifest = {}
+            stats_getter = getattr(bridge, "screen_sampling_stats", None)
+            eye_stats = {}
+            if callable(stats_getter):
+                try:
+                    eye_stats = stats_getter(eye)
+                except Exception as exc:
+                    eye_stats = {"error": f"{type(exc).__name__}: {exc}"}
+            stats_by_eye = dict(manifest.get("screen_sampling_stats", {}))
+            stats_by_eye["left" if eye == 0 else "right"] = eye_stats
+            mode = self._filament_screen_sampling_mode
+            manifest.update(
+                {
+                    "frame_id": int(output_frame.frame_id),
+                    "screen_stage": "filament_camera_sampled_screen",
+                    "screen_readback": "filament_render_target_rgba8",
+                    "screen_sampling_mode": mode,
+                    "screen_sampling_update": (
+                        "dynamic_per_frame_mip" if mode == "mip" else "legacy_lod0"
+                    ),
+                    "screen_mip_dynamic_update": mode == "mip",
+                    "screen_mip_expected_per_frame": mode == "mip",
+                    "screen_sampling_stats_abi": bool(
+                        getattr(bridge, "screen_sampling_stats_abi_available", False)
+                    ),
+                    "screen_sampling_stats": stats_by_eye,
+                    "screen_size": [width, height],
+                }
+            )
+            manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
             if len(self._visual_regression_screen_capture_eyes) >= min(
                 2, len(self.swapchains)
             ):
-                manifest_path = output_dir / "screen_sampling_runtime_manifest.json"
-                manifest = {}
-                if manifest_path.is_file():
-                    try:
-                        manifest = json.loads(
-                            manifest_path.read_text(encoding="utf-8")
-                        )
-                    except Exception:
-                        manifest = {}
-                manifest.update(
-                    {
-                        "frame_id": int(output_frame.frame_id),
-                        "screen_stage": "filament_camera_sampled_screen",
-                        "screen_readback": "filament_render_target_rgba8",
-                        "screen_sampling_mode": self._filament_screen_sampling_mode,
-                        "screen_size": [width, height],
-                    }
-                )
-                manifest_path.write_text(
-                    json.dumps(manifest, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
                 print(
                     f"[OpenXRViewer] direct Filament screen capture saved: {output_dir}",
                     flush=True,

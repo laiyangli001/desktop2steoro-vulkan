@@ -61,6 +61,7 @@ class FilamentVulkanBridge:
         self._finished_drawing_semaphore_abi_available = False
         self._screen_sampling_abi_available = False
         self._screen_sampling_mode_abi_available = False
+        self._screen_sampling_stats_abi_available = False
         self._screen_capture_abi_available = False
         self._async_submit_abi_available = False
         self._configure_abi()
@@ -600,6 +601,34 @@ class FilamentVulkanBridge:
     def screen_sampling_mode_abi_available(self) -> bool:
         return self._screen_sampling_mode_abi_available
 
+    @property
+    def screen_sampling_stats_abi_available(self) -> bool:
+        return self._screen_sampling_stats_abi_available
+
+    def screen_sampling_stats(self, eye_index: int) -> dict[str, int]:
+        """Return dynamic virtual-screen sampling counters for one eye."""
+        self._ensure_loaded()
+        if not self._screen_sampling_stats_abi_available:
+            return {}
+        eye = int(eye_index)
+        if eye not in (0, 1):
+            raise ValueError("eye_index must be 0 or 1")
+        source_binds = ctypes.c_uint64()
+        mip_generations = ctypes.c_uint64()
+        self._check_result(
+            self._library.filament_bridge_get_screen_sampling_stats(
+                self._handle,
+                ctypes.c_uint32(eye),
+                ctypes.byref(source_binds),
+                ctypes.byref(mip_generations),
+            ),
+            "get_screen_sampling_stats",
+        )
+        return {
+            "source_binds": int(source_binds.value),
+            "mip_generations": int(mip_generations.value),
+        }
+
     def set_screen_image(
         self, image: Any, *, width: int, height: int, format: int
     ) -> None:
@@ -920,6 +949,18 @@ class FilamentVulkanBridge:
             set_screen_sampling_mode.argtypes = [ctypes.c_void_p, ctypes.c_int]
             set_screen_sampling_mode.restype = ctypes.c_int
             self._screen_sampling_mode_abi_available = True
+        get_screen_sampling_stats = getattr(
+            library, "filament_bridge_get_screen_sampling_stats", None
+        )
+        if get_screen_sampling_stats is not None:
+            get_screen_sampling_stats.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_uint32,
+                ctypes.POINTER(ctypes.c_uint64),
+                ctypes.POINTER(ctypes.c_uint64),
+            ]
+            get_screen_sampling_stats.restype = ctypes.c_int
+            self._screen_sampling_stats_abi_available = True
         capture_screen = getattr(
             library, "filament_bridge_capture_screen_rgba", None
         )

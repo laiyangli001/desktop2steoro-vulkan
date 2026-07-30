@@ -233,6 +233,13 @@ int filament_bridge_capture_screen_rgba(
     return bridge_screen_capture_rgba(bridge, rgba, width, height);
 }
 
+int filament_bridge_get_screen_sampling_stats(
+        FilamentBridge* bridge, uint32_t eye_index,
+        uint64_t* source_binds, uint64_t* mip_generations) {
+    return bridge_screen_get_sampling_stats(
+            bridge, eye_index, source_binds, mip_generations);
+}
+
 int filament_bridge_vulkan_external_image_abi_available(
         const FilamentBridge*) {
 #if defined(D2S_FILAMENT_VULKAN_EXTERNAL_IMAGE)

@@ -600,6 +600,7 @@ int bridge_screen_set_image(FilamentBridge* bridge, const void* image,
             bind_screen_copy_source(bridge, slot.texture, width, height);
             ensure_screen_mip_target(bridge, eye_index, width, height, format);
             bind_screen_display_texture(bridge, eye_index);
+            ++bridge->screen_source_bind_count[eye_index];
             if (!bridge->screen_in_scene && !bridge->screen_entity.isNull()) {
                 bridge->scene->addEntity(bridge->screen_entity);
                 bridge_set_renderable_layer(bridge, bridge->screen_entity, 1, true);
@@ -652,6 +653,7 @@ int bridge_screen_set_image(FilamentBridge* bridge, const void* image,
     bind_screen_copy_source(bridge, texture, width, height);
     ensure_screen_mip_target(bridge, eye_index, width, height, format);
     bind_screen_display_texture(bridge, eye_index);
+    ++bridge->screen_source_bind_count[eye_index];
     if (!bridge->screen_in_scene && !bridge->screen_entity.isNull()) {
         bridge->scene->addEntity(bridge->screen_entity);
         bridge_set_renderable_layer(bridge, bridge->screen_entity, 1, true);
@@ -678,6 +680,7 @@ int bridge_screen_prepare_frame(FilamentBridge* bridge) {
             static_cast<uint32_t>(mip_texture->getHeight())});
     bridge->renderer->render(bridge->screen_mip_copy_view);
     mip_texture->generateMipmaps(*bridge->engine);
+    ++bridge->screen_mip_generation_count[bridge->active_eye];
     return 1;
 }
 
@@ -774,5 +777,17 @@ int bridge_screen_capture_rgba(
     // The caller owns the buffer. Waiting here guarantees that Filament has
     // completed the asynchronous readback before the Python call returns.
     bridge->engine->flushAndWait();
+    return 1;
+}
+
+int bridge_screen_get_sampling_stats(
+        FilamentBridge* bridge, uint32_t eye_index,
+        uint64_t* source_binds, uint64_t* mip_generations) {
+    if (!bridge || eye_index >= bridge->screen_source_bind_count.size() ||
+            !source_binds || !mip_generations) {
+        return 0;
+    }
+    *source_binds = bridge->screen_source_bind_count[eye_index];
+    *mip_generations = bridge->screen_mip_generation_count[eye_index];
     return 1;
 }
