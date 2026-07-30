@@ -456,10 +456,10 @@ int bridge_screen_create(FilamentBridge* bridge) {
         void material(inout MaterialInputs material) {
             prepareMaterial(material);
             vec2 uv = getUV0();
-            vec2 texel = materialParams.screenTexelSize;
-            vec3 center = texture(materialParams.screenTexture, uv).rgb;
+            vec2 texel = materialParams_screenTexelSize;
+            vec3 center = texture(materialParams_screenTexture, uv).rgb;
             vec3 output_color = center;
-            float quality_pass = materialParams.screenQualityPass;
+            float quality_pass = materialParams_screenQualityPass;
 
             if (quality_pass > 0.5 && quality_pass < 1.5) {
                 // Legacy screen-quality pass 1: separable-equivalent 4x4
@@ -475,7 +475,7 @@ int bridge_screen_create(FilamentBridge* bridge) {
                         float weight = screen_lanczos2(delta.x) *
                                 screen_lanczos2(delta.y);
                         vec2 sample_uv = (sample_position + vec2(0.5)) * texel;
-                        accum += texture(materialParams.screenTexture,
+                        accum += texture(materialParams_screenTexture,
                                 clamp(sample_uv, vec2(0.0), vec2(1.0))).rgb * weight;
                         weight_sum += weight;
                     }
@@ -493,11 +493,11 @@ int bridge_screen_create(FilamentBridge* bridge) {
                         vec2(0.0), vec2(1.0));
                 vec2 south_uv = clamp(uv + vec2(0.0, texel.y),
                         vec2(0.0), vec2(1.0));
-                vec3 b = texture(materialParams.screenTexture, north_uv).rgb;
-                vec3 d = texture(materialParams.screenTexture, west_uv).rgb;
+                vec3 b = texture(materialParams_screenTexture, north_uv).rgb;
+                vec3 d = texture(materialParams_screenTexture, west_uv).rgb;
                 vec3 e = center;
-                vec3 f = texture(materialParams.screenTexture, east_uv).rgb;
-                vec3 h = texture(materialParams.screenTexture, south_uv).rgb;
+                vec3 f = texture(materialParams_screenTexture, east_uv).rgb;
+                vec3 h = texture(materialParams_screenTexture, south_uv).rgb;
                 float b_luma = screen_luma(b);
                 float d_luma = screen_luma(d);
                 float e_luma = screen_luma(e);
@@ -522,8 +522,8 @@ int bridge_screen_create(FilamentBridge* bridge) {
                 float lobe = max(max(lobe_rgb.r, lobe_rgb.g), lobe_rgb.b);
                 float rcas_limit = 0.25 - (1.0 / 16.0);
                 float sharpness = clamp(
-                        materialParams.screenSharpness /
-                                max(materialParams.screenFilterScale, 1.0),
+                        materialParams_screenSharpness /
+                                max(materialParams_screenFilterScale, 1.0),
                         0.0, 1.0);
                 float sharpness_stops = 2.0 * (1.0 - sharpness);
                 float contrast = exp2(-sharpness_stops);
