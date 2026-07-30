@@ -567,6 +567,7 @@ class OpenXrVulkanPresenter(
         self._profile_initial_head: np.ndarray | None = None
         self._profile_space_applied = False
         self._profile_view_name: str | None = None
+        self._profile_alignment_logged = False
         self._head_position_w: np.ndarray | None = None
         self._head_forward_w: np.ndarray | None = None
         self._initial_head_y = 0.0
@@ -959,6 +960,7 @@ class OpenXrVulkanPresenter(
         self._xr_space = new_space
         self._profile_space_applied = False
         self._profile_initial_head = None
+        self._profile_alignment_logged = False
         self._head_position_w = None
         self._head_forward_w = None
         if old_space is not None:
@@ -1048,6 +1050,7 @@ class OpenXrVulkanPresenter(
                             ),
                         )
                     self._cache_head_position(views)
+                    self._report_profile_alignment()
                     self._initialize_filament_screen_from_head()
                     with self._output_lock:
                         output_frame = self._pending_output
@@ -2964,6 +2967,7 @@ class OpenXrVulkanPresenter(
         self._filament_animation_origin = None
         self._profile_initial_head = None
         self._profile_space_applied = False
+        self._profile_alignment_logged = False
         self._reference_space_type = None
         self._presenter_thread_id = None
         self._next_output_frame_id = 0
@@ -5437,6 +5441,25 @@ class OpenXrVulkanPresenter(
         self._head_forward_w = -head_matrix[:3, 2].astype(np.float64)
         if self._head_position_w is not None:
             self._initial_head_y = float(self._head_position_w[1])
+
+    def _report_profile_alignment(self) -> None:
+        """Log the calibrated head pose against the authored GLB-local target once."""
+        if self._profile_alignment_logged:
+            return
+        if self._profile_head_transform is None or self._head_position_w is None:
+            return
+        target = np.asarray(self._profile_head_transform[:3, 3], dtype=np.float64)
+        actual = np.asarray(self._head_position_w, dtype=np.float64)
+        delta = actual - target
+        self._profile_alignment_logged = True
+        print(
+            "[OpenXRViewer] profile head alignment: "
+            f"target_glb=({target[0]:.3f},{target[1]:.3f},{target[2]:.3f}) "
+            f"actual_xr=({actual[0]:.3f},{actual[1]:.3f},{actual[2]:.3f}) "
+            f"delta=({delta[0]:+.3f},{delta[1]:+.3f},{delta[2]:+.3f}) "
+            f"reference_space={getattr(self._reference_space_type, 'name', self._reference_space_type)}",
+            flush=True,
+        )
 
     def _initialize_filament_screen_from_head(self) -> None:
         """Initialize an unauthored screen with the legacy head-centered preset."""

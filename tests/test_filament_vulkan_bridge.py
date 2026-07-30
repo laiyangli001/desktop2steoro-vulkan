@@ -137,9 +137,11 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert 'parameter("screenTexelSize"' in source
     assert 'parameter("screenFilterScale"' in source
     assert 'parameter("screenSharpness"' in source
+    assert 'parameter("screenExposureCompensation"' in source
     assert "materialParams.screenTexelSize" in source
     assert "materialParams_screenTexture" in source
     assert "materialParams.screenQualityPass" in source
+    assert "materialParams.screenExposureCompensation" in source
     assert "materialParams_screenTexelSize" not in source
     assert "screen_lanczos2" in source
     assert "screenQualityPass" in source

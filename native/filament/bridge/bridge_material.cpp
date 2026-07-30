@@ -2,6 +2,8 @@
 #include "bridge_internal.h"
 #include "bridge_eye.h"
 
+#include <cmath>
+
 namespace {
 
 constexpr float kLegacyControllerCandelaScale = 10000.0f;
@@ -138,6 +140,14 @@ int preview_material_set_skybox_brightness(FilamentPreview* preview, float brigh
 int bridge_material_set_scene_exposure(FilamentBridge* bridge, float exposure_ev) {
     if (!bridge || !std::isfinite(exposure_ev)) return 0;
     bridge->brightness.scene_exposure_ev = std::clamp(exposure_ev, -8.0f, 8.0f);
+    if (bridge->screen_material_instance) {
+        // The final screen draw shares the Filament View with the HDR scene.
+        // Apply the inverse EV before the view-wide exposure operation; the
+        // intermediate MIP/filter view intentionally remains at 1.0.
+        bridge->screen_material_instance->setParameter(
+                "screenExposureCompensation",
+                std::exp2(-bridge->brightness.scene_exposure_ev));
+    }
     const uint32_t active_eye = bridge->active_eye;
     for (uint32_t eye_index = 0; eye_index < bridge->eyes.size(); ++eye_index) {
         auto& eye = bridge->eyes[eye_index];

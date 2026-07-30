@@ -2,6 +2,12 @@
 
 本文件记录项目重大更新和每日工作收尾。新记录按日期倒序追加；每个工作日结束时更新“已实现”“验证结果”“未决事项”和“下一项内容”。
 
+## 2026-07-31
+- 修复 Vulkan Filament 虚拟屏幕 MIP 采样缺少旧工程 `LOD_BIAS=-0.35` 的问题；最终屏幕采样现在使用与旧 OpenGL runtime eye 纹理一致的负 LOD 偏移，避免在相同屏幕 footprint 下过早选择较软的 MIP 级别。
+- 保持 `filter_scale=1` 路径不执行 Lanczos2 和 RCAS，仅进行原图 LOD0 拷贝与动态 MIP 链生成；不修改颜色空间、输入分辨率或显示几何。
+- 实机验证：MIP 路径文字边缘清晰度已接近旧工程 legacy 路径。
+- 本地回归测试：`38 passed`；Filament Bridge Windows/Linux/macOS 三平台 GitHub Actions 构建成功，二进制已同步。
+
 ## 2026-07-30
 - 修复 Lanczos2/RCAS 屏幕材质使用旧式 `materialParams_<name>` 访问导致 Filament shader 编译失败的问题，统一改为当前 Filament MaterialBuilder 要求的 `materialParams.<name>` 结构体访问。
 - 删除正常运行路径中的 `07_filament_screen_*.png` 固定相机 readback/PNG 导出及对应 C ABI；屏幕显示只保留 GPU 采样、MIP 计数和同步路径，历史 artifact 仍可由离线脚本比较。

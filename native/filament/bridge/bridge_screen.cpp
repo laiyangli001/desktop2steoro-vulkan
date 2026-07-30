@@ -543,6 +543,10 @@ int bridge_screen_create(FilamentBridge* bridge) {
                         lobe * f + e) * reciprocal_lobe,
                         vec3(0.0), vec3(1.0));
             }
+            // Scene exposure is a view-wide operation. Cancel it for the
+            // display-referred screen so desktop sRGB bytes are not brightened
+            // together with the HDR environment.
+            output_color *= materialParams.screenExposureCompensation;
             material.baseColor = vec4(clamp(output_color,
                     vec3(0.0), vec3(1.0)), 1.0);
         }
@@ -557,6 +561,7 @@ int bridge_screen_create(FilamentBridge* bridge) {
             .parameter("screenFilterScale", filamat::MaterialBuilder::UniformType::FLOAT)
             .parameter("screenSharpness", filamat::MaterialBuilder::UniformType::FLOAT)
             .parameter("screenLodBias", filamat::MaterialBuilder::UniformType::FLOAT)
+            .parameter("screenExposureCompensation", filamat::MaterialBuilder::UniformType::FLOAT)
             .parameter("screenQualityPass", filamat::MaterialBuilder::UniformType::FLOAT)
             .shading(filament::Shading::UNLIT)
             .materialDomain(filament::MaterialDomain::SURFACE)
@@ -587,6 +592,8 @@ int bridge_screen_create(FilamentBridge* bridge) {
             "screenSharpness", bridge->screen_filter_sharpness);
     bridge->screen_material_instance->setParameter(
             "screenLodBias", kLegacyScreenLodBias);
+    bridge->screen_material_instance->setParameter(
+            "screenExposureCompensation", 1.0f);
     bridge->screen_material_instance->setParameter("screenQualityPass", 0.0f);
     bridge->screen_vertices.resize((kScreenSegments + 1) * 2);
     bridge->screen_indices.clear();
@@ -648,6 +655,10 @@ int bridge_screen_create(FilamentBridge* bridge) {
             "screenSharpness", bridge->screen_filter_sharpness);
     bridge->screen_mip_copy_material_instance->setParameter(
             "screenLodBias", kLegacyScreenLodBias);
+    // The copy view is only a linear/sRGB-preserving filter pass. It must not
+    // inherit the scene exposure compensation used by the final screen draw.
+    bridge->screen_mip_copy_material_instance->setParameter(
+            "screenExposureCompensation", 1.0f);
     bridge->screen_mip_copy_material_instance->setParameter(
             "screenQualityPass", 0.0f);
     // Match the legacy screen mesh orientation: v=0 is the bottom edge and
