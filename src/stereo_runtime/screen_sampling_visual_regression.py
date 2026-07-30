@@ -64,7 +64,7 @@ def compare_screen_sampling_capture_dirs(
 ) -> dict[str, Any]:
     """Compare real runtime PNGs captured with legacy and MIP sampling.
 
-    The default stage is the fixed-camera Filament screen-only readback. It
+    The default stage is the camera-fixed Filament screen-only readback. It
     excludes OpenXR pose, projection, and controller composition effects.
     ``06_openxr_projection`` remains available for end-to-end diagnostics, and
     ``03_vulkan_output`` checks whether both runs used the same producer image.
@@ -87,7 +87,6 @@ def compare_screen_sampling_capture_dirs(
     )
     output.mkdir(parents=True, exist_ok=True)
     manifest_status: dict[str, str] = {}
-    fixed_source_replay: dict[str, bool] = {}
     for label, root, expected in (
         ("legacy", old_root, "legacy"),
         ("mip", new_root, "mip"),
@@ -104,14 +103,6 @@ def compare_screen_sampling_capture_dirs(
                 f"expected {expected!r}"
             )
         manifest_status[label] = "validated" if actual else "mode_missing"
-        screen_manifest_path = root / "screen_sampling_runtime_manifest.json"
-        if screen_manifest_path.is_file():
-            screen_manifest = json.loads(
-                screen_manifest_path.read_text(encoding="utf-8")
-            )
-            fixed_source_replay[label] = bool(
-                str(screen_manifest.get("fixed_source_image", "")).strip()
-            )
     def compare_stage(stage_name: str) -> dict[str, dict[str, float | int]]:
         result_for_stage: dict[str, dict[str, float | int]] = {}
         for eye in eyes:
@@ -134,12 +125,9 @@ def compare_screen_sampling_capture_dirs(
             )
         return result_for_stage
 
-    fixed_input = all(
-        fixed_source_replay.get(label, False) for label in ("legacy", "mip")
-    )
     source_pairs = (
         compare_stage("03_vulkan_output")
-        if verify_source and stage != "03_vulkan_output" and not fixed_input
+        if verify_source and stage != "03_vulkan_output"
         else None
     )
     pairs = compare_stage(stage)
@@ -149,7 +137,6 @@ def compare_screen_sampling_capture_dirs(
         "legacy_dir": str(old_root.resolve()),
         "mip_dir": str(new_root.resolve()),
         "manifest_status": manifest_status,
-        "fixed_source_replay": fixed_source_replay,
         "pairs": pairs,
         "mean_channel_error": float(
             np.mean([float(metrics["mean_channel_error"]) for metrics in pairs.values()])
@@ -179,8 +166,6 @@ def compare_screen_sampling_capture_dirs(
                 )
             ),
         }
-    elif fixed_input and verify_source and stage != "03_vulkan_output":
-        result["source_verification_skipped"] = "fixed_source_replay"
     (output / "screen_sampling_pixel_comparison.json").write_text(
         json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
     )
