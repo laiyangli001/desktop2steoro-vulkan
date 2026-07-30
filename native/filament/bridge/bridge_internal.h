@@ -303,21 +303,19 @@ struct FilamentBridge {
     bool passthrough_backdrop = false;
     filament::Texture* screen_texture = nullptr;
     std::array<filament::Texture*, 2> screen_source_textures{};
+    std::array<int32_t, 2> screen_source_formats{
+            VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_R8G8B8A8_SRGB};
     std::array<filament::Texture*, 2> screen_textures{};
     std::array<std::vector<ScreenTextureSlot>, 2> screen_texture_cache;
     filament::TextureSampler screen_texture_sampler;
     filament::TextureSampler screen_source_texture_sampler;
+    std::array<filament::Texture*, 2> screen_lanczos_textures{};
+    std::array<filament::RenderTarget*, 2> screen_lanczos_render_targets{};
     std::array<filament::Texture*, 2> screen_mip_textures{};
     std::array<filament::RenderTarget*, 2> screen_mip_render_targets{};
     std::array<bool, 2> screen_mip_ready{};
     std::array<uint64_t, 2> screen_source_bind_count{};
     std::array<uint64_t, 2> screen_mip_generation_count{};
-    // Fixed-camera diagnostic target for comparing the sampled virtual screen
-    // without OpenXR pose, projection, or controller composition effects.
-    filament::Texture* screen_capture_texture = nullptr;
-    filament::RenderTarget* screen_capture_render_target = nullptr;
-    uint32_t screen_capture_width = 0;
-    uint32_t screen_capture_height = 0;
     filament::Texture* screen_fixed_source_texture = nullptr;
     filament::MaterialInstance* screen_mip_copy_material_instance = nullptr;
     utils::Entity screen_mip_copy_entity;

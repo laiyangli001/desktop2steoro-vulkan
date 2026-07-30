@@ -690,8 +690,6 @@ class OpenXrVulkanPresenter(
         # production Vulkan image and the final OpenXR projection target.
         self._visual_regression_capture_eyes: set[int] = set()
         self._visual_regression_capture_failed = False
-        self._visual_regression_screen_capture_eyes: set[int] = set()
-        self._visual_regression_screen_capture_failed = False
         self._visual_regression_source_host_images: dict[int, VulkanHostImage] = {}
         self._visual_regression_projection_host_images: dict[int, VulkanHostImage] = {}
         self._overlay_quad_entries: dict[str, dict[str, Any]] = {}
@@ -2961,8 +2959,6 @@ class OpenXrVulkanPresenter(
         self._visual_regression_projection_host_images.clear()
         self._visual_regression_capture_eyes.clear()
         self._visual_regression_capture_failed = False
-        self._visual_regression_screen_capture_eyes.clear()
-        self._visual_regression_screen_capture_failed = False
         self._source_frame_wait_logged = False
         self._accept_output = False
         self._filament_animation_origin = None
@@ -4249,13 +4245,7 @@ class OpenXrVulkanPresenter(
                         bridge.apply_animations(animation_time)
                     bridge.set_acquired_image(image_index)
                     bridge.begin_frame()
-                    try:
-                        if isinstance(output_frame, VulkanStereoOutputFrame):
-                            self._maybe_capture_filament_screen_frame(
-                                bridge, output_frame, eye_index
-                            )
-                    finally:
-                        bridge.end_frame()
+                    bridge.end_frame()
                     if isinstance(output_frame, VulkanStereoOutputFrame):
                         self._maybe_capture_visual_regression_frame(
                             output_frame,
@@ -4371,103 +4361,6 @@ class OpenXrVulkanPresenter(
         }:
             pixels = pixels[..., [2, 1, 0, 3]]
         Image.fromarray(pixels[..., :3].copy(), mode="RGB").save(output_path)
-
-    def _maybe_capture_filament_screen_frame(
-        self,
-        bridge: Any,
-        output_frame: VulkanStereoOutputFrame,
-        eye_index: int,
-    ) -> None:
-        """Capture only the sampled screen with a pose-independent Filament view."""
-        if self._visual_regression_screen_capture_failed:
-            return
-        metadata = output_frame.metadata or {}
-        output_dir_text = str(metadata.get("visual_regression_dir", "")).strip()
-        if not output_dir_text:
-            return
-        eye = int(eye_index)
-        if eye in self._visual_regression_screen_capture_eyes:
-            return
-        capture = getattr(bridge, "capture_screen_rgba", None)
-        if not callable(capture):
-            print(
-                "[OpenXRViewer] direct screen capture skipped: "
-                "Filament Bridge screen capture ABI is unavailable",
-                flush=True,
-            )
-            return
-        try:
-            from PIL import Image
-
-            output_dir = Path(output_dir_text)
-            output_dir.mkdir(parents=True, exist_ok=True)
-            # Keep this diagnostic target fixed across legacy/MIP runs. A 2x
-            # reduction from the common 3840x2160 source exposes sampler and
-            # mip behavior while remaining inexpensive to read back.
-            width, height = 1920, 1080
-            rgba = np.frombuffer(
-                capture(width, height), dtype=np.uint8
-            ).reshape((height, width, 4))
-            # Vulkan/Filament readback is already in the runtime's top-left
-            # image convention for this RenderTarget; do not flip it here.
-            Image.fromarray(rgba[..., :3].copy(), mode="RGB").save(
-                output_dir
-                / f"07_filament_screen_{'left' if eye == 0 else 'right'}_eye.png"
-            )
-            self._visual_regression_screen_capture_eyes.add(eye)
-            manifest_path = output_dir / "screen_sampling_runtime_manifest.json"
-            manifest = {}
-            if manifest_path.is_file():
-                try:
-                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-                except Exception:
-                    manifest = {}
-            stats_getter = getattr(bridge, "screen_sampling_stats", None)
-            eye_stats = {}
-            if callable(stats_getter):
-                try:
-                    eye_stats = stats_getter(eye)
-                except Exception as exc:
-                    eye_stats = {"error": f"{type(exc).__name__}: {exc}"}
-            stats_by_eye = dict(manifest.get("screen_sampling_stats", {}))
-            stats_by_eye["left" if eye == 0 else "right"] = eye_stats
-            mode = self._filament_screen_sampling_mode
-            manifest.update(
-                {
-                    "frame_id": int(output_frame.frame_id),
-                    "screen_stage": "filament_camera_sampled_screen",
-                    "screen_readback": "filament_render_target_rgba8",
-                    "screen_sampling_mode": mode,
-                    "screen_sampling_update": (
-                        "dynamic_per_frame_mip" if mode == "mip" else "legacy_lod0"
-                    ),
-                    "screen_mip_dynamic_update": mode == "mip",
-                    "screen_mip_expected_per_frame": mode == "mip",
-                    "screen_sampling_stats_abi": bool(
-                        getattr(bridge, "screen_sampling_stats_abi_available", False)
-                    ),
-                    "screen_sampling_stats": stats_by_eye,
-                    "screen_size": [width, height],
-                }
-            )
-            manifest_path.write_text(
-                json.dumps(manifest, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-            if len(self._visual_regression_screen_capture_eyes) >= min(
-                2, len(self.swapchains)
-            ):
-                print(
-                    f"[OpenXRViewer] direct Filament screen capture saved: {output_dir}",
-                    flush=True,
-                )
-        except Exception as exc:
-            self._visual_regression_screen_capture_failed = True
-            print(
-                "[OpenXRViewer] direct Filament screen capture failed: "
-                f"{type(exc).__name__}: {exc}",
-                flush=True,
-            )
 
     def _maybe_capture_visual_regression_frame(
         self,

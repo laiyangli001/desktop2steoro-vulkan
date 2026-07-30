@@ -25,9 +25,6 @@ int bridge_screen_set_fixed_image(
         FilamentBridge* bridge, const uint8_t* rgba,
         uint32_t width, uint32_t height);
 int bridge_screen_prepare_frame(FilamentBridge* bridge);
-int bridge_screen_capture_rgba(
-        FilamentBridge* bridge, uint8_t* rgba,
-        uint32_t width, uint32_t height);
 int bridge_screen_get_sampling_stats(
         FilamentBridge* bridge, uint32_t eye_index,
         uint64_t* source_binds, uint64_t* mip_generations);

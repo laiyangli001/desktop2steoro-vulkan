@@ -137,12 +137,26 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert 'parameter("screenTexelSize"' in source
     assert 'parameter("screenFilterScale"' in source
     assert 'parameter("screenSharpness"' in source
-    assert "material.baseColor = texture(materialParams_screenTexture, getUV0());" in source
-    assert "screen_rcas" not in source
+    assert "screen_lanczos2" in source
+    assert "screenQualityPass" in source
+    assert "quality_pass > 0.5 && quality_pass < 1.5" in source
+    assert "quality_pass > 1.5" in source
+    assert "float rcas_limit = 0.25 - (1.0 / 16.0);" in source
+    assert "vec3 lobe_rgb = max(-hit_min, hit_max);" in source
+    assert "float sharpness_stops = 2.0 * (1.0 - sharpness);" in source
+    assert "screen_mip_copy_material_instance->setParameter(" in source
+    assert '"screenSharpness", bridge->screen_filter_sharpness' in source
+    assert "screen_lanczos_textures" in source
+    assert "screen_lanczos_render_targets" in source
+    assert "bridge->renderer->render(bridge->screen_mip_copy_view);" in source
     assert "fwidth(uv)" not in source
     assert "RenderTarget::Builder" in source
     assert "generateMipmaps(*bridge->engine)" in source
     assert "screen_mip_copy_view" in source
+    assert "bridge_screen_prepare_frame(bridge);" in (bridge_dir / "bridge_eye.cpp").read_text(encoding="utf-8")
+    assert "screen_mip_generation_count[bridge->active_eye]" in source
+    assert "LINEAR_MIPMAP_LINEAR" in source
+    assert "screen_texture_sampler.setAnisotropy(16.0f)" in source
     assert "v=0 is the bottom edge" in source
     context_source = (bridge_dir / "bridge_context.cpp").read_text(encoding="utf-8")
     assert "eye.view->setAntiAliasing(filament::AntiAliasing::NONE);" in context_source
@@ -220,11 +234,9 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "filament_bridge_set_screen_light" in facade
     assert "filament_bridge_set_screen_sampling" in facade
     assert "filament_bridge_set_screen_sampling_mode" in facade
-    assert "filament_bridge_capture_screen_rgba" in facade
     assert "filament_bridge_get_screen_sampling_stats" in facade
     assert "filament_bridge_set_fixed_screen_image" in facade
     assert "bridge_screen_set_sampling_mode" in source
-    assert "bridge_screen_capture_rgba" in source
     assert "LightManager::Type::FOCUSED_SPOT" in source
     assert "bridge->screen_light_direction = -forward;" in source
     assert "std::sqrt(width * width + height * height)" in source

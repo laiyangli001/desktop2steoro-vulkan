@@ -3,6 +3,10 @@
 本文件记录项目重大更新和每日工作收尾。新记录按日期倒序追加；每个工作日结束时更新“已实现”“验证结果”“未决事项”和“下一项内容”。
 
 ## 2026-07-30
+- 删除正常运行路径中的 `07_filament_screen_*.png` 固定相机 readback/PNG 导出及对应 C ABI；屏幕显示只保留 GPU 采样、MIP 计数和同步路径，历史 artifact 仍可由离线脚本比较。
+- 完整迁移 legacy 屏幕清晰化两级 GPU pass：第一 pass 为 4x4 Lanczos2 重建，第二 pass 为完整 FSR RCAS（luma 自适应、RGB limiter 和有界 sharpness），RCAS 输出再生成动态 MIP 链；不引入 CPU 像素往返或跨帧混合。
+- 动态屏幕 MIP 优化与两级质量 pass 在每只眼的 Filament `begin_frame` 内执行，使用线性空间 sRGB 下采样、三线性过滤和 16x 各向异性过滤；规格书和需求矩阵同步更新。
+- AMD FidelityFX SPD/Vulkan compute downsampler 暂不直接替换稳定路径，后续必须以相同 `07_filament_screen` 源一致性、计数和 heatmap 指标做 A/B 验证后再决定。
 - 补齐虚拟屏幕动态 MIP 采样的可验证闭环：native Bridge 记录每眼外部源图像绑定次数和 MIP 生成次数，并通过 `filament_bridge_get_screen_sampling_stats` C ABI 暴露给 Python。
 - `07_filament_screen_*.png` 捕获 manifest 现在写入 `screen_sampling_update=dynamic_per_frame_mip`、MIP 动态更新标记和每眼采样统计，便于确认每帧 `generateMipmaps()` 是否实际执行。
 - 修复屏幕采样视觉回归脚本的 manifest 识别：优先读取 `screen_sampling_runtime_manifest.json`，保留旧 `visual_regression_runtime_manifest.json` 回退，legacy/mip 对比不再误判 07 捕获缺少配置。

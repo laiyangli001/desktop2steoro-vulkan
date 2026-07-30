@@ -227,12 +227,6 @@ int filament_bridge_set_fixed_screen_image(
     return bridge_screen_set_fixed_image(bridge, rgba, width, height);
 }
 
-int filament_bridge_capture_screen_rgba(
-        FilamentBridge* bridge, uint8_t* rgba,
-        uint32_t width, uint32_t height) {
-    return bridge_screen_capture_rgba(bridge, rgba, width, height);
-}
-
 int filament_bridge_get_screen_sampling_stats(
         FilamentBridge* bridge, uint32_t eye_index,
         uint64_t* source_binds, uint64_t* mip_generations) {

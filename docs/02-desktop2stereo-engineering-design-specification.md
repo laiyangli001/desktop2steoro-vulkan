@@ -869,6 +869,33 @@ Presenter 启动时从 `XR Headset Model` 解析 2K/4K/8K 应用采样档位，�
 4. `filter_scale=1` 表示源纹素 footprint 与投影 `fwidth` 的最大值；大于 1 时仅扩大有限面积预滤 footprint。该参数不得改变 sRGB/linear 契约、不得加入 ACES/Reinhard 等 tone mapping，也不得修改源图像的像素值。
 5. Bridge 不支持 `filament_bridge_set_screen_sampling` 时必须报告 `bridge_sampling=unavailable`，保留兼容路径；新 ABI 必须通过三平台远程构建后才可实机验收为 active。
 
+#### 11.4.1 动态 MIP 与各向异性采样
+
+桌面源图像持续变化时，屏幕采样的 MIP 链必须在 GPU 上动态更新。当前正式实现采用
+Filament 的 device-local 中间纹理：每只眼在每帧先把源 `VkImage` 渲染到 MIP
+目标的 LOD 0，再调用 `Texture::generateMipmaps()` 生成完整链，屏幕材质使用
+`LINEAR_MIPMAP_LINEAR` 和 16x 各向异性过滤。源图像不回读 CPU，也不在 Python
+中逐像素缩放。
+
+- sRGB 目标必须声明为 `SRGB8_A8`，由 GPU 在下采样时在线性空间完成过滤；UNORM
+  目标只允许用于已经完成 sRGB 解码的线性输入。
+- MIP 目标和 RenderTarget 只在尺寸或格式变化时重建；正常帧只更新 LOD 0 和 MIP
+  链，避免重复创建纹理、材质和 Framebuffer。
+- 每眼必须记录源绑定次数和 MIP 生成次数。`mip` 回归运行中，每个有效渲染帧的
+  MIP 生成计数应递增；`legacy` 运行不得生成 MIP。
+- 正常运行路径不得为了视觉诊断执行固定相机 RenderTarget、GPU readback 或 PNG 写盘。
+  屏幕采样回归使用离线保存的历史 artifact，并校验源图像 manifest；运行时只保留
+  每眼源绑定和 MIP 生成计数。当前先使用 Filament 内部 blit/generateMipmap；AMD
+  FidelityFX SPD 或 Vulkan compute downsampler 作为后续等价替换，必须在相同离线
+  artifact 和 heatmap 指标下证明收益后才能替换。
+
+- MIP 链生成前必须执行完整的两级 GPU 质量 pass：第一 pass 使用 legacy 的 4x4
+  Lanczos2 重建，第二 pass 使用完整 FSR RCAS 的十字邻域、luma 自适应和 RGB
+  limiter。RCAS 的有效 sharpness 按 `screenSharpness / max(screenFilterScale, 1)`
+  有界缩放，避免视频高对比边缘出现振铃和闪烁；不得使用跨帧混合，避免滚动视频和
+  字幕产生拖影。两级 pass 均在 Filament device-local RenderTarget 上完成，CPU 不
+  读取或改写像素；随后从 RCAS 输出生成 MIP 链供屏幕材质三线性/各向异性采样。
+
 屏幕变换、距离、曲率和可见性由 `SceneFrameState` 提供。交互状态与渲染资源分离，手柄拖动只更新下一帧 transform snapshot。
 
 手柄状态同样由 Python OpenXR Presenter 管理，Bridge 只消费每帧快照。Presenter 必须分别维护左右手 Grip/Aim 有效性、上一帧姿态和最后移动时间；Grip 跟踪无效时立即隐藏对应模型和激光，连续 5 秒无位置或方向变化时自动隐藏，恢复移动后重新显示。激光使用 Aim 负 Z、旧工程标定偏移和稳定滤波，在共享 Filament Scene 的 Projection Layer 中绘制，不得提交为 Quad Layer；视觉契约为两张交叉锥形面和沿射线方向流动的蓝至红循环渐变。模型显隐、激光显隐、按键动画和姿态更新必须逐手独立；按键动画使用 GLB `_value/_min/_max` 节点、输入平滑和四元数旋转插值，任一可选 ABI 缺失不得阻断基础控制器 GLB 加载。`_value/_min/_max` 是 WebXR Input Profiles 的控制器变换契约，不得因节点本身不可渲染而丢弃；Bridge 应先枚举资产节点，再以打包 GLB 的完整节点名集合执行 `getFirstEntityByName` 回退，并逐型号测试所有完整三元组。摇杆、触控板和 thumbrest 的 touch 状态必须从 OpenXR action 传入动画层；为保持稳定 C ABI，可使用 `button_mask` 的版本化空闲位承载布尔状态，但不得把 touch 错当成 click。

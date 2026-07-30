@@ -12,58 +12,6 @@ constexpr float kCurvedHalfAngle = 0.72f;
 constexpr float kLegacyScreenCandelaScale = 1200.0f;
 constexpr uint8_t kScreenMipCopyLayer = 2;
 
-void destroy_screen_capture_target(FilamentBridge* bridge) {
-    if (!bridge || !bridge->engine) return;
-    if (bridge->screen_capture_render_target) {
-        bridge->engine->destroy(bridge->screen_capture_render_target);
-        bridge->screen_capture_render_target = nullptr;
-    }
-    if (bridge->screen_capture_texture) {
-        bridge->engine->destroy(bridge->screen_capture_texture);
-        bridge->screen_capture_texture = nullptr;
-    }
-    bridge->screen_capture_width = 0;
-    bridge->screen_capture_height = 0;
-}
-
-bool ensure_screen_capture_target(
-        FilamentBridge* bridge, uint32_t width, uint32_t height) {
-    if (!bridge || !bridge->engine || width == 0 || height == 0) return false;
-    if (bridge->screen_capture_texture && bridge->screen_capture_render_target &&
-            bridge->screen_capture_width == width &&
-            bridge->screen_capture_height == height) {
-        return true;
-    }
-    destroy_screen_capture_target(bridge);
-    using Usage = filament::Texture::Usage;
-    const auto usage = static_cast<Usage>(
-            static_cast<uint16_t>(Usage::COLOR_ATTACHMENT) |
-            static_cast<uint16_t>(Usage::BLIT_SRC));
-    auto* texture = filament::Texture::Builder()
-            .width(width).height(height).levels(1)
-            .format(filament::Texture::InternalFormat::SRGB8_A8)
-            .sampler(filament::Texture::Sampler::SAMPLER_2D)
-            .usage(usage)
-            .build(*bridge->engine);
-    if (!texture) {
-        bridge_set_error(bridge, "Filament could not create screen capture texture");
-        return false;
-    }
-    auto* target = filament::RenderTarget::Builder()
-            .texture(filament::RenderTarget::AttachmentPoint::COLOR, texture)
-            .build(*bridge->engine);
-    if (!target) {
-        bridge->engine->destroy(texture);
-        bridge_set_error(bridge, "Filament could not create screen capture target");
-        return false;
-    }
-    bridge->screen_capture_texture = texture;
-    bridge->screen_capture_render_target = target;
-    bridge->screen_capture_width = width;
-    bridge->screen_capture_height = height;
-    return true;
-}
-
 void destroy_screen_mip_target(FilamentBridge* bridge, uint32_t eye_index) {
     if (!bridge || eye_index >= bridge->screen_mip_textures.size()) return;
     if (bridge->screen_mip_render_targets[eye_index]) {
@@ -75,6 +23,18 @@ void destroy_screen_mip_target(FilamentBridge* bridge, uint32_t eye_index) {
         bridge->screen_mip_textures[eye_index] = nullptr;
     }
     bridge->screen_mip_ready[eye_index] = false;
+}
+
+void destroy_screen_lanczos_target(FilamentBridge* bridge, uint32_t eye_index) {
+    if (!bridge || eye_index >= bridge->screen_lanczos_textures.size()) return;
+    if (bridge->screen_lanczos_render_targets[eye_index]) {
+        bridge->engine->destroy(bridge->screen_lanczos_render_targets[eye_index]);
+        bridge->screen_lanczos_render_targets[eye_index] = nullptr;
+    }
+    if (bridge->screen_lanczos_textures[eye_index]) {
+        bridge->engine->destroy(bridge->screen_lanczos_textures[eye_index]);
+        bridge->screen_lanczos_textures[eye_index] = nullptr;
+    }
 }
 
 void bind_screen_display_texture(FilamentBridge* bridge, uint32_t eye_index) {
@@ -94,6 +54,10 @@ void bind_screen_display_texture(FilamentBridge* bridge, uint32_t eye_index) {
                 "screenTexture", texture,
                 use_mip ? bridge->screen_texture_sampler
                         : bridge->screen_source_texture_sampler);
+        bridge->screen_material_instance->setParameter(
+                "screenTexelSize", filament::math::float2{
+                        1.0f / static_cast<float>(texture->getWidth()),
+                        1.0f / static_cast<float>(texture->getHeight())});
     }
 }
 
@@ -165,11 +129,67 @@ bool ensure_screen_mip_target(
     return true;
 }
 
+bool ensure_screen_lanczos_target(
+        FilamentBridge* bridge, uint32_t eye_index,
+        uint32_t width, uint32_t height, int32_t format) {
+    if (!bridge || !bridge->engine || !bridge->screen_mip_experiment_enabled ||
+            eye_index >= bridge->screen_lanczos_textures.size() ||
+            width == 0 || height == 0) {
+        return false;
+    }
+    auto* current = bridge->screen_lanczos_textures[eye_index];
+    if (current && bridge->screen_lanczos_render_targets[eye_index] &&
+            current->getWidth() == width && current->getHeight() == height) {
+        return true;
+    }
+    destroy_screen_lanczos_target(bridge, eye_index);
+    const auto texture_format = format == VK_FORMAT_R8G8B8A8_SRGB
+            ? filament::Texture::InternalFormat::SRGB8_A8
+            : filament::Texture::InternalFormat::RGBA8;
+    using Usage = filament::Texture::Usage;
+    const auto usage = static_cast<Usage>(
+            static_cast<uint16_t>(Usage::COLOR_ATTACHMENT) |
+            static_cast<uint16_t>(Usage::SAMPLEABLE));
+    auto* texture = filament::Texture::Builder()
+            .width(width).height(height).levels(1)
+            .format(texture_format)
+            .sampler(filament::Texture::Sampler::SAMPLER_2D)
+            .usage(usage)
+            .build(*bridge->engine);
+    if (!texture) {
+        bridge_set_error(bridge, "Filament could not create screen Lanczos texture");
+        return false;
+    }
+    auto* target = filament::RenderTarget::Builder()
+            .texture(filament::RenderTarget::AttachmentPoint::COLOR, texture)
+            .build(*bridge->engine);
+    if (!target) {
+        bridge->engine->destroy(texture);
+        bridge_set_error(bridge, "Filament could not create screen Lanczos target");
+        return false;
+    }
+    bridge->screen_lanczos_textures[eye_index] = texture;
+    bridge->screen_lanczos_render_targets[eye_index] = target;
+    return true;
+}
+
+bool ensure_screen_quality_targets(
+        FilamentBridge* bridge, uint32_t eye_index,
+        uint32_t source_width, uint32_t source_height, int32_t format) {
+    if (!bridge || source_width == 0 || source_height == 0) return false;
+    const float scale = std::max(1.0f, bridge->screen_filter_scale);
+    const uint32_t width = std::max(
+            16u, static_cast<uint32_t>(std::lround(source_width / scale)) & ~1u);
+    const uint32_t height = std::max(
+            16u, static_cast<uint32_t>(std::lround(source_height / scale)) & ~1u);
+    return ensure_screen_lanczos_target(bridge, eye_index, width, height, format) &&
+            ensure_screen_mip_target(bridge, eye_index, width, height, format);
+}
+
 }  // namespace
 
 void bridge_screen_destroy(FilamentBridge* bridge) {
     if (!bridge || !bridge->engine) return;
-    destroy_screen_capture_target(bridge);
     if (bridge->scene && !bridge->screen_mip_copy_entity.isNull()) {
         bridge->scene->remove(bridge->screen_mip_copy_entity);
     }
@@ -202,6 +222,7 @@ void bridge_screen_destroy(FilamentBridge* bridge) {
         bridge->screen_fixed_source_texture = nullptr;
     }
     for (uint32_t eye_index = 0; eye_index < bridge->screen_mip_textures.size(); ++eye_index) {
+        destroy_screen_lanczos_target(bridge, eye_index);
         destroy_screen_mip_target(bridge, eye_index);
     }
     if (bridge->scene && bridge->screen_in_scene && !bridge->screen_entity.isNull()) {
@@ -234,6 +255,8 @@ void bridge_screen_destroy(FilamentBridge* bridge) {
         cache.clear();
     }
     bridge->screen_source_textures = {};
+    bridge->screen_source_formats = {
+            VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_R8G8B8A8_SRGB};
     bridge->screen_textures = {};
     bridge->screen_texture = nullptr;
     if (bridge->screen_material) {
@@ -379,6 +402,10 @@ int bridge_screen_set_sampling(FilamentBridge* bridge, float filter_scale) {
     bridge->screen_filter_scale = filter_scale;
     bridge->screen_material_instance->setParameter(
             "screenFilterScale", filter_scale);
+    if (bridge->screen_mip_copy_material_instance) {
+        bridge->screen_mip_copy_material_instance->setParameter(
+                "screenFilterScale", filter_scale);
+    }
     return 1;
 }
 
@@ -409,9 +436,106 @@ int bridge_screen_create(FilamentBridge* bridge) {
     // intentionally left at ordinary linear filtering for external images.
     bridge->screen_texture_sampler.setAnisotropy(16.0f);
     const char* shader = R"FILAMENT(
+        float screen_sinc(float x) {
+            x = abs(x);
+            if (x < 0.00001) return 1.0;
+            float p = 3.141592653589793 * x;
+            return sin(p) / p;
+        }
+
+        float screen_lanczos2(float x) {
+            x = abs(x);
+            if (x >= 2.0) return 0.0;
+            return screen_sinc(x) * screen_sinc(x * 0.5);
+        }
+
+        float screen_luma(vec3 color) {
+            return color.b * 0.5 + (color.r * 0.5 + color.g);
+        }
+
         void material(inout MaterialInputs material) {
             prepareMaterial(material);
-            material.baseColor = texture(materialParams_screenTexture, getUV0());
+            vec2 uv = getUV0();
+            vec2 texel = materialParams_screenTexelSize;
+            vec3 center = texture(materialParams_screenTexture, uv).rgb;
+            vec3 output_color = center;
+            float quality_pass = materialParams_screenQualityPass;
+
+            if (quality_pass > 0.5 && quality_pass < 1.5) {
+                // Legacy screen-quality pass 1: separable-equivalent 4x4
+                // Lanczos2 reconstruction performed entirely on the GPU.
+                vec2 source_position = uv / texel - vec2(0.5);
+                vec2 source_base = floor(source_position);
+                vec3 accum = vec3(0.0);
+                float weight_sum = 0.0;
+                for (int y = -1; y <= 2; ++y) {
+                    for (int x = -1; x <= 2; ++x) {
+                        vec2 sample_position = source_base + vec2(float(x), float(y));
+                        vec2 delta = source_position - sample_position;
+                        float weight = screen_lanczos2(delta.x) *
+                                screen_lanczos2(delta.y);
+                        vec2 sample_uv = (sample_position + vec2(0.5)) * texel;
+                        accum += texture(materialParams_screenTexture,
+                                clamp(sample_uv, vec2(0.0), vec2(1.0))).rgb * weight;
+                        weight_sum += weight;
+                    }
+                }
+                output_color = accum / max(weight_sum, 0.000001);
+            } else if (quality_pass > 1.5) {
+                // Legacy screen-quality pass 2: full FSR RCAS. This is the
+                // same cross-shaped luma adaptation and RGB limiter used by
+                // the legacy renderer, evaluated in the GPU pass before MIP.
+                vec2 north_uv = clamp(uv + vec2(0.0, -texel.y),
+                        vec2(0.0), vec2(1.0));
+                vec2 west_uv = clamp(uv + vec2(-texel.x, 0.0),
+                        vec2(0.0), vec2(1.0));
+                vec2 east_uv = clamp(uv + vec2(texel.x, 0.0),
+                        vec2(0.0), vec2(1.0));
+                vec2 south_uv = clamp(uv + vec2(0.0, texel.y),
+                        vec2(0.0), vec2(1.0));
+                vec3 b = texture(materialParams_screenTexture, north_uv).rgb;
+                vec3 d = texture(materialParams_screenTexture, west_uv).rgb;
+                vec3 e = center;
+                vec3 f = texture(materialParams_screenTexture, east_uv).rgb;
+                vec3 h = texture(materialParams_screenTexture, south_uv).rgb;
+                float b_luma = screen_luma(b);
+                float d_luma = screen_luma(d);
+                float e_luma = screen_luma(e);
+                float f_luma = screen_luma(f);
+                float h_luma = screen_luma(h);
+                float nz = 0.25 * b_luma + 0.25 * d_luma +
+                        0.25 * f_luma + 0.25 * h_luma - e_luma;
+                float l_max = max(max(max(b_luma, d_luma),
+                        max(e_luma, f_luma)), h_luma);
+                float l_min = min(min(min(b_luma, d_luma),
+                        min(e_luma, f_luma)), h_luma);
+                nz = clamp(abs(nz) / max(abs(l_max - l_min), 0.000001),
+                        0.0, 1.0);
+                nz = -0.5 * nz + 1.0;
+                vec3 min4 = min(min(b, d), min(f, h));
+                vec3 max4 = max(max(b, d), max(f, h));
+                vec3 hit_min = min(min4, e) /
+                        max(4.0 * max4, vec3(0.000001));
+                vec3 hit_max = (vec3(1.0) - max(max4, e)) /
+                        min(4.0 * min4 - vec3(4.0), vec3(-0.000001));
+                vec3 lobe_rgb = max(-hit_min, hit_max);
+                float lobe = max(max(lobe_rgb.r, lobe_rgb.g), lobe_rgb.b);
+                float rcas_limit = 0.25 - (1.0 / 16.0);
+                float sharpness = clamp(
+                        materialParams_screenSharpness /
+                                max(materialParams_screenFilterScale, 1.0),
+                        0.0, 1.0);
+                float sharpness_stops = 2.0 * (1.0 - sharpness);
+                float contrast = exp2(-sharpness_stops);
+                lobe = max(-rcas_limit, min(lobe, 0.0)) * contrast * nz;
+                float reciprocal_lobe = 1.0 / max(abs(4.0 * lobe + 1.0),
+                        0.000001);
+                output_color = clamp((lobe * b + lobe * d + lobe * h +
+                        lobe * f + e) * reciprocal_lobe,
+                        vec3(0.0), vec3(1.0));
+            }
+            material.baseColor = vec4(clamp(output_color,
+                    vec3(0.0), vec3(1.0)), 1.0);
         }
     )FILAMENT";
     filamat::MaterialBuilder::init();
@@ -423,6 +547,7 @@ int bridge_screen_create(FilamentBridge* bridge) {
             .parameter("screenTexelSize", filamat::MaterialBuilder::UniformType::FLOAT2)
             .parameter("screenFilterScale", filamat::MaterialBuilder::UniformType::FLOAT)
             .parameter("screenSharpness", filamat::MaterialBuilder::UniformType::FLOAT)
+            .parameter("screenQualityPass", filamat::MaterialBuilder::UniformType::FLOAT)
             .shading(filament::Shading::UNLIT)
             .materialDomain(filament::MaterialDomain::SURFACE)
             // Match the legacy projection pass: the display is an opaque
@@ -450,6 +575,7 @@ int bridge_screen_create(FilamentBridge* bridge) {
             "screenFilterScale", bridge->screen_filter_scale);
     bridge->screen_material_instance->setParameter(
             "screenSharpness", bridge->screen_filter_sharpness);
+    bridge->screen_material_instance->setParameter("screenQualityPass", 0.0f);
     bridge->screen_vertices.resize((kScreenSegments + 1) * 2);
     bridge->screen_indices.clear();
     bridge->screen_indices.reserve(kScreenSegments * 6);
@@ -504,6 +630,12 @@ int bridge_screen_create(FilamentBridge* bridge) {
     bridge_set_renderable_layer(bridge, bridge->screen_entity, 1, false);
     bridge->screen_mip_copy_material_instance =
             bridge->screen_material->createInstance();
+    bridge->screen_mip_copy_material_instance->setParameter(
+            "screenFilterScale", bridge->screen_filter_scale);
+    bridge->screen_mip_copy_material_instance->setParameter(
+            "screenSharpness", bridge->screen_filter_sharpness);
+    bridge->screen_mip_copy_material_instance->setParameter(
+            "screenQualityPass", 0.0f);
     // Match the legacy screen mesh orientation: v=0 is the bottom edge and
     // v=1 is the top edge. Reversing this pair mirrors the copied image.
     bridge->screen_mip_copy_vertices = {
@@ -593,12 +725,13 @@ int bridge_screen_set_image(FilamentBridge* bridge, const void* image,
         return 0;
     }
     const uint32_t eye_index = bridge->active_eye;
+    bridge->screen_source_formats[eye_index] = format;
     for (const auto& slot : bridge->screen_texture_cache[eye_index]) {
         if (slot.image == image && slot.width == width &&
                 slot.height == height && slot.format == format && slot.texture) {
             bridge->screen_source_textures[eye_index] = slot.texture;
             bind_screen_copy_source(bridge, slot.texture, width, height);
-            ensure_screen_mip_target(bridge, eye_index, width, height, format);
+            ensure_screen_quality_targets(bridge, eye_index, width, height, format);
             bind_screen_display_texture(bridge, eye_index);
             ++bridge->screen_source_bind_count[eye_index];
             if (!bridge->screen_in_scene && !bridge->screen_entity.isNull()) {
@@ -651,7 +784,7 @@ int bridge_screen_set_image(FilamentBridge* bridge, const void* image,
             ScreenTextureSlot{image, texture, width, height, format});
     bridge->screen_source_textures[eye_index] = texture;
     bind_screen_copy_source(bridge, texture, width, height);
-    ensure_screen_mip_target(bridge, eye_index, width, height, format);
+    ensure_screen_quality_targets(bridge, eye_index, width, height, format);
     bind_screen_display_texture(bridge, eye_index);
     ++bridge->screen_source_bind_count[eye_index];
     if (!bridge->screen_in_scene && !bridge->screen_entity.isNull()) {
@@ -666,15 +799,49 @@ int bridge_screen_prepare_frame(FilamentBridge* bridge) {
     if (!bridge || !bridge->frame_active || !bridge->renderer ||
             !bridge->screen_mip_experiment_enabled ||
             bridge->active_eye >= bridge->screen_mip_textures.size() ||
-            !bridge->screen_mip_ready[bridge->active_eye] ||
-            !bridge->screen_mip_render_targets[bridge->active_eye] ||
             !bridge->screen_source_textures[bridge->active_eye] ||
-            !bridge->screen_mip_copy_view) {
+            !bridge->screen_mip_copy_view ||
+            !bridge->screen_mip_copy_material_instance) {
         return 0;
     }
+    auto* source = bridge->screen_source_textures[bridge->active_eye];
+    if (!ensure_screen_quality_targets(
+            bridge, bridge->active_eye, source->getWidth(), source->getHeight(),
+            bridge->screen_source_formats[bridge->active_eye])) {
+        return 0;
+    }
+    auto* lanczos_texture = bridge->screen_lanczos_textures[bridge->active_eye];
     auto* mip_texture = bridge->screen_mip_textures[bridge->active_eye];
-    auto* render_target = bridge->screen_mip_render_targets[bridge->active_eye];
-    bridge->screen_mip_copy_view->setRenderTarget(render_target);
+    auto* lanczos_target = bridge->screen_lanczos_render_targets[bridge->active_eye];
+    auto* mip_target = bridge->screen_mip_render_targets[bridge->active_eye];
+
+    // Pass 1: reconstruct the external source into the bounded quality target.
+    bridge->screen_mip_copy_material_instance->setParameter(
+            "screenTexture", source, bridge->screen_source_texture_sampler);
+    bridge->screen_mip_copy_material_instance->setParameter(
+            "screenTexelSize", filament::math::float2{
+                    1.0f / static_cast<float>(source->getWidth()),
+                    1.0f / static_cast<float>(source->getHeight())});
+    bridge->screen_mip_copy_material_instance->setParameter(
+            "screenQualityPass", 1.0f);
+    bridge->screen_mip_copy_view->setRenderTarget(lanczos_target);
+    bridge->screen_mip_copy_view->setViewport(filament::Viewport{
+            0, 0, static_cast<uint32_t>(lanczos_texture->getWidth()),
+            static_cast<uint32_t>(lanczos_texture->getHeight())});
+    bridge->renderer->render(bridge->screen_mip_copy_view);
+
+    // Pass 2: sharpen the reconstructed image, then generate the stable MIP
+    // chain from the final quality result for video minification.
+    bridge->screen_mip_copy_material_instance->setParameter(
+            "screenTexture", lanczos_texture,
+            bridge->screen_source_texture_sampler);
+    bridge->screen_mip_copy_material_instance->setParameter(
+            "screenTexelSize", filament::math::float2{
+                    1.0f / static_cast<float>(lanczos_texture->getWidth()),
+                    1.0f / static_cast<float>(lanczos_texture->getHeight())});
+    bridge->screen_mip_copy_material_instance->setParameter(
+            "screenQualityPass", 2.0f);
+    bridge->screen_mip_copy_view->setRenderTarget(mip_target);
     bridge->screen_mip_copy_view->setViewport(filament::Viewport{
             0, 0, static_cast<uint32_t>(mip_texture->getWidth()),
             static_cast<uint32_t>(mip_texture->getHeight())});
@@ -722,7 +889,8 @@ int bridge_screen_set_fixed_image(
     for (uint32_t eye_index = 0;
             eye_index < bridge->screen_source_textures.size(); ++eye_index) {
         bridge->screen_source_textures[eye_index] = texture;
-        ensure_screen_mip_target(bridge, eye_index, width, height,
+        bridge->screen_source_formats[eye_index] = VK_FORMAT_R8G8B8A8_SRGB;
+        ensure_screen_quality_targets(bridge, eye_index, width, height,
                 VK_FORMAT_R8G8B8A8_SRGB);
     }
     bind_screen_copy_source(bridge, texture, width, height);
@@ -732,51 +900,6 @@ int bridge_screen_set_fixed_image(
         bridge_set_renderable_layer(bridge, bridge->screen_entity, 1, true);
         bridge->screen_in_scene = true;
     }
-    return 1;
-}
-
-int bridge_screen_capture_rgba(
-        FilamentBridge* bridge, uint8_t* rgba,
-        uint32_t width, uint32_t height) {
-    if (!bridge || !bridge->engine || !bridge->renderer ||
-            !bridge->frame_active || !rgba || width == 0 || height == 0 ||
-            !bridge->screen_mip_copy_view ||
-            bridge->active_eye >= bridge->screen_source_textures.size()) {
-        return 0;
-    }
-    auto* source = bridge->screen_source_textures[bridge->active_eye];
-    if (!source || !ensure_screen_capture_target(bridge, width, height)) {
-        return 0;
-    }
-    const bool use_mip = bridge->screen_mip_experiment_enabled &&
-            bridge->screen_mip_ready[bridge->active_eye] &&
-            bridge->screen_mip_textures[bridge->active_eye];
-    auto* sampled = use_mip
-            ? bridge->screen_mip_textures[bridge->active_eye]
-            : source;
-    bridge->screen_mip_copy_material_instance->setParameter(
-            "screenTexture", sampled,
-            use_mip ? bridge->screen_texture_sampler
-                    : bridge->screen_source_texture_sampler);
-    bridge->screen_mip_copy_material_instance->setParameter(
-            "screenTexelSize", filament::math::float2{
-                    1.0f / static_cast<float>(source->getWidth()),
-                    1.0f / static_cast<float>(source->getHeight())});
-    bridge->screen_mip_copy_view->setRenderTarget(
-            bridge->screen_capture_render_target);
-    bridge->screen_mip_copy_view->setViewport(filament::Viewport{
-            0, 0, width, height});
-    bridge->renderer->render(bridge->screen_mip_copy_view);
-    filament::backend::PixelBufferDescriptor pixels(
-            rgba, static_cast<size_t>(width) * height * 4,
-            filament::backend::PixelBufferDescriptor::PixelDataFormat::RGBA,
-            filament::backend::PixelBufferDescriptor::PixelDataType::UBYTE);
-    bridge->renderer->readPixels(
-            bridge->screen_capture_render_target, 0, 0, width, height,
-            std::move(pixels));
-    // The caller owns the buffer. Waiting here guarantees that Filament has
-    // completed the asynchronous readback before the Python call returns.
-    bridge->engine->flushAndWait();
     return 1;
 }
 

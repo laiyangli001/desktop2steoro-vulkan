@@ -548,3 +548,5 @@ OpenVINO: null
 Synthetic View: quality_4k
 Filament Scene Exposure: 2.0
 Filament Skybox Brightness: 1.0
+Filament Screen Sampling Mode: legacy
+OpenXR Visual Regression Directory: E:/AI_2D_to_3D/4.LC700X_Desktop2Stereo/desktop2steoro-vulkan/.ci-artifacts/screen-legacy

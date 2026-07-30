@@ -70,6 +70,7 @@
 | OBS-001 | 诊断 | capability report、结构化日志、GPU timing 和 diagnostic bundle 可导出。 | 01§12; 02§18 | `src/app_runtime/probe.py`; `src/` | `src/tools/probe.py`; 诊断验收 | implemented |
 | PERF-001 | 性能 | 90 Hz 应用 GPU 关键路径目标不超过 10 ms，并分开报告各阶段耗时。 | 01§13.4; 02§21.1 | `src/` | GPU benchmark; 头显实测 | verified |
 | PERF-002 | 性能 | 资源池、帧上下文、队列和 Telemetry ring 有界，显存超预算时拒绝或降档。 | 01§10; 02§21.2-21.3 | `src/` | 显存压力和长稳测试 | verified |
+| PERF-003 | 性能 | 动态桌面屏幕在 GPU 上每帧执行 Lanczos2 + RCAS 两级质量 pass 并更新 MIP 链，使用线性空间下采样、各向异性过滤和受控 sharpness；不得引入 CPU 像素往返、运行时 readback 或跨帧混合。legacy/mip 视觉回归使用离线 artifact，并记录源一致性、每眼 MIP 生成计数和 heatmap。 | 02§11.4.1 | `native/filament/bridge/bridge_screen.cpp`; `src/xr_viewer/core_openxr_vulkan.py`; `src/stereo_runtime/screen_sampling_visual_regression.py` | `tests/test_filament_vulkan_bridge.py`; `tests/test_screen_sampling_visual_regression.py` | in_progress |
 | TEST-001 | 测试 | 每个功能必须有单元、集成、平台或人工验收记录，不能只以代码存在为完成。 | 01§13; 02§19; 02§24 | `tests/`; `docs/` | 本矩阵; CI | in_progress |
 | TEST-002 | 测试 | Vulkan Validation、Shader golden、互操作、Filament、OpenXR、Fallback 和长稳测试必须分层执行。 | 02§19 | `tests/`; `.github/workflows/` | CI; 专用硬件 runner | planned |
 | PLATFORM-001 | 平台 | Windows/Linux 使用原生 Vulkan，macOS 使用 MoltenVK；OpenGL Fallback 按平台能力报告。 | 01§4; 01§3.2; 02§2.4 | `src/`; `.github/workflows/` | 三平台 CI; 实机验收 | in_progress |
