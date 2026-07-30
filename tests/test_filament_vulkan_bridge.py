@@ -152,7 +152,12 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert '"screenSharpness", bridge->screen_filter_sharpness' in source
     assert "screen_lanczos_textures" in source
     assert "screen_lanczos_render_targets" in source
+    assert "kLegacyScreenLodBias = -0.35f" in source
+    assert '"screenLodBias", kLegacyScreenLodBias' in source
+    assert "materialParams.screenLodBias" in source
     assert "bridge->renderer->render(bridge->screen_mip_copy_view);" in source
+    assert "Match the legacy OpenGL default" in source
+    assert "bridge->screen_filter_scale <= 1.0001f" in source
     assert "fwidth(uv)" not in source
     assert "RenderTarget::Builder" in source
     assert "generateMipmaps(*bridge->engine)" in source

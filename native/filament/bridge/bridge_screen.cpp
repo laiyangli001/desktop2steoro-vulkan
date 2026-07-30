@@ -10,6 +10,9 @@ namespace {
 constexpr uint32_t kScreenSegments = 48;
 constexpr float kCurvedHalfAngle = 0.72f;
 constexpr float kLegacyScreenCandelaScale = 1200.0f;
+// Match the legacy OpenGL runtime-eye sampler bias. Without this, the
+// trilinear MIP sampler selects a softer level for the same screen footprint.
+constexpr float kLegacyScreenLodBias = -0.35f;
 constexpr uint8_t kScreenMipCopyLayer = 2;
 
 void destroy_screen_mip_target(FilamentBridge* bridge, uint32_t eye_index) {
@@ -457,7 +460,8 @@ int bridge_screen_create(FilamentBridge* bridge) {
             prepareMaterial(material);
             vec2 uv = getUV0();
             vec2 texel = materialParams.screenTexelSize;
-            vec3 center = texture(materialParams_screenTexture, uv).rgb;
+            vec3 center = texture(materialParams_screenTexture, uv,
+                    materialParams.screenLodBias).rgb;
             vec3 output_color = center;
             float quality_pass = materialParams.screenQualityPass;
 
@@ -476,7 +480,8 @@ int bridge_screen_create(FilamentBridge* bridge) {
                                 screen_lanczos2(delta.y);
                         vec2 sample_uv = (sample_position + vec2(0.5)) * texel;
                         accum += texture(materialParams_screenTexture,
-                                clamp(sample_uv, vec2(0.0), vec2(1.0))).rgb * weight;
+                                clamp(sample_uv, vec2(0.0), vec2(1.0)),
+                                materialParams.screenLodBias).rgb * weight;
                         weight_sum += weight;
                     }
                 }
@@ -493,11 +498,15 @@ int bridge_screen_create(FilamentBridge* bridge) {
                         vec2(0.0), vec2(1.0));
                 vec2 south_uv = clamp(uv + vec2(0.0, texel.y),
                         vec2(0.0), vec2(1.0));
-                vec3 b = texture(materialParams_screenTexture, north_uv).rgb;
-                vec3 d = texture(materialParams_screenTexture, west_uv).rgb;
+                vec3 b = texture(materialParams_screenTexture, north_uv,
+                        materialParams.screenLodBias).rgb;
+                vec3 d = texture(materialParams_screenTexture, west_uv,
+                        materialParams.screenLodBias).rgb;
                 vec3 e = center;
-                vec3 f = texture(materialParams_screenTexture, east_uv).rgb;
-                vec3 h = texture(materialParams_screenTexture, south_uv).rgb;
+                vec3 f = texture(materialParams_screenTexture, east_uv,
+                        materialParams.screenLodBias).rgb;
+                vec3 h = texture(materialParams_screenTexture, south_uv,
+                        materialParams.screenLodBias).rgb;
                 float b_luma = screen_luma(b);
                 float d_luma = screen_luma(d);
                 float e_luma = screen_luma(e);
@@ -547,6 +556,7 @@ int bridge_screen_create(FilamentBridge* bridge) {
             .parameter("screenTexelSize", filamat::MaterialBuilder::UniformType::FLOAT2)
             .parameter("screenFilterScale", filamat::MaterialBuilder::UniformType::FLOAT)
             .parameter("screenSharpness", filamat::MaterialBuilder::UniformType::FLOAT)
+            .parameter("screenLodBias", filamat::MaterialBuilder::UniformType::FLOAT)
             .parameter("screenQualityPass", filamat::MaterialBuilder::UniformType::FLOAT)
             .shading(filament::Shading::UNLIT)
             .materialDomain(filament::MaterialDomain::SURFACE)
@@ -575,6 +585,8 @@ int bridge_screen_create(FilamentBridge* bridge) {
             "screenFilterScale", bridge->screen_filter_scale);
     bridge->screen_material_instance->setParameter(
             "screenSharpness", bridge->screen_filter_sharpness);
+    bridge->screen_material_instance->setParameter(
+            "screenLodBias", kLegacyScreenLodBias);
     bridge->screen_material_instance->setParameter("screenQualityPass", 0.0f);
     bridge->screen_vertices.resize((kScreenSegments + 1) * 2);
     bridge->screen_indices.clear();
@@ -634,6 +646,8 @@ int bridge_screen_create(FilamentBridge* bridge) {
             "screenFilterScale", bridge->screen_filter_scale);
     bridge->screen_mip_copy_material_instance->setParameter(
             "screenSharpness", bridge->screen_filter_sharpness);
+    bridge->screen_mip_copy_material_instance->setParameter(
+            "screenLodBias", kLegacyScreenLodBias);
     bridge->screen_mip_copy_material_instance->setParameter(
             "screenQualityPass", 0.0f);
     // Match the legacy screen mesh orientation: v=0 is the bottom edge and
@@ -814,6 +828,28 @@ int bridge_screen_prepare_frame(FilamentBridge* bridge) {
     auto* mip_texture = bridge->screen_mip_textures[bridge->active_eye];
     auto* lanczos_target = bridge->screen_lanczos_render_targets[bridge->active_eye];
     auto* mip_target = bridge->screen_mip_render_targets[bridge->active_eye];
+
+    // Match the legacy OpenGL default: a matched input/headset tier must not
+    // pass through an additional Lanczos2 + RCAS filter. Keep the dynamic MIP
+    // chain, but copy the source directly into LOD 0 first.
+    if (bridge->screen_filter_scale <= 1.0001f) {
+        bridge->screen_mip_copy_material_instance->setParameter(
+                "screenTexture", source, bridge->screen_source_texture_sampler);
+        bridge->screen_mip_copy_material_instance->setParameter(
+                "screenTexelSize", filament::math::float2{
+                        1.0f / static_cast<float>(source->getWidth()),
+                        1.0f / static_cast<float>(source->getHeight())});
+        bridge->screen_mip_copy_material_instance->setParameter(
+                "screenQualityPass", 0.0f);
+        bridge->screen_mip_copy_view->setRenderTarget(mip_target);
+        bridge->screen_mip_copy_view->setViewport(filament::Viewport{
+                0, 0, static_cast<uint32_t>(mip_texture->getWidth()),
+                static_cast<uint32_t>(mip_texture->getHeight())});
+        bridge->renderer->render(bridge->screen_mip_copy_view);
+        mip_texture->generateMipmaps(*bridge->engine);
+        ++bridge->screen_mip_generation_count[bridge->active_eye];
+        return 1;
+    }
 
     // Pass 1: reconstruct the external source into the bounded quality target.
     bridge->screen_mip_copy_material_instance->setParameter(
