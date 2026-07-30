@@ -3,6 +3,7 @@
 本文件记录项目重大更新和每日工作收尾。新记录按日期倒序追加；每个工作日结束时更新“已实现”“验证结果”“未决事项”和“下一项内容”。
 
 ## 2026-07-30
+- 修复 Lanczos2/RCAS 屏幕材质使用旧式 `materialParams_<name>` 访问导致 Filament shader 编译失败的问题，统一改为当前 Filament MaterialBuilder 要求的 `materialParams.<name>` 结构体访问。
 - 删除正常运行路径中的 `07_filament_screen_*.png` 固定相机 readback/PNG 导出及对应 C ABI；屏幕显示只保留 GPU 采样、MIP 计数和同步路径，历史 artifact 仍可由离线脚本比较。
 - 完整迁移 legacy 屏幕清晰化两级 GPU pass：第一 pass 为 4x4 Lanczos2 重建，第二 pass 为完整 FSR RCAS（luma 自适应、RGB limiter 和有界 sharpness），RCAS 输出再生成动态 MIP 链；不引入 CPU 像素往返或跨帧混合。
 - 动态屏幕 MIP 优化与两级质量 pass 在每只眼的 Filament `begin_frame` 内执行，使用线性空间 sRGB 下采样、三线性过滤和 16x 各向异性过滤；规格书和需求矩阵同步更新。
