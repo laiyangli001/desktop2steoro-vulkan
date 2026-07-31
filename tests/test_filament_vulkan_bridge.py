@@ -250,7 +250,12 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "foreground_scene" in source
     assert "foreground_view" in source
     assert "eye.foreground_view->setColorGrading(nullptr);" in source
-    assert "eye.foreground_view->setPostProcessingEnabled(false);" in source
+    assert "eye.foreground_view->setColorGrading(eye.color_grading);" in source
+    assert (
+        "eye.foreground_view->setBlendMode(filament::View::BlendMode::TRANSLUCENT);"
+        in source
+    )
+    assert "eye.foreground_view->setPostProcessingEnabled(true);" in source
     assert "filament_bridge_set_screen_light" in facade
     assert "filament_bridge_set_screen_sampling" in facade
     assert "filament_bridge_set_screen_sampling_mode" in facade

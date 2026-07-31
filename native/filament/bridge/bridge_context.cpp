@@ -106,9 +106,12 @@ FilamentBridge* bridge_context_create(
         eye.foreground_view->setCamera(eye.camera);
         eye.foreground_view->setVisibleLayers(0xff, 0x03);
         eye.foreground_view->setAntiAliasing(filament::AntiAliasing::NONE);
-        // The room view owns the single final color transform. Applying
-        // post-processing again here would overwrite the room pass.
-        eye.foreground_view->setPostProcessingEnabled(false);
+        // PBR foreground assets must use the same exposure and output color
+        // transform as the room. A translucent View keeps untouched pixels
+        // transparent so the post-processed foreground composites over the
+        // room pass instead of replacing it.
+        eye.foreground_view->setBlendMode(filament::View::BlendMode::TRANSLUCENT);
+        eye.foreground_view->setPostProcessingEnabled(true);
         // Start the foreground pass with a fresh depth buffer. The room pass
         // owns its depth, but reusing it here causes room geometry to clip
         // controller surfaces and makes opaque controllers look transparent.
@@ -126,6 +129,7 @@ FilamentBridge* bridge_context_create(
             return bridge.release();
         }
         eye.color_grading = bridge->color_grading;
+        eye.foreground_view->setColorGrading(eye.color_grading);
     }
     bridge_eye_activate(bridge.get(), 0);
     filament::gltfio::AssetConfiguration config{bridge->engine, bridge->materials};

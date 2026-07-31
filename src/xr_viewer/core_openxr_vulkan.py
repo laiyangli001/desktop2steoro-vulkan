@@ -829,7 +829,7 @@ class OpenXrVulkanPresenter(
         return tuple(float(component) for component in self._filament_ambient_light_color)
 
     def _controller_hdr_ambient_light_color(self) -> tuple[float, float, float]:
-        """Return HDR controller IBL color isolated from the room Scene."""
+        """Return controller ambient light isolated from the room Scene."""
         multiplier = max(
             0.0,
             float(getattr(self._controller_brand, "ambient_light_multiplier", 1.0)),
@@ -1197,7 +1197,7 @@ class OpenXrVulkanPresenter(
         if hasattr(bridge, "set_controller_ambient_light"):
             bridge.set_controller_ambient_light(
                 self._controller_hdr_ambient_light_color(),
-                self._controller_hdr_lighting,
+                True,
             )
         bridge.set_fill_light(
             self._filament_fill_light_color,
@@ -1565,7 +1565,7 @@ class OpenXrVulkanPresenter(
         if bridge is not None and hasattr(bridge, "set_controller_ambient_light"):
             bridge.set_controller_ambient_light(
                 self._controller_hdr_ambient_light_color(),
-                self._controller_hdr_lighting,
+                True,
             )
         anchor = self._resolve_controller_b_button_local(force=True)
         anchor_text = (
@@ -3579,7 +3579,7 @@ class OpenXrVulkanPresenter(
             if hasattr(bridge, "set_controller_ambient_light"):
                 bridge.set_controller_ambient_light(
                     self._controller_hdr_ambient_light_color(),
-                    self._controller_hdr_lighting,
+                    True,
                 )
             bridge.set_fill_light(
                 self._filament_fill_light_color,

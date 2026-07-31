@@ -330,7 +330,6 @@ def test_controller_profile_selects_ambient_light_multiplier(
     assert presenter._controller_ambient_light_color() == pytest.approx(
         (0.06, 0.05, 0.05)
     )
-    presenter._controller_hdr_lighting = True
     assert presenter._controller_hdr_ambient_light_color() == pytest.approx(
         tuple(value * expected_multiplier for value in (0.06, 0.05, 0.05))
     )
@@ -382,7 +381,7 @@ def test_controller_brand_switch_refreshes_ambient_light() -> None:
         (0.06, 0.05, 0.05)
     )
     assert presenter.filament_bridge.controller_ambient == [
-        ((1.2, 1.0, 1.0), False)
+        ((1.2, 1.0, 1.0), True)
     ]
 
 
