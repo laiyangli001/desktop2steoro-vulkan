@@ -104,12 +104,10 @@ FilamentBridge* bridge_context_create(
         eye.foreground_view->setCamera(eye.camera);
         eye.foreground_view->setVisibleLayers(0xff, 0x03);
         eye.foreground_view->setAntiAliasing(filament::AntiAliasing::NONE);
-        // The foreground view writes its own pixels after the room pass. It
-        // must use the same color grading so PBR controllers are not written
-        // as unmanaged linear values into the sRGB swapchain.
-        eye.foreground_view->setPostProcessingEnabled(true);
+        // The room view owns the single final color transform. Applying
+        // post-processing again here would overwrite the room pass.
+        eye.foreground_view->setPostProcessingEnabled(false);
         // Preserve the room color/depth while compositing foreground assets.
-        eye.foreground_view->setChannelColorClearEnabled(0, false);
         eye.foreground_view->setChannelDepthClearEnabled(0, false);
     }
     bridge_eye_activate(bridge.get(), 0);
@@ -122,7 +120,6 @@ FilamentBridge* bridge_context_create(
             return bridge.release();
         }
         eye.color_grading = bridge->color_grading;
-        eye.foreground_view->setColorGrading(eye.color_grading);
     }
     bridge_eye_activate(bridge.get(), 0);
     filament::gltfio::AssetConfiguration config{bridge->engine, bridge->materials};

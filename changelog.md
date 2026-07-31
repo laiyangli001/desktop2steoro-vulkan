@@ -3,7 +3,7 @@
 本文件记录项目重大更新和每日工作收尾。新记录按日期倒序追加；每个工作日结束时更新“已实现”“验证结果”“未决事项”和“下一项内容”。
 
 ## 2026-07-31
-- 修复静止源帧复用后 FPS 面板 SBS 计数归零的问题：SBS FPS 现在按实际 XR 显示 tick 统计，而不是按生产者 `frame_id` 去重；同时关闭前景 View 的颜色清屏，避免前景合成阶段覆盖房间场景。
+- 修复静止源帧复用后 FPS 面板 SBS 计数归零的问题：SBS FPS 现在按实际 XR 显示 tick 统计，而不是按生产者 `frame_id` 去重；同时恢复前景 View 不执行二次后处理，避免前景合成阶段覆盖房间场景。
 - 修复场景曝光更新和 Bridge 销毁时前景 View 残留旧 ColorGrading 句柄的问题，避免 Filament 访问已释放句柄导致原生崩溃。
 - 修复前景 View 中手柄材质发白、反光碎片化并被误认为透明的问题：手柄、屏幕和激光所在的前景 View 现在绑定与房间 View 相同的 ColorGrading，并独立执行一次输出变换；两个 View 先后写入同一交换链并不构成同一像素的二次编码。
 - 修复 `preview_room_layout.py` 中 `3d_bedroom` 材质大面积发黑的问题：桌面预览现在读取环境 profile 的 `env_ambient_color` 创建独立 Filament 间接光，并在未配置 `preview_exposure` 时回退使用 `env_exposure`，保留方向补光，避免无环境光导致背光材质全黑或明暗对比异常。

@@ -176,8 +176,8 @@ int bridge_material_set_scene_exposure(FilamentBridge* bridge, float exposure_ev
         auto& eye = bridge->eyes[eye_index];
         if (!eye.view) continue;
         bridge_eye_activate(bridge, eye_index);
-        // The foreground view shares this ColorGrading object. Detach it
-        // before configure_color_pipeline_impl destroys the previous object.
+        // The foreground view must not retain the grading object while the
+        // main view replaces it during an exposure update.
         if (eye.foreground_view) {
             eye.foreground_view->setColorGrading(nullptr);
         }
@@ -190,9 +190,6 @@ int bridge_material_set_scene_exposure(FilamentBridge* bridge, float exposure_ev
             return 0;
         }
         eye.color_grading = bridge->color_grading;
-        if (eye.foreground_view) {
-            eye.foreground_view->setColorGrading(eye.color_grading);
-        }
     }
     bridge_eye_activate(bridge, active_eye);
     return 1;
