@@ -112,6 +112,8 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     preview_source = (bridge_dir / "preview_bridge.cpp").read_text(encoding="utf-8")
     assert "preview->renderer->setClearOptions(clear_options);" in preview_source
     assert "preview->view->setChannelDepthClearEnabled(0, true);" in preview_source
+    assert "preview->indirect_light" in preview_source
+    assert "filament_preview_set_ambient_light" in facade
     assert "bridge->renderer->render(bridge->view);" in source
     assert "bridge_controller_set_occlusion_materials" not in source
     assert "bridge_controller_create_occlusion_material" not in source

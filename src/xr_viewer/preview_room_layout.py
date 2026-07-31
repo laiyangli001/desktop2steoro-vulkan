@@ -265,7 +265,9 @@ def main():
         _vec3(screen.get("rotation_deg"), [0.0, 0.0, 0.0]),
     )
     preview_exposure = float(
-        args.exposure if args.exposure is not None else profile.get("preview_exposure", 2.0)
+        args.exposure
+        if args.exposure is not None
+        else profile.get("preview_exposure", profile.get("env_exposure", 2.0))
     )
     skybox_brightness = float(
         args.skybox_brightness
@@ -280,6 +282,9 @@ def main():
         else profile.get("preview_fill_light_intensity", 100000.0)
     )
     preview.set_exposure(preview_exposure)
+    preview.set_ambient_light(
+        _vec3(profile.get("env_ambient_color"), [0.08, 0.08, 0.09])
+    )
     preview.set_fill_light(fill_light_color, fill_light_intensity, fill_light_direction)
     preview.set_skybox_brightness(skybox_brightness)
 

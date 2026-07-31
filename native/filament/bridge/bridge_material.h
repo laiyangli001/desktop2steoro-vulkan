@@ -29,6 +29,8 @@ void bridge_material_update_controller_lights(
         FilamentBridge* bridge, float eye_x, float eye_y, float eye_z);
 int preview_material_set_scene_exposure(
         FilamentPreview* preview, float exposure_ev);
+int preview_material_set_ambient_light(
+        FilamentPreview* preview, float red, float green, float blue);
 int preview_material_set_skybox_brightness(
         FilamentPreview* preview, float brightness);
 int preview_material_set_fill_light(

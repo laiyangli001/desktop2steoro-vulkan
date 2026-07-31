@@ -197,6 +197,15 @@ class FilamentDesktopPreview:
             "set_fill_light",
         )
 
+    def set_ambient_light(self, color) -> None:
+        setter = getattr(self._library, "filament_preview_set_ambient_light", None)
+        if setter is None:
+            return
+        self._check(
+            setter(self._handle, *(float(value) for value in color)),
+            "set_ambient_light",
+        )
+
     def set_skybox_brightness(self, brightness: float) -> None:
         self._check(
             self._library.filament_preview_set_skybox_brightness(
@@ -255,6 +264,14 @@ class FilamentDesktopPreview:
             ctypes.c_void_p, ctypes.c_float
         ]
         library.filament_preview_set_scene_exposure.restype = ctypes.c_int
+        set_ambient_light = getattr(
+            library, "filament_preview_set_ambient_light", None
+        )
+        if set_ambient_light is not None:
+            set_ambient_light.argtypes = [
+                ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_float
+            ]
+            set_ambient_light.restype = ctypes.c_int
         library.filament_preview_set_fill_light.argtypes = [
             ctypes.c_void_p, *([ctypes.c_float] * 7)
         ]

@@ -3,6 +3,7 @@
 本文件记录项目重大更新和每日工作收尾。新记录按日期倒序追加；每个工作日结束时更新“已实现”“验证结果”“未决事项”和“下一项内容”。
 
 ## 2026-07-31
+- 修复 `preview_room_layout.py` 中 `3d_bedroom` 材质大面积发黑的问题：桌面预览现在读取环境 profile 的 `env_ambient_color` 创建独立 Filament 间接光，并在未配置 `preview_exposure` 时回退使用 `env_exposure`，保留方向补光，避免无环境光导致背光材质全黑或明暗对比异常。
 - 将 Filament 光照拆分为房间 Scene 与前景 Scene：房间 GLB 使用全局间接光，手柄、屏幕、激光和 UI 使用独立前景 View；`ambient_light_multiplier` 不再放大房间全局光，`controller_hdr_lighting` 现在实际控制前景 controller 间接光开关。前景 HDR IBL 资源仍保留 `hdr_ibl_pending_profile_fallback` 约束，待三平台 KTX IBL 接入后使用真实 HDR 预过滤环境。
 - 前景 View 关闭后处理，仅在房间主 View 执行一次最终颜色变换，避免双 View 合成时房间颜色被二次 tone-map 或编码。
 - 将 Filament 默认场景曝光和天空盒亮度从 `settings.yaml` 迁移到 `xr_viewer/environments/common.json`；环境 `profile.json` 仍可按环境覆盖，旧 YAML 字段仅保留兼容回退。

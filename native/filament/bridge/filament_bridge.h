@@ -185,6 +185,8 @@ FILAMENT_BRIDGE_API int filament_preview_set_viewport(
         FilamentPreview* preview, uint32_t width, uint32_t height);
 FILAMENT_BRIDGE_API int filament_preview_set_scene_exposure(
         FilamentPreview* preview, float exposure_ev);
+FILAMENT_BRIDGE_API int filament_preview_set_ambient_light(
+        FilamentPreview* preview, float red, float green, float blue);
 FILAMENT_BRIDGE_API int filament_preview_set_fill_light(
         FilamentPreview* preview,
         float red, float green, float blue,

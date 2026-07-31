@@ -327,6 +327,11 @@ int filament_preview_set_scene_exposure(
     return preview_material_set_scene_exposure(preview, exposure_ev);
 }
 
+int filament_preview_set_ambient_light(
+        FilamentPreview* preview, float red, float green, float blue) {
+    return preview_material_set_ambient_light(preview, red, green, blue);
+}
+
 int filament_preview_set_fill_light(
         FilamentPreview* preview,
         float red, float green, float blue,

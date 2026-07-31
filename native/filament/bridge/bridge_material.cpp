@@ -130,6 +130,29 @@ int preview_material_set_fill_light(
     return 1;
 }
 
+int preview_material_set_ambient_light(
+        FilamentPreview* preview, float red, float green, float blue) {
+    if (!preview || !preview->engine || !preview->scene ||
+            !std::isfinite(red) || !std::isfinite(green) ||
+            !std::isfinite(blue) || red < 0.0f || green < 0.0f || blue < 0.0f) {
+        return 0;
+    }
+    filament::IndirectLight* next = nullptr;
+    if (red > 0.0f || green > 0.0f || blue > 0.0f) {
+        const filament::math::float3 irradiance[] = {{red, green, blue}};
+        next = filament::IndirectLight::Builder()
+                .irradiance(1, irradiance)
+                .intensity(kLegacyAmbientLux)
+                .build(*preview->engine);
+        if (!next) return 0;
+    }
+    auto* previous = preview->indirect_light;
+    preview->scene->setIndirectLight(next);
+    preview->indirect_light = next;
+    if (previous) preview->engine->destroy(previous);
+    return 1;
+}
+
 int preview_material_set_skybox_brightness(FilamentPreview* preview, float brightness) {
     if (!preview || !std::isfinite(brightness) || brightness < 0.0f) return 0;
     preview->brightness.skybox_brightness = std::min(brightness, 16.0f);

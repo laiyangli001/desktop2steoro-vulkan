@@ -254,6 +254,10 @@ void preview_bridge_destroy(FilamentPreview* preview) {
     if (!preview->fill_light.isNull() && preview->engine) {
         preview->engine->destroy(preview->fill_light);
     }
+    if (preview->indirect_light && preview->engine) {
+        preview->scene->setIndirectLight(nullptr);
+        preview->engine->destroy(preview->indirect_light);
+    }
     if (preview->swapchain && preview->engine) preview->engine->destroy(preview->swapchain);
     if (preview->color_grading && preview->engine) {
         preview->view->setColorGrading(nullptr);

@@ -382,6 +382,7 @@ struct FilamentPreview {
     filament::gltfio::FilamentAsset* asset = nullptr;
     filament::SwapChain* swapchain = nullptr;
     utils::Entity fill_light;
+    filament::IndirectLight* indirect_light = nullptr;
     utils::Entity screen_entity;
     filament::VertexBuffer* screen_vertex_buffer = nullptr;
     filament::IndexBuffer* screen_index_buffer = nullptr;
