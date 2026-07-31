@@ -261,6 +261,7 @@ def runtime_config_from_d2s_settings(
         edge_threshold=float(settings.get("Edge Threshold", 0.04)),
         edge_dilation=int(settings.get("Edge Dilation", 2)),
         mask_feather_radius=int(settings.get("Mask Feather Radius", 3)),
+        hole_fill="none" if hole_fill_mode == "none" else "edge_aware",
         hole_fill_mode=hole_fill_mode,
         hole_fill_radius=hole_fill_radius,
         hole_fill_strength=hole_fill_strength,
@@ -384,6 +385,12 @@ def _normalize_stereo_compute_backend(value: Any) -> StereoComputeBackendMode:
 def _normalize_hole_fill_mode(value: Any) -> tuple[str, int, float]:
     key = _normalize_hole_fill_mode_key(value)
     mapping = {
+        "none": ("none", 0, 0.0),
+        "off": ("none", 0, 0.0),
+        "off_no_fill": ("none", 0, 0.0),
+        "disabled": ("none", 0, 0.0),
+        "no_fill": ("none", 0, 0.0),
+        "no_hole_fill": ("none", 0, 0.0),
         "balanced": ("balanced", 1, 0.6),
         "soft": ("soft_low_ghost", 1, 0.6),
         "low_ghost": ("soft_low_ghost", 1, 0.6),
@@ -403,6 +410,9 @@ def _normalize_hole_fill_mode(value: Any) -> tuple[str, int, float]:
 def _normalize_hole_fill_mode_key(value: Any) -> str:
     text = str(value or "balanced").strip().lower()
     for old, new in (
+        ("不补洞", "no fill"),
+        ("关闭", "off"),
+        ("禁用", "disabled"),
         ("低重影", "low ghost"),
         ("柔和", "soft"),
         ("均衡", "balanced"),
@@ -582,7 +592,7 @@ def stereo_config_from_runtime(config: StereoRuntimeConfig) -> "StereoConfig":
             "layers": layers,
             "occlusion": config.occlusion,
             "symmetric": config.symmetric,
-            "hole_fill": config.hole_fill,
+            "hole_fill": "none" if config.hole_fill_mode == "none" else config.hole_fill,
             "temporal": temporal,
             "depth_strength": config.depth_strength,
             "convergence": config.convergence,

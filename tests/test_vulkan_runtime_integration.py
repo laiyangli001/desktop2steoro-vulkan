@@ -9,6 +9,7 @@ import stereo_runtime.runtime as runtime_module
 from stereo_runtime import StereoRuntime, StereoRuntimeConfig
 from stereo_runtime.depth_provider import DepthProfileResult
 from stereo_runtime.openxr_render import OpenXRRenderConfig
+from stereo_runtime.synthesis import StereoResult
 
 
 class _Provider:
@@ -52,6 +53,128 @@ def test_openxr_prewarp_is_enabled_by_default_for_presenter_owned_output(monkeyp
     monkeypatch.delenv("D2S_OPENXR_PREWARP_EYES", raising=False)
 
     assert runtime_module._openxr_prewarp_eyes_enabled() is True
+
+
+def test_openxr_triton_prewarp_reuses_full_synthesis_with_configured_hole_fill(monkeypatch):
+    monkeypatch.setenv("D2S_OPENXR_RUNTIME_OUTPUT_UINT8", "0")
+    config = StereoRuntimeConfig(
+        model_id="lc700x/Distill-Any-Depth-Base-hf",
+        stereo_quality="quality_4k",
+        stereo_compute_backend="triton",
+        temporal=False,
+        hole_fill_mode="quality",
+        hole_fill_radius=3,
+        hole_fill_strength=1.0,
+    )
+    runtime = StereoRuntime(config, depth_provider=_Provider(), collect_memory_stats=False)
+    monkeypatch.setattr(runtime, "_resolve_stereo_compute_backend", lambda _rgb: "cuda_triton")
+    runtime._resolved_stereo_compute_backend = "cuda_triton"
+
+    calls = []
+
+    def fake_synthesize(rgb, depth, synthesis_config, temporal_state=None):
+        calls.append((depth, synthesis_config, temporal_state))
+        return StereoResult(
+            left_eye=torch.full_like(rgb, 0.25),
+            right_eye=torch.full_like(rgb, 0.75),
+            sbs=torch.empty(0),
+            debug_info={
+                "backend": "quality_4k",
+                "occlusion_mask_backend": "triton_occlusion",
+                "hole_fill_backend": "triton_directional_content_aware_radius3",
+                "hole_fill_mode": synthesis_config.hole_fill_mode,
+                "hole_fill_radius": synthesis_config.hole_fill_radius,
+                "hole_fill_strength": synthesis_config.hole_fill_strength,
+            },
+        )
+
+    monkeypatch.setattr(runtime_module, "synthesize_stereo", fake_synthesize)
+    monkeypatch.setattr(
+        runtime_module,
+        "render_openxr_stereo",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("grid-sample fallback used")),
+    )
+
+    result = runtime.process_openxr_frame(
+        torch.rand(1, 3, 8, 12),
+        OpenXRRenderConfig(output_mode="full_synthesis_eyes"),
+    )
+
+    assert len(calls) == 1
+    _, synthesis_config, temporal_state = calls[0]
+    assert synthesis_config.output_format == "mono"
+    assert synthesis_config.hole_fill_mode == "quality"
+    assert synthesis_config.hole_fill_radius == 3
+    assert synthesis_config.hole_fill_strength == 1.0
+    assert temporal_state is runtime.temporal_state
+    assert torch.all(result.left_eye == 0.75)
+    assert torch.all(result.right_eye == 0.25)
+    assert result.debug_info["stereo_compute_backend"] == "cuda_triton"
+    assert result.debug_info["hole_fill_backend"] == "triton_directional_content_aware_radius3"
+    assert result.debug_info["openxr_prewarp_backend"] == "triton_full_synthesis_eyes"
+    assert result.debug_info["openxr_grid_sample_fallback"] == 0
+    assert result.timing["synthesis_ms"] > 0.0
+    runtime.close()
+
+
+def test_openxr_triton_no_fill_uses_fused_rgba_u8_output(monkeypatch):
+    config = StereoRuntimeConfig(
+        model_id="lc700x/Distill-Any-Depth-Base-hf",
+        stereo_quality="quality_4k",
+        stereo_compute_backend="triton",
+        temporal=False,
+        hole_fill_mode="none",
+    )
+    runtime = StereoRuntime(config, depth_provider=_Provider(), collect_memory_stats=False)
+    monkeypatch.setattr(runtime, "_resolve_stereo_compute_backend", lambda _rgb: "cuda_triton")
+    runtime._resolved_stereo_compute_backend = "cuda_triton"
+
+    synthesis_left = torch.full((8, 12, 4), 25, dtype=torch.uint8)
+    synthesis_right = torch.full((8, 12, 4), 75, dtype=torch.uint8)
+    calls = []
+
+    def fake_no_fill(rgb, depth, synthesis_config, cuda_events):
+        calls.append((rgb, depth, synthesis_config, cuda_events))
+        return (
+            synthesis_left,
+            synthesis_right,
+            {
+                "backend": "quality_4k",
+                "warp_composite_backend": "triton_warp_composite2_rgba_u8",
+                "occlusion_mask_backend": "skipped_no_consumer",
+                "hole_fill_backend": "none",
+            },
+        ), "used"
+
+    monkeypatch.setattr(runtime_module, "_try_openxr_no_fill_fused_rgba_u8", fake_no_fill)
+    monkeypatch.setattr(
+        runtime_module,
+        "synthesize_stereo",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("canonical synthesis used")),
+    )
+    monkeypatch.setattr(
+        runtime_module,
+        "render_openxr_stereo",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("grid-sample fallback used")),
+    )
+
+    result = runtime.process_openxr_frame(
+        torch.rand(1, 3, 8, 12),
+        OpenXRRenderConfig(output_mode="full_synthesis_eyes"),
+    )
+
+    assert len(calls) == 1
+    assert result.left_eye is synthesis_right
+    assert result.right_eye is synthesis_left
+    assert result.left_eye.dtype == torch.uint8
+    assert result.debug_info["sbs_backend"] == "openxr_triton_no_fill_fused_rgba_u8"
+    assert result.debug_info["openxr_prewarp_backend"] == "triton_no_fill_fused_rgba_u8"
+    assert result.debug_info["openxr_no_fill_fused_reason"] == "used"
+    assert result.debug_info["openxr_grid_sample_fallback"] == 0
+    assert result.debug_info["occlusion_mask_backend"] == "skipped_no_consumer"
+    assert result.debug_info["hole_fill_backend"] == "none"
+    assert result.debug_info["runtime_output_pack_backend"] == "triton_warp_composite2_rgba_u8"
+    runtime.close()
 
 
 def test_presenter_owned_vulkan_compute_declares_cuda_external_input_path():

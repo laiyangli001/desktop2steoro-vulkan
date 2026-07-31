@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import struct
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -13,6 +14,23 @@ from stereo_runtime.vulkan_stereo_pass import (
     VulkanStereoFusedParams,
     VulkanStereoFusedPass,
 )
+
+
+def test_vulkan_stereo_shaders_skip_fill_neighborhood_when_disabled():
+    root = Path(__file__).resolve().parents[1]
+    shader_paths = (
+        root / "shaders" / "d2s_stereo_fused.comp",
+        root / "shaders" / "d2s_stereo_layered.comp",
+        root / "shaders" / "d2s_stereo_layered_tiled.comp",
+        root / "shaders" / "d2s_stereo_layered_output.comp",
+    )
+
+    for shader_path in shader_paths:
+        source = shader_path.read_text(encoding="utf-8")
+        fill_function = source[source.index("vec3 fill_eye"):]
+        early_return = fill_function.index("params.fill_strength <= 1.0e-5")
+        neighborhood_sample = fill_function.index("box_average(")
+        assert early_return < neighborhood_sample, shader_path.name
 
 
 def test_vulkan_stereo_params_match_shader_push_constant_layout():

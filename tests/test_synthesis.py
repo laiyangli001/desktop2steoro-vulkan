@@ -5,10 +5,17 @@ import pytest
 import torch
 import torch.nn.functional as F
 
+import stereo_runtime.synthesis as synthesis_module
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from stereo_runtime.hole_fill import box_blur, directional_edge_aware_fill, edge_aware_fill
+from stereo_runtime.hole_fill import (
+    box_blur,
+    directional_edge_aware_fill,
+    directional_edge_aware_fill_backend,
+    edge_aware_fill,
+)
 from stereo_runtime.baseline_shift import ShiftParams, compute_shift_px, make_base_grid, warp_horizontal
 from stereo_runtime.depth_upsample import upsample_depth
 from stereo_runtime.layers import composite_layers, depth_edges, make_depth_layers
@@ -253,6 +260,36 @@ def test_fast_plus_adds_light_occlusion_fill_debug_info():
     assert not torch.equal(result.sbs, fast.sbs)
 
 
+def test_fast_plus_hole_fill_off_skips_fill_algorithms(monkeypatch):
+    rgb, depth = make_inputs()
+
+    def unexpected_fill(*args, **kwargs):
+        raise AssertionError("hole fill must not run when disabled")
+
+    monkeypatch.setattr(synthesis_module, "directional_edge_aware_fill_backend", unexpected_fill)
+    monkeypatch.setattr(synthesis_module, "directional_edge_aware_fill", unexpected_fill)
+
+    result = synthesize_stereo(
+        rgb,
+        depth,
+        StereoConfig(
+            backend="fast_plus",
+            output_format="half_sbs",
+            temporal=False,
+            fused=False,
+            hole_fill="none",
+            hole_fill_mode="none",
+        ),
+    )
+
+    assert result.debug_info["hole_fill_backend"] == "none"
+    assert result.debug_info["hole_fill_mode"] == "none"
+    assert result.debug_info["hole_fill_radius"] == 0
+    assert result.debug_info["hole_fill_strength"] == 0.0
+    assert result.debug_info["fast_plus_hole_fill_radius"] == 0
+    assert result.debug_info["fast_plus_hole_fill_strength"] == 0.0
+
+
 def test_layered_hole_fill_mode_controls_radius_and_strength():
     rgb, depth = make_inputs()
     result = synthesize_stereo(
@@ -311,6 +348,84 @@ def test_layered_quality_hole_fill_uses_directional_content_aware_path():
 
     assert result.debug_info["hole_fill_mode"] == "quality"
     assert result.debug_info["hole_fill_backend"] == "torch_directional_content_aware"
+
+
+def test_layered_hole_fill_off_skips_all_fill_algorithms(monkeypatch):
+    rgb, depth = make_inputs()
+
+    def unexpected_fill(*args, **kwargs):
+        raise AssertionError("hole fill must not run when disabled")
+
+    def unexpected_occlusion(*args, **kwargs):
+        raise AssertionError("occlusion mask must not run without a consumer")
+
+    monkeypatch.setattr(synthesis_module, "edge_aware_fill_backend", unexpected_fill)
+    monkeypatch.setattr(synthesis_module, "edge_aware_fill", unexpected_fill)
+    monkeypatch.setattr(synthesis_module, "directional_edge_aware_fill_backend", unexpected_fill)
+    monkeypatch.setattr(synthesis_module, "directional_edge_aware_fill", unexpected_fill)
+    monkeypatch.setattr(synthesis_module, "occlusion_backend", unexpected_occlusion)
+    monkeypatch.setattr(synthesis_module, "make_occlusion_mask", unexpected_occlusion)
+
+    result = synthesize_stereo(
+        rgb,
+        depth,
+        StereoConfig(
+            backend="quality_4k",
+            output_format="half_sbs",
+            temporal=False,
+            fused=False,
+            hole_fill="none",
+            hole_fill_mode="none",
+        ),
+    )
+
+    assert result.debug_info["hole_fill_backend"] == "none"
+    assert result.debug_info["occlusion_mask_backend"] == "skipped_no_consumer"
+    assert result.debug_info["hole_fill_mode"] == "none"
+    assert result.debug_info["hole_fill_radius"] == 0
+    assert result.debug_info["hole_fill_strength"] == 0.0
+
+
+def test_triton_directional_content_aware_matches_torch_reference_when_available():
+    if not torch.cuda.is_available():
+        return
+    torch.manual_seed(23)
+    image = torch.rand(2, 3, 31, 47, device="cuda")
+    mask = torch.rand(1, 1, 31, 47, device="cuda")
+    depth = torch.rand(1, 1, 31, 47, device="cuda")
+    shift_px = (depth - 0.5) * 24.0
+
+    expected = directional_edge_aware_fill(
+        image,
+        mask,
+        depth,
+        shift_px,
+        radius=3,
+        strength=1.0,
+        mask_feather_radius=3,
+        fused=False,
+    )
+    actual = directional_edge_aware_fill(
+        image,
+        mask,
+        depth,
+        shift_px,
+        radius=3,
+        strength=1.0,
+        mask_feather_radius=3,
+        fused=True,
+    )
+
+    assert directional_edge_aware_fill_backend(
+        image,
+        mask,
+        depth,
+        shift_px,
+        radius=3,
+        mask_feather_radius=3,
+        fused=True,
+    ) == "triton_directional_content_aware_radius3"
+    assert torch.allclose(actual, expected, atol=2e-6, rtol=2e-6)
 
 
 def test_mask_feather_radius_softens_hole_fill_blend():

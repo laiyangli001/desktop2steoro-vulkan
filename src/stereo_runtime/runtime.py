@@ -12,6 +12,7 @@ from typing import Any
 import torch
 
 from .adapter import StereoRuntimeConfig, depth_provider_config_from_runtime, stereo_config_from_runtime
+from .baseline_shift import ShiftParams, compute_shift_px, shift_debug_info
 from .depth_postprocess import postprocess_depth
 from .depth_provider import DepthProfileResult, create_depth_provider
 from .openxr_render import OpenXRRenderConfig, render_openxr_stereo
@@ -25,7 +26,7 @@ from .settings_snapshot import (
 )
 from .compute_backend import resolve_stereo_compute_backend
 from .output import make_sbs, match_depth
-from .synthesis import StereoResult, synthesize_stereo
+from .synthesis import StereoConfig, StereoResult, synthesize_stereo
 from .temporal import TemporalState, apply_temporal
 from .triton_runtime import probe_triton_runtime
 
@@ -357,6 +358,115 @@ def _merge_openxr_rgba_pack_backend(left_backend: str, right_backend: str) -> st
 def _record_cuda_event(events: dict[str, Any], name: str, frame: torch.Tensor | None) -> None:
     if not isinstance(frame, torch.Tensor) or not frame.is_cuda:
         return
+    try:
+        event = torch.cuda.Event(blocking=False, enable_timing=True)
+        event.record(torch.cuda.current_stream(frame.device))
+        events[name] = event
+    except Exception:
+        return
+
+
+def _try_openxr_no_fill_fused_rgba_u8(
+    rgb: torch.Tensor,
+    depth: torch.Tensor,
+    config: StereoConfig,
+    cuda_events: dict[str, Any],
+) -> tuple[tuple[torch.Tensor, torch.Tensor, dict[str, Any]] | None, str]:
+    if str(getattr(config, "backend", "")) != "quality_4k":
+        return None, f"backend={getattr(config, 'backend', 'unknown')}"
+    if str(getattr(config, "hole_fill", "edge_aware")).strip().lower() != "none":
+        return None, "hole_fill_enabled"
+    if bool(getattr(config, "temporal", False)):
+        return None, "temporal_enabled"
+    if bool(getattr(config, "refine", False)):
+        return None, "refine_enabled"
+    if bool(getattr(config, "debug_output", False)):
+        return None, "debug_output"
+    if int(getattr(config, "layers", 2)) != 2:
+        return None, f"layers={getattr(config, 'layers', 'unknown')}"
+    if not bool(getattr(config, "symmetric", True)):
+        return None, "asymmetric"
+    if bool(getattr(config, "cross_eyed", False)):
+        return None, "cross_eyed"
+    if not bool(getattr(config, "fused", True)):
+        return None, "fused_disabled"
+    if not _openxr_runtime_output_uint8_enabled():
+        return None, "rgba_u8_output_disabled"
+    if not isinstance(rgb, torch.Tensor) or not rgb.is_cuda or rgb.dtype != torch.float32:
+        return None, "unsupported_rgb"
+    if str(os.environ.get("STEREO_RUNTIME_DISABLE_TRITON", "")).strip().lower() in {"1", "true", "yes", "on"}:
+        return None, "triton_disabled"
+    if str(os.environ.get("STEREO_LAB_DISABLE_TRITON", "")).strip().lower() in {"1", "true", "yes", "on"}:
+        return None, "triton_disabled"
+
+    try:
+        from .warp_composite_triton import can_use_triton_warp_composite2, warp_composite2_rgba_u8
+    except Exception as exc:
+        return None, f"import_failed:{type(exc).__name__}"
+
+    _record_cuda_event(cuda_events, "synth_start", rgb)
+    depth_shift_start = time.perf_counter()
+    processed_depth = postprocess_depth(
+        match_depth(depth, rgb.shape[-2], rgb.shape[-1]),
+        depth_pop=float(getattr(config, "depth_pop", 0.0)),
+        antialias_strength=float(getattr(config, "depth_antialias_strength", 0.0)),
+    )
+    params = ShiftParams(
+        depth_strength=float(getattr(config, "depth_strength", 1.0)),
+        convergence=getattr(config, "convergence", 0.0),
+        max_disparity_px=getattr(config, "max_disparity_px", None),
+        parallax_preset=str(getattr(config, "parallax_preset", "standard")),
+        foreground_shift_scale=float(getattr(config, "foreground_shift_scale", 1.0)),
+        midground_shift_scale=float(getattr(config, "midground_shift_scale", 1.0)),
+        background_shift_scale=float(getattr(config, "background_shift_scale", 1.0)),
+    )
+    base_shift = compute_shift_px(processed_depth, int(rgb.shape[-1]), params)
+    _record_cuda_event(cuda_events, "synth_depth_shift", rgb)
+    depth_shift_ms = (time.perf_counter() - depth_shift_start) * 1000.0
+
+    if not can_use_triton_warp_composite2(
+        rgb,
+        processed_depth,
+        base_shift,
+        layers=2,
+        symmetric=True,
+    ):
+        return None, "unsupported_tensor"
+
+    warp_start = time.perf_counter()
+    _record_cuda_event(cuda_events, "openxr_pack_start", rgb)
+    left, right = warp_composite2_rgba_u8(rgb, processed_depth, base_shift)
+    _record_cuda_event(cuda_events, "synth_warp", left)
+    _record_cuda_event(cuda_events, "synth_occlusion", left)
+    _record_cuda_event(cuda_events, "synth_hole_fill", left)
+    _record_cuda_event(cuda_events, "synth_refine", left)
+    _record_cuda_event(cuda_events, "synth_temporal", left)
+    _record_cuda_event(cuda_events, "synth_output_depth", left)
+    _record_cuda_event(cuda_events, "synth_sbs", left)
+    _record_cuda_event(cuda_events, "openxr_pack", left)
+    warp_ms = (time.perf_counter() - warp_start) * 1000.0
+
+    debug = {
+        "backend": "quality_4k",
+        "layers": 2,
+        "shift_px": base_shift,
+        "warp_composite_backend": "triton_warp_composite2_rgba_u8",
+        "occlusion_mask_backend": "skipped_no_consumer",
+        "hole_fill_backend": "none",
+        "hole_fill_mode": "none",
+        "hole_fill_radius": 0,
+        "hole_fill_strength": 0.0,
+        "depth_postprocess_shift_ms": depth_shift_ms,
+        "warp_composite_ms": warp_ms,
+        "occlusion_ms": 0.0,
+        "hole_fill_ms": 0.0,
+        "refine_ms": 0.0,
+        "temporal_ms": 0.0,
+        "output_depth_ms": 0.0,
+        "make_sbs_ms": 0.0,
+        **shift_debug_info(processed_depth, int(rgb.shape[-1]), params),
+    }
+    return (left, right, debug), "used"
 
 
 def _apply_color_adjustment(rgb_frame: torch.Tensor, config: StereoRuntimeConfig) -> torch.Tensor:
@@ -387,12 +497,6 @@ def _apply_color_adjustment(rgb_frame: torch.Tensor, config: StereoRuntimeConfig
         rgb = rgb.clamp(0.0, 1.0).pow(1.0 / max(gamma, 0.01))
     rgb = rgb.clamp(0.0, 1.0)
     return rgb if rgb_frame.ndim == 4 else rgb[0]
-    try:
-        event = torch.cuda.Event(blocking=False, enable_timing=True)
-        event.record(torch.cuda.current_stream(frame.device))
-        events[name] = event
-    except Exception:
-        return
 
 
 def _should_split_half_sbs_for_openxr(debug: dict[str, Any]) -> bool:
@@ -626,9 +730,10 @@ def _add_runtime_config_debug_info(debug: dict[str, Any], config: StereoConfig) 
     debug.setdefault("midground_shift_scale", float(getattr(config, "midground_shift_scale", 1.0)))
     debug.setdefault("background_shift_scale", float(getattr(config, "background_shift_scale", 1.0)))
     debug.setdefault("dynamic_convergence_enabled", bool(getattr(config, "dynamic_convergence_enabled", False)))
-    debug.setdefault("hole_fill_mode", str(getattr(config, "hole_fill_mode", "balanced")))
-    debug.setdefault("hole_fill_radius", int(getattr(config, "hole_fill_radius", 1)))
-    debug.setdefault("hole_fill_strength", float(getattr(config, "hole_fill_strength", 0.6)))
+    hole_fill_enabled = str(getattr(config, "hole_fill", "edge_aware")).strip().lower() != "none"
+    debug.setdefault("hole_fill_mode", str(getattr(config, "hole_fill_mode", "balanced")) if hole_fill_enabled else "none")
+    debug.setdefault("hole_fill_radius", int(getattr(config, "hole_fill_radius", 1)) if hole_fill_enabled else 0)
+    debug.setdefault("hole_fill_strength", float(getattr(config, "hole_fill_strength", 0.6)) if hole_fill_enabled else 0.0)
 
 
 def _debug_scalar_no_sync(value: Any) -> float | str | None:
@@ -1260,6 +1365,7 @@ class StereoRuntime:
         _record_cuda_event(cuda_events, "depth", rgb_frame)
 
         openxr_render_ms = 0.0
+        synthesis_ms = 0.0
         pack_ms = 0.0
         pack_backend = "none"
         source_rgb = rgb_frame
@@ -1320,6 +1426,69 @@ class StereoRuntime:
                     render_backend["vulkan_openxr_prewarp"] = 1
                     render_backend["vulkan_fused_skip"] = vulkan_skip
                     _record_cuda_event(cuda_events, "openxr_render", rgb_frame)
+                elif _is_triton_stereo_compute_backend(self._resolve_stereo_compute_backend(output_rgb)):
+                    render_start = time.perf_counter()
+                    no_fill_fused, no_fill_fused_reason = _try_openxr_no_fill_fused_rgba_u8(
+                        output_rgb,
+                        depth,
+                        stereo_config,
+                        cuda_events,
+                    )
+                    if no_fill_fused is not None:
+                        synthesis_left, synthesis_right, fused_debug = no_fill_fused
+                        # Normalize synthesis eye order to the legacy OpenXR
+                        # projection resource convention.
+                        left_eye = synthesis_right
+                        right_eye = synthesis_left
+                        output_format = "openxr_eye_views"
+                        render_backend = dict(fused_debug)
+                        render_backend["sbs_backend"] = "openxr_triton_no_fill_fused_rgba_u8"
+                        render_backend["stereo_compute_backend"] = str(
+                            self._resolved_stereo_compute_backend or "cuda_triton"
+                        )
+                        render_backend["openxr_prewarp_backend"] = "triton_no_fill_fused_rgba_u8"
+                        render_backend["openxr_no_fill_fused_reason"] = no_fill_fused_reason
+                        render_backend["openxr_grid_sample_fallback"] = 0
+                        pack_backend = "triton_warp_composite2_rgba_u8"
+                    else:
+                        # Reuse the canonical synthesis path when the dedicated
+                        # no-fill kernel cannot preserve the selected behavior.
+                        triton_config = replace(stereo_config, output_format="mono")
+                        triton_stereo = synthesize_stereo(
+                            output_rgb,
+                            depth,
+                            triton_config,
+                            temporal_state=self.temporal_state,
+                        )
+                        cuda_events.update(getattr(triton_stereo, "cuda_timing_events", None) or {})
+
+                        left_eye = triton_stereo.right_eye
+                        right_eye = triton_stereo.left_eye
+                        output_format = "openxr_eye_views"
+                        render_backend = dict(triton_stereo.debug_info)
+                        render_backend["sbs_backend"] = "openxr_triton_eyes_only"
+                        render_backend["stereo_compute_backend"] = str(
+                            self._resolved_stereo_compute_backend or "cuda_triton"
+                        )
+                        render_backend["openxr_prewarp_backend"] = "triton_full_synthesis_eyes"
+                        render_backend["openxr_no_fill_fused_reason"] = no_fill_fused_reason
+                        render_backend["openxr_grid_sample_fallback"] = 0
+
+                        pack_start = time.perf_counter()
+                        _record_cuda_event(cuda_events, "openxr_pack_start", left_eye)
+                        if _openxr_runtime_output_uint8_enabled():
+                            packed_left, left_pack_backend = _pack_openxr_eye_rgba_u8_with_backend(left_eye)
+                            packed_right, right_pack_backend = _pack_openxr_eye_rgba_u8_with_backend(right_eye)
+                            if packed_left is not left_eye or packed_right is not right_eye:
+                                left_eye = packed_left
+                                right_eye = packed_right
+                                pack_backend = _merge_openxr_rgba_pack_backend(left_pack_backend, right_pack_backend)
+                        pack_ms = (time.perf_counter() - pack_start) * 1000.0
+                        _record_cuda_event(cuda_events, "openxr_pack", left_eye)
+
+                    openxr_render_ms = (time.perf_counter() - render_start) * 1000.0
+                    synthesis_ms = openxr_render_ms
+                    _record_cuda_event(cuda_events, "openxr_render", left_eye)
                 else:
                     render_start = time.perf_counter()
                     openxr = render_openxr_stereo(output_rgb, depth, openxr_config_for_frame)
@@ -1343,6 +1512,9 @@ class StereoRuntime:
                     _record_cuda_event(cuda_events, "openxr_pack", left_eye)
                     output_format = "openxr_eye_views"
                     render_backend = dict(openxr.debug_info)
+                    render_backend["openxr_prewarp_backend"] = "grid_sample_fallback"
+                    render_backend["openxr_grid_sample_fallback"] = 1
+                    render_backend["openxr_grid_sample_fallback_reason"] = str(vulkan_skip)
         else:
             depth = self._prepare_openxr_rgb_depth(depth)
             _record_cuda_event(cuda_events, "openxr_depth_prepare", rgb_frame)
@@ -1371,6 +1543,7 @@ class StereoRuntime:
             "depth_model_ms": float(profile.model_ms),
             "depth_postprocess_ms": float(profile.postprocess_ms),
             "depth_total_ms": float(depth_total_ms),
+            "synthesis_ms": float(synthesis_ms),
             "openxr_render_ms": float(openxr_render_ms),
             "pack_ms": float(pack_ms),
             "total_ms": float(total_ms),
@@ -1609,6 +1782,8 @@ class StereoRuntime:
             return None, "disabled"
         if stereo_config.backend != "fast_plus":
             return None, f"backend={stereo_config.backend}"
+        if str(getattr(stereo_config, "hole_fill", "edge_aware")).strip().lower() == "none":
+            return None, "hole_fill_disabled"
         if stereo_config.output_format != "half_sbs":
             return None, f"format={stereo_config.output_format}"
         if not _runtime_output_uint8_enabled():
@@ -1752,7 +1927,11 @@ class StereoRuntime:
                 "sbs_backend": "vulkan_fused_stereo",
                 "warp_composite_backend": "vulkan_fused_stereo",
                 "occlusion_mask_backend": "vulkan_fused_stereo",
-                "hole_fill_backend": "vulkan_fused_stereo",
+                "hole_fill_backend": (
+                    "none"
+                    if str(getattr(stereo_config, "hole_fill", "edge_aware")).strip().lower() == "none"
+                    else "vulkan_fused_stereo"
+                ),
                 "stereo_compute_backend": "vulkan",
                 "fast_plus_fused_temporal_bypass": 0,
                 "occlusion_mask": mask,
@@ -1854,7 +2033,7 @@ class StereoRuntime:
                 "sbs_backend": "vulkan_layered_stereo",
                 "warp_composite_backend": "vulkan_layered_stereo",
                 "occlusion_mask_backend": "vulkan_layered_stereo",
-                "hole_fill_backend": "vulkan_layered_stereo",
+                "hole_fill_backend": "none" if hole_fill == "none" else "vulkan_layered_stereo",
                 "stereo_compute_backend": "vulkan",
                 "layers": int(getattr(stereo_config, "layers", 2)),
                 "occlusion_mask": mask,
@@ -2076,6 +2255,10 @@ def _openxr_prewarp_eyes_enabled() -> bool:
     # OpenXR uses the Presenter-owned Vulkan image path by default. The
     # environment variable remains an explicit escape hatch for diagnostics.
     return _env_flag("D2S_OPENXR_PREWARP_EYES", "1")
+
+
+def _is_triton_stereo_compute_backend(value: object) -> bool:
+    return str(value or "").strip().lower() in {"triton", "cuda_triton", "amd_triton", "rocm_triton"}
 
 
 def _openxr_rgb_depth_temporal_alpha() -> float:

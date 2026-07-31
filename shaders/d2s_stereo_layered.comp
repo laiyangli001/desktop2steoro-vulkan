@@ -212,6 +212,7 @@ vec3 box_average(int x, int y, float eye_sign) {
 
 vec3 fill_eye(int x, int y, float eye_sign, float mask) {
     vec3 original = layered_warp_at(x, y, eye_sign);
+    if (mask <= 1.0e-5 || params.fill_strength <= 1.0e-5) return original;
     vec3 blurred = box_average(x, y, eye_sign);
     if (params.hole_fill_mode == 0u) {
         return mix(original, blurred, clamp(mask * params.fill_strength, 0.0, 1.0));

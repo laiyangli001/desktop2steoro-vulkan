@@ -27,6 +27,7 @@ from stereo_runtime.depth_provider import (
     _resolve_hf_model_file,
 )
 from stereo_runtime.runtime import RollingRuntimeStats
+from stereo_runtime.synthesis import StereoConfig
 
 
 class FakeDepthProvider:
@@ -509,6 +510,21 @@ def test_fast_plus_fused_uses_resolved_parallax_budget_contract():
     assert "D2S_TRITON_SPARSE_HOLE_THRESHOLD" in fused_source
     assert "max_disparity_px=float(budget.max_disparity_px)" in runtime_source
     assert 'depth_strength=max(0.0, float(getattr(stereo_config, "depth_strength", 1.0)))' in runtime_source
+
+
+def test_fast_plus_fused_runtime_is_bypassed_when_hole_fill_is_disabled(monkeypatch):
+    import stereo_runtime.runtime as runtime_module
+
+    monkeypatch.setattr(runtime_module, "_fast_plus_fused_enabled", lambda: True)
+    runtime = StereoRuntime.__new__(StereoRuntime)
+    result, reason = runtime._try_fast_plus_fused_sbs(
+        torch.zeros(1, 3, 8, 8),
+        torch.zeros(1, 1, 8, 8),
+        StereoConfig(backend="fast_plus", hole_fill="none", hole_fill_mode="none"),
+    )
+
+    assert result is None
+    assert reason == "hole_fill_disabled"
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for fast_plus_fused Triton")

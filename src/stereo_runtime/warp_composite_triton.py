@@ -43,6 +43,55 @@ def _warp_composite2_kernel(
 
 
 @triton.jit
+def _warp_composite2_rgba_u8_kernel(
+    rgb,
+    depth,
+    base_shift,
+    left,
+    right,
+    pixels: tl.constexpr,
+    width: tl.constexpr,
+    softness: tl.constexpr,
+    block: tl.constexpr,
+):
+    pixel = tl.program_id(0) * block + tl.arange(0, block)
+    active = pixel < pixels
+    y = pixel // width
+    x = pixel - y * width
+
+    depth_value = tl.load(depth + pixel, mask=active, other=0.0)
+    w0_raw = tl.exp(-(depth_value * depth_value) / softness)
+    depth_from_one = depth_value - 1.0
+    w1_raw = tl.exp(-(depth_from_one * depth_from_one) / softness)
+    weight_sum = w0_raw + w1_raw
+    w0 = w0_raw / weight_sum
+    w1 = w1_raw / weight_sum
+    shift = tl.load(base_shift + pixel, mask=active, other=0.0)
+
+    left_r = _sample_two_layers(rgb, 0, y, x, shift, 0.875, 1.0, width, pixels, active, w0, w1)
+    left_g = _sample_two_layers(rgb, 1, y, x, shift, 0.875, 1.0, width, pixels, active, w0, w1)
+    left_b = _sample_two_layers(rgb, 2, y, x, shift, 0.875, 1.0, width, pixels, active, w0, w1)
+    right_r = _sample_two_layers(rgb, 0, y, x, shift, -0.875, -1.0, width, pixels, active, w0, w1)
+    right_g = _sample_two_layers(rgb, 1, y, x, shift, -0.875, -1.0, width, pixels, active, w0, w1)
+    right_b = _sample_two_layers(rgb, 2, y, x, shift, -0.875, -1.0, width, pixels, active, w0, w1)
+
+    output_offset = pixel * 4
+    tl.store(left + output_offset, _rgba_u8(left_r), mask=active)
+    tl.store(left + output_offset + 1, _rgba_u8(left_g), mask=active)
+    tl.store(left + output_offset + 2, _rgba_u8(left_b), mask=active)
+    tl.store(left + output_offset + 3, 255, mask=active)
+    tl.store(right + output_offset, _rgba_u8(right_r), mask=active)
+    tl.store(right + output_offset + 1, _rgba_u8(right_g), mask=active)
+    tl.store(right + output_offset + 2, _rgba_u8(right_b), mask=active)
+    tl.store(right + output_offset + 3, 255, mask=active)
+
+
+@triton.jit
+def _rgba_u8(value):
+    return (tl.minimum(tl.maximum(value, 0.0), 1.0) * 255.0).to(tl.uint8)
+
+
+@triton.jit
 def _sample_two_layers(rgb, channel, y, x, shift, scale0, scale1, width: tl.constexpr, pixels: tl.constexpr, active, w0, w1):
     x0 = x + shift * scale0
     x1 = x + shift * scale1
@@ -99,4 +148,24 @@ def warp_composite2(rgb: torch.Tensor, depth: torch.Tensor, base_shift: torch.Te
     block = 256
     grid = (triton.cdiv(total, block),)
     _warp_composite2_kernel[grid](rgb, depth, base_shift, left, right, total, width, height, pixels, 0.08, block)
+    return left, right
+
+
+def warp_composite2_rgba_u8(
+    rgb: torch.Tensor,
+    depth: torch.Tensor,
+    base_shift: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    rgb = rgb.contiguous()
+    depth = depth.contiguous()
+    base_shift = base_shift.contiguous()
+    _, _, height, width = rgb.shape
+    left = torch.empty((height, width, 4), device=rgb.device, dtype=torch.uint8)
+    right = torch.empty_like(left)
+    pixels = height * width
+    block = 256
+    grid = (triton.cdiv(pixels, block),)
+    _warp_composite2_rgba_u8_kernel[
+        grid
+    ](rgb, depth, base_shift, left, right, pixels, width, 0.08, block)
     return left, right

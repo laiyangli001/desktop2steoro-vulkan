@@ -48,6 +48,7 @@ def runtime_stereo_overrides(runtime) -> dict:
         "edge_threshold": config.edge_threshold,
         "edge_dilation": config.edge_dilation,
         "mask_feather_radius": config.mask_feather_radius,
+        "hole_fill": "none" if config.hole_fill_mode == "none" else getattr(config, "hole_fill", "edge_aware"),
         "hole_fill_mode": config.hole_fill_mode,
         "hole_fill_radius": config.hole_fill_radius,
         "hole_fill_strength": config.hole_fill_strength,

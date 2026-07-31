@@ -35,6 +35,7 @@ def make_config(**overrides):
         "edge_threshold": 0.1,
         "edge_dilation": 2,
         "mask_feather_radius": 3,
+        "hole_fill": "edge_aware",
         "hole_fill_mode": "balanced",
         "hole_fill_radius": 3,
         "hole_fill_strength": 1.0,
@@ -134,12 +135,40 @@ def test_runtime_stereo_overrides_maps_runtime_config():
     assert overrides["scene_reset_threshold"] == 0.2
     assert ("reset_" + "cooldown" + "_frames") not in overrides
     assert overrides["mask_feather_radius"] == 3
+    assert overrides["hole_fill"] == "edge_aware"
     assert overrides["hole_fill_mode"] == "balanced"
     assert overrides["hole_fill_radius"] == 3
     assert overrides["hole_fill_strength"] == 1.0
     assert overrides["cross_eyed"] is False
     assert overrides["debug_output"] is False
     assert overrides["fused"] is True
+
+
+def test_hot_reload_hole_fill_off_disables_fill_and_ignores_stale_strength() -> None:
+    config = make_config()
+
+    values = hot_reload_value_snapshot(
+        {
+            "Hole Fill Mode": "Off / No Fill",
+            "Hole Fill Radius": 3,
+            "Hole Fill Strength": 1.0,
+        },
+        config,
+    )
+
+    assert values["hole_fill_mode"] == "none"
+    assert values["hole_fill_radius"] == 0
+    assert values["hole_fill_strength"] == 0.0
+
+    runtime = SimpleNamespace(
+        config=make_config(
+            hole_fill="edge_aware",
+            hole_fill_mode="none",
+            hole_fill_radius=0,
+            hole_fill_strength=0.0,
+        )
+    )
+    assert runtime_stereo_overrides(runtime)["hole_fill"] == "none"
 
 
 def test_hot_reload_depth_provider_rebuild_fields_only_when_changed():

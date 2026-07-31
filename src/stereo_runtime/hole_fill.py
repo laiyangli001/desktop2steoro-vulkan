@@ -108,6 +108,7 @@ def directional_edge_aware_fill(
     mask_feather_radius: int = 0,
     depth_edge_threshold: float = 0.03,
     shift_edge_threshold_px: float = 0.05,
+    fused: bool = True,
 ) -> torch.Tensor:
     image = ensure_bchw(image, name="image").float()
     mask = ensure_b1hw(mask).to(device=image.device, dtype=image.dtype).clamp(0, 1)
@@ -115,11 +116,32 @@ def directional_edge_aware_fill(
         mask = F.interpolate(mask, size=image.shape[-2:], mode="bilinear", align_corners=False)
     if mask.shape[0] == 1 and image.shape[0] > 1:
         mask = mask.expand(image.shape[0], -1, -1, -1)
-    if mask_feather_radius > 0:
-        mask = box_blur(mask, radius=int(mask_feather_radius)).clamp(0, 1)
-
     depth = _match_aux_to_image(depth, image)
     shift_px = _match_aux_to_image(shift_px, image)
+    backend = directional_edge_aware_fill_backend(
+        image,
+        mask,
+        depth,
+        shift_px,
+        radius=radius,
+        mask_feather_radius=mask_feather_radius,
+        fused=fused,
+    )
+    if backend == "triton_directional_content_aware_radius3":
+        from .hole_fill_triton import directional_content_aware_fill_radius3
+
+        return directional_content_aware_fill_radius3(
+            image,
+            mask,
+            depth,
+            shift_px,
+            strength=strength,
+            mask_feather_radius=mask_feather_radius,
+            depth_edge_threshold=depth_edge_threshold,
+            shift_edge_threshold_px=shift_edge_threshold_px,
+        )
+    if mask_feather_radius > 0:
+        mask = box_blur(mask, radius=int(mask_feather_radius)).clamp(0, 1)
     if depth is None:
         blurred = box_blur(image, radius=radius)
         blend = (mask * strength).clamp(0, 1)
@@ -146,7 +168,31 @@ def directional_edge_aware_fill(
     return torch.lerp(image, fill, blend)
 
 
-def directional_edge_aware_fill_backend() -> str:
+def directional_edge_aware_fill_backend(
+    image: torch.Tensor | None = None,
+    mask: torch.Tensor | None = None,
+    depth: torch.Tensor | None = None,
+    shift_px: torch.Tensor | None = None,
+    *,
+    radius: int = 3,
+    mask_feather_radius: int = 0,
+    fused: bool = True,
+) -> str:
+    if not fused or _triton_disabled_by_env() or image is None or mask is None:
+        return "torch_directional_content_aware"
+    try:
+        from .hole_fill_triton import can_use_triton_directional_content_aware
+    except Exception:
+        return "torch_directional_content_aware"
+    if can_use_triton_directional_content_aware(
+        image,
+        mask,
+        depth,
+        shift_px,
+        radius=radius,
+        mask_feather_radius=mask_feather_radius,
+    ):
+        return "triton_directional_content_aware_radius3"
     return "torch_directional_content_aware"
 
 def edge_aware_fill_backend(image: torch.Tensor, mask: torch.Tensor, *, radius: int, strength: float, fused: bool = True, mask_feather_radius: int = 0) -> str:

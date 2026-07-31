@@ -23,7 +23,7 @@ from .temporal import TemporalState, apply_temporal, detect_scene_gate
 
 Backend = Literal["fast", "fast_plus", "quality_4k", "hq_4k"]
 HoleFill = Literal["none", "fast", "edge_aware"]
-HoleFillMode = Literal["balanced", "soft_low_ghost", "sharp_test", "quality", "content_aware", "directional"]
+HoleFillMode = Literal["none", "balanced", "soft_low_ghost", "sharp_test", "quality", "content_aware", "directional"]
 
 
 @dataclass
@@ -142,7 +142,13 @@ def _layered_synthesis(
     _record_cuda_event(cuda_events, "synth_warp", rgb)
     stage_times["warp_composite_ms"] = (time.perf_counter() - stage_start) * 1000.0
     stage_start = time.perf_counter()
-    if config.occlusion:
+    occlusion_mask_needed = bool(config.occlusion) and (
+        config.hole_fill != "none"
+        or bool(config.refine)
+        or bool(config.temporal)
+        or bool(config.debug_output)
+    )
+    if occlusion_mask_needed:
         occlusion_mask_backend = occlusion_backend(
             depth,
             base_shift,
@@ -159,7 +165,7 @@ def _layered_synthesis(
             screen_edge_suppression=config.screen_edge_mask_suppression,
         )
     else:
-        occlusion_mask_backend = "none"
+        occlusion_mask_backend = "skipped_no_consumer" if config.occlusion else "none"
         mask = torch.zeros_like(depth)
 
     _record_cuda_event(cuda_events, "synth_occlusion", rgb)
@@ -180,7 +186,15 @@ def _layered_synthesis(
             "directional",
         }
         if use_directional_fill:
-            hole_fill_backend = directional_edge_aware_fill_backend()
+            hole_fill_backend = directional_edge_aware_fill_backend(
+                eyes,
+                fill_mask,
+                depth,
+                base_shift,
+                radius=radius,
+                mask_feather_radius=config.mask_feather_radius,
+                fused=config.fused,
+            )
             eyes = directional_edge_aware_fill(
                 eyes,
                 fill_mask,
@@ -190,6 +204,7 @@ def _layered_synthesis(
                 strength=strength,
                 mask_feather_radius=config.mask_feather_radius,
                 depth_edge_threshold=config.edge_threshold,
+                fused=config.fused,
             )
         else:
             hole_fill_backend = edge_aware_fill_backend(
@@ -316,24 +331,39 @@ def synthesize_stereo(
                 fused=config.fused,
                 screen_edge_suppression=config.screen_edge_mask_suppression,
             )
-            eyes = torch.cat([left, right], dim=0)
-            fill_mask = mask.expand(eyes.shape[0], -1, -1, -1)
             _record_cuda_event(cuda_events, "synth_occlusion", rgb)
             stage_times["fast_plus_mask_ms"] = (time.perf_counter() - stage_start) * 1000.0
 
             stage_start = time.perf_counter()
-            hole_fill_backend = directional_edge_aware_fill_backend()
-            eyes = directional_edge_aware_fill(
-                eyes,
-                fill_mask,
-                depth=depth_for_mask,
-                shift_px=shift_px,
-                radius=1,
-                strength=0.60,
-                mask_feather_radius=config.mask_feather_radius,
-                depth_edge_threshold=0.03,
-            )
-            left, right = eyes.chunk(2, dim=0)
+            hole_fill_backend = "none"
+            fast_plus_hole_fill_radius = 0
+            fast_plus_hole_fill_strength = 0.0
+            if config.hole_fill != "none":
+                eyes = torch.cat([left, right], dim=0)
+                fill_mask = mask.expand(eyes.shape[0], -1, -1, -1)
+                hole_fill_backend = directional_edge_aware_fill_backend(
+                    eyes,
+                    fill_mask,
+                    depth_for_mask,
+                    shift_px,
+                    radius=1,
+                    mask_feather_radius=config.mask_feather_radius,
+                    fused=config.fused,
+                )
+                eyes = directional_edge_aware_fill(
+                    eyes,
+                    fill_mask,
+                    depth=depth_for_mask,
+                    shift_px=shift_px,
+                    radius=1,
+                    strength=0.60,
+                    mask_feather_radius=config.mask_feather_radius,
+                    depth_edge_threshold=0.03,
+                    fused=config.fused,
+                )
+                left, right = eyes.chunk(2, dim=0)
+                fast_plus_hole_fill_radius = 1
+                fast_plus_hole_fill_strength = 0.60
             _record_cuda_event(cuda_events, "synth_hole_fill", rgb)
             stage_times["fast_plus_fill_ms"] = (time.perf_counter() - stage_start) * 1000.0
 
@@ -352,8 +382,8 @@ def synthesize_stereo(
                 "hole_fill_backend": hole_fill_backend,
                 "fast_plus_edge_threshold": 0.03,
                 "fast_plus_edge_dilation": 1,
-                "fast_plus_hole_fill_radius": 1,
-                "fast_plus_hole_fill_strength": 0.60,
+                "fast_plus_hole_fill_radius": fast_plus_hole_fill_radius,
+                "fast_plus_hole_fill_strength": fast_plus_hole_fill_strength,
                 "mask_feather_radius": int(config.mask_feather_radius),
                 **shift_debug_info(depth, left.shape[-1], params),
             }
@@ -408,9 +438,10 @@ def synthesize_stereo(
     debug["convergence"] = float(config.convergence)
     debug["temporal_enabled"] = int(bool(config.temporal))
     debug["temporal_strength"] = float(config.temporal_strength)
-    debug["hole_fill_mode"] = str(config.hole_fill_mode)
-    debug["hole_fill_radius"] = int(config.hole_fill_radius)
-    debug["hole_fill_strength"] = float(config.hole_fill_strength)
+    hole_fill_enabled = config.hole_fill != "none"
+    debug["hole_fill_mode"] = str(config.hole_fill_mode) if hole_fill_enabled else "none"
+    debug["hole_fill_radius"] = int(config.hole_fill_radius) if hole_fill_enabled else 0
+    debug["hole_fill_strength"] = float(config.hole_fill_strength) if hole_fill_enabled else 0.0
     debug["edge_threshold"] = float(config.edge_threshold)
     debug["edge_dilation"] = int(config.edge_dilation)
     debug["mask_feather_radius"] = int(config.mask_feather_radius)
