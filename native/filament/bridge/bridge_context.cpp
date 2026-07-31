@@ -153,6 +153,7 @@ void bridge_context_destroy(FilamentBridge* bridge) {
         }
         if (eye.color_grading && bridge->engine) {
             if (eye.view) eye.view->setColorGrading(nullptr);
+            if (eye.foreground_view) eye.foreground_view->setColorGrading(nullptr);
             bridge->engine->destroy(eye.color_grading);
         }
         if (eye.view && bridge->engine) {
