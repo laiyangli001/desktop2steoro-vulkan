@@ -105,14 +105,15 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "display_view" not in source
     assert "eye.laser_view = bridge->engine->createView();" not in source
     assert "eye.view->setVisibleLayers(0xff, 0x03);" in source
-    assert "eye.view->setChannelDepthClearEnabled(0, true);" in source
-    assert "eye.foreground_view->setChannelDepthClearEnabled(0, true);" in source
+    assert "eye.view->setChannelDepthClearEnabled(2, true);" in source
+    assert "eye.foreground_view->setChannelDepthClearEnabled(2, true);" in source
+    assert "eye.foreground_view->setChannelDepthClearEnabled(0, true);" not in source
     assert "Renderer::ClearOptions clear_options;" in source
     assert "clear_options.clear = true;" in source
     assert "eye.renderer->setClearOptions(clear_options);" in source
     preview_source = (bridge_dir / "preview_bridge.cpp").read_text(encoding="utf-8")
     assert "preview->renderer->setClearOptions(clear_options);" in preview_source
-    assert "preview->view->setChannelDepthClearEnabled(0, true);" in preview_source
+    assert "preview->view->setChannelDepthClearEnabled(2, true);" in preview_source
     assert "preview->indirect_light" in preview_source
     assert "filament_preview_set_ambient_light" in facade
     assert "bridge->renderer->render(bridge->view);" in source

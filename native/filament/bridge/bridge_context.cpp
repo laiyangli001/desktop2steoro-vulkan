@@ -99,7 +99,9 @@ FilamentBridge* bridge_context_create(
         // There is only one View per eye. The old false setting was required
         // to retain depth between the former scene and laser Views; retaining
         // it here leaks external OpenXR depth across frames and creates trails.
-        eye.view->setChannelDepthClearEnabled(0, true);
+        // RenderableManager::Builder defaults imported GLB renderables to
+        // channel 2, so depth clearing must target that channel.
+        eye.view->setChannelDepthClearEnabled(2, true);
         eye.foreground_view->setScene(bridge->foreground_scene);
         eye.foreground_view->setCamera(eye.camera);
         eye.foreground_view->setVisibleLayers(0xff, 0x03);
@@ -110,8 +112,9 @@ FilamentBridge* bridge_context_create(
         // Start the foreground pass with a fresh depth buffer. The room pass
         // owns its depth, but reusing it here causes room geometry to clip
         // controller surfaces and makes opaque controllers look transparent.
-        // The renderer clear options keep the color buffer intact.
-        eye.foreground_view->setChannelDepthClearEnabled(0, true);
+        // The renderer clear options keep the color buffer intact. Imported
+        // controller renderables use Filament's default render channel 2.
+        eye.foreground_view->setChannelDepthClearEnabled(2, true);
     }
     bridge_eye_activate(bridge.get(), 0);
     for (auto& eye : bridge->eyes) {

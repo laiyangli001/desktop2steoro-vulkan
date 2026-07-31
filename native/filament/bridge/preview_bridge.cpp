@@ -220,7 +220,8 @@ FilamentPreview* preview_bridge_create(void* native_window, uint32_t width, uint
             filament::math::float3{0.0f, 1.0f, 0.0f});
     preview->view->setScene(preview->scene);
     preview->view->setCamera(preview->camera);
-    preview->view->setChannelDepthClearEnabled(0, true);
+    // Imported GLB renderables use Filament's default render channel 2.
+    preview->view->setChannelDepthClearEnabled(2, true);
     if (!bridge_material_configure_color_pipeline(preview.get())) {
         preview_bridge_set_error(preview.get(), "Filament preview color pipeline creation failed");
         return preview.release();
