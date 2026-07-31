@@ -109,6 +109,7 @@ FilamentBridge* bridge_context_create(
         // as unmanaged linear values into the sRGB swapchain.
         eye.foreground_view->setPostProcessingEnabled(true);
         // Preserve the room color/depth while compositing foreground assets.
+        eye.foreground_view->setChannelColorClearEnabled(0, false);
         eye.foreground_view->setChannelDepthClearEnabled(0, false);
     }
     bridge_eye_activate(bridge.get(), 0);

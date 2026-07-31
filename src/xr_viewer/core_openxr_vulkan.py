@@ -4682,10 +4682,9 @@ class OpenXrVulkanPresenter(
 
         if output_frame is None:
             return
-        frame_id = int(output_frame.frame_id)
-        if frame_id == self._tool_overlay_last_output_id:
-            return
-        self._tool_overlay_last_output_id = frame_id
+        # Count display ticks, not unique producer frame ids. A static source
+        # intentionally reuses one stereo frame while XR still presents it at
+        # the runtime cadence; deduplicating here makes SBS FPS read as zero.
         if self._tool_overlay_sbs_window_started <= 0.0:
             self._tool_overlay_sbs_window_started = now
         self._tool_overlay_sbs_window_frames += 1
