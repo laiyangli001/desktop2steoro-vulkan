@@ -7,7 +7,7 @@
 void bridge_controller_guide_destroy(FilamentBridge* bridge) {
     if (!bridge || !bridge->engine) return;
     if (!bridge->controller_guide_entity.isNull()) {
-        if (bridge->scene) bridge->scene->remove(bridge->controller_guide_entity);
+        if (bridge->foreground_scene) bridge->foreground_scene->remove(bridge->controller_guide_entity);
         bridge->engine->destroy(bridge->controller_guide_entity);
         bridge->controller_guide_entity = {};
     }
@@ -36,7 +36,7 @@ void bridge_controller_guide_destroy(FilamentBridge* bridge) {
 int bridge_controller_guide_set_texture(
         FilamentBridge* bridge, const uint8_t* rgba,
         uint32_t width, uint32_t height) {
-    if (!bridge || !bridge->engine || !bridge->scene || !rgba ||
+    if (!bridge || !bridge->engine || !bridge->foreground_scene || !rgba ||
             width == 0 || height == 0) return 0;
     bridge_controller_guide_destroy(bridge);
 
@@ -155,7 +155,7 @@ int bridge_controller_guide_set_texture(
         bridge_set_error(bridge, "Filament could not create controller guide renderable");
         return 0;
     }
-    bridge->scene->addEntity(bridge->controller_guide_entity);
+    bridge->foreground_scene->addEntity(bridge->controller_guide_entity);
     bridge_set_renderable_layer(bridge, bridge->controller_guide_entity, 1, false);
     return 1;
 }

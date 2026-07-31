@@ -196,12 +196,35 @@ int bridge_material_set_ambient_light(
     return 1;
 }
 
+int bridge_material_set_controller_ambient_light(
+        FilamentBridge* bridge, float red, float green, float blue, int enabled) {
+    if (!bridge || !bridge->engine || !bridge->foreground_scene ||
+            !std::isfinite(red) || !std::isfinite(green) || !std::isfinite(blue) ||
+            red < 0.0f || green < 0.0f || blue < 0.0f) {
+        return 0;
+    }
+    filament::IndirectLight* next = nullptr;
+    if (enabled && (red > 0.0f || green > 0.0f || blue > 0.0f)) {
+        const filament::math::float3 irradiance[] = {{red, green, blue}};
+        next = filament::IndirectLight::Builder()
+                .irradiance(1, irradiance)
+                .intensity(kLegacyAmbientLux)
+                .build(*bridge->engine);
+        if (!next) return 0;
+    }
+    auto* previous = bridge->controller_indirect_light;
+    bridge->foreground_scene->setIndirectLight(next);
+    bridge->controller_indirect_light = next;
+    if (previous) bridge->engine->destroy(previous);
+    return 1;
+}
+
 int bridge_material_set_fill_light(
         FilamentBridge* bridge,
         float red, float green, float blue,
         float intensity,
         float direction_x, float direction_y, float direction_z) {
-    if (!bridge || !bridge->engine || !bridge->scene ||
+    if (!bridge || !bridge->engine || !bridge->foreground_scene ||
             !std::isfinite(red) || !std::isfinite(green) ||
             !std::isfinite(blue) || !std::isfinite(intensity) || intensity < 0.0f ||
             !std::isfinite(direction_x) || !std::isfinite(direction_y) ||
@@ -209,12 +232,12 @@ int bridge_material_set_fill_light(
         return 0;
     }
     if (!bridge->fill_light.isNull()) {
-        bridge->scene->remove(bridge->fill_light);
+        bridge->foreground_scene->remove(bridge->fill_light);
         bridge->engine->destroy(bridge->fill_light);
         bridge->fill_light = {};
     }
     if (!bridge->controller_top_light.isNull()) {
-        bridge->scene->remove(bridge->controller_top_light);
+        bridge->foreground_scene->remove(bridge->controller_top_light);
         bridge->engine->destroy(bridge->controller_top_light);
         bridge->controller_top_light = {};
     }
@@ -244,8 +267,8 @@ int bridge_material_set_fill_light(
             .lightChannel(1, true)
             .castShadows(false)
             .build(*bridge->engine, bridge->controller_top_light);
-    bridge->scene->addEntity(bridge->fill_light);
-    bridge->scene->addEntity(bridge->controller_top_light);
+    bridge->foreground_scene->addEntity(bridge->fill_light);
+    bridge->foreground_scene->addEntity(bridge->controller_top_light);
     return 1;
 }
 

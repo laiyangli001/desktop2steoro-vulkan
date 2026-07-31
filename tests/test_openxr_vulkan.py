@@ -326,7 +326,12 @@ def test_controller_profile_selects_ambient_light_multiplier(
     assert presenter._controller_brand.ambient_light_multiplier == pytest.approx(
         expected_multiplier
     )
+    # The room ambient color is never multiplied by a controller brand.
     assert presenter._controller_ambient_light_color() == pytest.approx(
+        (0.06, 0.05, 0.05)
+    )
+    presenter._controller_hdr_lighting = True
+    assert presenter._controller_hdr_ambient_light_color() == pytest.approx(
         tuple(value * expected_multiplier for value in (0.06, 0.05, 0.05))
     )
 
@@ -353,12 +358,16 @@ def test_controller_brand_switch_refreshes_ambient_light() -> None:
     class Bridge:
         def __init__(self) -> None:
             self.ambient_colors: list[tuple[float, float, float]] = []
+            self.controller_ambient: list[tuple[tuple[float, float, float], bool]] = []
 
         def load_controller(self, _hand: int, _data: bytes) -> None:
             pass
 
         def set_ambient_light(self, color) -> None:
             self.ambient_colors.append(tuple(color))
+
+        def set_controller_ambient_light(self, color, enabled) -> None:
+            self.controller_ambient.append((tuple(color), bool(enabled)))
 
     presenter = OpenXrVulkanPresenter()
     presenter._filament_ambient_light_color = (0.06, 0.05, 0.05)
@@ -370,8 +379,11 @@ def test_controller_brand_switch_refreshes_ambient_light() -> None:
     assert presenter._controller_brand.name == "VIVE"
     assert len(presenter.filament_bridge.ambient_colors) == 1
     assert presenter.filament_bridge.ambient_colors[0] == pytest.approx(
-        (1.2, 1.0, 1.0)
+        (0.06, 0.05, 0.05)
     )
+    assert presenter.filament_bridge.controller_ambient == [
+        ((1.2, 1.0, 1.0), False)
+    ]
 
 
 def test_controller_button_position_does_not_require_opengl_renderer(

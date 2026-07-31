@@ -93,6 +93,19 @@ def _resolve_filament_environment_paths(
         return resolve("Default")
 
 
+def _load_common_filament_defaults(src_root: Path) -> dict[str, object]:
+    """Load shared environment defaults without making startup depend on them."""
+    common_path = src_root / "xr_viewer" / "environments" / "common.json"
+    try:
+        common = json.loads(common_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(common, dict):
+        return {}
+    filament = common.get("filament", {})
+    return filament if isinstance(filament, dict) else {}
+
+
 def _openxr_filament_config(settings: dict) -> dict[str, object]:
     """Resolve the selected packaged Filament scene for direct OpenXR runs."""
     src_root = Path(__file__).resolve().parents[1]
@@ -108,6 +121,7 @@ def _openxr_filament_config(settings: dict) -> dict[str, object]:
         settings,
         src_root,
     )
+    common_filament = _load_common_filament_defaults(src_root)
 
     bridge_path = os.environ.get("D2S_FILAMENT_BRIDGE") or (
         str(platform_bridge) if platform_bridge and platform_bridge.is_file() else None
@@ -131,10 +145,16 @@ def _openxr_filament_config(settings: dict) -> dict[str, object]:
         "filament_profile_path": configured_profile
         or (str(profile_path) if profile_path is not None else None),
         "filament_scene_exposure_ev": float(
-            settings.get("Filament Scene Exposure", 2.0)
+            settings.get(
+                "Filament Scene Exposure",
+                common_filament.get("scene_exposure_ev", 2.0),
+            )
         ),
         "filament_skybox_brightness": float(
-            settings.get("Filament Skybox Brightness", 1.0)
+            settings.get(
+                "Filament Skybox Brightness",
+                common_filament.get("skybox_brightness", 1.0),
+            )
         ),
         # These values are resolved by the legacy viewer-settings path and
         # exported through utils; keep the Vulkan entrypoint as a consumer.

@@ -2,8 +2,8 @@
 #include "bridge_internal.h"
 
 void bridge_controller_destroy(FilamentBridge* bridge, ControllerAsset& controller) {
-    if (controller.asset && bridge->scene) {
-        bridge->scene->removeEntities(
+    if (controller.asset && bridge->foreground_scene) {
+        bridge->foreground_scene->removeEntities(
                 controller.asset->getEntities(), controller.asset->getEntityCount());
     }
     if (controller.asset && bridge->asset_loader) {
@@ -291,7 +291,7 @@ int bridge_controller_load(
         bridge_set_error(bridge, "Filament could not load controller GLB resources");
         return 0;
     }
-    bridge->scene->addEntities(
+    bridge->foreground_scene->addEntities(
             controller.asset->getEntities(), controller.asset->getEntityCount());
     // Keep controllers in front of the virtual screen and below the laser.
     // Both are rendered in the same Filament View, so priority is the

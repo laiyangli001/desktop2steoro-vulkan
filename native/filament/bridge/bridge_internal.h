@@ -232,6 +232,9 @@ struct MaterialBrightnessState {
 struct FilamentEyeTarget {
     filament::Renderer* renderer = nullptr;
     filament::View* view = nullptr;
+    // Foreground view renders controllers, screen and interaction overlays
+    // after the room view while sharing the same Engine and camera.
+    filament::View* foreground_view = nullptr;
     filament::Camera* camera = nullptr;
     filament::ColorGrading* color_grading = nullptr;
     filament::SwapChain* swapchain = nullptr;
@@ -290,6 +293,8 @@ struct FilamentBridge {
     utils::Entity fill_light;
     utils::Entity controller_top_light;
     filament::IndirectLight* indirect_light = nullptr;
+    filament::IndirectLight* controller_indirect_light = nullptr;
+    filament::Scene* foreground_scene = nullptr;
     utils::Entity screen_light;
     filament::math::float3 screen_light_position{0.0f, 0.0f, 0.0f};
     filament::math::float3 screen_light_direction{0.0f, 0.0f, -1.0f};

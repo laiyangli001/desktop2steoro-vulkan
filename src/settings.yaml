@@ -489,7 +489,7 @@ Auto Scene Reset: true
 Scene Reset Threshold: 0.22
 Edge Dilation: 1
 Mask Feather Radius: 1
-Hole Fill Mode: balanced
+Hole Fill Mode: quality
 Hole Fill Radius: 1
 Hole Fill Strength: 0.6
 Edge Threshold: 0.04
@@ -536,7 +536,7 @@ Stereo Mix: null
 CRF: 20
 Audio Delay: -0.15
 Controller Model: PICO
-Environment Model: Default
+Environment Model: 3d_artemis
 Lossless Scaling Support: false
 Capture Tool: WindowsCaptureCUDA
 Fill 16:9: true
@@ -546,7 +546,3 @@ Show Log Panel: true
 OpenXR Color Mode: sRGB
 OpenVINO: null
 Synthetic View: quality_4k
-Filament Scene Exposure: 2.0
-Filament Skybox Brightness: 1.0
-Filament Screen Sampling Mode: legacy
-OpenXR Visual Regression Directory: E:/AI_2D_to_3D/4.LC700X_Desktop2Stereo/desktop2steoro-vulkan/.ci-artifacts/screen-legacy

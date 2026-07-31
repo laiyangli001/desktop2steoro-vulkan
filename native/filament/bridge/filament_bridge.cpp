@@ -170,6 +170,12 @@ int filament_bridge_set_ambient_light(
     return bridge_material_set_ambient_light(bridge, red, green, blue);
 }
 
+int filament_bridge_set_controller_ambient_light(
+        FilamentBridge* bridge, float red, float green, float blue, int enabled) {
+    return bridge_material_set_controller_ambient_light(
+            bridge, red, green, blue, enabled);
+}
+
 int filament_bridge_set_fill_light(
         FilamentBridge* bridge,
         float red, float green, float blue,

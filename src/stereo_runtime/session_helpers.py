@@ -63,6 +63,9 @@ class StereoRuntimeLogger:
         runtime_cfg = self.runtime.config
         active_preset = self.active_preset_getter()
         preset = active_preset or runtime_cfg.stereo_preset or runtime_cfg.mode
+        hole_fill_mode = getattr(config, "hole_fill_mode", getattr(runtime_cfg, "hole_fill_mode", "balanced"))
+        hole_fill_radius = int(getattr(config, "hole_fill_radius", getattr(runtime_cfg, "hole_fill_radius", 1)))
+        hole_fill_strength = float(getattr(config, "hole_fill_strength", getattr(runtime_cfg, "hole_fill_strength", 0.6)))
         fused_candidate = (
             config.backend == "fast_plus"
             and config.output_format == "half_sbs"
@@ -78,6 +81,8 @@ class StereoRuntimeLogger:
             f"quality_setting={runtime_cfg.stereo_quality}",
             f"output={config.output_format}",
             f"hole_fill={config.hole_fill}",
+            f"hole_fill_mode={hole_fill_mode}"
+            f"({hole_fill_radius}/{hole_fill_strength:.2f})",
             f"temporal={config.temporal}",
             f"fast_plus_fused_candidate={int(fused_candidate)}",
             f"runtime_uint8={os.environ.get('D2S_RUNTIME_OUTPUT_UINT8', '0')}",
@@ -104,6 +109,9 @@ class StereoRuntimeLogger:
             runtime_cfg.stereo_quality,
             config.output_format,
             config.hole_fill,
+            getattr(config, "hole_fill_mode", getattr(runtime_cfg, "hole_fill_mode", "balanced")),
+            getattr(config, "hole_fill_radius", getattr(runtime_cfg, "hole_fill_radius", 1)),
+            getattr(config, "hole_fill_strength", getattr(runtime_cfg, "hole_fill_strength", 0.6)),
             config.temporal,
         )
         if state == self.last_mode_state:

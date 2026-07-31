@@ -59,9 +59,10 @@ FilamentBridge* bridge_context_create(
         return bridge.release();
     }
     bridge->scene = bridge->engine->createScene();
+    bridge->foreground_scene = bridge->engine->createScene();
     bridge->materials = filament::gltfio::createJitShaderProvider(bridge->engine);
     bridge->texture_provider = filament::gltfio::createStbProvider(bridge->engine);
-    if (!bridge->scene || !bridge->materials ||
+    if (!bridge->scene || !bridge->foreground_scene || !bridge->materials ||
             !bridge->texture_provider) {
         bridge_set_error(bridge.get(), "Filament Vulkan resource creation failed");
         return bridge.release();
@@ -69,9 +70,10 @@ FilamentBridge* bridge_context_create(
     for (auto& eye : bridge->eyes) {
         eye.renderer = bridge->engine->createRenderer();
         eye.view = bridge->engine->createView();
+        eye.foreground_view = bridge->engine->createView();
         eye.camera = bridge->engine->createCamera(
                 utils::EntityManager::get().create());
-        if (!eye.renderer || !eye.view || !eye.camera) {
+        if (!eye.renderer || !eye.view || !eye.foreground_view || !eye.camera) {
             bridge_set_error(bridge.get(), "Filament Vulkan eye resource creation failed");
             return bridge.release();
         }
@@ -98,6 +100,15 @@ FilamentBridge* bridge_context_create(
         // to retain depth between the former scene and laser Views; retaining
         // it here leaks external OpenXR depth across frames and creates trails.
         eye.view->setChannelDepthClearEnabled(0, true);
+        eye.foreground_view->setScene(bridge->foreground_scene);
+        eye.foreground_view->setCamera(eye.camera);
+        eye.foreground_view->setVisibleLayers(0xff, 0x03);
+        eye.foreground_view->setAntiAliasing(filament::AntiAliasing::NONE);
+        // The room view owns the single final color transform. Applying
+        // post-processing again here would encode the room a second time.
+        eye.foreground_view->setPostProcessingEnabled(false);
+        // Preserve the room color/depth while compositing foreground assets.
+        eye.foreground_view->setChannelDepthClearEnabled(0, false);
     }
     bridge_eye_activate(bridge.get(), 0);
     for (auto& eye : bridge->eyes) {
@@ -145,6 +156,9 @@ void bridge_context_destroy(FilamentBridge* bridge) {
         if (eye.view && bridge->engine) {
             bridge->engine->destroy(eye.view);
         }
+        if (eye.foreground_view && bridge->engine) {
+            bridge->engine->destroy(eye.foreground_view);
+        }
         if (eye.camera && bridge->engine) {
             bridge->engine->destroy(eye.camera->getEntity());
         }
@@ -163,8 +177,18 @@ void bridge_context_destroy(FilamentBridge* bridge) {
         bridge->engine->destroy(bridge->indirect_light);
         bridge->indirect_light = nullptr;
     }
+    if (bridge->controller_indirect_light && bridge->engine) {
+        if (bridge->foreground_scene) {
+            bridge->foreground_scene->setIndirectLight(nullptr);
+        }
+        bridge->engine->destroy(bridge->controller_indirect_light);
+        bridge->controller_indirect_light = nullptr;
+    }
     if (bridge->scene && bridge->engine) {
         bridge->engine->destroy(bridge->scene);
+    }
+    if (bridge->foreground_scene && bridge->engine) {
+        bridge->engine->destroy(bridge->foreground_scene);
     }
     if (bridge->asset_loader) {
         filament::gltfio::AssetLoader::destroy(&bridge->asset_loader);

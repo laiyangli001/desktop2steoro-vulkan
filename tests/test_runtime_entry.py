@@ -49,6 +49,15 @@ def test_openxr_filament_screen_geometry_follows_gui_headset_model() -> None:
     assert config["headset_model"] == "Pico 4 / 4 Ultra"
 
 
+def test_openxr_filament_color_defaults_come_from_common_json() -> None:
+    from app_runtime.runtime_entry import _openxr_filament_config
+
+    config = _openxr_filament_config({"Environment Model": "Default"})
+
+    assert config["filament_scene_exposure_ev"] == 2.0
+    assert config["filament_skybox_brightness"] == 1.0
+
+
 def test_openxr_environment_uses_selected_folder_and_profile_glb(tmp_path: Path) -> None:
     resolver = _load_environment_resolver()
     room = tmp_path / "xr_viewer/environments/3D_Artemis"

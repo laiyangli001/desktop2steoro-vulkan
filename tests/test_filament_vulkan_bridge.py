@@ -242,6 +242,9 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert ".irradiance(1, irradiance)" in source
     assert ".intensity(kLegacyAmbientLux)" in source
     assert "filament_bridge_set_ambient_light" in facade
+    assert "filament_bridge_set_controller_ambient_light" in facade
+    assert "foreground_scene" in source
+    assert "foreground_view" in source
     assert "filament_bridge_set_screen_light" in facade
     assert "filament_bridge_set_screen_sampling" in facade
     assert "filament_bridge_set_screen_sampling_mode" in facade

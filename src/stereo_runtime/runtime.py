@@ -626,6 +626,9 @@ def _add_runtime_config_debug_info(debug: dict[str, Any], config: StereoConfig) 
     debug.setdefault("midground_shift_scale", float(getattr(config, "midground_shift_scale", 1.0)))
     debug.setdefault("background_shift_scale", float(getattr(config, "background_shift_scale", 1.0)))
     debug.setdefault("dynamic_convergence_enabled", bool(getattr(config, "dynamic_convergence_enabled", False)))
+    debug.setdefault("hole_fill_mode", str(getattr(config, "hole_fill_mode", "balanced")))
+    debug.setdefault("hole_fill_radius", int(getattr(config, "hole_fill_radius", 1)))
+    debug.setdefault("hole_fill_strength", float(getattr(config, "hole_fill_strength", 0.6)))
 
 
 def _debug_scalar_no_sync(value: Any) -> float | str | None:

@@ -22,6 +22,9 @@ LATEST_KEYS = {
     "rt_sbs_backend",
     "rt_occ_backend",
     "rt_fill_backend",
+    "rt_hole_fill_mode",
+    "rt_hole_fill_radius",
+    "rt_hole_fill_strength",
     "rt_depth_strength",
     "rt_convergence",
     "rt_max_disparity_px",
@@ -147,6 +150,12 @@ class FPSBreakdown:
                 self.stats["rt_occ_backend"] = str(debug.get("occlusion_mask_backend"))
             if "hole_fill_backend" in debug:
                 self.stats["rt_fill_backend"] = str(debug.get("hole_fill_backend"))
+            if "hole_fill_mode" in debug:
+                self.stats["rt_hole_fill_mode"] = str(debug.get("hole_fill_mode"))
+            if "hole_fill_radius" in debug:
+                self.stats["rt_hole_fill_radius"] = int(debug.get("hole_fill_radius", 0))
+            if "hole_fill_strength" in debug:
+                self.stats["rt_hole_fill_strength"] = float(debug.get("hole_fill_strength", 0.0))
             if "fast_plus_fused_backend" in debug:
                 self.stats["rt_fast_plus_fused_backend"] = str(debug.get("fast_plus_fused_backend"))
             if "fast_plus_fused_skip" in debug:
@@ -358,6 +367,8 @@ class FPSBreakdown:
             f"rt_parallax={stats.get('rt_parallax_budget_preset', stats.get('rt_parallax_preset', 'n/a'))} "
             f"rt_occ={stats.get('rt_occ_backend', 'n/a')} "
             f"rt_fill={stats.get('rt_fill_backend', 'n/a')} "
+            f"rt_hole_fill={stats.get('rt_hole_fill_mode', 'n/a')}"
+            f"({stats.get('rt_hole_fill_radius', 'n/a')}/{float(stats.get('rt_hole_fill_strength', 0.0)):.2f}) "
             f"rt_fused={stats.get('rt_fast_plus_fused_backend', 'n/a')} "
             f"rt_fused_skip={stats.get('rt_fast_plus_fused_skip', 'n/a')} "
             f"rt_fused_temporal_bypass={stats.get('rt_fast_plus_fused_temporal_bypass', 'n/a')} "

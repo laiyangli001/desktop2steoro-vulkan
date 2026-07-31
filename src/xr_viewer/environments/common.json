@@ -1,5 +1,9 @@
 {
   "version": 1,
+  "filament": {
+    "scene_exposure_ev": 2.0,
+    "skybox_brightness": 1.0
+  },
   "gltf_material_fields": {
     "baseColorFactor": true,
     "alpha": true,

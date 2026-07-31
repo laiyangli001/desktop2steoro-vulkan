@@ -3,10 +3,10 @@
   "overrides": {
     "model_offset": [
       0.0,
-      -0.02491626634597768,
-      -0.019684740614891075
+      -0.025,
+      -0.020
     ],
-    "model_rotation_deg": -8.347753695201874,
+    "model_rotation_deg": -8.35,
     "ambient_light_multiplier": 20.0
   }
 }

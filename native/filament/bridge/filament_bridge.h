@@ -110,6 +110,8 @@ FILAMENT_BRIDGE_API int filament_bridge_set_passthrough_backdrop(
         FilamentBridge* bridge, int enabled);
 FILAMENT_BRIDGE_API int filament_bridge_set_ambient_light(
         FilamentBridge* bridge, float red, float green, float blue);
+FILAMENT_BRIDGE_API int filament_bridge_set_controller_ambient_light(
+        FilamentBridge* bridge, float red, float green, float blue, int enabled);
 FILAMENT_BRIDGE_API int filament_bridge_set_fill_light(
         FilamentBridge* bridge,
         float red, float green, float blue,

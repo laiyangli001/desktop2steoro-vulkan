@@ -7,7 +7,7 @@ void bridge_laser_destroy(FilamentBridge* bridge) {
     if (!bridge || !bridge->engine) return;
     for (auto& entity : bridge->laser_entities) {
         if (entity.isNull()) continue;
-        if (bridge->scene) bridge->scene->remove(entity);
+        if (bridge->foreground_scene) bridge->foreground_scene->remove(entity);
         bridge->engine->destroy(entity);
         entity = {};
     }
@@ -30,7 +30,7 @@ void bridge_laser_destroy(FilamentBridge* bridge) {
 }
 
 int bridge_laser_create(FilamentBridge* bridge) {
-    if (!bridge || !bridge->engine || !bridge->scene) return 0;
+    if (!bridge || !bridge->engine || !bridge->foreground_scene) return 0;
     bridge_laser_destroy(bridge);
     const char* shader = R"FILAMENT(
         void material(inout MaterialInputs material) {
@@ -140,7 +140,7 @@ int bridge_laser_create(FilamentBridge* bridge) {
             bridge_set_error(bridge, "Filament could not create controller laser renderable");
             return 0;
         }
-        bridge->scene->addEntity(entity);
+        bridge->foreground_scene->addEntity(entity);
         bridge_set_renderable_layer(bridge, entity, 0, false);
     }
     return 1;

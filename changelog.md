@@ -3,6 +3,10 @@
 本文件记录项目重大更新和每日工作收尾。新记录按日期倒序追加；每个工作日结束时更新“已实现”“验证结果”“未决事项”和“下一项内容”。
 
 ## 2026-07-31
+- 将 Filament 光照拆分为房间 Scene 与前景 Scene：房间 GLB 使用全局间接光，手柄、屏幕、激光和 UI 使用独立前景 View；`ambient_light_multiplier` 不再放大房间全局光，`controller_hdr_lighting` 现在实际控制前景 controller 间接光开关。前景 HDR IBL 资源仍保留 `hdr_ibl_pending_profile_fallback` 约束，待三平台 KTX IBL 接入后使用真实 HDR 预过滤环境。
+- 前景 View 关闭后处理，仅在房间主 View 执行一次最终颜色变换，避免双 View 合成时房间颜色被二次 tone-map 或编码。
+- 将 Filament 默认场景曝光和天空盒亮度从 `settings.yaml` 迁移到 `xr_viewer/environments/common.json`；环境 `profile.json` 仍可按环境覆盖，旧 YAML 字段仅保留兼容回退。
+- 明确区分电影立体合成质量与补洞质量：`quality_4k` 继续表示 Cinema 的立体合成后端，选择“最高质量”补洞后统一记录为 `hole_fill_mode=quality`；启动/热切换日志和 15 秒 FPSBreakdown 现在同时输出补洞模式、半径和强度。
 - 修复 Vulkan Filament 虚拟屏幕 MIP 采样缺少旧工程 `LOD_BIAS=-0.35` 的问题；最终屏幕采样现在使用与旧 OpenGL runtime eye 纹理一致的负 LOD 偏移，避免在相同屏幕 footprint 下过早选择较软的 MIP 级别。
 - 保持 `filter_scale=1` 路径不执行 Lanczos2 和 RCAS，仅进行原图 LOD0 拷贝与动态 MIP 链生成；不修改颜色空间、输入分辨率或显示几何。
 - 实机验证：MIP 路径文字边缘清晰度已接近旧工程 legacy 路径。

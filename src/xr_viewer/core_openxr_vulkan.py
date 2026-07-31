@@ -825,6 +825,11 @@ class OpenXrVulkanPresenter(
         return self._screen_ready_semaphore_abi_available
 
     def _controller_ambient_light_color(self) -> tuple[float, float, float]:
+        """Return the room ambient color without controller compensation."""
+        return tuple(float(component) for component in self._filament_ambient_light_color)
+
+    def _controller_hdr_ambient_light_color(self) -> tuple[float, float, float]:
+        """Return HDR controller IBL color isolated from the room Scene."""
         multiplier = max(
             0.0,
             float(getattr(self._controller_brand, "ambient_light_multiplier", 1.0)),
@@ -1189,6 +1194,11 @@ class OpenXrVulkanPresenter(
         bridge.set_skybox_brightness(self._filament_skybox_brightness)
         if hasattr(bridge, "set_ambient_light"):
             bridge.set_ambient_light(self._controller_ambient_light_color())
+        if hasattr(bridge, "set_controller_ambient_light"):
+            bridge.set_controller_ambient_light(
+                self._controller_hdr_ambient_light_color(),
+                self._controller_hdr_lighting,
+            )
         bridge.set_fill_light(
             self._filament_fill_light_color,
             self._filament_fill_light_intensity,
@@ -1552,6 +1562,11 @@ class OpenXrVulkanPresenter(
         )
         if bridge is not None and hasattr(bridge, "set_ambient_light"):
             bridge.set_ambient_light(self._controller_ambient_light_color())
+        if bridge is not None and hasattr(bridge, "set_controller_ambient_light"):
+            bridge.set_controller_ambient_light(
+                self._controller_hdr_ambient_light_color(),
+                self._controller_hdr_lighting,
+            )
         anchor = self._resolve_controller_b_button_local(force=True)
         anchor_text = (
             "unresolved"
@@ -3561,6 +3576,11 @@ class OpenXrVulkanPresenter(
             bridge.set_skybox_brightness(self._filament_skybox_brightness)
             if hasattr(bridge, "set_ambient_light"):
                 bridge.set_ambient_light(self._controller_ambient_light_color())
+            if hasattr(bridge, "set_controller_ambient_light"):
+                bridge.set_controller_ambient_light(
+                    self._controller_hdr_ambient_light_color(),
+                    self._controller_hdr_lighting,
+                )
             bridge.set_fill_light(
                 self._filament_fill_light_color,
                 self._filament_fill_light_intensity,

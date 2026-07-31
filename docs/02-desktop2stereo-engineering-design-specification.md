@@ -642,13 +642,13 @@ Capture Adapter 报告真实 `capture_size`、pixel format、transfer function�
 
 正式输出契约固定为 `color_space=srgb`、RGBA8、`image_origin=top_left`。OpenXR Projection swapchain 必须使用 Vulkan sRGB 格式，不得回退到 UNORM。Filament 主场景使用线性 Rec.709/D65 和明确配置的 tone mapping；场景曝光必须进入 ColorGrading，不得乘改 glTF 材质颜色。
 
-手柄 GLB 的加载和材质处理以 WebXR Input Profiles 官方 Viewer 为基准：模型加载后必须保留 glTF 原始 PBR 参数和纹理，不得在 Bridge 中统一覆盖 roughness、specular、metallic 或 base color。环境光按 profile 分成两种模式：`controller_hdr_lighting=false` 的 3D 房间模型使用旧工程校准的 `env_ambient_color`、跟随头部主光和顶部补光；`controller_hdr_lighting=true` 的 HDR 图片环境必须使用与当前 HDR 匹配的预过滤 reflection cubemap 和 irradiance。当前 Bridge 已完成房间 profile 的 SH irradiance 与直接补光，HDR 模式暂时明确记录为 `hdr_ibl_pending_profile_fallback`，不得伪报为完整 IBL；后续应由三平台 CI 预生成 Filament 可加载的 KTX IBL 资源并通过稳定 C ABI 接入。手柄 profile 可通过 `ambient_light_multiplier` 对暗色 GLB 的环境间接光进行品牌级补偿；该倍率不得修改 GLB 材质、屏幕光或直接补光，浅色 PICO/Quest 默认保持 `1.0`。
+手柄 GLB 的加载和材质处理以 WebXR Input Profiles 官方 Viewer 为基准：模型加载后必须保留 glTF 原始 PBR 参数和纹理，不得在 Bridge 中统一覆盖 roughness、specular、metallic 或 base color。房间和前景必须使用不同的 Filament Scene：房间 Scene 承载 GLB 与房间全局 `IndirectLight`；前景 Scene 只承载手柄、屏幕、激光和 UI，并共享同一 Engine、Camera 和 OpenXR 输出目标。这样房间环境光不能污染手柄和虚拟屏幕。`controller_hdr_lighting=false` 的 3D 房间模式关闭前景间接光，使用旧工程校准的 `env_head_light_color`、跟随头部主光、顶部补光和始终开启的屏幕光；`controller_hdr_lighting=true` 的 HDR 图片模式只给前景 Scene 挂载独立的 controller IBL，且必须使用与当前 HDR 匹配的预过滤 reflection cubemap 和 irradiance。当前 Bridge 的 HDR 资源仍记录为 `hdr_ibl_pending_profile_fallback`，不得伪报为完整 IBL；后续应由三平台 CI 预生成 Filament 可加载的 KTX IBL 资源并通过稳定 C ABI 接入。手柄 profile 的 `ambient_light_multiplier` 只能缩放前景 controller IBL，不得修改房间全局光、GLB 材质、屏幕光或直接补光，浅色 PICO/Quest 默认保持 `1.0`。
 
 控制器按键引导不得使用固定品牌坐标或控制器根节点。运行时必须从当前右手柄 GLB 的 B 键 `_pressed_value` 动画枢轴解析模型局部锚点，再应用与控制器渲染一致的 profile 旋转、偏移和 Grip 世界变换；切换手柄品牌或替换模型后必须立即清除缓存并重新解析，确保引导端点跟随实际 B 键位置。
 
 虚拟屏幕光与上述环境模式正交，HDR 开关不得关闭或控制屏幕光。运行时每 250 ms 在 CUDA 流上异步下采样左右眼显示用 sRGB 图像，按标准 sRGB EOTF 转为线性平均色；颜色继续沿用旧工程的 `82%` 屏幕采样色与 `18%` profile 中性色混合。Filament 在屏幕中心创建只作用于控制器 light channel 1 的无阴影前向聚光源，方向跟随屏幕法线、衰减距离使用屏幕对角线，并由 `screen_light_intensity` 控制强度。该补充采样不得阻塞输出路径，失败时必须保留 last-good 屏幕光颜色。
 
-虚拟屏幕、UI 和手柄激光属于显示参考 LDR 内容。传统 Quad Layer/直接 sRGB 纹理路径使用 `VK_FORMAT_R8G8B8A8_SRGB`，由 Filament 只解码一次；Presenter-owned Vulkan Compute 的 storage image 受 Vulkan storage-image 格式约束使用 `VK_FORMAT_R8G8B8A8_UNORM`，Compute 必须先把输入 sRGB 解码为线性光再写入，Filament 以线性 `RGBA8` 采样。两条路径在输出契约上都保持 `color_space=srgb`，最终只由 sRGB OpenXR 目标完成一次编码。主场景使用一个 View，包含 GLB、原始 PBR 手柄、屏幕/UI 与激光，所有图元共享同一深度缓冲；手柄 PBR 先写入深度，激光以 `depthCulling=true` 渲染，必须自然被外壳遮挡。主 View 的 ColorGrading 使用 `LINEAR` tone mapping，不使用 ACES 或其他场景曲线，但保持后处理启用以在最终 sRGB 目标上完成唯一一次输出编码。禁止通过双 View、重复 controller asset、临时交换材质或 `colorWrite=false` 深度副本处理激光遮挡。默认颜色控制必须为恒等变换，非中性颜色控制只能来自明确的用户配置。
+虚拟屏幕、UI 和手柄激光属于显示参考 LDR 内容。传统 Quad Layer/直接 sRGB 纹理路径使用 `VK_FORMAT_R8G8B8A8_SRGB`，由 Filament 只解码一次；Presenter-owned Vulkan Compute 的 storage image 受 Vulkan storage-image 格式约束使用 `VK_FORMAT_R8G8B8A8_UNORM`，Compute 必须先把输入 sRGB 解码为线性光再写入，Filament 以线性 `RGBA8` 采样。两条路径在输出契约上都保持 `color_space=srgb`，最终只由 sRGB OpenXR 目标完成一次编码。每只眼使用一个房间 View 和一个前景 View：房间 View 渲染 GLB，前景 View 在同一 Renderer 帧内随后合成手柄、屏幕/UI 与激光；两者共享 Camera、交换链、深度附件和 Engine，但不共享 Scene 级间接光。手柄 PBR 先写入前景深度，激光以 `depthCulling=true` 渲染，必须自然被外壳遮挡。两个 View 的 ColorGrading 使用 `LINEAR` tone mapping，不使用 ACES 或其他场景曲线，但保持后处理启用以在最终 sRGB 目标上完成唯一一次输出编码。禁止重复 Engine、重复 controller asset 或 CPU 像素往返；默认颜色控制必须为恒等变换，非中性颜色控制只能来自明确的用户配置。
 
 窗口尺寸或 HDR 状态改变时发布 format-change event。资源重建在 Frame Boundary 进行，capture callback 不直接重建 Vulkan 资源。
 
@@ -789,9 +789,11 @@ OpenGL Fallback 直接渲染到 OpenGL OpenXR swapchain 或 OpenGL window frameb
 
 ### 11.2.1 Filament 颜色管线
 
-Filament Bridge 必须将 GLB、原始 PBR 手柄、显示参考屏幕/UI 和激光放入同一个主 View，使控制器与激光共享 Scene 和深度缓冲。手柄使用原始 PBR 材质并写深度；激光使用不透明、`depthWrite=true`、`depthCulling=true` 的材质和控制器相同的 layer，因此外壳在几何上遮挡激光。单 View 每个 OpenXR 帧必须清理 channel 0 深度；仅多 View 同帧合成时才允许关闭该清理，且不得把该设置跨帧保留。每只眼的 Renderer 还必须在创建时显式设置 `ClearOptions.clear=true`、黑色 clear color 和 `discard=true`，因为 Filament 默认不清理颜色，而 OpenXR 外部 swapchain 图像的上一帧内容不得保留。主 View 使用 ColorGrading `LINEAR` tone mapping，不应用 ACES/其他场景曲线；保留后处理仅用于最终目标的单次 sRGB 编码。AssetLoader 只加载一个 controller asset，不得为遮挡创建副本、修改同一 Renderable 的材质绑定或在帧内切换 View。屏幕源格式必须与其采样语义匹配：sRGB 源使用 `VK_FORMAT_R8G8B8A8_SRGB`/`SRGB8_A8`，Compute 输出的 `VK_FORMAT_R8G8B8A8_UNORM` 必须在 shader 中先完成 sRGB→线性转换并以 Filament `RGBA8` 采样；禁止把 sRGB 数值直接写入 UNORM 后再当线性纹理使用。
+Filament Bridge 必须将 GLB 放入房间 Scene，将原始 PBR 手柄、显示参考屏幕/UI 和激光放入前景 Scene。房间 View 先渲染，前景 View 随后在同一帧合成；两个 View 使用同一 Camera、Renderer、交换链目标和深度附件，前景 View 不清理已有颜色/深度。手柄使用原始 PBR 材质并写前景深度；激光使用不透明、`depthWrite=true`、`depthCulling=true` 的材质和控制器相同的 layer，因此外壳在几何上遮挡激光。房间 Scene 的 IndirectLight 不得挂到前景 Scene；HDR 模式的 controller IBL 必须只挂到前景 Scene。每只眼的 Renderer 还必须在创建时显式设置 `ClearOptions.clear=true`、黑色 clear color 和 `discard=true`，因为 Filament 默认不清理颜色，而 OpenXR 外部 swapchain 图像的上一帧内容不得保留。两个 View 使用 ColorGrading `LINEAR` tone mapping，不应用 ACES/其他场景曲线；保留后处理仅用于最终目标的单次 sRGB 编码。AssetLoader 只加载一个 controller asset，不得为遮挡创建副本、修改同一 Renderable 的材质绑定或创建第二个 Engine。屏幕源格式必须与其采样语义匹配：sRGB 源使用 `VK_FORMAT_R8G8B8A8_SRGB`/`SRGB8_A8`，Compute 输出的 `VK_FORMAT_R8G8B8A8_UNORM` 必须在 shader 中先完成 sRGB→线性转换并以 Filament `RGBA8` 采样；禁止把 sRGB 数值直接写入 UNORM 后再当线性纹理使用。
 
 ### 11.2.2 Bridge 接口边界与完整性清单
+
+补充约束：前景 View 必须关闭后处理；房间主 View 是唯一执行 LINEAR tone mapping 和最终颜色编码的 View，避免前景合成再次处理已完成的房间颜色。
 
 Bridge 采用窄 C ABI，按产品功能补充接口，不做 Filament 全量 API 的 Python 化。C++ 内部管理 Engine、Renderer、Scene、View、Camera、AssetLoader、ResourceLoader、Animator、Material 和 Texture 等对象；Python 通过 `ctypes` 使用不透明 handle、标量、矩阵、资源字节和结构化状态。
 

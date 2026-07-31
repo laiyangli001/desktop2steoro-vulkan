@@ -228,8 +228,8 @@ void bridge_screen_destroy(FilamentBridge* bridge) {
         destroy_screen_lanczos_target(bridge, eye_index);
         destroy_screen_mip_target(bridge, eye_index);
     }
-    if (bridge->scene && bridge->screen_in_scene && !bridge->screen_entity.isNull()) {
-        bridge->scene->remove(bridge->screen_entity);
+    if (bridge->foreground_scene && bridge->screen_in_scene && !bridge->screen_entity.isNull()) {
+        bridge->foreground_scene->remove(bridge->screen_entity);
     }
     bridge->screen_in_scene = false;
     if (!bridge->screen_entity.isNull()) {
@@ -345,7 +345,7 @@ int bridge_screen_set_curved(FilamentBridge* bridge, int curved) {
 int bridge_screen_set_light(
         FilamentBridge* bridge,
         float red, float green, float blue, float intensity) {
-    if (!bridge || !bridge->engine || !bridge->scene ||
+    if (!bridge || !bridge->engine || !bridge->foreground_scene ||
             !std::isfinite(red) || !std::isfinite(green) ||
             !std::isfinite(blue) || !std::isfinite(intensity) ||
             red < 0.0f || green < 0.0f || blue < 0.0f || intensity < 0.0f) {
@@ -353,7 +353,7 @@ int bridge_screen_set_light(
     }
     if (intensity == 0.0f || (red == 0.0f && green == 0.0f && blue == 0.0f)) {
         if (!bridge->screen_light.isNull()) {
-            bridge->scene->remove(bridge->screen_light);
+            bridge->foreground_scene->remove(bridge->screen_light);
             bridge->engine->destroy(bridge->screen_light);
             bridge->screen_light = {};
         }
@@ -368,7 +368,7 @@ int bridge_screen_set_light(
                     instance, intensity * kLegacyScreenCandelaScale);
             return 1;
         }
-        bridge->scene->remove(bridge->screen_light);
+        bridge->foreground_scene->remove(bridge->screen_light);
         bridge->engine->destroy(bridge->screen_light);
         bridge->screen_light = {};
     }
@@ -392,7 +392,7 @@ int bridge_screen_set_light(
         bridge_set_error(bridge, "Filament could not create virtual screen light");
         return 0;
     }
-    bridge->scene->addEntity(bridge->screen_light);
+    bridge->foreground_scene->addEntity(bridge->screen_light);
     return 1;
 }
 
@@ -422,7 +422,7 @@ int bridge_screen_set_sampling_mode(FilamentBridge* bridge, int use_mip) {
 }
 
 int bridge_screen_create(FilamentBridge* bridge) {
-    if (!bridge || !bridge->engine || !bridge->scene) return 0;
+    if (!bridge || !bridge->engine || !bridge->foreground_scene) return 0;
     bridge_screen_destroy(bridge);
     // The screen sampler is used only for the internal MIP experiment texture.
     // External producer images use screen_source_texture_sampler below because
@@ -760,7 +760,7 @@ int bridge_screen_set_image(FilamentBridge* bridge, const void* image,
             bind_screen_display_texture(bridge, eye_index);
             ++bridge->screen_source_bind_count[eye_index];
             if (!bridge->screen_in_scene && !bridge->screen_entity.isNull()) {
-                bridge->scene->addEntity(bridge->screen_entity);
+                bridge->foreground_scene->addEntity(bridge->screen_entity);
                 bridge_set_renderable_layer(bridge, bridge->screen_entity, 1, true);
                 bridge->screen_in_scene = true;
             }
@@ -813,7 +813,7 @@ int bridge_screen_set_image(FilamentBridge* bridge, const void* image,
     bind_screen_display_texture(bridge, eye_index);
     ++bridge->screen_source_bind_count[eye_index];
     if (!bridge->screen_in_scene && !bridge->screen_entity.isNull()) {
-        bridge->scene->addEntity(bridge->screen_entity);
+        bridge->foreground_scene->addEntity(bridge->screen_entity);
         bridge_set_renderable_layer(bridge, bridge->screen_entity, 1, true);
         bridge->screen_in_scene = true;
     }
@@ -943,7 +943,7 @@ int bridge_screen_set_fixed_image(
     bind_screen_copy_source(bridge, texture, width, height);
     bind_screen_display_texture(bridge, bridge->active_eye);
     if (!bridge->screen_in_scene && !bridge->screen_entity.isNull()) {
-        bridge->scene->addEntity(bridge->screen_entity);
+        bridge->foreground_scene->addEntity(bridge->screen_entity);
         bridge_set_renderable_layer(bridge, bridge->screen_entity, 1, true);
         bridge->screen_in_scene = true;
     }
