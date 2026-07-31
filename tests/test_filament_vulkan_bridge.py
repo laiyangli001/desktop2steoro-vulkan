@@ -106,6 +106,7 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "eye.laser_view = bridge->engine->createView();" not in source
     assert "eye.view->setVisibleLayers(0xff, 0x03);" in source
     assert "eye.view->setChannelDepthClearEnabled(0, true);" in source
+    assert "eye.foreground_view->setChannelDepthClearEnabled(0, true);" in source
     assert "Renderer::ClearOptions clear_options;" in source
     assert "clear_options.clear = true;" in source
     assert "eye.renderer->setClearOptions(clear_options);" in source

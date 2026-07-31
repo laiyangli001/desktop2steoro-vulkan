@@ -107,8 +107,11 @@ FilamentBridge* bridge_context_create(
         // The room view owns the single final color transform. Applying
         // post-processing again here would overwrite the room pass.
         eye.foreground_view->setPostProcessingEnabled(false);
-        // Preserve the room color/depth while compositing foreground assets.
-        eye.foreground_view->setChannelDepthClearEnabled(0, false);
+        // Start the foreground pass with a fresh depth buffer. The room pass
+        // owns its depth, but reusing it here causes room geometry to clip
+        // controller surfaces and makes opaque controllers look transparent.
+        // The renderer clear options keep the color buffer intact.
+        eye.foreground_view->setChannelDepthClearEnabled(0, true);
     }
     bridge_eye_activate(bridge.get(), 0);
     for (auto& eye : bridge->eyes) {

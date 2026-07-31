@@ -723,3 +723,8 @@
   deterministic left-to-right and top-to-bottom pages.
 - Improved native MSDF coverage calculation for small VR OSD glyphs and forced
   linear atlas filtering with edge clamping.
+### Unreleased
+
+- Fixed controller surfaces being clipped by the room depth buffer after the
+  room/controller lighting split. The foreground pass now clears only depth,
+  preserving the room color while keeping opaque controller geometry intact.
