@@ -9,10 +9,13 @@
 namespace {
 
 constexpr uint32_t kGlowSegments = 64;
+constexpr uint32_t kGlowShellSegments = 96;
 constexpr uint32_t kFlatFrostDepthSteps = 8;
 constexpr uint32_t kFlatFrostEdgeSteps = 8;
 constexpr uint32_t kMaxGlowVertices = (kGlowSegments + 1) * 2;
 constexpr uint32_t kMaxGlowIndices = kGlowSegments * 6;
+constexpr uint32_t kMaxGlowShellVertices = (kGlowShellSegments + 1) * 2;
+constexpr uint32_t kMaxGlowShellIndices = kGlowShellSegments * 6;
 constexpr uint32_t kFlatFrostQuadCount =
         4 * kFlatFrostDepthSteps * kFlatFrostEdgeSteps;
 constexpr uint32_t kMaxFrostVertices = kFlatFrostQuadCount * 4;
@@ -249,6 +252,48 @@ void rebuild_frost_geometry(FilamentBridge* bridge) {
             {bridge->frost_entity});
 }
 
+void rebuild_glow_shell_geometry(FilamentBridge* bridge) {
+    if (!bridge || !bridge->glow_shell_vertex_buffer ||
+            !bridge->glow_shell_index_buffer) return;
+    const float radius = std::max(
+            bridge->glow_shell_radius,
+            std::max({bridge->screen_width, bridge->screen_height, 1.0f}) * 0.85f);
+    const float height = std::max(
+            bridge->glow_shell_height, bridge->screen_height * 1.8f);
+    constexpr float kPi = 3.14159265358979323846f;
+    bridge->glow_shell_vertices.clear();
+    bridge->glow_shell_indices.clear();
+    for (uint32_t segment = 0; segment <= kGlowShellSegments; ++segment) {
+        const float u = static_cast<float>(segment) /
+                static_cast<float>(kGlowShellSegments);
+        const float theta = (u - 0.5f) * kPi;
+        const float x = std::sin(theta) * radius;
+        const float z = -std::cos(theta) * radius;
+        const auto bottom = bridge->glow_head_position +
+                filament::math::float3{x, -height * 0.5f, z};
+        const auto top = bridge->glow_head_position +
+                filament::math::float3{x, height * 0.5f, z};
+        bridge->glow_shell_vertices.push_back(
+                {bottom, {u, 0.0f}, {0.0f, 0.0f}});
+        bridge->glow_shell_vertices.push_back(
+                {top, {u, 1.0f}, {0.0f, 0.0f}});
+    }
+    for (uint16_t segment = 0; segment < kGlowShellSegments; ++segment) {
+        const uint16_t lower_left = segment * 2;
+        const uint16_t upper_left = lower_left + 1;
+        const uint16_t lower_right = lower_left + 2;
+        const uint16_t upper_right = lower_left + 3;
+        bridge->glow_shell_indices.insert(
+                bridge->glow_shell_indices.end(), {
+                        lower_left, lower_right, upper_left,
+                        lower_right, upper_right, upper_left});
+    }
+    upload_geometry(
+            bridge, bridge->glow_shell_vertex_buffer,
+            bridge->glow_shell_index_buffer, bridge->glow_shell_vertices,
+            bridge->glow_shell_indices, {bridge->glow_shell_entity});
+}
+
 filament::Material* build_material(
         FilamentBridge* bridge, const char* name, const char* shader,
         bool glow_material) {
@@ -290,6 +335,30 @@ filament::Material* build_material(
             .package(package.getData(), package.getSize()).build(*bridge->engine);
 }
 
+filament::Material* build_glow_shell_material(
+        FilamentBridge* bridge, const char* shader) {
+    filamat::MaterialBuilder::init();
+    const auto package = filamat::MaterialBuilder()
+            .name("D2S Legacy Surround Glow")
+            .material(shader)
+            .require(filament::VertexAttribute::UV0)
+            .parameter("glowTexture", filamat::MaterialBuilder::SamplerType::SAMPLER_2D)
+            .parameter("glowColor", filamat::MaterialBuilder::UniformType::FLOAT3)
+            .parameter("glowIntensity", filamat::MaterialBuilder::UniformType::FLOAT)
+            .parameter("externalSource", filamat::MaterialBuilder::UniformType::FLOAT)
+            .shading(filament::Shading::UNLIT)
+            .materialDomain(filament::MaterialDomain::SURFACE)
+            .blending(filament::BlendingMode::TRANSPARENT)
+            .culling(filament::backend::CullingMode::NONE)
+            .depthWrite(false).depthCulling(false)
+            .targetApi(filamat::MaterialBuilder::TargetApi::ALL)
+            .platform(filamat::MaterialBuilder::Platform::ALL)
+            .build(bridge->engine->getJobSystem());
+    if (!package.isValid()) return nullptr;
+    return filament::Material::Builder()
+            .package(package.getData(), package.getSize()).build(*bridge->engine);
+}
+
 bool create_renderable(
         FilamentBridge* bridge, utils::Entity& entity,
         filament::MaterialInstance* material,
@@ -319,7 +388,8 @@ void bind_source(FilamentBridge* bridge) {
             bridge->glow_outer_material_instance,
             bridge->glow_inner_material_instance,
             bridge->frost_material_instance,
-            bridge->veil_material_instance}) {
+            bridge->veil_material_instance,
+            bridge->glow_shell_material_instance}) {
         if (!instance) continue;
         instance->setParameter("glowTexture", bridge->glow_source_texture, sampler);
         instance->setParameter(
@@ -332,7 +402,8 @@ void bind_source(FilamentBridge* bridge) {
 void bridge_glow_destroy(FilamentBridge* bridge) {
     if (!bridge || !bridge->engine) return;
     for (auto entity : {
-            bridge->glow_outer_entity, bridge->glow_inner_entity, bridge->frost_entity}) {
+            bridge->glow_outer_entity, bridge->glow_inner_entity,
+            bridge->frost_entity, bridge->glow_shell_entity}) {
         if (entity.isNull()) continue;
         if (bridge->foreground_scene) bridge->foreground_scene->remove(entity);
         bridge->engine->destroy(entity);
@@ -340,21 +411,29 @@ void bridge_glow_destroy(FilamentBridge* bridge) {
     bridge->glow_outer_entity = {};
     bridge->glow_inner_entity = {};
     bridge->frost_entity = {};
-    for (auto** buffer : {&bridge->glow_vertex_buffer, &bridge->frost_vertex_buffer}) {
+    bridge->glow_shell_entity = {};
+    for (auto** buffer : {
+            &bridge->glow_vertex_buffer, &bridge->frost_vertex_buffer,
+            &bridge->glow_shell_vertex_buffer}) {
         if (*buffer) bridge->engine->destroy(*buffer);
         *buffer = nullptr;
     }
-    for (auto** buffer : {&bridge->glow_index_buffer, &bridge->frost_index_buffer}) {
+    for (auto** buffer : {
+            &bridge->glow_index_buffer, &bridge->frost_index_buffer,
+            &bridge->glow_shell_index_buffer}) {
         if (*buffer) bridge->engine->destroy(*buffer);
         *buffer = nullptr;
     }
     for (auto** instance : {
             &bridge->glow_outer_material_instance, &bridge->glow_inner_material_instance,
-            &bridge->frost_material_instance, &bridge->veil_material_instance}) {
+            &bridge->frost_material_instance, &bridge->veil_material_instance,
+            &bridge->glow_shell_material_instance}) {
         if (*instance) bridge->engine->destroy(*instance);
         *instance = nullptr;
     }
-    for (auto** material : {&bridge->glow_material, &bridge->frost_material}) {
+    for (auto** material : {
+            &bridge->glow_material, &bridge->frost_material,
+            &bridge->glow_shell_material}) {
         if (*material) bridge->engine->destroy(*material);
         *material = nullptr;
     }
@@ -375,6 +454,8 @@ void bridge_glow_destroy(FilamentBridge* bridge) {
     bridge->glow_indices.clear();
     bridge->frost_vertices.clear();
     bridge->frost_indices.clear();
+    bridge->glow_shell_vertices.clear();
+    bridge->glow_shell_indices.clear();
 }
 
 int bridge_glow_create(FilamentBridge* bridge) {
@@ -478,11 +559,71 @@ int bridge_glow_create(FilamentBridge* bridge) {
             material.baseColor = vec4(color * alpha, 1.0);
         }
     )FILAMENT";
+    const char* glow_shell_shader = R"FILAMENT(
+        vec3 sampleBorderColor(vec2 p) {
+            float x = clamp(p.x, 0.0, 1.0);
+            float y = clamp(1.0 - p.y, 0.0, 1.0);
+            vec3 topColor = textureLod(
+                    materialParams_glowTexture, vec2(x, 0.055), 0.0).rgb;
+            vec3 bottomColor = textureLod(
+                    materialParams_glowTexture, vec2(x, 0.945), 0.0).rgb;
+            vec3 leftColor = textureLod(
+                    materialParams_glowTexture, vec2(0.055, y), 0.0).rgb;
+            vec3 rightColor = textureLod(
+                    materialParams_glowTexture, vec2(0.945, y), 0.0).rgb;
+            float topWeight = smoothstep(0.50, 0.95, p.y);
+            float bottomWeight = smoothstep(0.50, 0.95, 1.0 - p.y);
+            float leftWeight = smoothstep(0.35, 0.95, 1.0 - p.x);
+            float rightWeight = smoothstep(0.35, 0.95, p.x);
+            vec3 border = (topColor * topWeight + bottomColor * bottomWeight +
+                    leftColor * leftWeight + rightColor * rightWeight) /
+                    max(topWeight + bottomWeight + leftWeight + rightWeight, 0.001);
+            return mix(materialParams.glowColor, border, 0.90);
+        }
+        vec3 sampleRegionReflection(vec2 p) {
+            // Keep the v2.5 surround contract: one representative sample from
+            // each 4 x 3 screen region, sourced from the current Vulkan image.
+            vec2 grid = vec2(4.0, 3.0);
+            vec2 q = (floor(clamp(p, vec2(0.0), vec2(0.999)) * grid) +
+                    vec2(0.5)) / grid;
+            q.y = 1.0 - q.y;
+            vec3 region = textureLod(materialParams_glowTexture, q, 0.0).rgb;
+            return mix(materialParams.glowColor, region, 0.92);
+        }
+        void material(inout MaterialInputs material) {
+            prepareMaterial(material);
+            vec2 uv = getUV0();
+            float horiz = clamp(1.0 - abs(uv.x - 0.5) * 2.0, 0.0, 1.0);
+            float verticalCore = smoothstep(0.02, 0.20, uv.y) *
+                    (1.0 - smoothstep(0.82, 0.98, uv.y));
+            float verticalEdges = max(
+                    1.0 - smoothstep(0.12, 0.42, uv.y),
+                    smoothstep(0.58, 0.88, uv.y)) * 0.30;
+            float vertical = max(verticalCore, verticalEdges);
+            float frontFocus = pow(horiz, 1.55);
+            float band = 0.58 + 0.42 * sin(uv.y * 3.14159265);
+            float wrap = 0.65 + 0.35 * smoothstep(0.18, 0.70, horiz);
+            float glow = frontFocus * vertical * band * wrap *
+                    materialParams.glowIntensity;
+            if (glow <= 0.0001) discard;
+            glow = min(glow, 1.0);
+            vec3 borderColor = sampleBorderColor(uv);
+            vec3 regionColor = sampleRegionReflection(
+                    vec2(uv.x, 0.5 + (uv.y - 0.5) * 0.35));
+            float regionMix = 0.38 + 0.46 * smoothstep(0.12, 0.72, horiz);
+            vec3 shellColor = mix(borderColor, regionColor, regionMix);
+            // Preserve the project's explicit no-transparency Glow contract.
+            material.baseColor = vec4(shellColor * glow, 1.0);
+        }
+    )FILAMENT";
     bridge->glow_material = build_material(
             bridge, "D2S Legacy Screen Glow", glow_shader, true);
     bridge->frost_material = build_material(
             bridge, "D2S Legacy Frosted Glow", frost_shader, false);
-    if (!bridge->glow_material || !bridge->frost_material) {
+    bridge->glow_shell_material = build_glow_shell_material(
+            bridge, glow_shell_shader);
+    if (!bridge->glow_material || !bridge->frost_material ||
+            !bridge->glow_shell_material) {
         bridge_set_error(bridge, "Filament could not build legacy glow materials");
         return 0;
     }
@@ -490,6 +631,8 @@ int bridge_glow_create(FilamentBridge* bridge) {
     bridge->glow_inner_material_instance = bridge->glow_material->createInstance();
     bridge->frost_material_instance = bridge->frost_material->createInstance();
     bridge->veil_material_instance = bridge->frost_material->createInstance();
+    bridge->glow_shell_material_instance =
+            bridge->glow_shell_material->createInstance();
     bridge->glow_outer_material_instance->setParameter("innerOnly", 0.0f);
     bridge->glow_inner_material_instance->setParameter("innerOnly", 1.0f);
     bridge->glow_vertex_buffer = filament::VertexBuffer::Builder()
@@ -515,10 +658,22 @@ int bridge_glow_create(FilamentBridge* bridge) {
     bridge->frost_index_buffer = filament::IndexBuffer::Builder()
             .indexCount(kMaxFrostIndices)
             .bufferType(filament::IndexBuffer::IndexType::USHORT).build(*bridge->engine);
+    bridge->glow_shell_vertex_buffer = filament::VertexBuffer::Builder()
+            .vertexCount(kMaxGlowShellVertices).bufferCount(1)
+            .attribute(filament::VertexAttribute::POSITION, 0,
+                    filament::VertexBuffer::AttributeType::FLOAT3, 0, sizeof(GlowVertex))
+            .attribute(filament::VertexAttribute::UV0, 0,
+                    filament::VertexBuffer::AttributeType::FLOAT2,
+                    sizeof(float) * 3, sizeof(GlowVertex)).build(*bridge->engine);
+    bridge->glow_shell_index_buffer = filament::IndexBuffer::Builder()
+            .indexCount(kMaxGlowShellIndices)
+            .bufferType(filament::IndexBuffer::IndexType::USHORT).build(*bridge->engine);
     if (!bridge->glow_outer_material_instance || !bridge->glow_inner_material_instance ||
             !bridge->frost_material_instance || !bridge->veil_material_instance ||
+            !bridge->glow_shell_material_instance ||
             !bridge->glow_vertex_buffer || !bridge->glow_index_buffer ||
             !bridge->frost_vertex_buffer || !bridge->frost_index_buffer ||
+            !bridge->glow_shell_vertex_buffer || !bridge->glow_shell_index_buffer ||
             !create_renderable(bridge, bridge->glow_outer_entity,
                     bridge->glow_outer_material_instance, bridge->glow_vertex_buffer,
                     bridge->glow_index_buffer, kMaxGlowIndices, 0) ||
@@ -527,7 +682,12 @@ int bridge_glow_create(FilamentBridge* bridge) {
                     bridge->glow_index_buffer, kMaxGlowIndices, 1) ||
             !create_renderable(bridge, bridge->frost_entity,
                     bridge->frost_material_instance, bridge->frost_vertex_buffer,
-                    bridge->frost_index_buffer, kMaxFrostIndices, 1)) {
+                    bridge->frost_index_buffer, kMaxFrostIndices, 1) ||
+            !create_renderable(bridge, bridge->glow_shell_entity,
+                    bridge->glow_shell_material_instance,
+                    bridge->glow_shell_vertex_buffer,
+                    bridge->glow_shell_index_buffer,
+                    kMaxGlowShellIndices, 0)) {
         bridge_set_error(bridge, "Filament could not create legacy glow geometry");
         return 0;
     }
@@ -643,17 +803,23 @@ int bridge_glow_set_state(
         float frosted_threshold, float frosted_lod,
         float frosted_blend, float frosted_thickness,
         float frosted_diffuse, float frosted_inset,
-        float veil_intensity, float veil_alpha) {
-    if (!bridge || !bridge->engine || mode > 4) return 0;
+        float veil_intensity, float veil_alpha,
+        float glow_shell_intensity_multiplier,
+        float glow_shell_radius, float glow_shell_height) {
+    if (!bridge || !bridge->engine || mode > 5) return 0;
     const float values[] = {
             head_x, head_y, head_z, glow_intensity, glow_width,
             glow_intensity_multiplier, frosted_intensity, frosted_alpha,
             frosted_threshold, frosted_lod, frosted_blend, frosted_thickness,
-            frosted_diffuse, frosted_inset, veil_intensity, veil_alpha};
+            frosted_diffuse, frosted_inset, veil_intensity, veil_alpha,
+            glow_shell_intensity_multiplier, glow_shell_radius,
+            glow_shell_height};
     for (float value : values) if (!std::isfinite(value)) return 0;
     const filament::math::float3 requested_head{head_x, head_y, head_z};
     const bool geometry_changed = mode != bridge->glow_mode ||
             std::abs(glow_width - bridge->glow_width) > 1e-4f ||
+            std::abs(glow_shell_radius - bridge->glow_shell_radius) > 1e-4f ||
+            std::abs(glow_shell_height - bridge->glow_shell_height) > 1e-4f ||
             length(requested_head - bridge->glow_head_position) >= 0.02f;
     bridge->glow_mode = mode;
     if (geometry_changed) bridge->glow_head_position = requested_head;
@@ -670,6 +836,10 @@ int bridge_glow_set_state(
     bridge->frosted_inset = std::max(frosted_inset, 0.0001f);
     bridge->veil_intensity = std::max(veil_intensity, 0.0f);
     bridge->veil_alpha = std::clamp(veil_alpha, 0.0f, 1.0f);
+    bridge->glow_shell_intensity_multiplier = std::max(
+            glow_shell_intensity_multiplier, 0.0f);
+    bridge->glow_shell_radius = std::max(glow_shell_radius, 0.0f);
+    bridge->glow_shell_height = std::max(glow_shell_height, 0.0f);
     for (auto* instance : {
             bridge->glow_outer_material_instance,
             bridge->glow_inner_material_instance}) {
@@ -706,6 +876,13 @@ int bridge_glow_set_state(
         bridge->veil_material_instance->setParameter("effectInset", 0.02f);
         bridge->veil_material_instance->setParameter("effectTime", now);
     }
+    if (bridge->glow_shell_material_instance) {
+        bridge->glow_shell_material_instance->setParameter(
+                "glowColor", filament::math::float3{0.30f, 0.55f, 1.0f});
+        bridge->glow_shell_material_instance->setParameter(
+                "glowIntensity", bridge->glow_intensity *
+                        bridge->glow_shell_intensity_multiplier);
+    }
     if (!bridge->frost_entity.isNull()) {
         auto& renderables = bridge->engine->getRenderableManager();
         const auto instance = renderables.getInstance(bridge->frost_entity);
@@ -722,11 +899,14 @@ void bridge_glow_update_geometry(FilamentBridge* bridge) {
     if (!bridge || !bridge->engine) return;
     rebuild_glow_geometry(bridge);
     rebuild_frost_geometry(bridge);
+    rebuild_glow_shell_geometry(bridge);
 }
 
 void bridge_glow_update_visibility(FilamentBridge* bridge) {
     if (!bridge || !bridge->engine) return;
     const bool enabled = bridge->glow_intensity_multiplier > 0.0f &&
+            !bridge->passthrough_backdrop;
+    const bool shell_enabled = bridge->glow_shell_intensity_multiplier > 0.0f &&
             !bridge->passthrough_backdrop;
     const bool default_environment = bridge->asset == nullptr;
     bridge_set_renderable_layer(bridge, bridge->glow_outer_entity, 1,
@@ -737,4 +917,6 @@ void bridge_glow_update_visibility(FilamentBridge* bridge) {
     bridge_set_renderable_layer(bridge, bridge->frost_entity, 1,
             enabled && default_environment &&
                     (bridge->glow_mode == 3 || bridge->glow_mode == 4));
+    bridge_set_renderable_layer(bridge, bridge->glow_shell_entity, 1,
+            shell_enabled && default_environment && bridge->glow_mode == 5);
 }

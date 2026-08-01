@@ -233,6 +233,11 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "filament_bridge_set_glow_state" in facade
     assert "D2S Legacy Screen Glow" in source
     assert "D2S Legacy Frosted Glow" in source
+    assert "D2S Legacy Surround Glow" in source
+    assert "kGlowShellSegments = 96" in source
+    assert "vec2 grid = vec2(4.0, 3.0);" in source
+    assert "material.baseColor = vec4(shellColor * glow, 1.0);" in source
+    assert "bridge->glow_mode == 5" in source
     assert "Texture::InternalFormat::SRGB8_A8" in source
     assert "generateMipmaps(*bridge->engine)" in source
     assert "kFlatFrostDepthSteps = 8" in source
@@ -365,6 +370,20 @@ def test_legacy_glow_material_shaders_compile_with_pinned_filament(
                 { type : float, name : effectDiffuse },
                 { type : float, name : effectInset },
                 { type : float, name : effectTime }
+            """,
+        ),
+        "surround": (
+            re.search(
+                r'const char\* glow_shell_shader = R"FILAMENT\((.*?)\)FILAMENT";',
+                source,
+                re.DOTALL,
+            ),
+            "uv0",
+            """
+                { type : sampler2d, name : glowTexture },
+                { type : float3, name : glowColor },
+                { type : float, name : glowIntensity },
+                { type : float, name : externalSource }
             """,
         ),
     }

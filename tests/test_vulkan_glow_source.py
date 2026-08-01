@@ -11,6 +11,7 @@ def test_glow_prefilter_uses_legacy_mip_footprint_in_source_pixels() -> None:
     assert VulkanGlowSourceComputeBackend.prefilter_scale("veil", 5.4) == 1.0
     assert VulkanGlowSourceComputeBackend.prefilter_scale("frosted", 5.0) == 32.0
     assert VulkanGlowSourceComputeBackend.prefilter_scale("glow", 5.4) == 256.0
+    assert VulkanGlowSourceComputeBackend.prefilter_scale("surround", 5.4) == 256.0
 
 
 def test_glow_pass_contract_is_fixed_rgba_target() -> None:

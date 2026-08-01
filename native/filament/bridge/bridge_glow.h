@@ -21,6 +21,8 @@ int bridge_glow_set_state(
         float frosted_threshold, float frosted_lod,
         float frosted_blend, float frosted_thickness,
         float frosted_diffuse, float frosted_inset,
-        float veil_intensity, float veil_alpha);
+        float veil_intensity, float veil_alpha,
+        float glow_shell_intensity_multiplier,
+        float glow_shell_radius, float glow_shell_height);
 void bridge_glow_update_geometry(FilamentBridge* bridge);
 void bridge_glow_update_visibility(FilamentBridge* bridge);

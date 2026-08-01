@@ -649,8 +649,11 @@ class FilamentVulkanBridge:
         frosted_inset: float,
         veil_intensity: float,
         veil_alpha: float,
+        glow_shell_intensity_multiplier: float,
+        glow_shell_radius: float,
+        glow_shell_height: float,
     ) -> None:
-        """Apply the v2.5 OpenXR glow state without using the screen VkImage."""
+        """Apply the v2.5 OpenXR Glow state to its dedicated Vulkan source."""
         self._ensure_loaded()
         if not self._glow_abi_available:
             raise FilamentBridgeError(
@@ -665,6 +668,7 @@ class FilamentVulkanBridge:
             "veil": 3,
             "frosted": 4,
             "frost": 4,
+            "surround": 5,
         }.get(normalized)
         if mode_value is None:
             raise ValueError(f"unsupported glow mode: {mode}")
@@ -683,8 +687,11 @@ class FilamentVulkanBridge:
             float(frosted_inset),
             float(veil_intensity),
             float(veil_alpha),
+            float(glow_shell_intensity_multiplier),
+            float(glow_shell_radius),
+            float(glow_shell_height),
         )
-        if len(values) != 16:
+        if len(values) != 19:
             raise ValueError("head_position must contain exactly three values")
         self._check_result(
             self._library.filament_bridge_set_glow_state(
@@ -1070,7 +1077,7 @@ class FilamentVulkanBridge:
             set_glow_state.argtypes = [
                 ctypes.c_void_p,
                 ctypes.c_uint32,
-                *([ctypes.c_float] * 16),
+                *([ctypes.c_float] * 19),
             ]
             set_glow_state.restype = ctypes.c_int
             self._glow_abi_available = True

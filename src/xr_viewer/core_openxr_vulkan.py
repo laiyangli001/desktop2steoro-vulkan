@@ -604,13 +604,16 @@ class OpenXrVulkanPresenter(
         self._filament_glow_environment_enabled = not bool(
             self.config.filament_glb_path
         )
-        # Keep the v2.5 effect constants intact. The first Vulkan migration
-        # stage feeds these shaders through a small CPU-uploaded sRGB texture;
-        # it deliberately does not import or sample the external screen VkImage.
+        # Keep the v2.5 effect constants intact. Glow samples its own small
+        # Vulkan compute output, leaving the zero-copy screen image untouched.
         self._filament_glow_intensity = 0.175
         self._filament_glow_width = 0.75
         self._filament_glow_default_multiplier = 1.5
         self._filament_glow_intensity_multiplier = 0.0
+        self._filament_glow_shell_default_multiplier = 1.85
+        self._filament_glow_shell_intensity_multiplier = 0.0
+        self._filament_glow_shell_radius = 20.0
+        self._filament_glow_shell_height = 9.5
         self._frosted_glow_intensity = 1.0
         self._frosted_glow_alpha = 0.42
         self._frosted_glow_threshold = 0.46
@@ -1170,7 +1173,6 @@ class OpenXrVulkanPresenter(
             "false": "off",
             "0": "off",
             "screen": "glow",
-            "surround": "glow",
             "frost": "frosted",
             "frost_glow": "frosted",
             "frosted_glow": "frosted",
@@ -1189,6 +1191,9 @@ class OpenXrVulkanPresenter(
             ("glow_intensity", "_filament_glow_intensity", 0.0, None),
             ("glow_width", "_filament_glow_width", 0.0, None),
             ("glow_intensity_multiplier", "_filament_glow_intensity_multiplier", 0.0, None),
+            ("glow_shell_intensity_multiplier", "_filament_glow_shell_intensity_multiplier", 0.0, None),
+            ("glow_shell_radius", "_filament_glow_shell_radius", 0.0, None),
+            ("glow_shell_height", "_filament_glow_shell_height", 0.0, None),
             ("frosted_glow_intensity", "_frosted_glow_intensity", 0.0, None),
             ("frosted_glow_alpha", "_frosted_glow_alpha", 0.0, 1.0),
             ("frosted_glow_threshold", "_frosted_glow_threshold", 0.0, 1.0),
@@ -1211,7 +1216,7 @@ class OpenXrVulkanPresenter(
                 continue
 
     def _cycle_filament_glow_mode(self) -> None:
-        modes = ("glow", "glow2", "veil", "frosted", "off")
+        modes = ("surround", "glow", "glow2", "veil", "frosted", "off")
         current = self._normalize_filament_glow_mode(self._filament_glow_mode)
         if current not in modes:
             current = (
@@ -1223,11 +1228,24 @@ class OpenXrVulkanPresenter(
         self._filament_glow_mode = next_mode
         if next_mode == "off":
             self._filament_glow_intensity_multiplier = 0.0
-        elif self._filament_glow_intensity_multiplier <= 0.0:
+            self._filament_glow_shell_intensity_multiplier = 0.0
+        elif next_mode == "surround":
+            self._filament_glow_intensity_multiplier = 0.0
+            if self._filament_glow_shell_intensity_multiplier <= 0.0:
+                self._filament_glow_shell_intensity_multiplier = (
+                    self._filament_glow_shell_default_multiplier
+                )
+        else:
+            self._filament_glow_shell_intensity_multiplier = 0.0
+        if (
+            next_mode not in {"off", "surround"}
+            and self._filament_glow_intensity_multiplier <= 0.0
+        ):
             self._filament_glow_intensity_multiplier = (
                 self._filament_glow_default_multiplier
             )
         label = {
+            "surround": "Surround Glow",
             "glow": "Glow",
             "glow2": "Glow2",
             "veil": "Veil",
@@ -2630,6 +2648,13 @@ class OpenXrVulkanPresenter(
             frosted_inset=self._frosted_glow_inset,
             veil_intensity=self._frosted_veil_intensity,
             veil_alpha=self._frosted_veil_alpha,
+            glow_shell_intensity_multiplier=(
+                self._filament_glow_shell_intensity_multiplier
+                if environment_enabled
+                else 0.0
+            ),
+            glow_shell_radius=self._filament_glow_shell_radius,
+            glow_shell_height=self._filament_glow_shell_height,
         )
         # A reuse XR tick legitimately has no new output-frame metadata. Keep
         # the already-bound texture and report only real source transitions.
@@ -2673,16 +2698,27 @@ class OpenXrVulkanPresenter(
                     self._frosted_veil_alpha = value
                     self._preset_name_overlay = f"Veil {int(round(value * 100.0))}%"
                     self._preset_osd_show_t = now
-            elif mode == "glow":
-                base = max(float(self._filament_glow_default_multiplier), 1e-6)
+            elif mode in {"glow", "surround"}:
+                multiplier_attribute = (
+                    "_filament_glow_shell_intensity_multiplier"
+                    if mode == "surround"
+                    else "_filament_glow_intensity_multiplier"
+                )
+                default_multiplier = (
+                    self._filament_glow_shell_default_multiplier
+                    if mode == "surround"
+                    else self._filament_glow_default_multiplier
+                )
+                base = max(float(default_multiplier), 1e-6)
                 previous = max(
                     0.0,
-                    min(1.0, float(self._filament_glow_intensity_multiplier) / base),
+                    min(1.0, float(getattr(self, multiplier_attribute)) / base),
                 )
                 value = max(0.0, min(1.0, previous + left_stick_x * 0.8 * input_dt))
                 if value != previous:
-                    self._filament_glow_intensity_multiplier = value * base
-                    self._preset_name_overlay = f"Glow {int(round(value * 100.0))}%"
+                    setattr(self, multiplier_attribute, value * base)
+                    label = "Surround Glow" if mode == "surround" else "Glow"
+                    self._preset_name_overlay = f"{label} {int(round(value * 100.0))}%"
                     self._preset_osd_show_t = now
         if not (
             right_grip

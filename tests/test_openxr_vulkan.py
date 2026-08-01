@@ -1186,12 +1186,15 @@ def test_x_long_press_action_cycles_v25_glow_modes_not_room_lighting() -> None:
     presenter._filament_glow_intensity_multiplier = 0.0
 
     observed = []
-    for _ in range(5):
+    for _ in range(6):
         presenter._dispatch_controller_shortcut("cycle_environment_light")
         observed.append(presenter._filament_glow_mode)
 
-    assert observed == ["glow", "glow2", "veil", "frosted", "off"]
+    assert observed == [
+        "surround", "glow", "glow2", "veil", "frosted", "off"
+    ]
     assert presenter._filament_glow_intensity_multiplier == pytest.approx(0.0)
+    assert presenter._filament_glow_shell_intensity_multiplier == pytest.approx(0.0)
     assert presenter._preset_name_overlay == "Off"
 
 
@@ -1230,6 +1233,49 @@ def test_filament_glow_uses_cpu_texture_without_rebinding_same_serial() -> None:
     assert bridge.states[0][0] == "screen"
     assert bridge.states[0][1] == pytest.approx((0.1, 1.7, -0.2))
     assert bridge.states[0][2]["glow_intensity"] == pytest.approx(0.175)
+
+
+def test_filament_surround_glow_keeps_legacy_shell_profile_and_vulkan_source() -> None:
+    class Bridge:
+        glow_abi_available = True
+        glow_vulkan_image_abi_available = True
+
+        def __init__(self) -> None:
+            self.images = []
+            self.states = []
+
+        def set_glow_image(self, resource) -> None:
+            self.images.append(resource)
+
+        def set_glow_state(self, mode, head, **values) -> None:
+            self.states.append((mode, tuple(float(value) for value in head), values))
+
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_glow_mode = "surround"
+    presenter._filament_glow_intensity_multiplier = 0.0
+    presenter._filament_glow_shell_intensity_multiplier = 1.85
+    presenter._filament_glow_shell_radius = 20.0
+    presenter._filament_glow_shell_height = 9.5
+    presenter._head_position_w = np.asarray((0.2, 1.6, -0.1), dtype=np.float64)
+    bridge = Bridge()
+    resource = SimpleNamespace(width=320, height=180)
+    frame = SimpleNamespace(metadata={
+        "glow_vulkan_image": resource,
+        "glow_vulkan_serial": 8,
+        "glow_source_size": (320, 180),
+        "glow_source_path": "vulkan_compute_external_image",
+    })
+
+    presenter._update_filament_glow(bridge, frame)
+
+    assert bridge.images == [resource]
+    assert bridge.states[0][0] == "surround"
+    assert bridge.states[0][1] == pytest.approx((0.2, 1.6, -0.1))
+    values = bridge.states[0][2]
+    assert values["glow_intensity_multiplier"] == pytest.approx(0.0)
+    assert values["glow_shell_intensity_multiplier"] == pytest.approx(1.85)
+    assert values["glow_shell_radius"] == pytest.approx(20.0)
+    assert values["glow_shell_height"] == pytest.approx(9.5)
 
 
 def test_filament_glow_is_disabled_for_glb_environments() -> None:
@@ -2073,6 +2119,10 @@ def test_packaged_default_profile_uses_neutral_filament_exposure() -> None:
 
     assert profile["glb"] is None
     assert profile["preview_exposure"] == 0.0
+    assert profile["lighting_presets"][0]["glow_mode"] == "surround"
+    assert profile["lighting_presets"][0]["glow_shell_intensity_multiplier"] == 1.85
+    assert profile["lighting_presets"][0]["glow_shell_radius"] == 20.0
+    assert profile["lighting_presets"][0]["glow_shell_height"] == 9.5
 
 
 def test_controller_profile_rotation_uses_local_x_axis() -> None:

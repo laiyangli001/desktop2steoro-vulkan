@@ -233,13 +233,14 @@ int filament_bridge_set_glow_state(
         float frosted_threshold, float frosted_lod,
         float frosted_blend, float frosted_thickness,
         float frosted_diffuse, float frosted_inset,
-        float veil_intensity, float veil_alpha) {
+        float veil_intensity, float veil_alpha,
+        float glow_shell_intensity_multiplier, float glow_shell_radius, float glow_shell_height) {
     return bridge_glow_set_state(
-            bridge, mode, head_x, head_y, head_z,
-            glow_intensity, glow_width, glow_intensity_multiplier,
-            frosted_intensity, frosted_alpha, frosted_threshold, frosted_lod,
-            frosted_blend, frosted_thickness, frosted_diffuse, frosted_inset,
-            veil_intensity, veil_alpha);
+            bridge, mode, head_x, head_y, head_z, glow_intensity, glow_width,
+            glow_intensity_multiplier, frosted_intensity, frosted_alpha,
+            frosted_threshold, frosted_lod, frosted_blend, frosted_thickness,
+            frosted_diffuse, frosted_inset, veil_intensity, veil_alpha,
+            glow_shell_intensity_multiplier, glow_shell_radius, glow_shell_height);
 }
 
 int filament_bridge_set_screen_sampling(

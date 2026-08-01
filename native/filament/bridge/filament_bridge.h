@@ -136,7 +136,7 @@ FILAMENT_BRIDGE_API int filament_bridge_set_glow_source(
 FILAMENT_BRIDGE_API int filament_bridge_set_glow_image(
         FilamentBridge* bridge, const void* image,
         uint32_t width, uint32_t height, int32_t format);
-// mode: 0=off, 1=glow, 2=glow2, 3=veil, 4=frosted.
+// mode: 0=off, 1=glow, 2=glow2, 3=veil, 4=frosted, 5=surround.
 FILAMENT_BRIDGE_API int filament_bridge_set_glow_state(
         FilamentBridge* bridge, uint32_t mode,
         float head_x, float head_y, float head_z,
@@ -146,7 +146,9 @@ FILAMENT_BRIDGE_API int filament_bridge_set_glow_state(
         float frosted_threshold, float frosted_lod,
         float frosted_blend, float frosted_thickness,
         float frosted_diffuse, float frosted_inset,
-        float veil_intensity, float veil_alpha);
+        float veil_intensity, float veil_alpha,
+        float glow_shell_intensity_multiplier,
+        float glow_shell_radius, float glow_shell_height);
 // Set the matrix-selected source prefilter scale. One means no additional
 // prefiltering beyond the projected source footprint.
 FILAMENT_BRIDGE_API int filament_bridge_set_screen_sampling(
