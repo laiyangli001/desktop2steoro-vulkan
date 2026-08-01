@@ -238,9 +238,10 @@ struct MaterialBrightnessState {
 struct FilamentEyeTarget {
     filament::Renderer* renderer = nullptr;
     filament::View* view = nullptr;
-    // Foreground view renders controllers, screen and interaction overlays
-    // after the room view while sharing the same Engine and camera.
+    // Effect and controller views provide an explicit screen -> Glow ->
+    // controller ordering after the room view.
     filament::View* foreground_view = nullptr;
+    filament::View* controller_view = nullptr;
     filament::Camera* camera = nullptr;
     filament::ColorGrading* color_grading = nullptr;
     filament::SwapChain* swapchain = nullptr;

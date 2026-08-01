@@ -182,10 +182,16 @@ int bridge_material_set_scene_exposure(FilamentBridge* bridge, float exposure_ev
         if (eye.foreground_view) {
             eye.foreground_view->setColorGrading(nullptr);
         }
+        if (eye.controller_view) {
+            eye.controller_view->setColorGrading(nullptr);
+        }
         bridge->color_grading = eye.color_grading;
         if (!configure_color_pipeline_impl(bridge)) {
             if (eye.foreground_view) {
                 eye.foreground_view->setColorGrading(eye.color_grading);
+            }
+            if (eye.controller_view) {
+                eye.controller_view->setColorGrading(eye.color_grading);
             }
             bridge_eye_activate(bridge, active_eye);
             return 0;
@@ -193,6 +199,9 @@ int bridge_material_set_scene_exposure(FilamentBridge* bridge, float exposure_ev
         eye.color_grading = bridge->color_grading;
         if (eye.foreground_view) {
             eye.foreground_view->setColorGrading(eye.color_grading);
+        }
+        if (eye.controller_view) {
+            eye.controller_view->setColorGrading(eye.color_grading);
         }
     }
     bridge_eye_activate(bridge, active_eye);

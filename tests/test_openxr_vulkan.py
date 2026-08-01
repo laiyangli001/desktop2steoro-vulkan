@@ -1232,7 +1232,7 @@ def test_filament_glow_uses_cpu_texture_without_rebinding_same_serial() -> None:
     assert bridge.states[0][2]["glow_intensity"] == pytest.approx(0.175)
 
 
-def test_filament_glow_binds_completed_vulkan_image_once_per_serial() -> None:
+def test_filament_glow_binds_completed_vulkan_image_once_per_serial(capsys) -> None:
     class Bridge:
         glow_abi_available = True
         glow_vulkan_image_abi_available = True
@@ -1260,9 +1260,24 @@ def test_filament_glow_binds_completed_vulkan_image_once_per_serial() -> None:
 
     presenter._update_filament_glow(bridge, frame)
     presenter._update_filament_glow(bridge, frame)
+    presenter._update_filament_glow(bridge, None)
 
-    assert bridge.images == [resource]
-    assert len(bridge.states) == 2
+    next_resource = SimpleNamespace(width=320, height=180)
+    next_frame = SimpleNamespace(metadata={
+        "glow_vulkan_image": next_resource,
+        "glow_vulkan_serial": 5,
+        "glow_source_size": (320, 180),
+        "glow_source_path": "vulkan_compute_external_image",
+    })
+    presenter._update_filament_glow(bridge, next_frame)
+
+    assert bridge.images == [resource, next_resource]
+    assert len(bridge.states) == 4
+    output = capsys.readouterr().out
+    assert output.count("Glow reference path:") == 1
+    assert "source=missing" not in output
+    assert "texture=0x0" not in output
+    assert "texture=320x180" in output
 
 
 def test_screen_adjustment_osd_is_submitted_as_quad_layer() -> None:

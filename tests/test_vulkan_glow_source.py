@@ -79,4 +79,5 @@ def test_glow_shader_and_spirv_are_checked_in_together() -> None:
 
     assert "max(base_footprint, vec2(max(params.prefilter_scale, 1.0)))" in source
     assert "srgb_to_linear" in source
+    assert "vec2(output_uv.x, 1.0 - output_uv.y)" in source
     assert spirv[:4] == b"\x03\x02#\x07"

@@ -2536,28 +2536,33 @@ class OpenXrVulkanPresenter(
         if not bool(getattr(bridge, "glow_abi_available", False)):
             return
         metadata = dict(getattr(output_frame, "metadata", None) or {})
-        source_path = str(metadata.get("glow_source_path", "missing"))
+        source_path = str(metadata.get("glow_source_path", ""))
         external = metadata.get("glow_vulkan_image")
         external_serial = int(metadata.get("glow_vulkan_serial", 0) or 0)
         rgba = metadata.get("glow_cpu_rgba")
         size = metadata.get("glow_cpu_size", (0, 0))
         serial = int(metadata.get("glow_cpu_serial", 0) or 0)
-        bound = False
+        source_status = None
         if (
             external is not None
             and external_serial > 0
             and bool(getattr(bridge, "glow_vulkan_image_abi_available", False))
-            and self._last_filament_glow_source_key != ("vulkan", external_serial)
         ):
-            bridge.set_glow_image(external)
-            self._last_filament_glow_source_key = ("vulkan", external_serial)
-            bound = True
             size = metadata.get(
                 "glow_source_size",
                 (
                     int(getattr(external, "width", 0)),
                     int(getattr(external, "height", 0)),
                 ),
+            )
+            if self._last_filament_glow_source_key != ("vulkan", external_serial):
+                bridge.set_glow_image(external)
+                self._last_filament_glow_source_key = ("vulkan", external_serial)
+            source_status = (
+                self._normalize_filament_glow_mode(self._filament_glow_mode),
+                source_path or "vulkan_compute_external_image",
+                int(size[0]) if isinstance(size, (tuple, list)) and len(size) >= 2 else 0,
+                int(size[1]) if isinstance(size, (tuple, list)) and len(size) >= 2 else 0,
             )
         elif (
             serial > 0
@@ -2571,7 +2576,24 @@ class OpenXrVulkanPresenter(
                 bridge.set_glow_source(bytes(rgba), width=width, height=height)
                 self._last_filament_glow_source_serial = serial
                 self._last_filament_glow_source_key = ("cpu", serial)
-                bound = True
+                source_status = (
+                    self._normalize_filament_glow_mode(self._filament_glow_mode),
+                    source_path or "cpu_uploaded_reference",
+                    width,
+                    height,
+                )
+        elif (
+            serial > 0
+            and self._last_filament_glow_source_key == ("cpu", serial)
+            and isinstance(size, (tuple, list))
+            and len(size) >= 2
+        ):
+            source_status = (
+                self._normalize_filament_glow_mode(self._filament_glow_mode),
+                source_path or "cpu_uploaded_reference",
+                int(size[0]),
+                int(size[1]),
+            )
 
         head = (
             np.asarray(self._head_position_w, dtype=np.float64)
@@ -2595,24 +2617,20 @@ class OpenXrVulkanPresenter(
             veil_intensity=self._frosted_veil_intensity,
             veil_alpha=self._frosted_veil_alpha,
         )
-        status = (
-            self._normalize_filament_glow_mode(self._filament_glow_mode),
-            source_path,
-            int(size[0]) if isinstance(size, (tuple, list)) and len(size) >= 2 else 0,
-            int(size[1]) if isinstance(size, (tuple, list)) and len(size) >= 2 else 0,
-        )
-        if bound or status != self._last_filament_glow_status:
+        # A reuse XR tick legitimately has no new output-frame metadata. Keep
+        # the already-bound texture and report only real source transitions.
+        if source_status is not None and source_status != self._last_filament_glow_status:
             print(
                 "[OpenXRViewer] Glow reference path: "
-                f"mode={status[0]} source={status[1]} "
-                f"texture={status[2]}x{status[3]} "
+                f"mode={source_status[0]} source={source_status[1]} "
+                f"texture={source_status[2]}x{source_status[3]} "
                 f"submit_ms={float(metadata.get('glow_gpu_submit_ms', 0.0) or 0.0):.3f} "
                 f"reuse={int(metadata.get('glow_reuse', 0) or 0)} "
                 f"budget_skip={int(metadata.get('glow_budget_skip', 0) or 0)} "
                 "screen_zero_copy_unchanged=True",
                 flush=True,
             )
-            self._last_filament_glow_status = status
+            self._last_filament_glow_status = source_status
 
     def _handle_vulkan_pointer_input(self) -> None:
         """Reuse legacy trigger hold/drag semantics for the Vulkan screen."""

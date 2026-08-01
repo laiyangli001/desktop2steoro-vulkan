@@ -71,9 +71,11 @@ FilamentBridge* bridge_context_create(
         eye.renderer = bridge->engine->createRenderer();
         eye.view = bridge->engine->createView();
         eye.foreground_view = bridge->engine->createView();
+        eye.controller_view = bridge->engine->createView();
         eye.camera = bridge->engine->createCamera(
                 utils::EntityManager::get().create());
-        if (!eye.renderer || !eye.view || !eye.foreground_view || !eye.camera) {
+        if (!eye.renderer || !eye.view || !eye.foreground_view ||
+                !eye.controller_view || !eye.camera) {
             bridge_set_error(bridge.get(), "Filament Vulkan eye resource creation failed");
             return bridge.release();
         }
@@ -104,7 +106,9 @@ FilamentBridge* bridge_context_create(
         eye.view->setChannelDepthClearEnabled(2, true);
         eye.foreground_view->setScene(bridge->foreground_scene);
         eye.foreground_view->setCamera(eye.camera);
-        eye.foreground_view->setVisibleLayers(0xff, 0x03);
+        // Layer 1 contains the screen and transparent Glow. Render it before
+        // layer 0 controllers so transparent sorting cannot cover the hands.
+        eye.foreground_view->setVisibleLayers(0xff, 0x02);
         eye.foreground_view->setAntiAliasing(filament::AntiAliasing::NONE);
         // PBR foreground assets must use the same exposure and output color
         // transform as the room. A translucent View keeps untouched pixels
@@ -116,8 +120,17 @@ FilamentBridge* bridge_context_create(
         // owns its depth, but reusing it here causes room geometry to clip
         // controller surfaces and makes opaque controllers look transparent.
         // The renderer clear options keep the color buffer intact. Imported
-        // controller renderables use Filament's default render channel 2.
+        // foreground renderables use Filament's default render channel 2.
         eye.foreground_view->setChannelDepthClearEnabled(2, true);
+        eye.controller_view->setScene(bridge->foreground_scene);
+        eye.controller_view->setCamera(eye.camera);
+        eye.controller_view->setVisibleLayers(0xff, 0x01);
+        eye.controller_view->setAntiAliasing(filament::AntiAliasing::NONE);
+        eye.controller_view->setBlendMode(filament::View::BlendMode::TRANSLUCENT);
+        eye.controller_view->setPostProcessingEnabled(true);
+        // Controllers and laser are the final pass and therefore start from a
+        // fresh depth buffer instead of being clipped by the screen or Glow.
+        eye.controller_view->setChannelDepthClearEnabled(2, true);
     }
     bridge_eye_activate(bridge.get(), 0);
     for (auto& eye : bridge->eyes) {
@@ -130,6 +143,7 @@ FilamentBridge* bridge_context_create(
         }
         eye.color_grading = bridge->color_grading;
         eye.foreground_view->setColorGrading(eye.color_grading);
+        eye.controller_view->setColorGrading(eye.color_grading);
     }
     bridge_eye_activate(bridge.get(), 0);
     filament::gltfio::AssetConfiguration config{bridge->engine, bridge->materials};
@@ -162,6 +176,7 @@ void bridge_context_destroy(FilamentBridge* bridge) {
         if (eye.color_grading && bridge->engine) {
             if (eye.view) eye.view->setColorGrading(nullptr);
             if (eye.foreground_view) eye.foreground_view->setColorGrading(nullptr);
+            if (eye.controller_view) eye.controller_view->setColorGrading(nullptr);
             bridge->engine->destroy(eye.color_grading);
         }
         if (eye.view && bridge->engine) {
@@ -169,6 +184,9 @@ void bridge_context_destroy(FilamentBridge* bridge) {
         }
         if (eye.foreground_view && bridge->engine) {
             bridge->engine->destroy(eye.foreground_view);
+        }
+        if (eye.controller_view && bridge->engine) {
+            bridge->engine->destroy(eye.controller_view);
         }
         if (eye.camera && bridge->engine) {
             bridge->engine->destroy(eye.camera->getEntity());

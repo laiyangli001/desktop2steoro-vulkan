@@ -103,14 +103,19 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert all(name in cmake for name in module_names if name.endswith(".cpp"))
     assert "filament::Renderer* renderer = nullptr;" in source
     assert "eye.renderer = bridge->engine->createRenderer();" in source
+    assert "eye.controller_view = bridge->engine->createView();" in source
     assert "bridge->engine->destroy(eye.renderer);" in source
+    assert "bridge->engine->destroy(eye.controller_view);" in source
     assert "filament::View* laser_view = nullptr;" not in source
     assert "display_view" not in source
     assert "eye.laser_view = bridge->engine->createView();" not in source
     assert "eye.view->setVisibleLayers(0xff, 0x03);" in source
     assert "eye.view->setChannelDepthClearEnabled(2, true);" in source
     assert "eye.foreground_view->setChannelDepthClearEnabled(2, true);" in source
+    assert "eye.controller_view->setChannelDepthClearEnabled(2, true);" in source
     assert "eye.foreground_view->setChannelDepthClearEnabled(0, true);" not in source
+    assert "eye.foreground_view->setVisibleLayers(0xff, 0x02);" in source
+    assert "eye.controller_view->setVisibleLayers(0xff, 0x01);" in source
     assert "Renderer::ClearOptions clear_options;" in source
     assert "clear_options.clear = true;" in source
     assert "eye.renderer->setClearOptions(clear_options);" in source
@@ -273,13 +278,16 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "filament_bridge_set_controller_ambient_light" in facade
     assert "foreground_scene" in source
     assert "foreground_view" in source
+    assert "controller_view" in source
     assert "eye.foreground_view->setColorGrading(nullptr);" in source
     assert "eye.foreground_view->setColorGrading(eye.color_grading);" in source
+    assert "eye.controller_view->setColorGrading(eye.color_grading);" in source
     assert (
         "eye.foreground_view->setBlendMode(filament::View::BlendMode::TRANSLUCENT);"
         in source
     )
     assert "eye.foreground_view->setPostProcessingEnabled(true);" in source
+    assert "eye.controller_view->setPostProcessingEnabled(true);" in source
     assert "filament_bridge_set_screen_light" in facade
     assert "filament_bridge_set_screen_sampling" in facade
     assert "filament_bridge_set_screen_sampling_mode" in facade
@@ -483,9 +491,12 @@ def test_native_controller_animation_preserves_touch_semantics_without_abi_growt
     assert "uint32_t button_mask" in public_header
 
 
-def test_native_screen_is_rendered_before_controller_and_laser() -> None:
+def test_native_screen_glow_and_controllers_use_explicit_view_order() -> None:
     root = Path(__file__).resolve().parents[1]
     screen_source = (root / "native/filament/bridge/bridge_screen.cpp").read_text(
+        encoding="utf-8"
+    )
+    glow_source = (root / "native/filament/bridge/bridge_glow.cpp").read_text(
         encoding="utf-8"
     )
     controller_source = (root / "native/filament/bridge/bridge_controller.cpp").read_text(
@@ -494,11 +505,19 @@ def test_native_screen_is_rendered_before_controller_and_laser() -> None:
     laser_source = (root / "native/filament/bridge/bridge_laser.cpp").read_text(
         encoding="utf-8"
     )
+    eye_source = (root / "native/filament/bridge/bridge_eye.cpp").read_text(
+        encoding="utf-8"
+    )
 
     assert ".priority(0).culling(false)" in screen_source
     assert ".blending(filament::BlendingMode::OPAQUE)" in screen_source
     assert ".depthWrite(true)" in screen_source
     assert ".depthCulling(true)" in screen_source
+    assert ".blending(filament::BlendingMode::TRANSPARENT)" in glow_source
     assert "renderables.setPriority(instance, 6);" in controller_source
     assert ".priority(7)" in laser_source
     assert ".depthWrite(true)" in laser_source
+    room = eye_source.index("bridge->renderer->render(bridge->view);")
+    glow = eye_source.index("bridge->renderer->render(eye.foreground_view);")
+    controllers = eye_source.index("bridge->renderer->render(eye.controller_view);")
+    assert room < glow < controllers

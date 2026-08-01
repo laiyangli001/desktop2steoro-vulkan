@@ -41,7 +41,11 @@ void main() {
 
     vec2 output_uv = (vec2(output_pixel) + vec2(0.5)) /
             vec2(params.target_width, params.target_height);
-    vec2 source_center = output_uv * vec2(params.source_width, params.source_height);
+    // Filament's uploaded CPU Glow texture follows the legacy OpenGL
+    // bottom-left row convention. Mirror the top-left CUDA source here so the
+    // external Vulkan image has the same sampling orientation.
+    vec2 source_uv = vec2(output_uv.x, 1.0 - output_uv.y);
+    vec2 source_center = source_uv * vec2(params.source_width, params.source_height);
     vec2 base_footprint = vec2(params.source_width, params.source_height) /
             vec2(params.target_width, params.target_height);
     // prefilter_scale is the legacy MIP footprint in source pixels, not a

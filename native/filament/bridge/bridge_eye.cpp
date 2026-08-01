@@ -107,6 +107,7 @@ int bridge_eye_create_target_swapchain(
             1000.0);
     eye.view->setViewport(filament::Viewport{0, 0, width, height});
     eye.foreground_view->setViewport(filament::Viewport{0, 0, width, height});
+    eye.controller_view->setViewport(filament::Viewport{0, 0, width, height});
     bridge_eye_activate(bridge, eye_index);
     return 1;
 }
@@ -194,10 +195,12 @@ int bridge_eye_begin_frame(FilamentBridge* bridge) {
     }
     bridge_screen_prepare_frame(bridge);
     bridge->renderer->render(bridge->view);
-    // Composite isolated foreground lighting after the room pass. Both views
-    // share the eye camera, swapchain and Engine; only their Scenes differ.
+    // Composite screen and transparent Glow first, then controllers and laser.
+    // Splitting these layers across Views makes the ordering independent of
+    // Filament's opaque/transparent sorting inside a single View.
     auto& eye = bridge->eyes[bridge->active_eye];
     bridge->renderer->render(eye.foreground_view);
+    bridge->renderer->render(eye.controller_view);
     return bridge->frame_active ? 1 : 0;
 }
 
