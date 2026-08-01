@@ -413,6 +413,18 @@ Stereo Warp 使用反向采样生成 Left Eye 和 Right Eye，并写出原始 di
 
 实时默认采用方向性、边缘感知的多轮 Compute Pass：mask 膨胀、背景方向搜索、候选颜色选择和羽化合成。修补不得跨越明确的前景深度边缘，也不得改变未被 mask 标记的有效区域。
 
+产品只定义以下三个正式补洞模式；GUI、配置快照、Triton 和 Vulkan 不得增加语义重复的模式名称：
+
+| 模式 | GUI 文案 | 参数与行为 |
+|------|----------|------------|
+| `none` | 关闭 / 不补洞 | `radius=0`、`strength=0.0`；不得计算补洞遮挡 mask、羽化窗口、box average 或方向候选，输出 mask 为零。 |
+| `balanced` | 均衡 / 标准 | `radius=1`、`strength=0.6`；使用实时 box-average 边缘补洞，在速度、边缘稳定和细节之间折中。 |
+| `quality` | 增强 / 高质量 | `radius=3`、`strength=1.0`；使用方向内容感知补洞，包括深度/位移可靠性、radius-3 方向平均、方向候选与 box average 的 `0.75/0.25` 混合、亮度边缘保护和深度边缘保护。 |
+
+`soft_low_ghost` 与 `sharp_test` 不属于正式模式，不得出现在 GUI 选项、运行时类型、适配映射或 shader 枚举中。立体模式的默认补洞配置固定为：电影模式使用 `balanced`，游戏模式使用 `none`，图片模式使用 `quality`。选择立体模式时必须同步更新 mode、radius 和 strength，不得只切换显示标签。
+
+Vulkan fallback 的 fused、layered、tiled reference 和 OpenXR presenter-owned output image 路径必须使用同一枚举：`BALANCED=0`、`QUALITY=1`、`NONE=2`。OpenXR zero-copy 不得因为输出目标不同而退回简化质量公式；`none` 必须在主 shader 路径进入 feather/邻域采样前短路。运行时必须同时报告 `vulkan_hole_fill_mode` 与实际 `hole_fill_backend`。
+
 4K layered output 必须先完成当前像素的 warp，再仅在羽化 mask 大于零时执行邻域补洞；无 mask 像素不得执行 box average 或方向候选计算。遮挡搜索允许在已经确认 edge 的局部提前结束，但羽化采样近似只能作为性能策略，必须单独验证斜向边缘和羽化外圈，不得把近似结果视为与完整窗口严格等价。
 
 大面积生成式补图不进入默认实时管线。若未来提供离线质量模式，必须使用独立产品模式和资源预算。

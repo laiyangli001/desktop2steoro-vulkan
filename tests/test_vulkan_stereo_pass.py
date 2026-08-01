@@ -9,10 +9,16 @@ import pytest
 import stereo_runtime.vulkan_stereo_pass as module
 import stereo_runtime.vulkan_stereo_image_pass as image_module
 from stereo_runtime.vulkan_stereo_pass import (
+    VULKAN_HOLE_FILL_BALANCED,
+    VULKAN_HOLE_FILL_NONE,
+    VULKAN_HOLE_FILL_QUALITY,
     VulkanLayeredStereoParams,
     VulkanLayeredStereoPass,
     VulkanStereoFusedParams,
     VulkanStereoFusedPass,
+    resolve_vulkan_hole_fill_mode,
+    resolve_vulkan_hole_fill_parameters,
+    vulkan_hole_fill_backend_name,
 )
 
 
@@ -32,6 +38,69 @@ def test_vulkan_stereo_shaders_skip_fill_neighborhood_when_disabled():
         neighborhood_sample = fill_function.index("box_average(")
         assert early_return < neighborhood_sample, shader_path.name
 
+    fused_source = shader_paths[0].read_text(encoding="utf-8")
+    assert "params.hole_fill_mode != HOLE_FILL_NONE" in fused_source
+    assert "fill_enabled ? feathered_mask_at" in fused_source
+    for shader_path in shader_paths[1:]:
+        source = shader_path.read_text(encoding="utf-8")
+        assert "params.hole_fill_mode != HOLE_FILL_NONE" in source
+        assert "? 0.0 : feathered_mask_at" in source
+
+
+def test_vulkan_layered_shaders_implement_quality_content_aware_fill():
+    root = Path(__file__).resolve().parents[1]
+    for name in (
+        "d2s_stereo_fused.comp",
+        "d2s_stereo_layered.comp",
+        "d2s_stereo_layered_tiled.comp",
+        "d2s_stereo_layered_output.comp",
+    ):
+        source = (root / "shaders" / name).read_text(encoding="utf-8")
+        assert "const uint HOLE_FILL_NONE = 2u;" in source
+        assert "abs(right_shift - left_shift) > 0.05" in source
+        assert "for (int step = 1; step <= 3; ++step)" in source
+        assert "directional * 0.75 + blurred * 0.25" in source
+        assert "depth_protection" in source
+
+
+@pytest.mark.parametrize(
+    ("hole_fill", "hole_fill_mode", "expected_mode", "expected_backend"),
+    (
+        ("edge_aware", "balanced", VULKAN_HOLE_FILL_BALANCED, "vulkan_balanced"),
+        (
+            "edge_aware",
+            "quality",
+            VULKAN_HOLE_FILL_QUALITY,
+            "vulkan_directional_content_aware_radius3",
+        ),
+        ("none", "quality", VULKAN_HOLE_FILL_NONE, "none"),
+        ("edge_aware", "none", VULKAN_HOLE_FILL_NONE, "none"),
+    ),
+)
+def test_vulkan_hole_fill_mode_mapping(
+    hole_fill, hole_fill_mode, expected_mode, expected_backend
+):
+    mode = resolve_vulkan_hole_fill_mode(hole_fill, hole_fill_mode)
+
+    assert mode == expected_mode
+    assert vulkan_hole_fill_backend_name(mode) == expected_backend
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    (
+        (VULKAN_HOLE_FILL_BALANCED, (2, 0.6)),
+        (VULKAN_HOLE_FILL_QUALITY, (3, 1.0)),
+        (VULKAN_HOLE_FILL_NONE, (0, 0.0)),
+    ),
+)
+def test_vulkan_hole_fill_parameters_are_mode_complete(mode, expected):
+    assert resolve_vulkan_hole_fill_parameters(
+        mode,
+        fill_radius=2,
+        fill_strength=0.6,
+    ) == expected
+
 
 def test_vulkan_stereo_params_match_shader_push_constant_layout():
     payload = VulkanStereoFusedParams(
@@ -43,12 +112,13 @@ def test_vulkan_stereo_params_match_shader_push_constant_layout():
         fill_radius=1,
         mask_feather_radius=3,
         symmetric=True,
+        hole_fill_mode=VULKAN_HOLE_FILL_QUALITY,
     ).pack(3840, 2160)
 
     assert len(payload) == VulkanStereoFusedPass.PUSH_CONSTANTS_SIZE
-    unpacked = struct.unpack("<IIfffffIII", payload)
+    unpacked = struct.unpack("<IIfffffIIII", payload)
     assert unpacked[:2] == (3840, 2160)
-    assert unpacked[-3:] == (1, 3, 1)
+    assert unpacked[-4:] == (1, 3, 1, VULKAN_HOLE_FILL_QUALITY)
 
 
 def test_vulkan_stereo_params_reject_invalid_dimensions_and_radius():
@@ -59,13 +129,13 @@ def test_vulkan_stereo_params_reject_invalid_dimensions_and_radius():
 
 
 def test_vulkan_layered_params_match_shader_push_constant_layout():
-    payload = VulkanLayeredStereoParams(layers=3, hole_fill_mode=1).pack(3840, 2160)
+    payload = VulkanLayeredStereoParams(layers=3, hole_fill_mode=VULKAN_HOLE_FILL_NONE).pack(3840, 2160)
 
     assert len(payload) == VulkanLayeredStereoPass.PUSH_CONSTANTS_SIZE
     unpacked = struct.unpack("<IIfffffIIIIffffIIII", payload)
     assert unpacked[:2] == (3840, 2160)
     assert unpacked[10] == 3
-    assert unpacked[-2:] == (1, 1)
+    assert unpacked[-2:] == (VULKAN_HOLE_FILL_NONE, 1)
 
 
 def test_vulkan_stereo_pass_uses_bounded_descriptor_sets(monkeypatch):
@@ -122,7 +192,7 @@ def test_vulkan_stereo_pass_uses_bounded_descriptor_sets(monkeypatch):
     assert recorded == [{}]
     assert stereo_pass.pipeline.calls[0][1]["group_count_x"] == 2
     assert stereo_pass.pipeline.calls[0][1]["group_count_y"] == 2
-    assert len(stereo_pass.pipeline.calls[0][1]["push_constants"]) == 40
+    assert len(stereo_pass.pipeline.calls[0][1]["push_constants"]) == 44
     stereo_pass.close()
 
 

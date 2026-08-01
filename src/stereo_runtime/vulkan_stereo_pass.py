@@ -13,6 +13,50 @@ from viewer.vulkan_descriptors import (
 )
 
 
+VULKAN_HOLE_FILL_BALANCED = 0
+VULKAN_HOLE_FILL_QUALITY = 1
+VULKAN_HOLE_FILL_NONE = 2
+
+
+def resolve_vulkan_hole_fill_mode(hole_fill: object, hole_fill_mode: object) -> int:
+    normalized_fill = str(hole_fill or "edge_aware").strip().lower()
+    normalized_mode = str(hole_fill_mode or "balanced").strip().lower()
+    if normalized_fill in {"none", "off", "disabled"} or normalized_mode in {
+        "none",
+        "off",
+        "disabled",
+    }:
+        return VULKAN_HOLE_FILL_NONE
+    if normalized_mode in {
+        "quality",
+        "content_aware",
+        "directional",
+    }:
+        return VULKAN_HOLE_FILL_QUALITY
+    return VULKAN_HOLE_FILL_BALANCED
+
+
+def vulkan_hole_fill_backend_name(mode: int) -> str:
+    if int(mode) == VULKAN_HOLE_FILL_NONE:
+        return "none"
+    if int(mode) == VULKAN_HOLE_FILL_QUALITY:
+        return "vulkan_directional_content_aware_radius3"
+    return "vulkan_balanced"
+
+
+def resolve_vulkan_hole_fill_parameters(
+    mode: int,
+    *,
+    fill_radius: object,
+    fill_strength: object,
+) -> tuple[int, float]:
+    if int(mode) == VULKAN_HOLE_FILL_NONE:
+        return 0, 0.0
+    if int(mode) == VULKAN_HOLE_FILL_QUALITY:
+        return 3, 1.0
+    return max(0, min(3, int(fill_radius))), max(0.0, float(fill_strength))
+
+
 @dataclass(frozen=True, slots=True)
 class VulkanStereoFusedParams:
     """Push constants matching d2s_stereo_fused.comp."""
@@ -25,6 +69,7 @@ class VulkanStereoFusedParams:
     fill_radius: int = 1
     mask_feather_radius: int = 3
     symmetric: bool = True
+    hole_fill_mode: int = VULKAN_HOLE_FILL_BALANCED
 
     def pack(self, width: int, height: int) -> bytes:
         if int(width) < 1 or int(height) < 1:
@@ -32,7 +77,7 @@ class VulkanStereoFusedParams:
         if int(self.fill_radius) < 0 or int(self.mask_feather_radius) < 0:
             raise ValueError("Vulkan stereo fill radii must be non-negative")
         return struct.pack(
-            "<IIfffffIII",
+            "<IIfffffIIII",
             int(width),
             int(height),
             float(self.depth_strength),
@@ -43,6 +88,7 @@ class VulkanStereoFusedParams:
             int(self.fill_radius),
             int(self.mask_feather_radius),
             1 if self.symmetric else 0,
+            int(self.hole_fill_mode),
         )
 
 
@@ -107,7 +153,7 @@ class VulkanStereoFusedPass:
     """
 
     WORKGROUP_SIZE = 16
-    PUSH_CONSTANTS_SIZE = 40
+    PUSH_CONSTANTS_SIZE = 44
     BUFFER_COUNT = 5
 
     def __init__(

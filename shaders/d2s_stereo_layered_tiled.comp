@@ -52,6 +52,9 @@ layout(push_constant) uniform LayeredStereoParams {
 const int TILE_SIZE = 16;
 const int TILE_HALO = 7;
 const int SHARED_EXTENT = TILE_SIZE + TILE_HALO * 2;
+const uint HOLE_FILL_BALANCED = 0u;
+const uint HOLE_FILL_QUALITY = 1u;
+const uint HOLE_FILL_NONE = 2u;
 
 shared float shared_depth[SHARED_EXTENT][SHARED_EXTENT];
 
@@ -198,7 +201,7 @@ float dilated_occlusion_at(int sx, int sy) {
     return found;
 }
 
-float feathered_mask_at(int sx, int sy) {
+float feathered_mask_at(int x, int y, int sx, int sy) {
     int radius = min(int(params.mask_feather_radius), 3);
     if (radius <= 0) {
         return dilated_occlusion_at(sx, sy);
@@ -208,7 +211,12 @@ float feathered_mask_at(int sx, int sy) {
     for (int dy = -3; dy <= 3; ++dy) {
         for (int dx = -3; dx <= 3; ++dx) {
             if (abs(dx) <= radius && abs(dy) <= radius) {
-                total += dilated_occlusion_at(sx + dx, sy + dy);
+                int sample_x = x + dx;
+                int sample_y = y + dy;
+                if (sample_x >= 0 && sample_x < int(params.width)
+                        && sample_y >= 0 && sample_y < int(params.height)) {
+                    total += dilated_occlusion_at(sx + dx, sy + dy);
+                }
                 count += 1.0;
             }
         }
@@ -223,7 +231,12 @@ vec3 box_average(int x, int y, int sx, int sy, float eye_sign) {
     for (int dy = -3; dy <= 3; ++dy) {
         for (int dx = -3; dx <= 3; ++dx) {
             if (abs(dx) <= radius && abs(dy) <= radius) {
-                total += layered_warp_at(x + dx, y + dy, sx + dx, sy + dy, eye_sign);
+                int sample_x = x + dx;
+                int sample_y = y + dy;
+                if (sample_x >= 0 && sample_x < int(params.width)
+                        && sample_y >= 0 && sample_y < int(params.height)) {
+                    total += layered_warp_at(sample_x, sample_y, sx + dx, sy + dy, eye_sign);
+                }
                 count += 1.0;
             }
         }
@@ -231,25 +244,48 @@ vec3 box_average(int x, int y, int sx, int sy, float eye_sign) {
     return total / max(count, 1.0);
 }
 
+float mean_luma(vec3 color) {
+    return (color.r + color.g + color.b) / 3.0;
+}
+
 vec3 fill_eye(int x, int y, int sx, int sy, float eye_sign, float mask) {
     vec3 original = layered_warp_at(x, y, sx, sy, eye_sign);
-    if (mask <= 1.0e-5 || params.fill_strength <= 1.0e-5) return original;
+    if (params.hole_fill_mode == HOLE_FILL_NONE
+            || mask <= 1.0e-5 || params.fill_strength <= 1.0e-5) return original;
     vec3 blurred = box_average(x, y, sx, sy, eye_sign);
-    if (params.hole_fill_mode == 0u) {
+    if (params.hole_fill_mode == HOLE_FILL_BALANCED) {
         return mix(original, blurred, clamp(mask * params.fill_strength, 0.0, 1.0));
     }
 
     float left_depth = tile_depth_at(sx - 1, sy);
     float right_depth = tile_depth_at(sx + 1, sy);
-    bool reliable = abs(right_depth - left_depth) > params.edge_threshold;
-    vec3 directional = right_depth < left_depth
-        ? layered_warp_at(x + 1, y, sx + 1, sy, eye_sign)
-        : layered_warp_at(x - 1, y, sx - 1, sy, eye_sign);
+    float left_shift = tile_shift_at(sx - 1, sy);
+    float right_shift = tile_shift_at(sx + 1, sy);
+    bool reliable = abs(right_depth - left_depth) > params.edge_threshold
+        || abs(right_shift - left_shift) > 0.05;
+    int direction = right_depth < left_depth ? 1 : -1;
+    int radius = clamp(int(params.fill_radius), 1, 3);
+    vec3 directional = vec3(0.0);
+    for (int step = 1; step <= 3; ++step) {
+        if (step <= radius) {
+            int sample_x = clamp_x(x + direction * step);
+            int sample_sx = sx + sample_x - x;
+            directional += layered_warp_at(sample_x, y, sample_sx, sy, eye_sign);
+        }
+    }
+    directional /= float(radius);
     vec3 content_aware = reliable ? directional * 0.75 + blurred * 0.25 : blurred;
-    float current_luma = dot(original, vec3(0.299, 0.587, 0.114));
-    float left_luma = dot(layered_warp_at(x - 1, y, sx - 1, sy, eye_sign), vec3(0.299, 0.587, 0.114));
-    float up_luma = dot(layered_warp_at(x, y - 1, sx, sy - 1, eye_sign), vec3(0.299, 0.587, 0.114));
-    float protection = clamp((max(abs(current_luma - left_luma), abs(current_luma - up_luma)) - 0.20) / 0.30, 0.0, 1.0);
+    float current_luma = mean_luma(original);
+    float rgb_edge_x = x > 0
+        ? abs(current_luma - mean_luma(layered_warp_at(x - 1, y, sx - 1, sy, eye_sign))) : 0.0;
+    float rgb_edge_y = y > 0
+        ? abs(current_luma - mean_luma(layered_warp_at(x, y - 1, sx, sy - 1, eye_sign))) : 0.0;
+    float protection = clamp((max(rgb_edge_x, rgb_edge_y) - 0.20) / 0.30, 0.0, 1.0);
+    float current_depth = tile_depth_at(sx, sy);
+    float depth_edge_x = x > 0 ? abs(current_depth - tile_depth_at(sx - 1, sy)) : 0.0;
+    float depth_edge_y = y > 0 ? abs(current_depth - tile_depth_at(sx, sy - 1)) : 0.0;
+    float depth_protection = clamp((max(depth_edge_x, depth_edge_y) - 0.04) / 0.12, 0.0, 1.0) * 0.5;
+    protection = max(protection, depth_protection);
     float blend = clamp(mask * params.fill_strength * (1.0 - protection * 0.70), 0.0, 1.0);
     return mix(original, content_aware, blend);
 }
@@ -282,8 +318,11 @@ void main() {
     int iy = int(y);
     int sx = int(gl_LocalInvocationID.x) + TILE_HALO;
     int sy = int(gl_LocalInvocationID.y) + TILE_HALO;
-    float mask = screen_edge_suppressed(ix, iy) ? 0.0 : dilated_occlusion_at(sx, sy);
-    float fill_mask = screen_edge_suppressed(ix, iy) ? 0.0 : feathered_mask_at(sx, sy);
+    bool fill_enabled = params.hole_fill_mode != HOLE_FILL_NONE && params.fill_strength > 1.0e-5;
+    float mask = (!fill_enabled || screen_edge_suppressed(ix, iy))
+        ? 0.0 : dilated_occlusion_at(sx, sy);
+    float fill_mask = (!fill_enabled || screen_edge_suppressed(ix, iy))
+        ? 0.0 : feathered_mask_at(ix, iy, sx, sy);
     uint pixel = pixel_index(ix, iy);
     uint plane = pixel_count();
     vec3 left = fill_eye(ix, iy, sx, sy, 1.0, fill_mask);

@@ -23,7 +23,7 @@ from .temporal import TemporalState, apply_temporal, detect_scene_gate
 
 Backend = Literal["fast", "fast_plus", "quality_4k", "hq_4k"]
 HoleFill = Literal["none", "fast", "edge_aware"]
-HoleFillMode = Literal["none", "balanced", "soft_low_ghost", "sharp_test", "quality", "content_aware", "directional"]
+HoleFillMode = Literal["none", "balanced", "quality", "content_aware", "directional"]
 
 
 @dataclass

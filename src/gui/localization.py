@@ -52,9 +52,6 @@ MESSAGE_CATALOGS = {
         "Off / No Fill": "Off / No Fill",
         "Balanced": "Balanced",
         "Balanced / Standard": "Balanced / Standard",
-        "Soft / Low Ghost": "Soft / Low Ghost",
-        "Sharp Test": "Sharp Test",
-        "Sharp / High Detail": "Sharp / High Detail",
         "Content Aware / Highest Quality": "Content Aware / Highest Quality",
         "On": "On",
         "Anaglyph:": "Anaglyph:",
@@ -175,7 +172,7 @@ MESSAGE_CATALOGS = {
         "tooltip_edge_dilation": "Expands detected depth edges for occlusion handling",
         "tooltip_mask_feather": "Softens the occlusion fill mask; higher values reduce hard edge artifacts",
         "tooltip_edge_threshold": "Depth edge sensitivity; lower values detect more edges",
-        "tooltip_hole_fill_mode": "Occlusion fill preset: Off / No Fill completely disables hole filling; Balanced / Standard keeps the realtime speed-detail balance, Soft / Low Ghost reduces edge ghosts, Sharp / High Detail keeps stronger detail for comparison, Content Aware / Highest Quality uses directional content-aware fill and is much slower.",
+        "tooltip_hole_fill_mode": "Occlusion fill preset: Off / No Fill completely disables hole filling; Balanced / Standard keeps the realtime speed-detail balance; Content Aware / Highest Quality uses directional content-aware fill and is much slower. Defaults: Cinema = Balanced / Standard; Game = Off / No Fill; Image = Content Aware / Highest Quality.",
         "tooltip_anaglyph": "Color pair used when Display Mode is Anaglyph",
         "tooltip_cross_eyed": "Swap left and right eyes for cross-eyed viewing",
         "tooltip_advanced_stereo": "Show expert stereo/runtime parameters. Leave off for the simplified everyday UI.",
@@ -291,10 +288,7 @@ MESSAGE_CATALOGS = {
         "Off / No Fill": "关闭 / 不补洞",
         "Balanced": "均衡",
         "Balanced / Standard": "均衡 / 标准",
-        "Soft / Low Ghost": "柔和 / 低重影",
-        "Sharp Test": "锐利测试",
-        "Sharp / High Detail": "锐利 / 高细节",
-        "Content Aware / Highest Quality": "内容感知 / 最高质量",
+        "Content Aware / Highest Quality": "增强 / 高质量",
         "On": "开启",
         "Anaglyph:": "红蓝模式:",
         "Color Brightness:": "亮度:",
@@ -422,7 +416,7 @@ MESSAGE_CATALOGS = {
         "tooltip_edge_dilation": "扩张深度边缘区域，用于遮挡和补洞处理",
         "tooltip_mask_feather": "柔化遮挡补洞遮罩；数值越高越能减轻硬边重影",
         "tooltip_edge_threshold": "深度边缘检测敏感度；越低检测到的边缘越多",
-        "tooltip_hole_fill_mode": "遮挡补洞预设：关闭 / 不补洞会完全禁用所有补洞算法；均衡 / 标准保留实时速度和细节折中，柔和 / 低重影降低边缘重影，锐利 / 高细节保留更强细节用于对比，内容感知 / 最高质量使用方向内容感知补洞，速度会明显变慢。",
+        "tooltip_hole_fill_mode": "遮挡补洞预设：关闭 / 不补洞会完全禁用所有补洞算法；均衡 / 标准保留实时速度和细节折中；增强 / 高质量使用方向内容感知补洞，速度会明显变慢。默认对应：电影模式 = 均衡 / 标准；游戏模式 = 关闭 / 不补洞；图片模式 = 增强 / 高质量。",
         "tooltip_anaglyph": "显示模式为红蓝/补色时使用的颜色组合",
         "tooltip_cross_eyed": "交换左右眼，用于交叉眼观看",
         "tooltip_advanced_stereo": "显示专家级立体和运行时参数；普通使用建议保持关闭。",
@@ -632,19 +626,15 @@ def display_to_depth_separation(value):
     return "standard"
 
 
-HOLE_FILL_MODE_KEYS = ("none", "balanced", "soft_low_ghost", "sharp_test", "quality")
+HOLE_FILL_MODE_KEYS = ("none", "balanced", "quality")
 HOLE_FILL_MODE_LABELS = {
     "none": "Off / No Fill",
     "balanced": "Balanced / Standard",
-    "soft_low_ghost": "Soft / Low Ghost",
-    "sharp_test": "Sharp / High Detail",
     "quality": "Content Aware / Highest Quality",
 }
 HOLE_FILL_MODE_LEGACY_LABELS = {
     "none": ("Off", "Disabled", "None", "No Fill"),
     "balanced": ("Balanced",),
-    "soft_low_ghost": (),
-    "sharp_test": ("Sharp Test",),
     "quality": ("Quality", "Content Aware", "Directional"),
 }
 

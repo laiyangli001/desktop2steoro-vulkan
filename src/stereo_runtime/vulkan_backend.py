@@ -17,6 +17,7 @@ from .vulkan_stereo_pass import (
     VulkanLayeredStereoPass,
     VulkanStereoFusedParams,
     VulkanStereoFusedPass,
+    vulkan_hole_fill_backend_name,
 )
 from .vulkan_stereo_image_pass import VulkanStereoImagePass
 
@@ -201,6 +202,8 @@ class VulkanStereoImageComputeBackend:
             "vulkan_input_path": input_mode,
             "vulkan_input_upload_ms": input_upload_ms,
             "vulkan_input_error": self._cuda_input_error,
+            "vulkan_hole_fill_mode": int(params.hole_fill_mode),
+            "vulkan_hole_fill_backend": vulkan_hole_fill_backend_name(params.hole_fill_mode),
         }
 
     def _ensure_cuda_inputs(self, height: int, width: int) -> None:
@@ -443,6 +446,8 @@ class VulkanStereoComputeBackend:
             "vulkan_submit_wait_ms": submit_wait_ms,
             "vulkan_host_readback_ms": readback_ms,
             "vulkan_total_ms": (time.perf_counter() - total_start) * 1000.0,
+            "vulkan_hole_fill_mode": int(params.hole_fill_mode),
+            "vulkan_hole_fill_backend": vulkan_hole_fill_backend_name(params.hole_fill_mode),
         }
         return left, right, mask, debug
 
@@ -499,6 +504,8 @@ class VulkanStereoComputeBackend:
             "vulkan_submit_timeline": int(timeline),
             "vulkan_readback": "host_visible_storage_buffer",
             "vulkan_layered_shader": self.layered_shader_path.name,
+            "vulkan_hole_fill_mode": int(params.hole_fill_mode),
+            "vulkan_hole_fill_backend": vulkan_hole_fill_backend_name(params.hole_fill_mode),
             "vulkan_host_upload_ms": upload_ms,
             "vulkan_submit_wait_ms": submit_wait_ms,
             "vulkan_host_readback_ms": readback_ms,

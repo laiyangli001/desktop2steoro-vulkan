@@ -2,6 +2,16 @@
 
 本文件记录项目重大更新和每日工作收尾。新记录按日期倒序追加；每个工作日结束时更新“已实现”“验证结果”“未决事项”和“下一项内容”。
 
+## 2026-08-01
+- 将补洞模式收敛为三个正式选项：`none`（关闭 / 不补洞）、`balanced`（均衡 / 标准）和 `quality`（增强 / 高质量）；删除没有独立 kernel 价值的 `soft_low_ghost` 与 `sharp_test` 选项、标签和适配映射，不保留旧模式专用兼容分支。
+- 更新补洞 GUI 中文文案：原“内容感知 / 最高质量”改为“增强 / 高质量”；Tooltip 仅说明三档有效行为，并明确立体模式默认映射为电影→均衡、游戏→关闭、图片→增强/高质量。
+- 同步 GUI 与运行时预设：电影使用 `balanced, radius=1, strength=0.6`；游戏使用 `none, radius=0, strength=0.0`；图片使用 `quality, radius=3, strength=1.0`。
+- 为 Vulkan Compute 建立统一补洞三态 ABI：`BALANCED=0`、`QUALITY=1`、`NONE=2`。`d2s_stereo_fused`、`d2s_stereo_layered`、`d2s_stereo_layered_tiled` 和 OpenXR zero-copy 的 `d2s_stereo_layered_output` 均执行同一模式契约。
+- Vulkan 最高质量补洞迁移完整 radius-3 方向内容感知公式：深度/位移方向可靠性判断、三点方向平均、方向候选与 box average 的 0.75/0.25 混合、UI 亮度边缘保护和深度边缘保护；关闭模式在 shader 主路径直接跳过遮挡、羽化和补洞邻域计算，并输出零 mask。
+- 更新 Vulkan 运行时 debug 字段，统一报告 `vulkan_hole_fill_mode` 与实际 `hole_fill_backend`，避免配置显示为最高质量但执行均衡公式。
+- 使用 Vulkan SDK 1.4.350.0 重新编译四个 SPIR-V；RTX 3090 实际 Vulkan 调度验证三态均可执行，关闭模式 `mask_max=0`，最高质量与均衡输出存在有效差异。
+- 回归验证：专项测试 121 项通过，全量测试 `713 passed`；`git diff --check` 通过。
+
 ## 2026-07-31
 - 修复静止源帧复用后 FPS 面板 SBS 计数归零的问题：SBS FPS 现在按实际 XR 显示 tick 统计，而不是按生产者 `frame_id` 去重；同时恢复前景 View 不执行二次后处理，避免前景合成阶段覆盖房间场景。
 - 修复场景曝光更新和 Bridge 销毁时前景 View 残留旧 ColorGrading 句柄的问题，避免 Filament 访问已释放句柄导致原生崩溃。

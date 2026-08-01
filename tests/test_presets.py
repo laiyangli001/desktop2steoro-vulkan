@@ -62,7 +62,10 @@ def test_stereo_presets_map_to_expected_modes():
         assert config.foreground_shift_scale == 1.0
 
     assert game.backend == "fast_plus"
-    assert game.hole_fill == "fast"
+    assert game.hole_fill == "none"
+    assert game.hole_fill_mode == "none"
+    assert game.hole_fill_radius == 0
+    assert game.hole_fill_strength == 0.0
     assert game.temporal_strength < cinema.temporal_strength
     assert game.depth_strength < cinema.depth_strength
 
@@ -71,6 +74,8 @@ def test_stereo_presets_map_to_expected_modes():
     assert still.temporal is False
     assert still.auto_reset_temporal is False
     assert still.hole_fill_mode == "quality"
+    assert still.hole_fill_radius == 3
+    assert still.hole_fill_strength == 1.0
 
     assert debug.debug_output is True
     assert debug.depth_strength >= cinema.depth_strength
@@ -188,7 +193,7 @@ def test_manual_presets_bypass_auto_runtime_contract():
     auto_default = stereo_config_for_preset("auto", output_format="half_sbs")
 
     assert manual.backend == "fast_plus"
-    assert manual.hole_fill == "fast"
+    assert manual.hole_fill == "none"
     assert auto_default.backend == "quality_4k"
     assert auto_default.hole_fill == "edge_aware"
     assert auto_detection_required("auto") is True

@@ -1393,12 +1393,17 @@ class StereoRuntime:
                 left_eye = output_rgb
                 right_eye = output_rgb
                 output_format = "openxr_eye_views"
+                from .vulkan_stereo_pass import vulkan_hole_fill_backend_name
+
                 render_backend = {
                     "backend": str(stereo_config.backend),
                     "sbs_backend": "vulkan_deferred_stereo",
                     "warp_composite_backend": "vulkan_layered_stereo_output_image",
                     "occlusion_mask_backend": "vulkan_layered_stereo_output_image",
-                    "hole_fill_backend": "vulkan_layered_stereo_output_image",
+                    "hole_fill_backend": vulkan_hole_fill_backend_name(
+                        deferred_request.params.hole_fill_mode
+                    ),
+                    "vulkan_hole_fill_mode": int(deferred_request.params.hole_fill_mode),
                     "stereo_compute_backend": "vulkan",
                     "vulkan_openxr_prewarp": 1,
                     "vulkan_zero_copy_request": 1,
@@ -1658,21 +1663,27 @@ class StereoRuntime:
                 convergence=float(getattr(stereo_config, "convergence", 0.0)),
                 max_disparity_px=getattr(stereo_config, "max_disparity_px", None),
             )
-            from .vulkan_stereo_pass import VulkanLayeredStereoParams
+            from .vulkan_stereo_pass import (
+                VulkanLayeredStereoParams,
+                resolve_vulkan_hole_fill_mode,
+                resolve_vulkan_hole_fill_parameters,
+            )
 
             hole_fill = str(getattr(stereo_config, "hole_fill", "edge_aware")).strip().lower()
             hole_fill_mode = str(getattr(stereo_config, "hole_fill_mode", "balanced")).strip().lower()
-            directional_fill = hole_fill_mode in {"quality", "content_aware", "directional"}
+            vulkan_hole_fill_mode = resolve_vulkan_hole_fill_mode(hole_fill, hole_fill_mode)
+            fill_radius, fill_strength = resolve_vulkan_hole_fill_parameters(
+                vulkan_hole_fill_mode,
+                fill_radius=getattr(stereo_config, "hole_fill_radius", 3),
+                fill_strength=getattr(stereo_config, "hole_fill_strength", 1.0),
+            )
             params = VulkanLayeredStereoParams(
                 depth_strength=max(0.0, float(getattr(stereo_config, "depth_strength", 1.0))),
                 max_disparity_px=float(budget.max_disparity_px),
                 convergence=float(getattr(stereo_config, "convergence", 0.0)),
                 edge_threshold=float(getattr(stereo_config, "edge_threshold", 0.04)),
-                fill_strength=(
-                    float(getattr(stereo_config, "hole_fill_strength", 1.0))
-                    if hole_fill != "none" else 0.0
-                ),
-                fill_radius=max(0, min(3, int(getattr(stereo_config, "hole_fill_radius", 3)))),
+                fill_strength=fill_strength,
+                fill_radius=fill_radius,
                 mask_feather_radius=max(0, min(3, int(getattr(stereo_config, "mask_feather_radius", 3)))),
                 symmetric=bool(getattr(stereo_config, "symmetric", True)),
                 layers=(1 if backend == "fast_plus" else max(1, min(4, int(getattr(stereo_config, "layers", 2))))),
@@ -1682,7 +1693,7 @@ class StereoRuntime:
                 background_scale=max(0.0, float(getattr(stereo_config, "background_shift_scale", 1.0))),
                 edge_dilation=max(0, min(3, int(getattr(stereo_config, "edge_dilation", 2)))),
                 screen_edge_suppression=max(0, int(getattr(stereo_config, "screen_edge_mask_suppression", 0))),
-                hole_fill_mode=1 if directional_fill else 0,
+                hole_fill_mode=vulkan_hole_fill_mode,
                 occlusion_enabled=bool(getattr(stereo_config, "occlusion", True)),
             )
             return VulkanComputeRequest(rgb=rgb_frame, depth=processed_depth, params=params), "ready"
@@ -1890,7 +1901,28 @@ class StereoRuntime:
                 convergence=float(getattr(stereo_config, "convergence", 0.0)),
                 max_disparity_px=getattr(stereo_config, "max_disparity_px", None),
             )
-            from .vulkan_stereo_pass import VulkanStereoFusedParams
+            from .vulkan_stereo_pass import (
+                VulkanStereoFusedParams,
+                resolve_vulkan_hole_fill_mode,
+                resolve_vulkan_hole_fill_parameters,
+                vulkan_hole_fill_backend_name,
+            )
+
+            hole_fill = str(
+                getattr(stereo_config, "hole_fill", "edge_aware")
+            ).strip().lower()
+            hole_fill_mode = str(
+                getattr(stereo_config, "hole_fill_mode", "balanced")
+            ).strip().lower()
+            vulkan_hole_fill_mode = resolve_vulkan_hole_fill_mode(
+                hole_fill,
+                hole_fill_mode,
+            )
+            fill_radius, fill_strength = resolve_vulkan_hole_fill_parameters(
+                vulkan_hole_fill_mode,
+                fill_radius=getattr(stereo_config, "hole_fill_radius", 1),
+                fill_strength=getattr(stereo_config, "hole_fill_strength", 0.6),
+            )
 
             left, right, mask, backend_debug = self._vulkan_stereo_backend.submit_frame(
                 rgb_frame,
@@ -1900,14 +1932,11 @@ class StereoRuntime:
                     max_disparity_px=float(budget.max_disparity_px),
                     convergence=float(getattr(stereo_config, "convergence", 0.0)),
                     edge_threshold=float(getattr(stereo_config, "edge_threshold", 0.03)),
-                    fill_strength=(
-                        float(getattr(stereo_config, "hole_fill_strength", 0.6))
-                        if getattr(stereo_config, "hole_fill", "edge_aware") != "none"
-                        else 0.0
-                    ),
-                    fill_radius=max(0, min(3, int(getattr(stereo_config, "hole_fill_radius", 1)))),
+                    fill_strength=fill_strength,
+                    fill_radius=fill_radius,
                     mask_feather_radius=max(0, min(3, int(getattr(stereo_config, "mask_feather_radius", 3)))),
                     symmetric=bool(getattr(stereo_config, "symmetric", True)),
+                    hole_fill_mode=vulkan_hole_fill_mode,
                 ),
             )
             if bool(getattr(stereo_config, "temporal", False)):
@@ -1927,11 +1956,8 @@ class StereoRuntime:
                 "sbs_backend": "vulkan_fused_stereo",
                 "warp_composite_backend": "vulkan_fused_stereo",
                 "occlusion_mask_backend": "vulkan_fused_stereo",
-                "hole_fill_backend": (
-                    "none"
-                    if str(getattr(stereo_config, "hole_fill", "edge_aware")).strip().lower() == "none"
-                    else "vulkan_fused_stereo"
-                ),
+                "hole_fill_backend": vulkan_hole_fill_backend_name(vulkan_hole_fill_mode),
+                "vulkan_hole_fill_mode": int(vulkan_hole_fill_mode),
                 "stereo_compute_backend": "vulkan",
                 "fast_plus_fused_temporal_bypass": 0,
                 "occlusion_mask": mask,
@@ -1985,11 +2011,21 @@ class StereoRuntime:
                 convergence=float(getattr(stereo_config, "convergence", 0.0)),
                 max_disparity_px=getattr(stereo_config, "max_disparity_px", None),
             )
-            from .vulkan_stereo_pass import VulkanLayeredStereoParams
+            from .vulkan_stereo_pass import (
+                VulkanLayeredStereoParams,
+                resolve_vulkan_hole_fill_mode,
+                resolve_vulkan_hole_fill_parameters,
+                vulkan_hole_fill_backend_name,
+            )
 
             hole_fill = str(getattr(stereo_config, "hole_fill", "edge_aware")).strip().lower()
             hole_fill_mode = str(getattr(stereo_config, "hole_fill_mode", "balanced")).strip().lower()
-            directional_fill = hole_fill_mode in {"quality", "content_aware", "directional"}
+            vulkan_hole_fill_mode = resolve_vulkan_hole_fill_mode(hole_fill, hole_fill_mode)
+            fill_radius, fill_strength = resolve_vulkan_hole_fill_parameters(
+                vulkan_hole_fill_mode,
+                fill_radius=getattr(stereo_config, "hole_fill_radius", 3),
+                fill_strength=getattr(stereo_config, "hole_fill_strength", 1.0),
+            )
             left, right, mask, backend_debug = self._vulkan_stereo_backend.submit_layered_frame(
                 rgb_frame,
                 processed_depth,
@@ -1998,11 +2034,8 @@ class StereoRuntime:
                     max_disparity_px=float(budget.max_disparity_px),
                     convergence=float(getattr(stereo_config, "convergence", 0.0)),
                     edge_threshold=float(getattr(stereo_config, "edge_threshold", 0.04)),
-                    fill_strength=(
-                        float(getattr(stereo_config, "hole_fill_strength", 1.0))
-                        if hole_fill != "none" else 0.0
-                    ),
-                    fill_radius=max(0, min(3, int(getattr(stereo_config, "hole_fill_radius", 3)))),
+                    fill_strength=fill_strength,
+                    fill_radius=fill_radius,
                     mask_feather_radius=max(0, min(3, int(getattr(stereo_config, "mask_feather_radius", 3)))),
                     symmetric=bool(getattr(stereo_config, "symmetric", True)),
                     layers=max(1, min(4, int(getattr(stereo_config, "layers", 2)))),
@@ -2012,7 +2045,7 @@ class StereoRuntime:
                     background_scale=max(0.0, float(getattr(stereo_config, "background_shift_scale", 1.0))),
                     edge_dilation=max(0, min(3, int(getattr(stereo_config, "edge_dilation", 2)))),
                     screen_edge_suppression=max(0, int(getattr(stereo_config, "screen_edge_mask_suppression", 0))),
-                    hole_fill_mode=1 if directional_fill else 0,
+                    hole_fill_mode=vulkan_hole_fill_mode,
                     occlusion_enabled=bool(getattr(stereo_config, "occlusion", True)),
                 ),
             )
@@ -2033,7 +2066,8 @@ class StereoRuntime:
                 "sbs_backend": "vulkan_layered_stereo",
                 "warp_composite_backend": "vulkan_layered_stereo",
                 "occlusion_mask_backend": "vulkan_layered_stereo",
-                "hole_fill_backend": "none" if hole_fill == "none" else "vulkan_layered_stereo",
+                "hole_fill_backend": vulkan_hole_fill_backend_name(vulkan_hole_fill_mode),
+                "vulkan_hole_fill_mode": int(vulkan_hole_fill_mode),
                 "stereo_compute_backend": "vulkan",
                 "layers": int(getattr(stereo_config, "layers", 2)),
                 "occlusion_mask": mask,

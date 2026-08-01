@@ -418,8 +418,8 @@ class GUIConfigMixin:
                 "convergence": 0.0, "dynamic_convergence": False, "dynamic_convergence_strength": 0.0,
                 "temporal_strength": 0.0, "scene_reset_threshold": 0.18,
                 "depth_pop": 0.0, "depth_separation": "weak", "foreground_pop": 1.15, "midground_pop": 1.05, "background_pop": 0.85, "antialiasing": 0, "depth_antialias_strength": 0.0,
-                "edge_dilation": 1, "mask_feather_radius": 0, "hole_fill_mode": "soft_low_ghost",
-                "hole_fill_radius": 1, "hole_fill_strength": 0.60, "edge_threshold": 0.04,
+                "edge_dilation": 1, "mask_feather_radius": 0, "hole_fill_mode": "none",
+                "hole_fill_radius": 0, "hole_fill_strength": 0.0, "edge_threshold": 0.04,
                 "cross_eyed": False,
             },
             "still_image_hq": {
@@ -436,8 +436,8 @@ class GUIConfigMixin:
                 "convergence": 0.0, "dynamic_convergence": False, "dynamic_convergence_strength": 0.0,
                 "temporal_strength": 0.0, "scene_reset_threshold": 0.22,
                 "depth_pop": 0.0, "depth_separation": "default", "foreground_pop": 1.0, "midground_pop": 1.0, "background_pop": 1.0, "antialiasing": 0, "depth_antialias_strength": 0.0,
-                "edge_dilation": 1, "mask_feather_radius": 0, "hole_fill_mode": "sharp_test",
-                "hole_fill_radius": 1, "hole_fill_strength": 0.45, "edge_threshold": 0.04,
+                "edge_dilation": 1, "mask_feather_radius": 0, "hole_fill_mode": "balanced",
+                "hole_fill_radius": 1, "hole_fill_strength": 0.60, "edge_threshold": 0.04,
                 "cross_eyed": False,
             },
         }

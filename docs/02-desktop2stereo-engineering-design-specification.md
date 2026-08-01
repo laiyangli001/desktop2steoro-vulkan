@@ -744,6 +744,23 @@ Pass 不得自行提交 queue，不得持有 OpenXR swapchain，不得执行文�
 
 每帧参数写入 host-visible ring buffer 或 push constant。参数快照带 `config_version`，一帧所有 Pass 必须使用同一版本。
 
+#### 10.3.1 补洞模式 ABI 与 shader 实现
+
+补洞模式使用跨后端稳定枚举：`VULKAN_HOLE_FILL_BALANCED=0`、`VULKAN_HOLE_FILL_QUALITY=1`、`VULKAN_HOLE_FILL_NONE=2`。Python 运行时负责把唯一的产品模式 `balanced/quality/none` 解析为枚举，并同步解析固定参数：均衡为 radius 1、strength 0.6；增强/高质量为 radius 3、strength 1.0；关闭为 radius 0、strength 0.0。`soft_low_ghost` 和 `sharp_test` 已删除，不建立旧值兼容表。
+
+以下 shader 必须接受并执行同一模式语义：
+
+- `d2s_stereo_fused.comp`：普通 SBS `fast_plus` Vulkan fallback。
+- `d2s_stereo_layered.comp`：`quality_4k/hq_4k` 通用 layered fallback。
+- `d2s_stereo_layered_tiled.comp`：tiled reference/优化对照路径。
+- `d2s_stereo_layered_output.comp`：OpenXR presenter-owned storage image zero-copy 路径。
+
+`quality` 的公式顺序固定为：生成 feather mask；以左右深度差或位移差判断方向可靠性；沿可靠背景方向对 step 1..3 采样并平均；可靠时使用 `directional * 0.75 + blurred * 0.25`，否则使用 blurred；最后应用通道均值亮度边缘保护与深度边缘保护。窗口边界按固定分母零填充，方向采样按边界复制。颜色运算必须服从该输出路径既有的 sRGB/线性契约，不得加入 tone mapping。
+
+`none` 的短路必须位于 occlusion dilation、feather 和 box/directional neighborhood 之前；通用 buffer 路径写零 mask，OpenXR image 路径不执行 mask 计算。Debug 至少包含 `vulkan_hole_fill_mode` 和 `vulkan_hole_fill_backend`。Push constant ABI 变化必须同步更新 Python pack 格式、pipeline size、SPIR-V 和 ABI 测试。
+
+GUI 与 canonical runtime preset 必须一致：电影 `balanced/1/0.6`，游戏 `none/0/0.0`，图片 `quality/3/1.0`。Tooltip 仅展示“关闭 / 不补洞、均衡 / 标准、增强 / 高质量”三档及上述默认映射。
+
 视差核心语义保持：
 
 ```text

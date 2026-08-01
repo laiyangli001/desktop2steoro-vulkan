@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from pathlib import Path
 
+import pytest
 import torch
 
 import stereo_runtime.runtime as runtime_module
@@ -28,7 +29,7 @@ class _Provider:
 
 class _FakeVulkanBackend:
     def submit_frame(self, rgb, depth, *, params):
-        del params
+        self.last_fused_params = params
         mask = torch.zeros_like(depth)
         return rgb, rgb.clone(), mask, {
             "vulkan_device": "fake-vulkan",
@@ -333,6 +334,57 @@ def test_openxr_default_auto_mode_builds_deferred_vulkan_request(monkeypatch):
     runtime.close()
 
 
+@pytest.mark.parametrize(
+    ("hole_fill_mode", "fill_radius", "fill_strength", "expected_mode", "expected_backend"),
+    (
+        (
+            "quality",
+            3,
+            1.0,
+            1,
+            "vulkan_directional_content_aware_radius3",
+        ),
+        ("none", 0, 0.0, 2, "none"),
+    ),
+)
+def test_openxr_deferred_vulkan_request_preserves_hole_fill_mode(
+    monkeypatch,
+    hole_fill_mode,
+    fill_radius,
+    fill_strength,
+    expected_mode,
+    expected_backend,
+):
+    monkeypatch.setattr(
+        runtime_module,
+        "probe_triton_runtime",
+        lambda device=None: SimpleNamespace(available=False, vendor="unsupported"),
+    )
+    config = StereoRuntimeConfig(
+        model_id="lc700x/Distill-Any-Depth-Base-hf",
+        stereo_quality="quality_4k",
+        stereo_compute_backend="vulkan",
+        temporal=False,
+        hole_fill_mode=hole_fill_mode,
+        hole_fill_radius=fill_radius,
+        hole_fill_strength=fill_strength,
+    )
+    runtime = StereoRuntime(config, depth_provider=_Provider(), collect_memory_stats=False)
+
+    result = runtime.process_openxr_frame(
+        torch.rand(1, 3, 8, 12),
+        OpenXRRenderConfig(output_mode="full_synthesis_eyes"),
+    )
+
+    assert result.vulkan_compute_request is not None
+    assert result.vulkan_compute_request.params.hole_fill_mode == expected_mode
+    assert result.vulkan_compute_request.params.fill_radius == fill_radius
+    assert result.vulkan_compute_request.params.fill_strength == fill_strength
+    assert result.debug_info["vulkan_hole_fill_mode"] == expected_mode
+    assert result.debug_info["hole_fill_backend"] == expected_backend
+    runtime.close()
+
+
 def test_runtime_routes_fast_plus_to_vulkan_fused_backend(monkeypatch):
     monkeypatch.setattr(
         runtime_module,
@@ -356,6 +408,51 @@ def test_runtime_routes_fast_plus_to_vulkan_fused_backend(monkeypatch):
     assert result.debug_info["vulkan_device"] == "fake-vulkan"
     assert result.left_eye.shape == (1, 3, 8, 12)
     assert result.right_eye.shape == (1, 3, 8, 12)
+    runtime.close()
+
+
+@pytest.mark.parametrize(
+    ("hole_fill_mode", "expected_mode", "expected_radius", "expected_strength", "expected_backend"),
+    (
+        ("balanced", 0, 1, 0.6, "vulkan_balanced"),
+        ("quality", 1, 3, 1.0, "vulkan_directional_content_aware_radius3"),
+        ("none", 2, 0, 0.0, "none"),
+    ),
+)
+def test_fast_plus_vulkan_fused_preserves_hole_fill_mode(
+    monkeypatch,
+    hole_fill_mode,
+    expected_mode,
+    expected_radius,
+    expected_strength,
+    expected_backend,
+):
+    monkeypatch.setattr(
+        runtime_module,
+        "probe_triton_runtime",
+        lambda device=None: SimpleNamespace(available=False, vendor="unsupported"),
+    )
+    config = StereoRuntimeConfig(
+        model_id="lc700x/Distill-Any-Depth-Base-hf",
+        stereo_quality="fast_plus",
+        stereo_compute_backend="vulkan",
+        output_format="half_sbs",
+        temporal=False,
+        hole_fill_mode=hole_fill_mode,
+        hole_fill_radius=1,
+        hole_fill_strength=0.6,
+    )
+    runtime = StereoRuntime(config, depth_provider=_Provider(), collect_memory_stats=False)
+    runtime._vulkan_stereo_backend = _FakeVulkanBackend()
+
+    result = runtime.process_rgb_frame(torch.rand(1, 3, 8, 12))
+    params = runtime._vulkan_stereo_backend.last_fused_params
+
+    assert params.hole_fill_mode == expected_mode
+    assert params.fill_radius == expected_radius
+    assert params.fill_strength == expected_strength
+    assert result.debug_info["vulkan_hole_fill_mode"] == expected_mode
+    assert result.debug_info["hole_fill_backend"] == expected_backend
     runtime.close()
 
 

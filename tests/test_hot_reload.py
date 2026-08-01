@@ -111,7 +111,7 @@ def test_hot_reload_value_snapshot_parses_expected_fields():
     assert values["depth_antialias_strength"] == 0.8
     assert values["edge_dilation"] == 3
     assert values["mask_feather_radius"] == 4
-    assert values["hole_fill_mode"] == "soft_low_ghost"
+    assert values["hole_fill_mode"] == "balanced"
     assert values["hole_fill_radius"] == 1
     assert values["hole_fill_strength"] == 0.6
     assert values["edge_threshold"] == 0.2

@@ -15,7 +15,11 @@ from .openxr_visual_regression import compare_tensors, diff_heatmap, make_depth_
 from .output import make_sbs
 from .parallax import resolve_parallax_budget
 from .synthesis import StereoConfig, synthesize_stereo
-from .vulkan_stereo_pass import VulkanLayeredStereoParams
+from .vulkan_stereo_pass import (
+    VulkanLayeredStereoParams,
+    resolve_vulkan_hole_fill_mode,
+    resolve_vulkan_hole_fill_parameters,
+)
 
 
 @dataclass(frozen=True)
@@ -234,13 +238,22 @@ def run_stage_visual_regression(
     save_depth(depth, output / "01_raw_depth.png")
     save_depth(prepared_depth, output / "02_prepared_depth.png")
 
+    vulkan_hole_fill_mode = resolve_vulkan_hole_fill_mode(
+        config.hole_fill,
+        config.hole_fill_mode,
+    )
+    fill_radius, fill_strength = resolve_vulkan_hole_fill_parameters(
+        vulkan_hole_fill_mode,
+        fill_radius=config.hole_fill_radius,
+        fill_strength=config.hole_fill_strength,
+    )
     vulkan_params = VulkanLayeredStereoParams(
         depth_strength=max(0.0, float(config.depth_strength)),
         max_disparity_px=resolved_max_disparity,
         convergence=float(config.convergence),
         edge_threshold=float(config.edge_threshold),
-        fill_strength=float(config.hole_fill_strength),
-        fill_radius=max(0, min(3, int(config.hole_fill_radius))),
+        fill_strength=fill_strength,
+        fill_radius=fill_radius,
         mask_feather_radius=max(0, min(3, int(config.mask_feather_radius))),
         symmetric=bool(config.symmetric),
         layers=max(1, min(4, int(config.layers))),
@@ -250,9 +263,7 @@ def run_stage_visual_regression(
         background_scale=max(0.0, float(config.background_scale)),
         edge_dilation=max(0, min(3, int(config.edge_dilation))),
         screen_edge_suppression=0,
-        hole_fill_mode=(
-            1 if str(config.hole_fill_mode).strip().lower() in {"quality", "content_aware", "directional"} else 0
-        ),
+        hole_fill_mode=vulkan_hole_fill_mode,
         occlusion_enabled=bool(config.occlusion),
     )
 

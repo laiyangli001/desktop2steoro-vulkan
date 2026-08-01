@@ -301,13 +301,13 @@ def test_layered_hole_fill_mode_controls_radius_and_strength():
             debug_output=True,
             temporal=False,
             fused=False,
-            hole_fill_mode="soft_low_ghost",
+            hole_fill_mode="balanced",
             hole_fill_radius=1,
             hole_fill_strength=0.6,
         ),
     )
 
-    assert result.debug_info["hole_fill_mode"] == "soft_low_ghost"
+    assert result.debug_info["hole_fill_mode"] == "balanced"
     assert result.debug_info["hole_fill_radius"] == 1
     assert result.debug_info["hole_fill_strength"] == 0.6
 
