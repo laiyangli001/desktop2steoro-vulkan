@@ -403,10 +403,19 @@ void bridge_glow_destroy(FilamentBridge* bridge) {
     if (!bridge || !bridge->engine) return;
     for (auto entity : {
             bridge->glow_outer_entity, bridge->glow_inner_entity,
-            bridge->frost_entity, bridge->glow_shell_entity}) {
+            bridge->frost_entity}) {
         if (entity.isNull()) continue;
         if (bridge->foreground_scene) bridge->foreground_scene->remove(entity);
         bridge->engine->destroy(entity);
+    }
+    if (!bridge->glow_shell_entity.isNull()) {
+        // The shell belongs to the room/background pass. Remove from both
+        // scenes so partial create failures remain safe to destroy.
+        if (bridge->scene) bridge->scene->remove(bridge->glow_shell_entity);
+        if (bridge->foreground_scene) {
+            bridge->foreground_scene->remove(bridge->glow_shell_entity);
+        }
+        bridge->engine->destroy(bridge->glow_shell_entity);
     }
     bridge->glow_outer_entity = {};
     bridge->glow_inner_entity = {};
@@ -459,7 +468,8 @@ void bridge_glow_destroy(FilamentBridge* bridge) {
 }
 
 int bridge_glow_create(FilamentBridge* bridge) {
-    if (!bridge || !bridge->engine || !bridge->foreground_scene) return 0;
+    if (!bridge || !bridge->engine || !bridge->scene ||
+            !bridge->foreground_scene) return 0;
     bridge_glow_destroy(bridge);
     bridge->glow_texture_sampler = filament::TextureSampler(
             filament::TextureSampler::MinFilter::LINEAR_MIPMAP_LINEAR,
@@ -691,6 +701,11 @@ int bridge_glow_create(FilamentBridge* bridge) {
         bridge_set_error(bridge, "Filament could not create legacy glow geometry");
         return 0;
     }
+    // Legacy surround is a screen-background effect. Put only this shell in
+    // the room Scene so the main View finishes before the foreground View
+    // draws the opaque virtual screen and edge effects.
+    bridge->foreground_scene->remove(bridge->glow_shell_entity);
+    bridge->scene->addEntity(bridge->glow_shell_entity);
     const uint8_t fallback[] = {77, 153, 255, 255};
     if (!bridge_glow_set_source(bridge, fallback, 1, 1)) return 0;
     bridge_glow_update_geometry(bridge);

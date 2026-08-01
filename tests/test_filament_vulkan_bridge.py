@@ -241,6 +241,9 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "bridge->glow_index_buffer, kMaxGlowIndices, 4" in source
     assert "bridge->glow_index_buffer, kMaxGlowIndices, 5" in source
     assert "bridge->frost_index_buffer, kMaxFrostIndices, 5" in source
+    assert "bridge->foreground_scene->remove(bridge->glow_shell_entity);" in source
+    assert "bridge->scene->addEntity(bridge->glow_shell_entity);" in source
+    assert "Legacy surround is a screen-background effect" in source
     assert "Texture::InternalFormat::SRGB8_A8" in source
     assert "generateMipmaps(*bridge->engine)" in source
     assert "kFlatFrostDepthSteps = 8" in source
