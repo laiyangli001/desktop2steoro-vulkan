@@ -9,6 +9,7 @@ def _adapter_with_backend(backend):
     adapter = object.__new__(CudaVulkanOutputAdapter)
     adapter.presenter = SimpleNamespace(
         _filament_glow_mode="glow",
+        _filament_glow_environment_enabled=True,
         _frosted_glow_lod=5.4,
         filament_bridge=SimpleNamespace(glow_vulkan_image_abi_available=True),
         vulkan=object(),
@@ -18,6 +19,18 @@ def _adapter_with_backend(backend):
     adapter._glow_gpu_status = None
     adapter._glow_gpu_submission_disabled = False
     return adapter
+
+
+def test_cuda_adapter_does_not_submit_glow_for_glb_environment() -> None:
+    class Backend:
+        def poll(self) -> None:
+            raise AssertionError("GLB environments must not poll the Glow backend")
+
+    adapter = _adapter_with_backend(Backend())
+    adapter.presenter._filament_glow_environment_enabled = False
+
+    assert adapter._update_glow_gpu_source("cuda-source", frame_id=1) == {}
+    assert adapter._glow_cpu_metadata() == {}
 
 
 def test_cuda_adapter_reuses_completed_glow_while_new_dispatch_runs() -> None:

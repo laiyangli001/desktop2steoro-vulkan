@@ -599,6 +599,11 @@ class OpenXrVulkanPresenter(
         self._filament_lighting_presets: tuple[dict[str, Any], ...] = ()
         self._filament_lighting_preset_index = 0
         self._filament_glow_mode = "off"
+        # Glow belongs to the blank Default environment only. GLB rooms have
+        # authored lighting and geometry that must not receive this overlay.
+        self._filament_glow_environment_enabled = not bool(
+            self.config.filament_glb_path
+        )
         # Keep the v2.5 effect constants intact. The first Vulkan migration
         # stage feeds these shaders through a small CPU-uploaded sRGB texture;
         # it deliberately does not import or sample the external screen VkImage.
@@ -2535,7 +2540,12 @@ class OpenXrVulkanPresenter(
         """Bind the newest completed Vulkan Glow image, with CPU fallback."""
         if not bool(getattr(bridge, "glow_abi_available", False)):
             return
-        metadata = dict(getattr(output_frame, "metadata", None) or {})
+        environment_enabled = bool(self._filament_glow_environment_enabled)
+        metadata = (
+            dict(getattr(output_frame, "metadata", None) or {})
+            if environment_enabled
+            else {}
+        )
         source_path = str(metadata.get("glow_source_path", ""))
         external = metadata.get("glow_vulkan_image")
         external_serial = int(metadata.get("glow_vulkan_serial", 0) or 0)
@@ -2601,11 +2611,15 @@ class OpenXrVulkanPresenter(
             else np.zeros(3, dtype=np.float64)
         )
         bridge.set_glow_state(
-            self._filament_glow_mode,
+            self._filament_glow_mode if environment_enabled else "off",
             head,
             glow_intensity=self._filament_glow_intensity,
             glow_width=self._filament_glow_width,
-            glow_intensity_multiplier=self._filament_glow_intensity_multiplier,
+            glow_intensity_multiplier=(
+                self._filament_glow_intensity_multiplier
+                if environment_enabled
+                else 0.0
+            ),
             frosted_intensity=self._frosted_glow_intensity,
             frosted_alpha=self._frosted_glow_alpha,
             frosted_threshold=self._frosted_glow_threshold,

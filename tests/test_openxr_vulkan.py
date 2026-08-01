@@ -1232,6 +1232,41 @@ def test_filament_glow_uses_cpu_texture_without_rebinding_same_serial() -> None:
     assert bridge.states[0][2]["glow_intensity"] == pytest.approx(0.175)
 
 
+def test_filament_glow_is_disabled_for_glb_environments() -> None:
+    class Bridge:
+        glow_abi_available = True
+
+        def __init__(self) -> None:
+            self.sources = []
+            self.states = []
+
+        def set_glow_source(self, rgba, *, width, height) -> None:
+            self.sources.append((bytes(rgba), width, height))
+
+        def set_glow_state(self, mode, head, **values) -> None:
+            self.states.append((mode, values))
+
+    presenter = OpenXrVulkanPresenter(
+        OpenXrVulkanConfig(filament_glb_path="room.glb")
+    )
+    presenter._filament_glow_mode = "frosted"
+    presenter._filament_glow_intensity_multiplier = 1.5
+    bridge = Bridge()
+    frame = SimpleNamespace(
+        metadata={
+            "glow_cpu_rgba": bytes((20, 40, 60, 255) * 4),
+            "glow_cpu_size": (2, 2),
+            "glow_cpu_serial": 7,
+        }
+    )
+
+    presenter._update_filament_glow(bridge, frame)
+
+    assert bridge.sources == []
+    assert bridge.states[0][0] == "off"
+    assert bridge.states[0][1]["glow_intensity_multiplier"] == pytest.approx(0.0)
+
+
 def test_filament_glow_binds_completed_vulkan_image_once_per_serial(capsys) -> None:
     class Bridge:
         glow_abi_available = True

@@ -142,8 +142,19 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
             # Screen illumination is supplemental and must never break output.
             self._screen_light_pending = None
 
+    def _glow_environment_enabled(self) -> bool:
+        return bool(
+            getattr(
+                self.presenter,
+                "_filament_glow_environment_enabled",
+                True,
+            )
+        )
+
     def _update_glow_cpu_source(self, source) -> None:
         """Build a small CPU RGBA reference texture without reading back VkImage."""
+        if not self._glow_environment_enabled():
+            return
         pending = self._glow_cpu_pending
         if pending is not None:
             host, event, width, height = pending
@@ -218,6 +229,8 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
             self._glow_cpu_pending = None
 
     def _glow_cpu_metadata(self) -> dict[str, object]:
+        if not self._glow_environment_enabled():
+            return {}
         return {
             "glow_cpu_rgba": self._glow_cpu_rgba,
             "glow_cpu_size": self._glow_cpu_size,
@@ -238,6 +251,8 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
         This method never waits for Glow completion. If the newest dispatch is
         still running, acquire() returns the last completed image instead.
         """
+        if not self._glow_environment_enabled():
+            return {}
         mode = str(
             getattr(self.presenter, "_filament_glow_mode", "off") or "off"
         ).strip().lower()

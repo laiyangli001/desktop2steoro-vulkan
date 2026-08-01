@@ -238,10 +238,11 @@ struct MaterialBrightnessState {
 struct FilamentEyeTarget {
     filament::Renderer* renderer = nullptr;
     filament::View* view = nullptr;
-    // Effect and controller views provide an explicit screen -> Glow ->
-    // controller ordering after the room view.
+    // Effect, controller, and guide views provide an explicit screen -> Glow
+    // -> controller -> guide ordering after the room view.
     filament::View* foreground_view = nullptr;
     filament::View* controller_view = nullptr;
+    filament::View* controller_guide_view = nullptr;
     filament::Camera* camera = nullptr;
     filament::ColorGrading* color_grading = nullptr;
     filament::SwapChain* swapchain = nullptr;

@@ -72,10 +72,11 @@ FilamentBridge* bridge_context_create(
         eye.view = bridge->engine->createView();
         eye.foreground_view = bridge->engine->createView();
         eye.controller_view = bridge->engine->createView();
+        eye.controller_guide_view = bridge->engine->createView();
         eye.camera = bridge->engine->createCamera(
                 utils::EntityManager::get().create());
         if (!eye.renderer || !eye.view || !eye.foreground_view ||
-                !eye.controller_view || !eye.camera) {
+                !eye.controller_view || !eye.controller_guide_view || !eye.camera) {
             bridge_set_error(bridge.get(), "Filament Vulkan eye resource creation failed");
             return bridge.release();
         }
@@ -128,9 +129,19 @@ FilamentBridge* bridge_context_create(
         eye.controller_view->setAntiAliasing(filament::AntiAliasing::NONE);
         eye.controller_view->setBlendMode(filament::View::BlendMode::TRANSLUCENT);
         eye.controller_view->setPostProcessingEnabled(true);
-        // Controllers and laser are the final pass and therefore start from a
-        // fresh depth buffer instead of being clipped by the screen or Glow.
+        // Controllers and laser render after the screen and Glow, starting
+        // from fresh depth so those earlier passes cannot clip the hands.
         eye.controller_view->setChannelDepthClearEnabled(2, true);
+        eye.controller_guide_view->setScene(bridge->foreground_scene);
+        eye.controller_guide_view->setCamera(eye.camera);
+        eye.controller_guide_view->setVisibleLayers(0xff, 0x04);
+        eye.controller_guide_view->setAntiAliasing(filament::AntiAliasing::NONE);
+        eye.controller_guide_view->setBlendMode(
+                filament::View::BlendMode::TRANSLUCENT);
+        eye.controller_guide_view->setPostProcessingEnabled(true);
+        // The B-button callout is an instructional overlay. Render it after
+        // controllers with fresh depth so the controller can never cover it.
+        eye.controller_guide_view->setChannelDepthClearEnabled(2, true);
     }
     bridge_eye_activate(bridge.get(), 0);
     for (auto& eye : bridge->eyes) {
@@ -144,6 +155,7 @@ FilamentBridge* bridge_context_create(
         eye.color_grading = bridge->color_grading;
         eye.foreground_view->setColorGrading(eye.color_grading);
         eye.controller_view->setColorGrading(eye.color_grading);
+        eye.controller_guide_view->setColorGrading(eye.color_grading);
     }
     bridge_eye_activate(bridge.get(), 0);
     filament::gltfio::AssetConfiguration config{bridge->engine, bridge->materials};
@@ -177,6 +189,9 @@ void bridge_context_destroy(FilamentBridge* bridge) {
             if (eye.view) eye.view->setColorGrading(nullptr);
             if (eye.foreground_view) eye.foreground_view->setColorGrading(nullptr);
             if (eye.controller_view) eye.controller_view->setColorGrading(nullptr);
+            if (eye.controller_guide_view) {
+                eye.controller_guide_view->setColorGrading(nullptr);
+            }
             bridge->engine->destroy(eye.color_grading);
         }
         if (eye.view && bridge->engine) {
@@ -187,6 +202,9 @@ void bridge_context_destroy(FilamentBridge* bridge) {
         }
         if (eye.controller_view && bridge->engine) {
             bridge->engine->destroy(eye.controller_view);
+        }
+        if (eye.controller_guide_view && bridge->engine) {
+            bridge->engine->destroy(eye.controller_guide_view);
         }
         if (eye.camera && bridge->engine) {
             bridge->engine->destroy(eye.camera->getEntity());

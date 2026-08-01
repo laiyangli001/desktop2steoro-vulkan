@@ -430,7 +430,9 @@ int bridge_glow_create(FilamentBridge* bridge) {
             vec3 edgeColor = textureLod(materialParams_glowTexture, edgeUv, lod + 1.0).rgb;
             vec3 color = mix(localColor, edgeColor, blur * 0.5);
             glow = min(glow, 1.0);
-            material.baseColor = vec4(color * glow, glow);
+            // Transparency is fixed at zero: every surviving Glow fragment is
+            // fully opaque while RGB still carries the authored falloff.
+            material.baseColor = vec4(color * glow, 1.0);
         }
     )FILAMENT";
     const char* frost_shader = R"FILAMENT(
@@ -471,7 +473,9 @@ int bridge_glow_create(FilamentBridge* bridge) {
             }
             if (alpha <= 0.002) discard;
             alpha = min(alpha, 1.0);
-            material.baseColor = vec4(color * alpha, alpha);
+            // Veil and Frosted use alpha only as an effect-strength mask. The
+            // emitted fragment itself is fully opaque.
+            material.baseColor = vec4(color * alpha, 1.0);
         }
     )FILAMENT";
     bridge->glow_material = build_material(
@@ -724,12 +728,13 @@ void bridge_glow_update_visibility(FilamentBridge* bridge) {
     if (!bridge || !bridge->engine) return;
     const bool enabled = bridge->glow_intensity_multiplier > 0.0f &&
             !bridge->passthrough_backdrop;
-    const bool flat_glow_allowed = bridge->asset == nullptr;
+    const bool default_environment = bridge->asset == nullptr;
     bridge_set_renderable_layer(bridge, bridge->glow_outer_entity, 1,
-            enabled && flat_glow_allowed &&
+            enabled && default_environment &&
                     (bridge->glow_mode == 1 || bridge->glow_mode == 2));
     bridge_set_renderable_layer(bridge, bridge->glow_inner_entity, 1,
-            enabled && flat_glow_allowed && bridge->glow_mode == 1);
+            enabled && default_environment && bridge->glow_mode == 1);
     bridge_set_renderable_layer(bridge, bridge->frost_entity, 1,
-            enabled && (bridge->glow_mode == 3 || bridge->glow_mode == 4));
+            enabled && default_environment &&
+                    (bridge->glow_mode == 3 || bridge->glow_mode == 4));
 }

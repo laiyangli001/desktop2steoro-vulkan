@@ -104,8 +104,10 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "filament::Renderer* renderer = nullptr;" in source
     assert "eye.renderer = bridge->engine->createRenderer();" in source
     assert "eye.controller_view = bridge->engine->createView();" in source
+    assert "eye.controller_guide_view = bridge->engine->createView();" in source
     assert "bridge->engine->destroy(eye.renderer);" in source
     assert "bridge->engine->destroy(eye.controller_view);" in source
+    assert "bridge->engine->destroy(eye.controller_guide_view);" in source
     assert "filament::View* laser_view = nullptr;" not in source
     assert "display_view" not in source
     assert "eye.laser_view = bridge->engine->createView();" not in source
@@ -113,9 +115,11 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "eye.view->setChannelDepthClearEnabled(2, true);" in source
     assert "eye.foreground_view->setChannelDepthClearEnabled(2, true);" in source
     assert "eye.controller_view->setChannelDepthClearEnabled(2, true);" in source
+    assert "eye.controller_guide_view->setChannelDepthClearEnabled(2, true);" in source
     assert "eye.foreground_view->setChannelDepthClearEnabled(0, true);" not in source
     assert "eye.foreground_view->setVisibleLayers(0xff, 0x02);" in source
     assert "eye.controller_view->setVisibleLayers(0xff, 0x01);" in source
+    assert "eye.controller_guide_view->setVisibleLayers(0xff, 0x04);" in source
     assert "Renderer::ClearOptions clear_options;" in source
     assert "clear_options.clear = true;" in source
     assert "eye.renderer->setClearOptions(clear_options);" in source
@@ -209,7 +213,7 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert ".blending(filament::BlendingMode::TRANSPARENT)" in source
     assert ".depthWrite(false)" in source
     assert ".depthCulling(false)" in source
-    assert "bridge_set_renderable_layer(bridge, bridge->controller_guide_entity, 1" in source
+    assert "bridge_set_renderable_layer(bridge, bridge->controller_guide_entity, 2" in source
     assert "D2S Controller Laser" in source
     assert 'parameter("laser_time"' in source
     assert "materialParams.laser_time * 0.4" in source
@@ -234,8 +238,10 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "kFlatFrostDepthSteps = 8" in source
     assert "kFlatFrostEdgeSteps = 8" in source
     assert "four independent walls" in source
-    assert "material.baseColor = vec4(color * glow, glow);" in source
-    assert "material.baseColor = vec4(color * alpha, alpha);" in source
+    assert "material.baseColor = vec4(color * glow, 1.0);" in source
+    assert "material.baseColor = vec4(color * alpha, 1.0);" in source
+    assert "const bool default_environment = bridge->asset == nullptr;" in source
+    assert "enabled && default_environment &&" in source
     glow_source = (bridge_dir / "bridge_glow.cpp").read_text(encoding="utf-8")
     assert "createExternalImageFromVkImage" in glow_source
     assert "glow_cpu_source_texture" in glow_source
@@ -279,15 +285,18 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "foreground_scene" in source
     assert "foreground_view" in source
     assert "controller_view" in source
+    assert "controller_guide_view" in source
     assert "eye.foreground_view->setColorGrading(nullptr);" in source
     assert "eye.foreground_view->setColorGrading(eye.color_grading);" in source
     assert "eye.controller_view->setColorGrading(eye.color_grading);" in source
+    assert "eye.controller_guide_view->setColorGrading(eye.color_grading);" in source
     assert (
         "eye.foreground_view->setBlendMode(filament::View::BlendMode::TRANSLUCENT);"
         in source
     )
     assert "eye.foreground_view->setPostProcessingEnabled(true);" in source
     assert "eye.controller_view->setPostProcessingEnabled(true);" in source
+    assert "eye.controller_guide_view->setPostProcessingEnabled(true);" in source
     assert "filament_bridge_set_screen_light" in facade
     assert "filament_bridge_set_screen_sampling" in facade
     assert "filament_bridge_set_screen_sampling_mode" in facade
@@ -520,4 +529,7 @@ def test_native_screen_glow_and_controllers_use_explicit_view_order() -> None:
     room = eye_source.index("bridge->renderer->render(bridge->view);")
     glow = eye_source.index("bridge->renderer->render(eye.foreground_view);")
     controllers = eye_source.index("bridge->renderer->render(eye.controller_view);")
-    assert room < glow < controllers
+    guide = eye_source.index(
+        "bridge->renderer->render(eye.controller_guide_view);"
+    )
+    assert room < glow < controllers < guide

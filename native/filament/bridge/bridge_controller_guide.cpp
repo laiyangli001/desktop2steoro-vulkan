@@ -156,7 +156,7 @@ int bridge_controller_guide_set_texture(
         return 0;
     }
     bridge->foreground_scene->addEntity(bridge->controller_guide_entity);
-    bridge_set_renderable_layer(bridge, bridge->controller_guide_entity, 1, false);
+    bridge_set_renderable_layer(bridge, bridge->controller_guide_entity, 2, false);
     return 1;
 }
 
@@ -164,7 +164,7 @@ int bridge_controller_guide_set(
         FilamentBridge* bridge, const float* matrix16, int visible) {
     if (!bridge || !bridge->engine || bridge->controller_guide_entity.isNull()) return 0;
     if (!visible) {
-        bridge_set_renderable_layer(bridge, bridge->controller_guide_entity, 1, false);
+        bridge_set_renderable_layer(bridge, bridge->controller_guide_entity, 2, false);
         return 1;
     }
     if (!matrix16) return 0;
@@ -177,6 +177,6 @@ int bridge_controller_guide_set(
             matrix16[8], matrix16[9], matrix16[10], matrix16[11],
             matrix16[12], matrix16[13], matrix16[14], matrix16[15]);
     transforms.setTransform(instance, matrix);
-    bridge_set_renderable_layer(bridge, bridge->controller_guide_entity, 1, true);
+    bridge_set_renderable_layer(bridge, bridge->controller_guide_entity, 2, true);
     return 1;
 }
