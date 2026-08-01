@@ -403,6 +403,12 @@ Vulkan Compute 完成写入后，Presenter graphics submit 等待 Compute timeli
 
 直接外部采样是 Vulkan 主路径的首选：每张源 `VkImage` 只创建一次 Filament 外部纹理，稳态帧只切换槽位和材质绑定。不得把“裸 `VkImage` 可导入”当作完整同步；如果缺少格式/尺寸、layout、queue ownership 或 producer/consumer 同步信息，必须拒绝零拷贝绑定并选择一次 GPU copy 的屏幕路径或 Quad Layer 回退。回退不能使用 CPU 像素回读，也不能在已提交的 Filament 采样期间复用或销毁源图像。槽位扩容或尺寸变化属于受控重配置，不得发生在正常帧循环。
 
+上述禁止 CPU 回读的要求针对主屏幕实时图像链。辉光迁移第一阶段保留一个明确隔离的能力回退：从立体合成前的桌面源图低频生成不超过 `320x180` 的 RGBA sRGB 特效纹理，经 CPU 上传到同一个 Filament Engine，用于在外部内存能力不足时继续提供 `Desktop2Stereo_v2.5.0_Windows_NVIDIA` 的 Glow、Glow2、Veil 和 Frosted 行为；日志必须标记 `glow_source_path=cpu_uploaded_reference`，不得宣称为 GPU zero-copy。
+
+NVIDIA/CUDA 的正式 Glow 纹理来源使用独立 GPU 路径：CUDA 张量复制到 Presenter 持有的 external storage buffer，并通过 CUDA external semaphore 通知同一 Vulkan queue family 的第二条 Compute queue；`d2s_glow_source.comp` 在线性光空间完成固定 `320x180` RGBA8_UNORM 特效源生成，Filament 通过外部 `VkImage` 在 LOD 0 采样。Compute 中的预过滤足迹必须复现旧 MIP 语义：Veil 使用目标像素自身的缩小足迹，Frosted 使用 `2^effectLod` 个源像素，Glow/Glow2 使用约 256 个源像素的宽范围；不得把该值再次乘以 320x180 降采样足迹。该路径使用至少三个有界槽位，只发布已完成并已在 graphics queue 排队完成 layout transition 的最新槽位；新任务未完成、资源预算不足或 12 Hz 更新间隔未到时复用上一张已完成纹理，禁止让主 graphics queue、OpenXR 帧或主屏幕 zero-copy 等待 Glow。日志标记 `glow_source_path=vulkan_compute_external_image`，并分别报告 submit、reuse 和 budget-skip。ROCm/HIP、Vulkan Stereo producer、缺少第二队列、缺少 CUDA external memory/semaphore 或旧 Filament ABI 时仍使用上述 CPU 回退，不能静默破坏主屏幕输出。
+
+Glow 外部图像和 Filament 外部纹理包装必须按严格生命周期销毁：先停止新帧并释放输出帧租约，等待 graphics/compute queue 空闲，销毁 Filament texture wrapper，最后销毁 Presenter 持有的 `VkImage`、buffer、semaphore 和 fence。Compute queue 与 Filament graphics queue 当前必须属于同一 queue family；不满足时禁用该 GPU Glow 路径，不允许用 `VK_QUEUE_FAMILY_IGNORED` 冒充跨 family ownership transfer。
+
 源图像 producer 必须通过后端无关的 Vulkan interop contract 接入 Presenter：`GpuProducerAdapter` 负责导出/导入 external memory、提交 producer-ready semaphore 或 timeline、报告实际 image layout/queue family，并在收到 consumer-release 后回收槽位。CUDA、ROCm/HIP、MIGraphX、DirectML 或其它推理后端只能实现该适配器，不得把 CUDA API、HIP API 或厂商句柄泄漏到 Filament Bridge 和 `VulkanContext` 的策略接口。Windows/Linux 优先复用各后端已有 external memory；ROCm/HIP 或驱动不支持安全零拷贝时，必须降级为一次 GPU copy，不能降级为 CPU 像素往返。
 
 Presenter 只能通过 `GpuProducerAdapter` 注册表创建具体 producer；不得在 OpenXR、Filament 或 `VulkanContext` 中直接实例化 CUDA、HIP 或其它厂商适配器。未注册或能力不足的后端必须明确进入 GPU copy/Quad Layer 回退路径，禁止将一个厂商的句柄或同步语义伪装成另一个厂商的实现。

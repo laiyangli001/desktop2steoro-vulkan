@@ -4,6 +4,7 @@
 #include "bridge_controller.h"
 #include "bridge_controller_guide.h"
 #include "bridge_eye.h"
+#include "bridge_glow.h"
 #include "bridge_laser.h"
 #include "bridge_material.h"
 #include "bridge_scene.h"
@@ -209,6 +210,36 @@ int filament_bridge_set_screen_light(
         FilamentBridge* bridge,
         float red, float green, float blue, float intensity) {
     return bridge_screen_set_light(bridge, red, green, blue, intensity);
+}
+
+int filament_bridge_set_glow_source(
+        FilamentBridge* bridge, const uint8_t* rgba,
+        uint32_t width, uint32_t height) {
+    return bridge_glow_set_source(bridge, rgba, width, height);
+}
+
+int filament_bridge_set_glow_image(
+        FilamentBridge* bridge, const void* image,
+        uint32_t width, uint32_t height, int32_t format) {
+    return bridge_glow_set_image(bridge, image, width, height, format);
+}
+
+int filament_bridge_set_glow_state(
+        FilamentBridge* bridge, uint32_t mode,
+        float head_x, float head_y, float head_z,
+        float glow_intensity, float glow_width,
+        float glow_intensity_multiplier,
+        float frosted_intensity, float frosted_alpha,
+        float frosted_threshold, float frosted_lod,
+        float frosted_blend, float frosted_thickness,
+        float frosted_diffuse, float frosted_inset,
+        float veil_intensity, float veil_alpha) {
+    return bridge_glow_set_state(
+            bridge, mode, head_x, head_y, head_z,
+            glow_intensity, glow_width, glow_intensity_multiplier,
+            frosted_intensity, frosted_alpha, frosted_threshold, frosted_lod,
+            frosted_blend, frosted_thickness, frosted_diffuse, frosted_inset,
+            veil_intensity, veil_alpha);
 }
 
 int filament_bridge_set_screen_sampling(

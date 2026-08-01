@@ -1,4 +1,5 @@
 #include "bridge_screen.h"
+#include "bridge_glow.h"
 #include "bridge_internal.h"
 
 #include <backend/PixelBufferDescriptor.h>
@@ -193,6 +194,7 @@ bool ensure_screen_quality_targets(
 
 void bridge_screen_destroy(FilamentBridge* bridge) {
     if (!bridge || !bridge->engine) return;
+    bridge_glow_destroy(bridge);
     if (bridge->scene && !bridge->screen_mip_copy_entity.isNull()) {
         bridge->scene->remove(bridge->screen_mip_copy_entity);
     }
@@ -294,6 +296,12 @@ int bridge_screen_update(
             -cy * sr + sy * sp * cr, cr * cp, sr * sy + cy * sp * cr};
     const filament::math::float3 forward = cross(right, up);
     const filament::math::float3 center{position_x, position_y, position_z};
+    bridge->screen_center = center;
+    bridge->screen_right = right;
+    bridge->screen_up = up;
+    bridge->screen_forward = forward;
+    bridge->screen_width = width;
+    bridge->screen_height = height;
     bridge->screen_light_position = center;
     bridge->screen_light_direction = -forward;
     bridge->screen_light_falloff =
@@ -333,12 +341,14 @@ int bridge_screen_update(
             filament::VertexBuffer::BufferDescriptor(
                     bridge->screen_vertices.data(),
                     bridge->screen_vertices.size() * sizeof(PreviewScreenVertex), nullptr));
+    bridge_glow_update_geometry(bridge);
     return 1;
 }
 
 int bridge_screen_set_curved(FilamentBridge* bridge, int curved) {
     if (!bridge || !bridge->engine || !bridge->screen_vertex_buffer) return 0;
     bridge->screen_curved = curved != 0;
+    bridge_glow_update_geometry(bridge);
     return 1;
 }
 
@@ -737,6 +747,9 @@ int bridge_screen_create(FilamentBridge* bridge) {
     bridge->screen_mip_copy_view->setAntiAliasing(filament::AntiAliasing::NONE);
     // The sampler is required by the material. Keep the renderable detached
     // until a valid runtime Vulkan image has been imported.
+    if (!bridge_glow_create(bridge)) {
+        return 0;
+    }
     return 1;
 }
 

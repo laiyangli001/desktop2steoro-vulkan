@@ -4,6 +4,7 @@ import ctypes
 import json
 import re
 import struct
+import subprocess
 import threading
 from pathlib import Path
 
@@ -65,6 +66,8 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
         "bridge_controller_guide.h",
         "bridge_laser.cpp",
         "bridge_laser.h",
+        "bridge_glow.cpp",
+        "bridge_glow.h",
         "bridge_screen.cpp",
         "bridge_screen.h",
         "bridge_material.cpp",
@@ -217,6 +220,25 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "controller_quaternion_slerp" in source
     assert "controller.button_values[5]" in source
     assert "controller loaded hand=%u animations=%zu" in source
+    assert "filament_bridge_set_glow_source" in facade
+    assert "filament_bridge_set_glow_state" in facade
+    assert "D2S Legacy Screen Glow" in source
+    assert "D2S Legacy Frosted Glow" in source
+    assert "Texture::InternalFormat::SRGB8_A8" in source
+    assert "generateMipmaps(*bridge->engine)" in source
+    assert "kFlatFrostDepthSteps = 8" in source
+    assert "kFlatFrostEdgeSteps = 8" in source
+    assert "four independent walls" in source
+    assert "material.baseColor = vec4(color * glow, glow);" in source
+    assert "material.baseColor = vec4(color * alpha, alpha);" in source
+    glow_source = (bridge_dir / "bridge_glow.cpp").read_text(encoding="utf-8")
+    assert "createExternalImageFromVkImage" in glow_source
+    assert "glow_cpu_source_texture" in glow_source
+    assert "glow_texture_cache" in glow_source
+    assert "glow_source_external" in glow_source
+    assert 'parameter("externalSource"' in glow_source
+    assert "materialParams.externalSource > 0.5" in glow_source
+    assert "filament_bridge_set_glow_image" in facade
     assert "kControllerValues" in source
     assert "bridge_controller_find_instance_entity" not in source
     assert "if (!bridge || !controller.asset || value_entity.isNull())" in source
@@ -269,6 +291,97 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "lights.setIntensityCandela(" in source
     assert ".lightChannel(0, false)" in source
     assert ".lightChannel(1, true)" in source
+
+
+def test_legacy_glow_material_shaders_compile_with_pinned_filament(
+    tmp_path: Path,
+) -> None:
+    root = Path(__file__).resolve().parents[1]
+    candidates = (
+        root / "native/filament/sdk/windows/v1.74.0/matc.exe",
+        root / "native/filament/sdk/linux/v1.74.0/filament/bin/matc",
+        root / "native/filament/sdk/macos/v1.74.0/filament/bin/matc",
+    )
+    matc = next((path for path in candidates if path.is_file()), None)
+    if matc is None:
+        pytest.skip("pinned Filament matc is unavailable")
+    source = (root / "native/filament/bridge/bridge_glow.cpp").read_text(
+        encoding="utf-8"
+    )
+    shader_sources = {
+        "glow": (
+            re.search(
+                r'const char\* glow_shader = R"FILAMENT\((.*?)\)FILAMENT";',
+                source,
+                re.DOTALL,
+            ),
+            "uv0",
+            """
+                { type : sampler2d, name : glowTexture },
+                { type : float, name : glowIntensity },
+                { type : float, name : externalSource },
+                { type : float2, name : screenHalf },
+                { type : float, name : glowInvRange },
+                { type : float, name : glowInner },
+                { type : float, name : innerOnly }
+            """,
+        ),
+        "frost": (
+            re.search(
+                r'const char\* frost_shader = R"FILAMENT\((.*?)\)FILAMENT";',
+                source,
+                re.DOTALL,
+            ),
+            "uv0, uv1",
+            """
+                { type : sampler2d, name : glowTexture },
+                { type : float, name : glowIntensity },
+                { type : float, name : externalSource },
+                { type : float, name : effectMode },
+                { type : float, name : effectAlpha },
+                { type : float, name : effectThreshold },
+                { type : float, name : effectLod },
+                { type : float, name : effectBlend },
+                { type : float, name : effectThickness },
+                { type : float, name : effectDiffuse },
+                { type : float, name : effectInset },
+                { type : float, name : effectTime }
+            """,
+        ),
+    }
+    for name, (match, requires, parameters) in shader_sources.items():
+        assert match is not None
+        material_path = tmp_path / f"{name}.mat"
+        material_path.write_text(
+            f"""
+material {{
+    name : D2S_{name}_validation,
+    shadingModel : unlit,
+    blending : transparent,
+    doubleSided : true,
+    depthWrite : false,
+    depthCulling : false,
+    requires : [ {requires} ],
+    parameters : [ {parameters} ]
+}}
+fragment {{
+{match.group(1)}
+}}
+""",
+            encoding="utf-8",
+        )
+        completed = subprocess.run(
+            [
+                str(matc), "--api", "all", "-o",
+                str(tmp_path / f"{name}.filamat"), str(material_path),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
 def test_screen_light_is_independent_from_environment_hdr_mode() -> None:

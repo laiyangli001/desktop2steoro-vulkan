@@ -1,4 +1,5 @@
 #include "bridge_material.h"
+#include "bridge_glow.h"
 #include "bridge_internal.h"
 #include "bridge_eye.h"
 
@@ -311,6 +312,7 @@ int bridge_material_set_passthrough_backdrop(
     if (!bridge || !bridge->engine) return 0;
     const bool active = enabled != 0;
     bridge->passthrough_backdrop = active;
+    bridge_glow_update_visibility(bridge);
     auto& renderables = bridge->engine->getRenderableManager();
     for (const auto entity : bridge->brightness.skybox_entities) {
         const auto instance = renderables.getInstance(entity);

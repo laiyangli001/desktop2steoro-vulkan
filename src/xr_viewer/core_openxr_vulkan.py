@@ -599,7 +599,26 @@ class OpenXrVulkanPresenter(
         self._filament_lighting_presets: tuple[dict[str, Any], ...] = ()
         self._filament_lighting_preset_index = 0
         self._filament_glow_mode = "off"
+        # Keep the v2.5 effect constants intact. The first Vulkan migration
+        # stage feeds these shaders through a small CPU-uploaded sRGB texture;
+        # it deliberately does not import or sample the external screen VkImage.
+        self._filament_glow_intensity = 0.175
+        self._filament_glow_width = 0.75
+        self._filament_glow_default_multiplier = 1.5
         self._filament_glow_intensity_multiplier = 0.0
+        self._frosted_glow_intensity = 1.0
+        self._frosted_glow_alpha = 0.42
+        self._frosted_glow_threshold = 0.46
+        self._frosted_glow_lod = 5.4
+        self._frosted_glow_blend = 1.35
+        self._frosted_glow_thickness = 1.6
+        self._frosted_glow_diffuse = 0.85
+        self._frosted_glow_inset = 0.045
+        self._frosted_veil_intensity = 1.5
+        self._frosted_veil_alpha = 1.0
+        self._last_filament_glow_source_serial = -1
+        self._last_filament_glow_source_key: tuple[str, int] | None = None
+        self._last_filament_glow_status: tuple[Any, ...] | None = None
         self._filament_screen: tuple[
             tuple[float, float, float], float, float, tuple[float, float, float]
         ] | None = None
@@ -1138,6 +1157,83 @@ class OpenXrVulkanPresenter(
                 self._filament_skybox_brightness
             )
 
+    @staticmethod
+    def _normalize_filament_glow_mode(value: Any) -> str:
+        mode = str(value or "off").strip().lower()
+        return {
+            "none": "off",
+            "false": "off",
+            "0": "off",
+            "screen": "glow",
+            "surround": "glow",
+            "frost": "frosted",
+            "frost_glow": "frosted",
+            "frosted_glow": "frosted",
+        }.get(mode, mode) if mode in {
+            "off", "none", "false", "0", "screen", "surround",
+            "glow", "glow2", "veil", "frost", "frost_glow",
+            "frosted", "frosted_glow",
+        } else "off"
+
+    def _apply_filament_glow_profile_fields(self, values: dict[str, Any]) -> None:
+        if "glow_mode" in values:
+            self._filament_glow_mode = self._normalize_filament_glow_mode(
+                values.get("glow_mode")
+            )
+        for key, attribute, minimum, maximum in (
+            ("glow_intensity", "_filament_glow_intensity", 0.0, None),
+            ("glow_width", "_filament_glow_width", 0.0, None),
+            ("glow_intensity_multiplier", "_filament_glow_intensity_multiplier", 0.0, None),
+            ("frosted_glow_intensity", "_frosted_glow_intensity", 0.0, None),
+            ("frosted_glow_alpha", "_frosted_glow_alpha", 0.0, 1.0),
+            ("frosted_glow_threshold", "_frosted_glow_threshold", 0.0, 1.0),
+            ("frosted_glow_lod", "_frosted_glow_lod", 0.0, None),
+            ("frosted_glow_blend", "_frosted_glow_blend", 0.0, None),
+            ("frosted_glow_thickness", "_frosted_glow_thickness", 0.1, None),
+            ("frosted_glow_diffuse", "_frosted_glow_diffuse", 0.0, None),
+            ("frosted_glow_inset", "_frosted_glow_inset", 0.0, None),
+            ("frosted_veil_intensity", "_frosted_veil_intensity", 0.0, None),
+            ("frosted_veil_alpha", "_frosted_veil_alpha", 0.0, 1.0),
+        ):
+            if key not in values:
+                continue
+            try:
+                number = max(float(minimum), float(values[key]))
+                if maximum is not None:
+                    number = min(float(maximum), number)
+                setattr(self, attribute, number)
+            except (TypeError, ValueError):
+                continue
+
+    def _cycle_filament_glow_mode(self) -> None:
+        modes = ("glow", "glow2", "veil", "frosted", "off")
+        current = self._normalize_filament_glow_mode(self._filament_glow_mode)
+        if current not in modes:
+            current = (
+                "glow"
+                if float(self._filament_glow_intensity_multiplier) > 0.0
+                else "off"
+            )
+        next_mode = modes[(modes.index(current) + 1) % len(modes)]
+        self._filament_glow_mode = next_mode
+        if next_mode == "off":
+            self._filament_glow_intensity_multiplier = 0.0
+        elif self._filament_glow_intensity_multiplier <= 0.0:
+            self._filament_glow_intensity_multiplier = (
+                self._filament_glow_default_multiplier
+            )
+        label = {
+            "glow": "Glow",
+            "glow2": "Glow2",
+            "veil": "Veil",
+            "frosted": "Frosted",
+            "off": "Off",
+        }[next_mode]
+        self._preset_name_overlay = label
+        self._preset_osd_show_t = time.perf_counter()
+        self._last_filament_glow_status = None
+        print(f"[OpenXRViewer] Glow mode: {next_mode}", flush=True)
+
     def _apply_filament_lighting_preset(
         self, preset: dict[str, Any], *, apply_bridge: bool = True
     ) -> None:
@@ -1176,17 +1272,7 @@ class OpenXrVulkanPresenter(
                 )
             except (TypeError, ValueError):
                 pass
-        if "glow_mode" in preset:
-            mode = str(preset["glow_mode"]).strip().lower()
-            if mode in {"off", "screen", "surround", "veil", "frosted"}:
-                self._filament_glow_mode = mode
-        if "glow_intensity_multiplier" in preset:
-            try:
-                self._filament_glow_intensity_multiplier = max(
-                    0.0, float(preset["glow_intensity_multiplier"])
-                )
-            except (TypeError, ValueError):
-                pass
+        self._apply_filament_glow_profile_fields(preset)
         if not apply_bridge or self.filament_bridge is None:
             return
         bridge = self.filament_bridge
@@ -1338,26 +1424,10 @@ class OpenXrVulkanPresenter(
                     self._shortcut_saved_skybox_brightness or 1.0
                 )
         elif action == "cycle_environment_light":
-            if self._filament_lighting_presets:
-                self._filament_lighting_preset_index = (
-                    self._filament_lighting_preset_index + 1
-                ) % len(self._filament_lighting_presets)
-                self._apply_filament_lighting_preset(
-                    self._filament_lighting_presets[
-                        self._filament_lighting_preset_index
-                    ]
-                )
-            else:
-                current = self._filament_skybox_brightness
-                index = min(
-                    range(len(self._shortcut_light_levels)),
-                    key=lambda item: abs(self._shortcut_light_levels[item] - current),
-                )
-                self._set_shortcut_skybox_brightness(
-                    self._shortcut_light_levels[
-                        (index + 1) % len(self._shortcut_light_levels)
-                    ]
-                )
+            # The shared shortcut name predates the renderer split. In v2.5,
+            # releasing X after 1-4 seconds cycles the screen-edge effects;
+            # it does not cycle room-light presets.
+            self._cycle_filament_glow_mode()
         elif action == "toggle_passthrough":
             bridge = self.filament_bridge
             if bridge is None or not getattr(
@@ -2459,6 +2529,91 @@ class OpenXrVulkanPresenter(
         bridge.set_screen_light(color, self._filament_screen_light_intensity)
         self._last_filament_screen_light = state
 
+    def _update_filament_glow(
+        self, bridge: Any, output_frame: VulkanStereoOutputFrame | None
+    ) -> None:
+        """Bind the newest completed Vulkan Glow image, with CPU fallback."""
+        if not bool(getattr(bridge, "glow_abi_available", False)):
+            return
+        metadata = dict(getattr(output_frame, "metadata", None) or {})
+        source_path = str(metadata.get("glow_source_path", "missing"))
+        external = metadata.get("glow_vulkan_image")
+        external_serial = int(metadata.get("glow_vulkan_serial", 0) or 0)
+        rgba = metadata.get("glow_cpu_rgba")
+        size = metadata.get("glow_cpu_size", (0, 0))
+        serial = int(metadata.get("glow_cpu_serial", 0) or 0)
+        bound = False
+        if (
+            external is not None
+            and external_serial > 0
+            and bool(getattr(bridge, "glow_vulkan_image_abi_available", False))
+            and self._last_filament_glow_source_key != ("vulkan", external_serial)
+        ):
+            bridge.set_glow_image(external)
+            self._last_filament_glow_source_key = ("vulkan", external_serial)
+            bound = True
+            size = metadata.get(
+                "glow_source_size",
+                (
+                    int(getattr(external, "width", 0)),
+                    int(getattr(external, "height", 0)),
+                ),
+            )
+        elif (
+            serial > 0
+            and self._last_filament_glow_source_key != ("cpu", serial)
+            and isinstance(rgba, (bytes, bytearray, memoryview))
+            and isinstance(size, (tuple, list))
+            and len(size) >= 2
+        ):
+            width, height = int(size[0]), int(size[1])
+            if width > 0 and height > 0 and len(rgba) == width * height * 4:
+                bridge.set_glow_source(bytes(rgba), width=width, height=height)
+                self._last_filament_glow_source_serial = serial
+                self._last_filament_glow_source_key = ("cpu", serial)
+                bound = True
+
+        head = (
+            np.asarray(self._head_position_w, dtype=np.float64)
+            if self._head_position_w is not None
+            else np.zeros(3, dtype=np.float64)
+        )
+        bridge.set_glow_state(
+            self._filament_glow_mode,
+            head,
+            glow_intensity=self._filament_glow_intensity,
+            glow_width=self._filament_glow_width,
+            glow_intensity_multiplier=self._filament_glow_intensity_multiplier,
+            frosted_intensity=self._frosted_glow_intensity,
+            frosted_alpha=self._frosted_glow_alpha,
+            frosted_threshold=self._frosted_glow_threshold,
+            frosted_lod=self._frosted_glow_lod,
+            frosted_blend=self._frosted_glow_blend,
+            frosted_thickness=self._frosted_glow_thickness,
+            frosted_diffuse=self._frosted_glow_diffuse,
+            frosted_inset=self._frosted_glow_inset,
+            veil_intensity=self._frosted_veil_intensity,
+            veil_alpha=self._frosted_veil_alpha,
+        )
+        status = (
+            self._normalize_filament_glow_mode(self._filament_glow_mode),
+            source_path,
+            int(size[0]) if isinstance(size, (tuple, list)) and len(size) >= 2 else 0,
+            int(size[1]) if isinstance(size, (tuple, list)) and len(size) >= 2 else 0,
+        )
+        if bound or status != self._last_filament_glow_status:
+            print(
+                "[OpenXRViewer] Glow reference path: "
+                f"mode={status[0]} source={status[1]} "
+                f"texture={status[2]}x{status[3]} "
+                f"submit_ms={float(metadata.get('glow_gpu_submit_ms', 0.0) or 0.0):.3f} "
+                f"reuse={int(metadata.get('glow_reuse', 0) or 0)} "
+                f"budget_skip={int(metadata.get('glow_budget_skip', 0) or 0)} "
+                "screen_zero_copy_unchanged=True",
+                flush=True,
+            )
+            self._last_filament_glow_status = status
+
     def _handle_vulkan_pointer_input(self) -> None:
         """Reuse legacy trigger hold/drag semantics for the Vulkan screen."""
         self._right_grip_screen_pointer_applied = False
@@ -2467,6 +2622,36 @@ class OpenXrVulkanPresenter(
         hits = (self._screen_ray_hit_for_hand(0), self._screen_ray_hit_for_hand(1))
         left_grip = bool(inputs[0].get("grip", 0.0) > 0.5)
         right_grip = bool(inputs[1].get("grip", 0.0) > 0.5)
+        # v2.5: right Grip + left-stick X adjusts the current edge-effect
+        # opacity without requiring either laser to hit the screen.
+        left_stick_x = float(inputs[0].get("joystick_x", 0.0) or 0.0)
+        left_stick_y = float(inputs[0].get("joystick_y", 0.0) or 0.0)
+        if (
+            right_grip
+            and not left_grip
+            and abs(left_stick_x) > self._input_deadzone()
+            and abs(left_stick_x) > abs(left_stick_y)
+        ):
+            input_dt = max(0.001, min(0.1, float(self._last_frame_dt)))
+            mode = self._normalize_filament_glow_mode(self._filament_glow_mode)
+            if mode == "veil":
+                previous = float(self._frosted_veil_alpha)
+                value = max(0.0, min(1.0, previous + left_stick_x * 0.8 * input_dt))
+                if value != previous:
+                    self._frosted_veil_alpha = value
+                    self._preset_name_overlay = f"Veil {int(round(value * 100.0))}%"
+                    self._preset_osd_show_t = now
+            elif mode == "glow":
+                base = max(float(self._filament_glow_default_multiplier), 1e-6)
+                previous = max(
+                    0.0,
+                    min(1.0, float(self._filament_glow_intensity_multiplier) / base),
+                )
+                value = max(0.0, min(1.0, previous + left_stick_x * 0.8 * input_dt))
+                if value != previous:
+                    self._filament_glow_intensity_multiplier = value * base
+                    self._preset_name_overlay = f"Glow {int(round(value * 100.0))}%"
+                    self._preset_osd_show_t = now
         if not (
             right_grip
             and not left_grip
@@ -2869,21 +3054,31 @@ class OpenXrVulkanPresenter(
             except Exception:
                 pass
 
-        if self._output_adapter is not None:
-            try:
-                self._output_adapter.close()
-            except Exception:
-                pass
-            self._output_adapter = None
-
+        # Release output-frame leases while their adapters and synchronization
+        # objects are still alive.
         self._drop_output_frames()
 
+        if self.vulkan is not None:
+            try:
+                self.vulkan.wait_idle()
+            except Exception:
+                pass
+
+        # Destroy Filament's external-texture wrappers before the adapters
+        # destroy the borrowed screen and Glow VkImages.
         if self.filament_bridge is not None:
             try:
                 self.filament_bridge.close()
             except Exception:
                 pass
             self.filament_bridge = None
+
+        if self._output_adapter is not None:
+            try:
+                self._output_adapter.close()
+            except Exception:
+                pass
+            self._output_adapter = None
 
         if self._vulkan_msdf_quad_renderer is not None:
             try:
@@ -3044,11 +3239,18 @@ class OpenXrVulkanPresenter(
             )
         except VulkanCapabilityError as exc:
             raise OpenXrVulkanUnavailableError(str(exc)) from exc
+        queue_family_properties = vk.vkGetPhysicalDeviceQueueFamilyProperties(
+            vk_physical_device
+        )
+        available_queue_count = int(
+            queue_family_properties[queue_family_index].queueCount
+        )
+        requested_queue_count = 2 if available_queue_count >= 2 else 1
         queue_info = vk.VkDeviceQueueCreateInfo(
             sType=vk.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
             queueFamilyIndex=queue_family_index,
-            queueCount=1,
-            pQueuePriorities=[1.0],
+            queueCount=requested_queue_count,
+            pQueuePriorities=[1.0, 0.5][:requested_queue_count],
         )
         # XR_KHR_vulkan_enable2 does not expose xrGetVulkanDeviceExtensionsKHR.
         # Device extensions are selected from the application's Vulkan resource
@@ -3109,6 +3311,15 @@ class OpenXrVulkanPresenter(
             owns_device=True,
             timeline_semaphore_enabled=True,
             synchronization2_enabled=synchronization2_enabled,
+            compute_queue_index=1 if requested_queue_count >= 2 else 0,
+        )
+        print(
+            "[OpenXRViewer] Vulkan queue topology: "
+            f"graphics=family{queue_family_index}/queue0 "
+            f"glow_compute=family{queue_family_index}/queue"
+            f"{1 if requested_queue_count >= 2 else 0} "
+            f"async={requested_queue_count >= 2}",
+            flush=True,
         )
         self._provisional_vk_device = None
         self._provisional_vk_instance = None
@@ -3421,19 +3632,27 @@ class OpenXrVulkanPresenter(
         consumer_semaphores = metadata.get(
             "_vulkan_consumer_release_semaphores"
         )
-        if callable(consumer_release) and consumer_semaphores is not None:
-            consumer_release(frame.frame_id, tuple(consumer_semaphores))
-            return
-        callback = metadata.get("_vulkan_output_release")
-        if callable(callback):
-            fallback_timeline = metadata.get("_vulkan_fallback_copy_timeline")
-            if fallback_timeline is not None:
-                try:
-                    callback(frame.frame_id, wait_for_timeline=int(fallback_timeline))
-                    return
-                except TypeError:
-                    pass
-            callback(frame.frame_id)
+        try:
+            if callable(consumer_release) and consumer_semaphores is not None:
+                consumer_release(frame.frame_id, tuple(consumer_semaphores))
+            else:
+                callback = metadata.get("_vulkan_output_release")
+                if callable(callback):
+                    fallback_timeline = metadata.get("_vulkan_fallback_copy_timeline")
+                    if fallback_timeline is not None:
+                        try:
+                            callback(
+                                frame.frame_id,
+                                wait_for_timeline=int(fallback_timeline),
+                            )
+                        except TypeError:
+                            callback(frame.frame_id)
+                    else:
+                        callback(frame.frame_id)
+        finally:
+            glow_release = metadata.get("_vulkan_glow_release")
+            if callable(glow_release):
+                glow_release(frame.frame_id)
 
     def release_displayed_output_for_reuse(self, slot_index: int) -> bool:
         """Release a displayed source slot before a producer ring wrap blocks."""
@@ -3924,17 +4143,7 @@ class OpenXrVulkanPresenter(
             self._filament_lighting_preset_index %= len(
                 self._filament_lighting_presets
             )
-        mode = str(profile.get("glow_mode", "off")).strip().lower()
-        self._filament_glow_mode = (
-            mode if mode in {"off", "screen", "surround", "veil", "frosted"}
-            else "off"
-        )
-        try:
-            self._filament_glow_intensity_multiplier = max(
-                0.0, float(profile.get("glow_intensity_multiplier", 0.0))
-            )
-        except (TypeError, ValueError):
-            self._filament_glow_intensity_multiplier = 0.0
+        self._apply_filament_glow_profile_fields(profile)
 
         view_pose = profile.get("view_pose", profile.get("camera"))
         view_poses = profile.get("view_poses")
@@ -4221,6 +4430,12 @@ class OpenXrVulkanPresenter(
             )
             if self.filament_bridge is not None:
                 self._update_filament_screen_light(
+                    self.filament_bridge,
+                    output_frame
+                    if isinstance(output_frame, VulkanStereoOutputFrame)
+                    else None,
+                )
+                self._update_filament_glow(
                     self.filament_bridge,
                     output_frame
                     if isinstance(output_frame, VulkanStereoOutputFrame)

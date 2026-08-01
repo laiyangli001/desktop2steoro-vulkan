@@ -206,6 +206,8 @@ class VulkanContext:
         transfer_queue: Any | None = None,
         compute_queue_family_index: int | None = None,
         transfer_queue_family_index: int | None = None,
+        compute_queue_index: int = 0,
+        transfer_queue_index: int = 0,
         frame_context_count: int = 3,
     ) -> None:
         self.vk = vk
@@ -217,6 +219,8 @@ class VulkanContext:
         self.graphics_queue = queue
         self.compute_queue = compute_queue if compute_queue is not None else queue
         self.transfer_queue = transfer_queue if transfer_queue is not None else queue
+        self.compute_queue_index = int(compute_queue_index)
+        self.transfer_queue_index = int(transfer_queue_index)
         self.compute_queue_family_index = int(
             compute_queue_family_index
             if compute_queue_family_index is not None
@@ -378,9 +382,17 @@ class VulkanContext:
         owns_device: bool = True,
         timeline_semaphore_enabled: bool = False,
         synchronization2_enabled: bool = False,
+        compute_queue_index: int = 0,
+        transfer_queue_index: int = 0,
     ) -> "VulkanContext":
         vk = _import_vulkan()
         queue = vk.vkGetDeviceQueue(device, int(queue_family_index), 0)
+        compute_queue = vk.vkGetDeviceQueue(
+            device, int(queue_family_index), int(compute_queue_index)
+        )
+        transfer_queue = vk.vkGetDeviceQueue(
+            device, int(queue_family_index), int(transfer_queue_index)
+        )
         return cls(
             vk=vk,
             instance=instance,
@@ -401,8 +413,12 @@ class VulkanContext:
             ),
             owns_instance=owns_instance,
             owns_device=owns_device,
+            compute_queue=compute_queue,
+            transfer_queue=transfer_queue,
             compute_queue_family_index=int(queue_family_index),
             transfer_queue_family_index=int(queue_family_index),
+            compute_queue_index=int(compute_queue_index),
+            transfer_queue_index=int(transfer_queue_index),
         )
 
     @property

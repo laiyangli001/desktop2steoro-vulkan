@@ -58,6 +58,12 @@ struct PreviewScreenVertex {
     filament::math::float2 uv;
 };
 
+struct GlowVertex {
+    filament::math::float3 position;
+    filament::math::float2 uv;
+    filament::math::float2 effect;
+};
+
 struct MsdfTextVertex {
     filament::math::float3 position;
     filament::math::float2 uv;
@@ -341,6 +347,50 @@ struct FilamentBridge {
     std::vector<PreviewScreenVertex> screen_vertices;
     std::vector<uint16_t> screen_indices;
     bool screen_curved = false;
+    filament::math::float3 screen_center{0.0f, 0.0f, -2.0f};
+    filament::math::float3 screen_right{1.0f, 0.0f, 0.0f};
+    filament::math::float3 screen_up{0.0f, 1.0f, 0.0f};
+    filament::math::float3 screen_forward{0.0f, 0.0f, 1.0f};
+    float screen_width = 2.4f;
+    float screen_height = 1.35f;
+    uint32_t glow_mode = 0;
+    filament::math::float3 glow_head_position{0.0f, 0.0f, 0.0f};
+    float glow_intensity = 0.175f;
+    float glow_width = 0.75f;
+    float glow_intensity_multiplier = 0.0f;
+    float frosted_intensity = 1.0f;
+    float frosted_alpha = 0.42f;
+    float frosted_threshold = 0.46f;
+    float frosted_lod = 5.4f;
+    float frosted_blend = 1.35f;
+    float frosted_thickness = 1.6f;
+    float frosted_diffuse = 0.85f;
+    float frosted_inset = 0.045f;
+    float veil_intensity = 1.5f;
+    float veil_alpha = 1.0f;
+    filament::Texture* glow_source_texture = nullptr;
+    filament::Texture* glow_cpu_source_texture = nullptr;
+    std::vector<ScreenTextureSlot> glow_texture_cache;
+    bool glow_source_external = false;
+    filament::TextureSampler glow_texture_sampler;
+    filament::TextureSampler glow_external_texture_sampler;
+    filament::Material* glow_material = nullptr;
+    filament::MaterialInstance* glow_outer_material_instance = nullptr;
+    filament::MaterialInstance* glow_inner_material_instance = nullptr;
+    filament::Material* frost_material = nullptr;
+    filament::MaterialInstance* frost_material_instance = nullptr;
+    filament::MaterialInstance* veil_material_instance = nullptr;
+    filament::VertexBuffer* glow_vertex_buffer = nullptr;
+    filament::IndexBuffer* glow_index_buffer = nullptr;
+    filament::VertexBuffer* frost_vertex_buffer = nullptr;
+    filament::IndexBuffer* frost_index_buffer = nullptr;
+    utils::Entity glow_outer_entity;
+    utils::Entity glow_inner_entity;
+    utils::Entity frost_entity;
+    std::vector<GlowVertex> glow_vertices;
+    std::vector<uint16_t> glow_indices;
+    std::vector<GlowVertex> frost_vertices;
+    std::vector<uint16_t> frost_indices;
     filament::backend::VulkanPlatform::VulkanSharedContext shared_context{};
     MaterialBrightnessState brightness;
     std::array<ControllerAsset, 2> controllers;

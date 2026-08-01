@@ -64,6 +64,15 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
         self._closed = False
         self._screen_light_rgb = (0.18, 0.18, 0.18)
         self._screen_light_pending = None
+        self._glow_cpu_pending = None
+        self._glow_cpu_rgba: bytes | None = None
+        self._glow_cpu_size = (0, 0)
+        self._glow_cpu_serial = 0
+        self._glow_cpu_last_submit = 0.0
+        self._glow_gpu_backend = None
+        self._glow_gpu_last_submit = 0.0
+        self._glow_gpu_status: str | None = None
+        self._glow_gpu_submission_disabled = False
         self._release_signaled: set[tuple[int, int]] = set()
         self._source_frames: dict[int, tuple[object, object, int]] = {}
         self._released_source_frames: set[int] = set()
@@ -132,6 +141,170 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
         except Exception:
             # Screen illumination is supplemental and must never break output.
             self._screen_light_pending = None
+
+    def _update_glow_cpu_source(self, source) -> None:
+        """Build a small CPU RGBA reference texture without reading back VkImage."""
+        pending = self._glow_cpu_pending
+        if pending is not None:
+            host, event, width, height = pending
+            if event.query():
+                self._glow_cpu_rgba = host.numpy().tobytes()
+                self._glow_cpu_size = (int(width), int(height))
+                self._glow_cpu_serial += 1
+                self._glow_cpu_pending = None
+
+        mode = str(
+            getattr(self.presenter, "_filament_glow_mode", "off") or "off"
+        ).strip().lower()
+        if mode in {"off", "none", "false", "0"}:
+            return
+
+        now = time.monotonic()
+        if self._glow_cpu_pending is not None or now - self._glow_cpu_last_submit < (1.0 / 12.0):
+            return
+        try:
+            import torch
+            import torch.nn.functional as functional
+
+            if not isinstance(source, torch.Tensor) or not source.is_cuda:
+                return
+            value = source
+            if value.ndim == 4:
+                value = value[0]
+            if value.ndim != 3:
+                return
+            if int(value.shape[-1]) in (3, 4):
+                value = value[..., :3].permute(2, 0, 1)
+            elif int(value.shape[0]) in (3, 4):
+                value = value[:3]
+            else:
+                return
+            source_height, source_width = int(value.shape[1]), int(value.shape[2])
+            target_width = min(320, max(1, source_width))
+            target_height = max(1, int(round(source_height * target_width / source_width)))
+            if target_height > 180:
+                target_height = 180
+                target_width = max(1, int(round(source_width * target_height / source_height)))
+            sample = functional.interpolate(
+                value.unsqueeze(0).to(dtype=torch.float32),
+                size=(target_height, target_width),
+                mode="area",
+            )[0]
+            if source.dtype == torch.uint8:
+                sample = sample.clamp(0.0, 255.0)
+            else:
+                sample = sample.clamp(0.0, 1.0).mul(255.0)
+            rgb = sample.round().to(torch.uint8).permute(1, 2, 0)
+            rgba = torch.empty(
+                (target_height, target_width, 4),
+                dtype=torch.uint8,
+                device=source.device,
+            )
+            rgba[..., :3].copy_(rgb)
+            rgba[..., 3].fill_(255)
+            host = torch.empty(
+                (target_height, target_width, 4),
+                dtype=torch.uint8,
+                pin_memory=True,
+            )
+            host.copy_(rgba, non_blocking=True)
+            event = torch.cuda.Event()
+            event.record(torch.cuda.current_stream(source.device))
+            self._glow_cpu_pending = (
+                host, event, target_width, target_height
+            )
+            self._glow_cpu_last_submit = now
+        except Exception:
+            self._glow_cpu_pending = None
+
+    def _glow_cpu_metadata(self) -> dict[str, object]:
+        return {
+            "glow_cpu_rgba": self._glow_cpu_rgba,
+            "glow_cpu_size": self._glow_cpu_size,
+            "glow_cpu_serial": self._glow_cpu_serial,
+            "glow_source_path": "cpu_uploaded_reference",
+        }
+
+    def _set_glow_gpu_status(self, status: str) -> None:
+        normalized = str(status or "unknown")
+        if normalized == self._glow_gpu_status:
+            return
+        self._glow_gpu_status = normalized
+        print(f"[VulkanOutput] Glow texture source: {normalized}", flush=True)
+
+    def _update_glow_gpu_source(self, source, *, frame_id: int) -> dict[str, object]:
+        """Publish only completed dedicated-queue Glow images.
+
+        This method never waits for Glow completion. If the newest dispatch is
+        still running, acquire() returns the last completed image instead.
+        """
+        mode = str(
+            getattr(self.presenter, "_filament_glow_mode", "off") or "off"
+        ).strip().lower()
+        if mode in {"off", "none", "false", "0"}:
+            return {}
+        if self.backend_name != "cuda":
+            self._set_glow_gpu_status(f"cpu_fallback backend={self.backend_name}")
+            return {}
+        bridge = getattr(self.presenter, "filament_bridge", None)
+        if not bool(getattr(bridge, "glow_vulkan_image_abi_available", False)):
+            self._set_glow_gpu_status("cpu_fallback reason=glow_external_image_abi")
+            return {}
+        try:
+            if self._glow_gpu_backend is None:
+                from stereo_runtime.vulkan_glow_source import (
+                    VulkanGlowSourceComputeBackend,
+                )
+
+                self._glow_gpu_backend = VulkanGlowSourceComputeBackend(
+                    self.presenter.vulkan
+                )
+                self._set_glow_gpu_status(
+                    "vulkan_compute_external_image async_queue=True"
+                )
+            backend = self._glow_gpu_backend
+            backend.poll()
+            now = time.monotonic()
+            if (
+                not self._glow_gpu_submission_disabled
+                and now - self._glow_gpu_last_submit >= (1.0 / 12.0)
+            ):
+                submitted = backend.submit(
+                    source,
+                    mode=mode,
+                    frosted_lod=float(
+                        getattr(self.presenter, "_frosted_glow_lod", 5.4)
+                    ),
+                )
+                if submitted:
+                    self._glow_gpu_last_submit = now
+            metadata = backend.acquire(frame_id)
+            resource = metadata.get("glow_vulkan_image")
+            if resource is not None:
+                metadata["glow_source_size"] = (
+                    int(getattr(resource, "width", 0)),
+                    int(getattr(resource, "height", 0)),
+                )
+            return metadata
+        except Exception as exc:
+            self._set_glow_gpu_status(
+                f"reuse_last_completed reason={type(exc).__name__}: {exc}"
+            )
+            backend = self._glow_gpu_backend
+            self._glow_gpu_submission_disabled = True
+            if backend is not None:
+                try:
+                    metadata = backend.acquire(frame_id)
+                    resource = metadata.get("glow_vulkan_image")
+                    if resource is not None:
+                        metadata["glow_source_size"] = (
+                            int(getattr(resource, "width", 0)),
+                            int(getattr(resource, "height", 0)),
+                        )
+                        return metadata
+                except Exception:
+                    pass
+            return {}
 
     @staticmethod
     def _tensor_extent(tensor):
@@ -364,8 +537,17 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
         self._claim_slot(slot_index, frame_id)
         self.left_slot = self.left_slots[slot_index]
         self.right_slot = self.right_slots[slot_index]
+        glow_metadata: dict[str, object] = {}
         try:
             self._update_screen_light_sample(left, right)
+            glow_source = getattr(runtime_result, "source_rgb", None)
+            glow_source = glow_source if glow_source is not None else left
+            glow_metadata = self._update_glow_gpu_source(
+                glow_source, frame_id=frame_id
+            )
+            if not glow_metadata:
+                self._update_glow_cpu_source(glow_source)
+                glow_metadata = self._glow_cpu_metadata()
             left_ready = None
             right_ready = None
             use_external_semaphore = bool(
@@ -408,6 +590,9 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
                 self.importer.copy_tensor(right, self.right_slot)
                 self.importer.synchronize()
         except Exception:
+            glow_release = glow_metadata.get("_vulkan_glow_release")
+            if callable(glow_release):
+                glow_release(frame_id)
             self.release_frame(frame_id)
             raise
         left_contract = self.source_image_contract(self.left_slot.resource)
@@ -463,6 +648,7 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
                 "_vulkan_source_consumer_release": self.release_consumer_frame,
                 "_vulkan_output_release": self.release_frame,
                 "screen_light_linear_rgb": self._screen_light_rgb,
+                **glow_metadata,
             },
             color_space="srgb",
             image_origin="top_left",
@@ -473,6 +659,10 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
             self._closed = True
             self._active_leases.clear()
             self._lease_condition.notify_all()
+        glow_backend = self._glow_gpu_backend
+        self._glow_gpu_backend = None
+        if glow_backend is not None:
+            glow_backend.close()
         if self.importer is not None:
             self.importer.close()
         self.importer = None
@@ -503,6 +693,8 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
         self.right_slot = None
         self._extent = None
         self._screen_light_pending = None
+        self._glow_cpu_pending = None
+        self._glow_cpu_rgba = None
         self._release_signaled.clear()
         self._source_frames.clear()
         self._released_source_frames.clear()
@@ -823,6 +1015,7 @@ class VulkanZeroCopyOutputAdapter(CudaVulkanOutputAdapter):
         left_slot = self.left_slots[slot_index]
         right_slot = self.right_slots[slot_index]
         try:
+            self._update_glow_cpu_source(rgb)
             if self._release_timelines[slot_index]:
                 self.presenter.vulkan.wait_for_timeline(self._release_timelines[slot_index])
             if self._compute_backend is None:
@@ -877,6 +1070,7 @@ class VulkanZeroCopyOutputAdapter(CudaVulkanOutputAdapter):
                 "_vulkan_source_prepare_for_sampling": self.prepare_source_for_sampling,
                 "_vulkan_source_consumer_release": self.release_consumer_frame,
                 "_vulkan_output_release": self.release_output_frame,
+                **self._glow_cpu_metadata(),
             },
             color_space="srgb",
             image_origin="top_left",

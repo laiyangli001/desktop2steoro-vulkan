@@ -128,6 +128,25 @@ FILAMENT_BRIDGE_API int filament_bridge_set_screen_curved(
 FILAMENT_BRIDGE_API int filament_bridge_set_screen_light(
         FilamentBridge* bridge,
         float red, float green, float blue, float intensity);
+// CPU-uploaded fallback for runtimes without the Vulkan Glow image ABI.
+FILAMENT_BRIDGE_API int filament_bridge_set_glow_source(
+        FilamentBridge* bridge, const uint8_t* rgba,
+        uint32_t width, uint32_t height);
+// Bind a borrowed, completed Vulkan image produced by the asynchronous Glow pass.
+FILAMENT_BRIDGE_API int filament_bridge_set_glow_image(
+        FilamentBridge* bridge, const void* image,
+        uint32_t width, uint32_t height, int32_t format);
+// mode: 0=off, 1=glow, 2=glow2, 3=veil, 4=frosted.
+FILAMENT_BRIDGE_API int filament_bridge_set_glow_state(
+        FilamentBridge* bridge, uint32_t mode,
+        float head_x, float head_y, float head_z,
+        float glow_intensity, float glow_width,
+        float glow_intensity_multiplier,
+        float frosted_intensity, float frosted_alpha,
+        float frosted_threshold, float frosted_lod,
+        float frosted_blend, float frosted_thickness,
+        float frosted_diffuse, float frosted_inset,
+        float veil_intensity, float veil_alpha);
 // Set the matrix-selected source prefilter scale. One means no additional
 // prefiltering beyond the projected source footprint.
 FILAMENT_BRIDGE_API int filament_bridge_set_screen_sampling(

@@ -821,6 +821,29 @@ def test_release_output_frame_waits_for_filament_finished_semaphores() -> None:
     assert calls == [(17, ("left-finished", "right-finished"))]
 
 
+def test_release_output_frame_releases_glow_after_screen_consumer() -> None:
+    calls = []
+    frame = SimpleNamespace(
+        frame_id=19,
+        metadata={
+            "_vulkan_source_consumer_release": lambda frame_id, semaphores: calls.append(
+                ("screen", frame_id, semaphores)
+            ),
+            "_vulkan_consumer_release_semaphores": ("left", "right"),
+            "_vulkan_glow_release": lambda frame_id: calls.append(
+                ("glow", frame_id)
+            ),
+        },
+    )
+
+    OpenXrVulkanPresenter._release_output_frame(frame)
+
+    assert calls == [
+        ("screen", 19, ("left", "right")),
+        ("glow", 19),
+    ]
+
+
 def test_release_displayed_output_for_reuse_releases_matching_ring_slot() -> None:
     calls = []
     presenter = OpenXrVulkanPresenter()
@@ -1155,6 +1178,91 @@ def test_vulkan_shortcuts_cycle_screen_preset_and_background() -> None:
     assert presenter._filament_skybox_brightness == pytest.approx(0.0)
     presenter._dispatch_controller_shortcut("toggle_background")
     assert presenter._filament_skybox_brightness == pytest.approx(1.0)
+
+
+def test_x_long_press_action_cycles_v25_glow_modes_not_room_lighting() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_glow_mode = "off"
+    presenter._filament_glow_intensity_multiplier = 0.0
+
+    observed = []
+    for _ in range(5):
+        presenter._dispatch_controller_shortcut("cycle_environment_light")
+        observed.append(presenter._filament_glow_mode)
+
+    assert observed == ["glow", "glow2", "veil", "frosted", "off"]
+    assert presenter._filament_glow_intensity_multiplier == pytest.approx(0.0)
+    assert presenter._preset_name_overlay == "Off"
+
+
+def test_filament_glow_uses_cpu_texture_without_rebinding_same_serial() -> None:
+    class Bridge:
+        glow_abi_available = True
+
+        def __init__(self) -> None:
+            self.sources = []
+            self.states = []
+
+        def set_glow_source(self, rgba, *, width, height) -> None:
+            self.sources.append((bytes(rgba), width, height))
+
+        def set_glow_state(self, mode, head, **values) -> None:
+            self.states.append((mode, tuple(float(value) for value in head), values))
+
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_glow_mode = "screen"
+    presenter._filament_glow_intensity_multiplier = 1.5
+    presenter._head_position_w = np.asarray((0.1, 1.7, -0.2), dtype=np.float64)
+    bridge = Bridge()
+    rgba = bytes((20, 40, 60, 255) * 4)
+    frame = SimpleNamespace(metadata={
+        "glow_cpu_rgba": rgba,
+        "glow_cpu_size": (2, 2),
+        "glow_cpu_serial": 7,
+        "glow_source_path": "cpu_uploaded_reference",
+    })
+
+    presenter._update_filament_glow(bridge, frame)
+    presenter._update_filament_glow(bridge, frame)
+
+    assert bridge.sources == [(rgba, 2, 2)]
+    assert len(bridge.states) == 2
+    assert bridge.states[0][0] == "screen"
+    assert bridge.states[0][1] == pytest.approx((0.1, 1.7, -0.2))
+    assert bridge.states[0][2]["glow_intensity"] == pytest.approx(0.175)
+
+
+def test_filament_glow_binds_completed_vulkan_image_once_per_serial() -> None:
+    class Bridge:
+        glow_abi_available = True
+        glow_vulkan_image_abi_available = True
+
+        def __init__(self) -> None:
+            self.images = []
+            self.states = []
+
+        def set_glow_image(self, resource) -> None:
+            self.images.append(resource)
+
+        def set_glow_state(self, mode, head, **values) -> None:
+            self.states.append((mode, tuple(float(value) for value in head), values))
+
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_glow_mode = "glow"
+    bridge = Bridge()
+    resource = SimpleNamespace(width=320, height=180)
+    frame = SimpleNamespace(metadata={
+        "glow_vulkan_image": resource,
+        "glow_vulkan_serial": 4,
+        "glow_source_size": (320, 180),
+        "glow_source_path": "vulkan_compute_external_image",
+    })
+
+    presenter._update_filament_glow(bridge, frame)
+    presenter._update_filament_glow(bridge, frame)
+
+    assert bridge.images == [resource]
+    assert len(bridge.states) == 2
 
 
 def test_screen_adjustment_osd_is_submitted_as_quad_layer() -> None:

@@ -55,6 +55,8 @@ class FilamentVulkanBridge:
         self._vulkan_external_image_abi_available = False
         self._screen_curved_abi_available = False
         self._screen_light_abi_available = False
+        self._glow_abi_available = False
+        self._glow_vulkan_image_abi_available = False
         self._passthrough_backdrop_abi_available = False
         self._ambient_light_abi_available = False
         self._controller_ambient_light_abi_available = False
@@ -578,6 +580,119 @@ class FilamentVulkanBridge:
             "set_screen_light",
         )
 
+    @property
+    def glow_abi_available(self) -> bool:
+        return self._glow_abi_available
+
+    @property
+    def glow_vulkan_image_abi_available(self) -> bool:
+        return self._glow_vulkan_image_abi_available
+
+    def set_glow_source(self, rgba: bytes, *, width: int, height: int) -> None:
+        """Upload the legacy glow source through an ordinary CPU sRGB texture."""
+        self._ensure_loaded()
+        if not self._glow_abi_available:
+            raise FilamentBridgeError(
+                "Filament Bridge glow ABI is unavailable; rebuild the CI artifact"
+            )
+        expected = int(width) * int(height) * 4
+        payload = bytes(rgba)
+        if int(width) <= 0 or int(height) <= 0 or len(payload) != expected:
+            raise ValueError("glow source must contain width*height*4 RGBA bytes")
+        buffer = ctypes.create_string_buffer(payload)
+        self._check_result(
+            self._library.filament_bridge_set_glow_source(
+                self._handle, buffer, int(width), int(height)
+            ),
+            "set_glow_source",
+        )
+
+    def set_glow_image(self, resource: Any) -> None:
+        """Bind a completed presenter-owned Vulkan image as the Glow source."""
+        self._ensure_loaded()
+        if not self._glow_vulkan_image_abi_available:
+            raise FilamentBridgeError(
+                "Filament Bridge Glow external-image ABI is unavailable; rebuild the CI artifact"
+            )
+        image = getattr(resource, "image", None)
+        width = int(getattr(resource, "width", 0) or 0)
+        height = int(getattr(resource, "height", 0) or 0)
+        format_value = int(getattr(resource, "format", 0) or 0)
+        if image is None or width <= 0 or height <= 0 or format_value <= 0:
+            raise ValueError("Glow Vulkan image resource is incomplete")
+        self._check_result(
+            self._library.filament_bridge_set_glow_image(
+                self._handle,
+                ctypes.c_void_p(_as_pointer_value(image)),
+                width,
+                height,
+                format_value,
+            ),
+            "set_glow_image",
+        )
+
+    def set_glow_state(
+        self,
+        mode: str,
+        head_position,
+        *,
+        glow_intensity: float,
+        glow_width: float,
+        glow_intensity_multiplier: float,
+        frosted_intensity: float,
+        frosted_alpha: float,
+        frosted_threshold: float,
+        frosted_lod: float,
+        frosted_blend: float,
+        frosted_thickness: float,
+        frosted_diffuse: float,
+        frosted_inset: float,
+        veil_intensity: float,
+        veil_alpha: float,
+    ) -> None:
+        """Apply the v2.5 OpenXR glow state without using the screen VkImage."""
+        self._ensure_loaded()
+        if not self._glow_abi_available:
+            raise FilamentBridgeError(
+                "Filament Bridge glow ABI is unavailable; rebuild the CI artifact"
+            )
+        normalized = str(mode or "off").strip().lower()
+        mode_value = {
+            "off": 0,
+            "glow": 1,
+            "screen": 1,
+            "glow2": 2,
+            "veil": 3,
+            "frosted": 4,
+            "frost": 4,
+        }.get(normalized)
+        if mode_value is None:
+            raise ValueError(f"unsupported glow mode: {mode}")
+        values = (
+            *(float(value) for value in head_position),
+            float(glow_intensity),
+            float(glow_width),
+            float(glow_intensity_multiplier),
+            float(frosted_intensity),
+            float(frosted_alpha),
+            float(frosted_threshold),
+            float(frosted_lod),
+            float(frosted_blend),
+            float(frosted_thickness),
+            float(frosted_diffuse),
+            float(frosted_inset),
+            float(veil_intensity),
+            float(veil_alpha),
+        )
+        if len(values) != 16:
+            raise ValueError("head_position must contain exactly three values")
+        self._check_result(
+            self._library.filament_bridge_set_glow_state(
+                self._handle, ctypes.c_uint32(mode_value), *values
+            ),
+            "set_glow_state",
+        )
+
     def set_screen_sampling(self, filter_scale: float) -> None:
         self._ensure_loaded()
         if not self._screen_sampling_abi_available:
@@ -935,6 +1050,40 @@ class FilamentVulkanBridge:
             ]
             set_screen_light.restype = ctypes.c_int
             self._screen_light_abi_available = True
+        set_glow_source = getattr(
+            library, "filament_bridge_set_glow_source", None
+        )
+        set_glow_state = getattr(
+            library, "filament_bridge_set_glow_state", None
+        )
+        set_glow_image = getattr(
+            library, "filament_bridge_set_glow_image", None
+        )
+        if set_glow_source is not None and set_glow_state is not None:
+            set_glow_source.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_uint32,
+                ctypes.c_uint32,
+            ]
+            set_glow_source.restype = ctypes.c_int
+            set_glow_state.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_uint32,
+                *([ctypes.c_float] * 16),
+            ]
+            set_glow_state.restype = ctypes.c_int
+            self._glow_abi_available = True
+        if set_glow_image is not None:
+            set_glow_image.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_uint32,
+                ctypes.c_uint32,
+                ctypes.c_int32,
+            ]
+            set_glow_image.restype = ctypes.c_int
+            self._glow_vulkan_image_abi_available = True
         set_screen_sampling = getattr(
             library, "filament_bridge_set_screen_sampling", None
         )
@@ -992,6 +1141,10 @@ class FilamentVulkanBridge:
             self._vulkan_external_image_abi_available = bool(
                 external_image_abi(None)
             )
+        self._glow_vulkan_image_abi_available = bool(
+            self._glow_vulkan_image_abi_available
+            and self._vulkan_external_image_abi_available
+        )
         if hasattr(library, "filament_bridge_set_screen_ready_semaphore"):
             library.filament_bridge_set_screen_ready_semaphore.argtypes = [
                 ctypes.c_void_p, ctypes.c_void_p
