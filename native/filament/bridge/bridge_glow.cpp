@@ -543,11 +543,15 @@ int bridge_glow_set_source(
         if (bridge->glow_cpu_source_texture) {
             bridge->engine->destroy(bridge->glow_cpu_source_texture);
         }
+        using Usage = filament::Texture::Usage;
+        const auto glow_texture_usage = static_cast<Usage>(
+                static_cast<uint16_t>(Usage::DEFAULT) |
+                static_cast<uint16_t>(Usage::GEN_MIPMAPPABLE));
         bridge->glow_cpu_source_texture = filament::Texture::Builder()
                 .width(width).height(height).levels(mip_level_count(width, height))
                 .format(filament::Texture::InternalFormat::SRGB8_A8)
                 .sampler(filament::Texture::Sampler::SAMPLER_2D)
-                .usage(filament::Texture::Usage::DEFAULT)
+                .usage(glow_texture_usage)
                 .build(*bridge->engine);
         if (!bridge->glow_cpu_source_texture) {
             bridge_set_error(bridge, "Filament could not create CPU glow source texture");

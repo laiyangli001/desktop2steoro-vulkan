@@ -234,6 +234,8 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     glow_source = (bridge_dir / "bridge_glow.cpp").read_text(encoding="utf-8")
     assert "createExternalImageFromVkImage" in glow_source
     assert "glow_cpu_source_texture" in glow_source
+    assert "Usage::GEN_MIPMAPPABLE" in glow_source
+    assert ".usage(glow_texture_usage)" in glow_source
     assert "glow_texture_cache" in glow_source
     assert "glow_source_external" in glow_source
     assert 'parameter("externalSource"' in glow_source
