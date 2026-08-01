@@ -676,13 +676,13 @@ int bridge_glow_create(FilamentBridge* bridge) {
             !bridge->glow_shell_vertex_buffer || !bridge->glow_shell_index_buffer ||
             !create_renderable(bridge, bridge->glow_outer_entity,
                     bridge->glow_outer_material_instance, bridge->glow_vertex_buffer,
-                    bridge->glow_index_buffer, kMaxGlowIndices, 0) ||
+                    bridge->glow_index_buffer, kMaxGlowIndices, 4) ||
             !create_renderable(bridge, bridge->glow_inner_entity,
                     bridge->glow_inner_material_instance, bridge->glow_vertex_buffer,
-                    bridge->glow_index_buffer, kMaxGlowIndices, 1) ||
+                    bridge->glow_index_buffer, kMaxGlowIndices, 5) ||
             !create_renderable(bridge, bridge->frost_entity,
                     bridge->frost_material_instance, bridge->frost_vertex_buffer,
-                    bridge->frost_index_buffer, kMaxFrostIndices, 1) ||
+                    bridge->frost_index_buffer, kMaxFrostIndices, 5) ||
             !create_renderable(bridge, bridge->glow_shell_entity,
                     bridge->glow_shell_material_instance,
                     bridge->glow_shell_vertex_buffer,

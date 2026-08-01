@@ -238,6 +238,9 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "vec2 grid = vec2(4.0, 3.0);" in source
     assert "material.baseColor = vec4(shellColor * glow, 1.0);" in source
     assert "bridge->glow_mode == 5" in source
+    assert "bridge->glow_index_buffer, kMaxGlowIndices, 4" in source
+    assert "bridge->glow_index_buffer, kMaxGlowIndices, 5" in source
+    assert "bridge->frost_index_buffer, kMaxFrostIndices, 5" in source
     assert "Texture::InternalFormat::SRGB8_A8" in source
     assert "generateMipmaps(*bridge->engine)" in source
     assert "kFlatFrostDepthSteps = 8" in source
@@ -537,7 +540,8 @@ def test_native_screen_glow_and_controllers_use_explicit_view_order() -> None:
         encoding="utf-8"
     )
 
-    assert ".priority(0).culling(false)" in screen_source
+    assert ".priority(2).culling(false)" in screen_source
+    assert "surround shell is the background effect" in screen_source
     assert ".blending(filament::BlendingMode::OPAQUE)" in screen_source
     assert ".depthWrite(true)" in screen_source
     assert ".depthCulling(true)" in screen_source
