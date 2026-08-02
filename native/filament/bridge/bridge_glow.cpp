@@ -10,15 +10,15 @@ namespace {
 
 constexpr uint32_t kGlowSegments = 64;
 constexpr uint32_t kGlowShellSegments = 96;
-constexpr uint32_t kGlowShellVerticalSegments = 48;
+constexpr uint32_t kGlowShellRadialSegments = 48;
 constexpr uint32_t kFlatFrostDepthSteps = 8;
 constexpr uint32_t kFlatFrostEdgeSteps = 8;
 constexpr uint32_t kMaxGlowVertices = (kGlowSegments + 1) * 2;
 constexpr uint32_t kMaxGlowIndices = kGlowSegments * 6;
 constexpr uint32_t kMaxGlowShellVertices =
-        (kGlowShellSegments + 1) * (kGlowShellVerticalSegments + 1);
+        4 * (kGlowShellSegments + 1) * (kGlowShellRadialSegments + 1);
 constexpr uint32_t kMaxGlowShellIndices =
-        kGlowShellSegments * kGlowShellVerticalSegments * 6;
+        4 * kGlowShellSegments * kGlowShellRadialSegments * 6;
 constexpr uint32_t kFlatFrostQuadCount =
         4 * kFlatFrostDepthSteps * kFlatFrostEdgeSteps;
 constexpr uint32_t kMaxFrostVertices = kFlatFrostQuadCount * 4;
@@ -263,7 +263,6 @@ void rebuild_glow_shell_geometry(FilamentBridge* bridge) {
             std::max({bridge->screen_width, bridge->screen_height, 1.0f}) * 0.85f);
     const float height = std::max(
             bridge->glow_shell_height, bridge->screen_height * 1.8f);
-    constexpr float kPi = 3.14159265358979323846f;
     bridge->glow_shell_vertices.clear();
     bridge->glow_shell_indices.clear();
     auto shell_forward = bridge->screen_center - bridge->glow_head_position;
@@ -279,60 +278,82 @@ void rebuild_glow_shell_geometry(FilamentBridge* bridge) {
     }
     shell_right = normalize(shell_right);
     const auto shell_up = normalize(cross(shell_right, shell_forward));
-    const float projected_screen_width = bridge->screen_curved
-            ? bridge->screen_width * std::sin(kCurvedHalfAngle) / kCurvedHalfAngle
-            : bridge->screen_width;
-    auto screen_relative_uv = [&](const filament::math::float3& direction) {
-        const float denominator = dot(direction, bridge->screen_forward);
-        const float plane_offset = dot(
-                bridge->screen_center - bridge->glow_head_position,
-                bridge->screen_forward);
-        if (std::abs(denominator) <= 1e-5f) {
-            return filament::math::float2{1000.0f, 1000.0f};
-        }
-        const float distance = plane_offset / denominator;
-        if (distance <= 0.0f) {
-            return filament::math::float2{1000.0f, 1000.0f};
-        }
-        const auto hit = bridge->glow_head_position + direction * distance;
-        const auto local = hit - bridge->screen_center;
-        return filament::math::float2{
-                dot(local, bridge->screen_right) /
-                                std::max(projected_screen_width, 1e-5f) + 0.5f,
-                dot(local, bridge->screen_up) /
-                                std::max(bridge->screen_height, 1e-5f) + 0.5f};
-    };
     const float vertical_radius = std::max(height * 0.5f, 1.0f);
-    for (uint32_t row = 0; row <= kGlowShellVerticalSegments; ++row) {
-        const float v = static_cast<float>(row) /
-                static_cast<float>(kGlowShellVerticalSegments);
-        const float phi = (v - 0.5f) * kPi;
-        const float ring = std::cos(phi);
-        const float y = std::sin(phi) * vertical_radius;
-        for (uint32_t column = 0; column <= kGlowShellSegments; ++column) {
-            const float u = static_cast<float>(column) /
-                    static_cast<float>(kGlowShellSegments);
-            const float theta = (u - 0.5f) * kPi;
-            const auto direction =
-                    shell_right * (std::sin(theta) * ring * radius) +
-                    shell_up * y +
-                    shell_forward * (std::cos(theta) * ring * radius);
-            const auto position = bridge->glow_head_position + direction;
-            bridge->glow_shell_vertices.push_back(
-                    {position, screen_relative_uv(direction), {0.0f, 0.0f}});
+    auto edge_uv = [](uint32_t side, float along) {
+        switch (side) {
+            case 0: return filament::math::float2{along, 1.0f};
+            case 1: return filament::math::float2{1.0f, 1.0f - along};
+            case 2: return filament::math::float2{1.0f - along, 0.0f};
+            default: return filament::math::float2{0.0f, along};
         }
-    }
-    const uint32_t stride = kGlowShellSegments + 1;
-    for (uint32_t row = 0; row < kGlowShellVerticalSegments; ++row) {
-        for (uint32_t column = 0; column < kGlowShellSegments; ++column) {
-            const auto lower_left = static_cast<uint16_t>(row * stride + column);
-            const auto lower_right = static_cast<uint16_t>(lower_left + 1);
-            const auto upper_left = static_cast<uint16_t>(lower_left + stride);
-            const auto upper_right = static_cast<uint16_t>(upper_left + 1);
-            bridge->glow_shell_indices.insert(
-                    bridge->glow_shell_indices.end(), {
-                            lower_left, lower_right, upper_left,
-                            lower_right, upper_right, upper_left});
+    };
+    auto spherical_interpolate = [](
+            const filament::math::float3& start,
+            const filament::math::float3& end, float amount) {
+        const float cosine = std::clamp(dot(start, end), -1.0f, 1.0f);
+        const float angle = std::acos(cosine);
+        const float sine = std::sin(angle);
+        if (std::abs(sine) <= 1e-5f) {
+            return normalize(start * (1.0f - amount) + end * amount);
+        }
+        return normalize(
+                start * (std::sin((1.0f - amount) * angle) / sine) +
+                end * (std::sin(amount * angle) / sine));
+    };
+    auto shell_position = [&](const filament::math::float3& direction) {
+        return bridge->glow_head_position +
+                shell_right * (dot(direction, shell_right) * radius) +
+                shell_up * (dot(direction, shell_up) * vertical_radius) +
+                shell_forward * (dot(direction, shell_forward) * radius);
+    };
+
+    // Four independent edge-to-rim strips replace the latitude/longitude
+    // hemisphere. Every screen-edge sample owns its radial geodesic, so no
+    // row of vertices can collapse into a shared top, bottom, left, or right
+    // pole and make the surround light converge there.
+    const uint32_t radial_stride = kGlowShellSegments + 1;
+    for (uint32_t side = 0; side < 4; ++side) {
+        const uint32_t side_first =
+                static_cast<uint32_t>(bridge->glow_shell_vertices.size());
+        for (uint32_t radial = 0; radial <= kGlowShellRadialSegments; ++radial) {
+            const float radial_t = static_cast<float>(radial) /
+                    static_cast<float>(kGlowShellRadialSegments);
+            for (uint32_t segment = 0; segment <= kGlowShellSegments; ++segment) {
+                const float along = static_cast<float>(segment) /
+                        static_cast<float>(kGlowShellSegments);
+                const auto source_uv = edge_uv(side, along);
+                auto source_direction = screen_surface(
+                        bridge, source_uv.x, source_uv.y) -
+                        bridge->glow_head_position;
+                if (length(source_direction) <= 1e-5f) {
+                    source_direction = shell_forward;
+                } else {
+                    source_direction = normalize(source_direction);
+                }
+                const float rim_x = (source_uv.x - 0.5f) * 2.0f;
+                const float rim_y = (source_uv.y - 0.5f) * 2.0f;
+                auto rim_direction = shell_right * rim_x + shell_up * rim_y +
+                        shell_forward * 0.02f;
+                rim_direction = normalize(rim_direction);
+                const auto direction = spherical_interpolate(
+                        source_direction, rim_direction, radial_t);
+                bridge->glow_shell_vertices.push_back({
+                        shell_position(direction), source_uv, {radial_t, 0.0f}});
+            }
+        }
+        for (uint32_t radial = 0; radial < kGlowShellRadialSegments; ++radial) {
+            for (uint32_t segment = 0; segment < kGlowShellSegments; ++segment) {
+                const auto near_left = static_cast<uint16_t>(
+                        side_first + radial * radial_stride + segment);
+                const auto near_right = static_cast<uint16_t>(near_left + 1);
+                const auto far_left = static_cast<uint16_t>(
+                        near_left + radial_stride);
+                const auto far_right = static_cast<uint16_t>(far_left + 1);
+                bridge->glow_shell_indices.insert(
+                        bridge->glow_shell_indices.end(), {
+                                near_left, near_right, far_left,
+                                near_right, far_right, far_left});
+            }
         }
     }
     upload_geometry(
@@ -389,6 +410,7 @@ filament::Material* build_glow_shell_material(
             .name("D2S Legacy Surround Glow")
             .material(shader)
             .require(filament::VertexAttribute::UV0)
+            .require(filament::VertexAttribute::UV1)
             .parameter("glowTexture", filamat::MaterialBuilder::SamplerType::SAMPLER_2D)
             .parameter("glowIntensity", filamat::MaterialBuilder::UniformType::FLOAT)
             .parameter("externalSource", filamat::MaterialBuilder::UniformType::FLOAT)
@@ -638,32 +660,20 @@ int bridge_glow_create(FilamentBridge* bridge) {
         }
         void material(inout MaterialInputs material) {
             prepareMaterial(material);
-            // UV0 is the dome ray projected onto the current screen plane.
-            // Values inside [0, 1] belong to the screen itself; values outside
-            // describe the distance from its live edge, so resizing, moving,
-            // or rotating the screen moves the surround boundary with it.
-            vec2 screenUv = getUV0();
-            float inside = step(0.0, screenUv.x) * step(screenUv.x, 1.0) *
-                    step(0.0, screenUv.y) * step(screenUv.y, 1.0);
-            if (inside > 0.5) discard;
-            vec2 outside = max(max(-screenUv, screenUv - vec2(1.0)), vec2(0.0));
-            float edgeDistance = length(outside);
-            // Plane distance tends to infinity as a dome ray approaches the
-            // hemisphere rim. Convert it to a bounded angular distance so the
-            // edge light spans the complete forward hemisphere and reaches
-            // zero only at the outer rim.
-            float angularDistance = atan(edgeDistance) / 1.57079633;
-            float edgeField = 1.0 - smoothstep(0.0, 1.0, angularDistance);
+            // UV0 stays on one screen edge while UV1 advances along that
+            // sample's independent geodesic to the hemisphere rim.
+            vec2 sourceUv = getUV0();
+            float radialDistance = clamp(getUV1().x, 0.0, 1.0);
+            float edgeField = exp2(-5.0 * radialDistance) *
+                    (1.0 - smoothstep(0.88, 1.0, radialDistance));
             float glow = edgeField * materialParams.glowIntensity;
-            if (glow <= 0.0001) discard;
+            if (glow <= 0.002) discard;
             glow = min(glow, 1.0);
             // Clamp to the nearest point on the screen perimeter. The 8 x 6
             // producer grid turns the outer row / column into a finite-width
             // sampling band rather than a one-pixel sampling line.
-            vec3 shellColor = sampleRegionAverage(
-                    clamp(screenUv, vec2(0.0), vec2(1.0)));
-            // Preserve the project's explicit no-transparency Glow contract.
-            material.baseColor = vec4(shellColor * glow, 1.0);
+            vec3 shellColor = sampleRegionAverage(sourceUv);
+            material.baseColor = vec4(shellColor, glow);
         }
     )FILAMENT";
     bridge->glow_material = build_material(
@@ -714,7 +724,10 @@ int bridge_glow_create(FilamentBridge* bridge) {
                     filament::VertexBuffer::AttributeType::FLOAT3, 0, sizeof(GlowVertex))
             .attribute(filament::VertexAttribute::UV0, 0,
                     filament::VertexBuffer::AttributeType::FLOAT2,
-                    sizeof(float) * 3, sizeof(GlowVertex)).build(*bridge->engine);
+                    sizeof(float) * 3, sizeof(GlowVertex))
+            .attribute(filament::VertexAttribute::UV1, 0,
+                    filament::VertexBuffer::AttributeType::FLOAT2,
+                    sizeof(float) * 5, sizeof(GlowVertex)).build(*bridge->engine);
     bridge->glow_shell_index_buffer = filament::IndexBuffer::Builder()
             .indexCount(kMaxGlowShellIndices)
             .bufferType(filament::IndexBuffer::IndexType::USHORT).build(*bridge->engine);

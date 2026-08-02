@@ -11,6 +11,7 @@ namespace {
 constexpr uint32_t kScreenSegments = 48;
 constexpr float kCurvedHalfAngle = 0.72f;
 constexpr float kLegacyScreenCandelaScale = 1200.0f;
+constexpr float kControllerScreenLightWeight = 0.80f;
 // Match the legacy OpenGL runtime-eye sampler bias. Without this, the
 // trilinear MIP sampler selects a softer level for the same screen footprint.
 constexpr float kLegacyScreenLodBias = -0.35f;
@@ -375,7 +376,8 @@ int bridge_screen_set_light(
         if (instance.isValid()) {
             lights.setColor(instance, filament::LinearColor{red, green, blue});
             lights.setIntensityCandela(
-                    instance, intensity * kLegacyScreenCandelaScale);
+                    instance, intensity * kLegacyScreenCandelaScale *
+                    kControllerScreenLightWeight);
             return 1;
         }
         bridge->foreground_scene->remove(bridge->screen_light);
@@ -385,7 +387,9 @@ int bridge_screen_set_light(
     bridge->screen_light = utils::EntityManager::get().create();
     filament::LightManager::Builder(filament::LightManager::Type::FOCUSED_SPOT)
             .color(filament::LinearColor{red, green, blue})
-            .intensityCandela(intensity * kLegacyScreenCandelaScale)
+            .intensityCandela(
+                    intensity * kLegacyScreenCandelaScale *
+                    kControllerScreenLightWeight)
             .position(bridge->screen_light_position)
             .direction(bridge->screen_light_direction)
             .falloff(bridge->screen_light_falloff)

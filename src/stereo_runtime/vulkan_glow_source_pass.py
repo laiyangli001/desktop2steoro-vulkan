@@ -47,6 +47,9 @@ class VulkanGlowSourcePass:
                 DescriptorBinding(
                     binding=1, descriptor_type=vk.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
                 ),
+                DescriptorBinding(
+                    binding=2, descriptor_type=vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
+                ),
             ],
             push_constants_size=self.PUSH_CONSTANTS_SIZE,
         )
@@ -54,8 +57,8 @@ class VulkanGlowSourcePass:
             context,
             DescriptorBudget(
                 max_sets=self.slot_count,
-                storage_buffers_per_set=self.slot_count,
-                storage_images_per_set=self.slot_count,
+                storage_buffers_per_set=2,
+                storage_images_per_set=1,
             ),
         )
         self.descriptor_sets = [
@@ -82,13 +85,19 @@ class VulkanGlowSourcePass:
         slot_index: int,
         source_buffer: Any,
         output_image: Any,
+        screen_light_buffer: Any,
         source_width: int,
         source_height: int,
         prefilter_scale: float,
         surround_region_average: bool = False,
+        screen_light_only: bool = False,
     ) -> None:
         if source_buffer.context is not self.context or output_image.context is not self.context:
             raise ValueError("Glow resources belong to a different Vulkan context")
+        if screen_light_buffer.context is not self.context:
+            raise ValueError("screen-light buffer belongs to a different Vulkan context")
+        if int(screen_light_buffer.size) < 16:
+            raise ValueError("screen-light buffer must contain one vec4")
         if int(source_buffer.size) < self.input_buffer_size(source_width, source_height):
             raise ValueError("Glow source buffer is too small")
         if (
@@ -102,6 +111,9 @@ class VulkanGlowSourcePass:
         descriptor_set = self.descriptor_sets[int(slot_index) % len(self.descriptor_sets)]
         self.descriptor_arena.update_storage_buffer(descriptor_set, 0, source_buffer)
         self.descriptor_arena.update_storage_image(descriptor_set, 1, output_image)
+        self.descriptor_arena.update_storage_buffer(
+            descriptor_set, 2, screen_light_buffer
+        )
         push_constants = struct.pack(
             "<IIIIfI",
             int(source_width),
@@ -111,11 +123,12 @@ class VulkanGlowSourcePass:
             max(1.0, float(prefilter_scale)),
             int(bool(surround_region_average)),
         )
+        group_counts = (1, 1, 1) if screen_light_only else self.group_counts
         self.pipeline.record_dispatch(
             command_buffer,
-            group_count_x=self.group_counts[0],
-            group_count_y=self.group_counts[1],
-            group_count_z=1,
+            group_count_x=group_counts[0],
+            group_count_y=group_counts[1],
+            group_count_z=group_counts[2],
             descriptor_set=descriptor_set,
             push_constants=push_constants,
         )

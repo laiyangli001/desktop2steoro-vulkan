@@ -235,24 +235,28 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "D2S Legacy Frosted Glow" in source
     assert "D2S Legacy Surround Glow" in source
     assert "kGlowShellSegments = 96" in source
-    assert "kGlowShellVerticalSegments = 48" in source
-    assert "const float phi = (v - 0.5f) * kPi;" in source
-    assert "std::cos(phi)" in source
+    assert "kGlowShellRadialSegments = 48" in source
+    assert "for (uint32_t side = 0; side < 4; ++side)" in source
+    assert "Four independent edge-to-rim strips" in source
+    assert "spherical_interpolate" in source
+    assert "{radial_t, 0.0f}" in source
     assert "vec2 grid = vec2(8.0, 6.0);" in source
     assert "sampleRegionCell" in source
     assert "sampleRegionAverage" in source
     assert "blend = blend * blend" in source
-    assert "screen_relative_uv" in source
-    assert "projected_screen_width" in source
-    assert "UV0 is the dome ray projected onto the current screen plane" in source
-    assert "float edgeDistance" in source
-    assert "float angularDistance = atan(edgeDistance)" in source
-    assert "float edgeField" in source
-    assert "complete forward hemisphere" in source
+    assert "float radialDistance = clamp(getUV1().x" in source
+    assert "float edgeField = exp2(-5.0 * radialDistance)" in source
+    assert "vec3 shellColor = sampleRegionAverage(sourceUv);" in source
+    assert "const float phi" not in source
+    assert "screen_relative_uv" not in source
+    shell_buffer = source.split(
+        "bridge->glow_shell_vertex_buffer =", 1
+    )[1].split("bridge->glow_shell_index_buffer =", 1)[0]
+    assert "filament::VertexAttribute::UV1" in shell_buffer
     assert "finite-width" in source
     assert '.parameter("glowColor"' not in source
     assert 'setParameter(\n                "glowColor"' not in source
-    assert "material.baseColor = vec4(shellColor * glow, 1.0);" in source
+    assert "material.baseColor = vec4(shellColor, glow);" in source
     assert "bridge->glow_mode == 5" in source
     assert "bridge->glow_index_buffer, kMaxGlowIndices, 4" in source
     assert "bridge->glow_index_buffer, kMaxGlowIndices, 5" in source
@@ -297,8 +301,9 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "ToneMapping::ACES_LEGACY" not in source
     assert "LightManager::Type::POINT" in source
     assert "kLegacyControllerCandelaScale = 10000.0f" in source
-    assert ".intensityCandela(intensity * kLegacyControllerCandelaScale)" in source
-    assert "0.55f * intensity * kLegacyControllerCandelaScale" in source
+    assert "kControllerBaseLightWeight = 0.20f" in source
+    assert "intensity * kLegacyControllerCandelaScale *" in source
+    assert "0.55f * intensity * kLegacyControllerCandelaScale *" in source
     assert "eye_y + 0.05f" in source
     assert "eye_y + 0.45f" in source
     assert "eye_z - 0.18f" in source
@@ -400,7 +405,7 @@ def test_legacy_glow_material_shaders_compile_with_pinned_filament(
                 source,
                 re.DOTALL,
             ),
-            "uv0",
+            "uv0, uv1",
             """
                 { type : sampler2d, name : glowTexture },
                 { type : float, name : glowIntensity },
@@ -453,10 +458,20 @@ def test_screen_light_is_independent_from_environment_hdr_mode() -> None:
     )[0]
 
     assert "screen_light_linear_rgb" in method
-    assert "sampled * 0.82 + neutral * 0.18" in method
+    assert "color = sampled" in method
+    assert "sampled * 0.82 + neutral * 0.18" not in method
     assert "_controller_hdr_lighting" not in method
     assert "screen_light=always" in source
     assert "hdr_ibl_pending_profile_fallback" in source
+
+    material_source = (
+        root / "native/filament/bridge/bridge_material.cpp"
+    ).read_text(encoding="utf-8")
+    screen_source = (
+        root / "native/filament/bridge/bridge_screen.cpp"
+    ).read_text(encoding="utf-8")
+    assert "kControllerBaseLightWeight = 0.20f" in material_source
+    assert "kControllerScreenLightWeight = 0.80f" in screen_source
 
 
 def test_artemis_controller_lighting_matches_legacy_head_light() -> None:

@@ -63,6 +63,7 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
         self._active_leases: dict[int, int] = {}
         self._closed = False
         self._screen_light_rgb = (0.18, 0.18, 0.18)
+        self._screen_light_sample_path = "cuda_tensor_reduction_fallback"
         self._screen_light_pending = None
         self._glow_cpu_pending = None
         self._glow_cpu_rgba: bytes | None = None
@@ -258,28 +259,29 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
         if normalized == self._glow_gpu_status:
             return
         self._glow_gpu_status = normalized
-        print(f"[VulkanOutput] Glow texture source: {normalized}", flush=True)
+        print(f"[VulkanOutput] Glow/screen-light source: {normalized}", flush=True)
 
     def _update_glow_gpu_source(self, source, *, frame_id: int) -> dict[str, object]:
-        """Publish only completed dedicated-queue Glow images.
+        """Publish completed Glow images and Vulkan screen-light reductions.
 
-        This method never waits for Glow completion. If the newest dispatch is
-        still running, acquire() returns the last completed image instead.
+        This method never waits for completion. If the newest dispatch is
+        still running, acquire() returns the last completed slot instead.
         """
-        if not self._glow_environment_enabled():
-            return {}
         mode = str(
             getattr(self.presenter, "_filament_glow_mode", "off") or "off"
         ).strip().lower()
-        if mode in {"off", "none", "false", "0"}:
-            return {}
+        glow_active = (
+            self._glow_environment_enabled()
+            and mode not in {"off", "none", "false", "0"}
+        )
         if self.backend_name != "cuda":
             self._set_glow_gpu_status(f"cpu_fallback backend={self.backend_name}")
             return {}
         bridge = getattr(self.presenter, "filament_bridge", None)
-        if not bool(getattr(bridge, "glow_vulkan_image_abi_available", False)):
-            self._set_glow_gpu_status("cpu_fallback reason=glow_external_image_abi")
-            return {}
+        glow_image_available = bool(
+            getattr(bridge, "glow_vulkan_image_abi_available", False)
+        )
+        gpu_glow_active = glow_active and glow_image_available
         try:
             if self._glow_gpu_backend is None:
                 from stereo_runtime.vulkan_glow_source import (
@@ -289,26 +291,50 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
                 self._glow_gpu_backend = VulkanGlowSourceComputeBackend(
                     self.presenter.vulkan
                 )
+            if gpu_glow_active:
                 self._set_glow_gpu_status(
                     "vulkan_compute_external_image async_queue=True"
+                )
+            else:
+                reason = (
+                    "glow_external_image_abi"
+                    if glow_active and not glow_image_available
+                    else "glow_inactive"
+                )
+                self._set_glow_gpu_status(
+                    "vulkan_compute_reduction screen_light_only=True "
+                    f"glow={reason}"
                 )
             backend = self._glow_gpu_backend
             backend.poll()
             now = time.monotonic()
+            submit_interval = (1.0 / 12.0) if gpu_glow_active else 0.25
             if (
                 not self._glow_gpu_submission_disabled
-                and now - self._glow_gpu_last_submit >= (1.0 / 12.0)
+                and now - self._glow_gpu_last_submit >= submit_interval
             ):
-                submitted = backend.submit(
-                    source,
-                    mode=mode,
-                    frosted_lod=float(
+                submit_kwargs = {
+                    "mode": mode if gpu_glow_active else "screen_light",
+                    "frosted_lod": float(
                         getattr(self.presenter, "_frosted_glow_lod", 5.4)
                     ),
-                )
+                }
+                if not gpu_glow_active:
+                    submit_kwargs["screen_light_only"] = True
+                submitted = backend.submit(source, **submit_kwargs)
                 if submitted:
                     self._glow_gpu_last_submit = now
             metadata = backend.acquire(frame_id)
+            if not gpu_glow_active:
+                metadata = {
+                    key: value
+                    for key, value in metadata.items()
+                    if key in {
+                        "screen_light_linear_rgb",
+                        "screen_light_sample_path",
+                        "_vulkan_glow_release",
+                    }
+                }
             resource = metadata.get("glow_vulkan_image")
             if resource is not None:
                 metadata["glow_source_size"] = (
@@ -569,15 +595,24 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
         self.right_slot = self.right_slots[slot_index]
         glow_metadata: dict[str, object] = {}
         try:
-            self._update_screen_light_sample(left, right)
+            if self._screen_light_sample_path != "vulkan_compute_reduction":
+                self._update_screen_light_sample(left, right)
             glow_source = getattr(runtime_result, "source_rgb", None)
             glow_source = glow_source if glow_source is not None else left
             glow_metadata = self._update_glow_gpu_source(
                 glow_source, frame_id=frame_id
             )
-            if not glow_metadata:
+            sampled_light = glow_metadata.get("screen_light_linear_rgb")
+            if isinstance(sampled_light, (list, tuple)) and len(sampled_light) >= 3:
+                self._screen_light_rgb = tuple(float(value) for value in sampled_light[:3])
+                self._screen_light_sample_path = str(
+                    glow_metadata.get(
+                        "screen_light_sample_path", "vulkan_compute_reduction"
+                    )
+                )
+            if "glow_vulkan_image" not in glow_metadata:
                 self._update_glow_cpu_source(glow_source)
-                glow_metadata = self._glow_cpu_metadata()
+                glow_metadata = {**glow_metadata, **self._glow_cpu_metadata()}
             left_ready = None
             right_ready = None
             use_external_semaphore = bool(
@@ -678,6 +713,7 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
                 "_vulkan_source_consumer_release": self.release_consumer_frame,
                 "_vulkan_output_release": self.release_frame,
                 "screen_light_linear_rgb": self._screen_light_rgb,
+                "screen_light_sample_path": self._screen_light_sample_path,
                 **glow_metadata,
             },
             color_space="srgb",

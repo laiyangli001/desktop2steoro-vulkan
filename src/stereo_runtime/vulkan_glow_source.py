@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import struct
 import time
 from typing import Any
 
@@ -12,6 +13,7 @@ from viewer.vulkan_resources import (
     VulkanExportableImage,
     VulkanExportableSemaphore,
 )
+from viewer.vulkan_descriptors import VulkanStorageBuffer
 
 from .vulkan_glow_source_pass import VulkanGlowSourcePass
 
@@ -29,6 +31,7 @@ class _GlowSlot:
     graphics_command: Any
     compute_fence: Any
     graphics_fence: Any
+    screen_light_buffer: VulkanStorageBuffer
     input_buffer: VulkanExportableBuffer | None = None
     input_ready: VulkanExportableSemaphore | None = None
     state: str = "free"
@@ -99,6 +102,7 @@ class VulkanGlowSourceComputeBackend:
                         graphics_command=commands[index * 2 + 1],
                         compute_fence=self._create_fence(signaled=True),
                         graphics_fence=self._create_fence(signaled=True),
+                        screen_light_buffer=VulkanStorageBuffer(context, 16),
                     )
                 )
         except Exception:
@@ -112,6 +116,7 @@ class VulkanGlowSourceComputeBackend:
         self._last_submit_ms = 0.0
         self._reuse_count = 0
         self._budget_skip_count = 0
+        self._screen_light_rgb = (0.18, 0.18, 0.18)
         self._closed = False
 
     def _create_command_pool(self):
@@ -236,7 +241,14 @@ class VulkanGlowSourceComputeBackend:
             value = value.to(dtype=torch.float32)
         return value.contiguous()
 
-    def submit(self, source: Any, *, mode: str, frosted_lod: float) -> bool:
+    def submit(
+        self,
+        source: Any,
+        *,
+        mode: str,
+        frosted_lod: float,
+        screen_light_only: bool = False,
+    ) -> bool:
         if self._closed:
             return False
         self.poll()
@@ -261,12 +273,17 @@ class VulkanGlowSourceComputeBackend:
             slot_index=slot.index,
             source_buffer=slot.input_buffer,
             output_image=slot.image.resource,
+            screen_light_buffer=slot.screen_light_buffer,
             source_width=source_width,
             source_height=source_height,
             prefilter_scale=self.prefilter_scale(mode, frosted_lod),
             surround_region_average=(
                 str(mode or "").strip().lower() == "surround"
             ),
+            screen_light_only=screen_light_only,
+        )
+        self._record_screen_light_host_barrier(
+            slot.compute_command, slot.screen_light_buffer
         )
         self.vk.vkEndCommandBuffer(slot.compute_command)
         self.vk.vkQueueSubmit(
@@ -291,6 +308,40 @@ class VulkanGlowSourceComputeBackend:
         slot.state = "computing"
         self._last_submit_ms = (time.perf_counter() - start) * 1000.0
         return True
+
+    def _record_screen_light_host_barrier(
+        self, command: Any, buffer: VulkanStorageBuffer
+    ) -> None:
+        vk = self.vk
+        barrier = vk.VkBufferMemoryBarrier(
+            sType=vk.VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+            srcAccessMask=vk.VK_ACCESS_SHADER_WRITE_BIT,
+            dstAccessMask=vk.VK_ACCESS_HOST_READ_BIT,
+            srcQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+            dstQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+            buffer=buffer.buffer,
+            offset=0,
+            size=16,
+        )
+        vk.vkCmdPipelineBarrier(
+            command,
+            vk.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            vk.VK_PIPELINE_STAGE_HOST_BIT,
+            0,
+            0,
+            None,
+            1,
+            [barrier],
+            0,
+            None,
+        )
+
+    def _read_screen_light(self, slot: _GlowSlot) -> None:
+        values = struct.unpack("<4f", slot.screen_light_buffer.read_bytes(16))
+        if all(value == value and abs(value) != float("inf") for value in values[:3]):
+            self._screen_light_rgb = tuple(
+                max(0.0, min(8.0, float(value))) for value in values[:3]
+            )
 
     def _record_image_barrier(
         self, command: Any, slot: _GlowSlot, *, to_sampling: bool
@@ -424,6 +475,7 @@ class VulkanGlowSourceComputeBackend:
             key=lambda item: item.generation,
         )
         for slot in completed:
+            self._read_screen_light(slot)
             self._publish(slot)
         for slot in self.slots:
             if (
@@ -455,6 +507,8 @@ class VulkanGlowSourceComputeBackend:
             "glow_gpu_submit_ms": self._last_submit_ms,
             "glow_reuse": self._reuse_count,
             "glow_budget_skip": self._budget_skip_count,
+            "screen_light_linear_rgb": self._screen_light_rgb,
+            "screen_light_sample_path": "vulkan_compute_reduction",
             "_vulkan_glow_release": self.release_frame,
         }
 
@@ -483,6 +537,7 @@ class VulkanGlowSourceComputeBackend:
                     slot.input_ready.close()
                 if slot.input_buffer is not None:
                     slot.input_buffer.close()
+                slot.screen_light_buffer.close()
                 slot.compute_done.close()
                 slot.image.close()
                 self.vk.vkDestroyFence(self.context.device, slot.compute_fence, None)

@@ -21,15 +21,43 @@ def _adapter_with_backend(backend):
     return adapter
 
 
-def test_cuda_adapter_does_not_submit_glow_for_glb_environment() -> None:
+def test_cuda_adapter_keeps_vulkan_screen_light_sampling_in_glb_environment() -> None:
     class Backend:
-        def poll(self) -> None:
-            raise AssertionError("GLB environments must not poll the Glow backend")
+        def __init__(self) -> None:
+            self.submits = 0
 
-    adapter = _adapter_with_backend(Backend())
+        def poll(self) -> None:
+            return None
+
+        def submit(
+            self, source, *, mode, frosted_lod, screen_light_only=False
+        ) -> bool:
+            self.submits += 1
+            assert source == "cuda-source"
+            assert mode == "screen_light"
+            assert frosted_lod == 5.4
+            assert screen_light_only is True
+            return True
+
+        def acquire(self, frame_id: int):
+            assert frame_id == 1
+            return {
+                "glow_vulkan_image": SimpleNamespace(width=320, height=180),
+                "screen_light_linear_rgb": (0.1, 0.2, 0.3),
+                "screen_light_sample_path": "vulkan_compute_reduction",
+                "_vulkan_glow_release": lambda _frame_id: None,
+            }
+
+    backend = Backend()
+    adapter = _adapter_with_backend(backend)
     adapter.presenter._filament_glow_environment_enabled = False
 
-    assert adapter._update_glow_gpu_source("cuda-source", frame_id=1) == {}
+    metadata = adapter._update_glow_gpu_source("cuda-source", frame_id=1)
+
+    assert backend.submits == 1
+    assert "glow_vulkan_image" not in metadata
+    assert metadata["screen_light_linear_rgb"] == (0.1, 0.2, 0.3)
+    assert callable(metadata["_vulkan_glow_release"])
     assert adapter._glow_cpu_metadata() == {}
 
 

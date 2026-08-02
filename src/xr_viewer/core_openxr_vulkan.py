@@ -2539,9 +2539,10 @@ class OpenXrVulkanPresenter(
             if isinstance(sample, (list, tuple)) and len(sample) >= 3:
                 sampled = np.asarray(sample[:3], dtype=np.float64)
                 if np.all(np.isfinite(sampled)):
-                    # Match the legacy shader's 18% neutral bias while the
-                    # sampled screen remains the dominant light color.
-                    color = sampled * 0.82 + neutral * 0.18
+                    # The neutral/base contribution is supplied by the
+                    # independently weighted controller lights. Keep the
+                    # screen spotlight chroma equal to the Vulkan reduction.
+                    color = sampled
         color = np.clip(color, 0.0, 8.0)
         state = (
             *(round(float(value), 4) for value in color),

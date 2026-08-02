@@ -9,6 +9,7 @@ namespace {
 
 constexpr float kLegacyControllerCandelaScale = 10000.0f;
 constexpr float kLegacyAmbientLux = 30000.0f;
+constexpr float kControllerBaseLightWeight = 0.20f;
 
 }  // namespace
 
@@ -261,7 +262,7 @@ int bridge_material_set_controller_ambient_light(
         const filament::math::float3 irradiance[] = {{red, green, blue}};
         next = filament::IndirectLight::Builder()
                 .irradiance(1, irradiance)
-                .intensity(kLegacyAmbientLux)
+                .intensity(kLegacyAmbientLux * kControllerBaseLightWeight)
                 .build(*bridge->engine);
         if (!next) return 0;
     }
@@ -302,7 +303,9 @@ int bridge_material_set_fill_light(
             .color(filament::LinearColor{red, green, blue})
             // Convert the legacy unit-less head-light level for Filament's
             // daylight-exposed main camera without altering scene exposure.
-            .intensityCandela(intensity * kLegacyControllerCandelaScale)
+            .intensityCandela(
+                    intensity * kLegacyControllerCandelaScale *
+                    kControllerBaseLightWeight)
             .position({0.0f, 0.05f, 0.0f})
             .falloff(2.0f)
             .lightChannel(0, false)
@@ -313,7 +316,8 @@ int bridge_material_set_fill_light(
     filament::LightManager::Builder(filament::LightManager::Type::POINT)
             .color(filament::LinearColor{0.95f, 0.97f, 1.0f})
             .intensityCandela(
-                    0.55f * intensity * kLegacyControllerCandelaScale)
+                    0.55f * intensity * kLegacyControllerCandelaScale *
+                    kControllerBaseLightWeight)
             .position({0.0f, 0.45f, -0.18f})
             .falloff(2.0f)
             .lightChannel(0, false)

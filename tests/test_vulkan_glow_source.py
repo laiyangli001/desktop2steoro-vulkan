@@ -53,6 +53,7 @@ def test_glow_frame_lease_is_counted_once_and_released() -> None:
             resource=SimpleNamespace(width=320, height=180, format=37)
         ),
         lease_count=0,
+        screen_light_buffer=SimpleNamespace(),
     )
     backend = object.__new__(VulkanGlowSourceComputeBackend)
     backend._closed = False
@@ -62,12 +63,15 @@ def test_glow_frame_lease_is_counted_once_and_released() -> None:
     backend._last_submit_ms = 0.2
     backend._reuse_count = 0
     backend._budget_skip_count = 0
+    backend._screen_light_rgb = (0.1, 0.2, 0.3)
     backend.poll = lambda: None
 
     first = backend.acquire(8)
     second = backend.acquire(8)
     assert first["glow_vulkan_image"] is slot.image.resource
     assert second["glow_vulkan_serial"] == 3
+    assert first["screen_light_linear_rgb"] == (0.1, 0.2, 0.3)
+    assert first["screen_light_sample_path"] == "vulkan_compute_reduction"
     assert slot.lease_count == 1
 
     backend.release_frame(8)
@@ -88,4 +92,6 @@ def test_glow_shader_and_spirv_are_checked_in_together() -> None:
     assert "source_encoded_at" in source
     assert "preserve perceptual black" in source
     assert "average = srgb_to_linear(average);" in source
+    assert "ScreenLightBuffer" in source
+    assert "reduce_screen_light_linear" in source
     assert spirv[:4] == b"\x03\x02#\x07"
