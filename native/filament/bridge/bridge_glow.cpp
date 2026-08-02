@@ -301,10 +301,21 @@ void rebuild_glow_shell_geometry(FilamentBridge* bridge) {
                 end * (std::sin(amount * angle) / sine));
     };
     auto shell_position = [&](const filament::math::float3& direction) {
+        // Intersect the original eye ray with the ellipsoid. Scaling each
+        // basis component independently changes the ray direction whenever
+        // the vertical and horizontal radii differ, which makes the apparent
+        // emission boundary drift away from the live screen size.
+        const float local_x = dot(direction, shell_right);
+        const float local_y = dot(direction, shell_up);
+        const float local_z = dot(direction, shell_forward);
+        const float inverse_distance_squared =
+                local_x * local_x / (radius * radius) +
+                local_y * local_y / (vertical_radius * vertical_radius) +
+                local_z * local_z / (radius * radius);
+        const float intersection_distance = 1.0f /
+                std::sqrt(std::max(inverse_distance_squared, 1e-8f));
         return bridge->glow_head_position +
-                shell_right * (dot(direction, shell_right) * radius) +
-                shell_up * (dot(direction, shell_up) * vertical_radius) +
-                shell_forward * (dot(direction, shell_forward) * radius);
+                direction * intersection_distance;
     };
 
     // Four independent edge-to-rim strips replace the latitude/longitude
@@ -416,7 +427,7 @@ filament::Material* build_glow_shell_material(
             .parameter("externalSource", filamat::MaterialBuilder::UniformType::FLOAT)
             .shading(filament::Shading::UNLIT)
             .materialDomain(filament::MaterialDomain::SURFACE)
-            .blending(filament::BlendingMode::TRANSPARENT)
+            .blending(filament::BlendingMode::ADD)
             .culling(filament::backend::CullingMode::NONE)
             .depthWrite(false).depthCulling(false)
             .targetApi(filamat::MaterialBuilder::TargetApi::ALL)
@@ -673,7 +684,10 @@ int bridge_glow_create(FilamentBridge* bridge) {
             // producer grid turns the outer row / column into a finite-width
             // sampling band rather than a one-pixel sampling line.
             vec3 shellColor = sampleRegionAverage(sourceUv);
-            material.baseColor = vec4(shellColor, glow);
+            // Surround is emitted light, not a translucent colored wall.
+            // Additive output lets black samples contribute zero instead of
+            // producing an opaque black rectangle behind the screen.
+            material.baseColor = vec4(shellColor * glow, 1.0);
         }
     )FILAMENT";
     bridge->glow_material = build_material(

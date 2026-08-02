@@ -240,6 +240,8 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "Four independent edge-to-rim strips" in source
     assert "spherical_interpolate" in source
     assert "{radial_t, 0.0f}" in source
+    assert "inverse_distance_squared" in source
+    assert "direction * intersection_distance" in source
     assert "vec2 grid = vec2(8.0, 6.0);" in source
     assert "sampleRegionCell" in source
     assert "sampleRegionAverage" in source
@@ -256,13 +258,19 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "finite-width" in source
     assert '.parameter("glowColor"' not in source
     assert 'setParameter(\n                "glowColor"' not in source
-    assert "material.baseColor = vec4(shellColor, glow);" in source
+    assert "material.baseColor = vec4(shellColor * glow, 1.0);" in source
+    shell_material = source.split(
+        'name("D2S Legacy Surround Glow")', 1
+    )[1].split(".build(bridge->engine->getJobSystem())", 1)[0]
+    assert ".blending(filament::BlendingMode::ADD)" in shell_material
     assert "bridge->glow_mode == 5" in source
     assert "bridge->glow_index_buffer, kMaxGlowIndices, 4" in source
     assert "bridge->glow_index_buffer, kMaxGlowIndices, 5" in source
     assert "bridge->frost_index_buffer, kMaxFrostIndices, 5" in source
     assert "bridge->foreground_scene->remove(bridge->glow_shell_entity);" in source
     assert "bridge->scene->addEntity(bridge->glow_shell_entity);" in source
+    screen_module = (bridge_dir / "bridge_screen.cpp").read_text(encoding="utf-8")
+    assert "bridge_glow_update_geometry(bridge);" in screen_module
     assert "Legacy surround is a screen-background effect" in source
     assert "Texture::InternalFormat::SRGB8_A8" in source
     assert "generateMipmaps(*bridge->engine)" in source
