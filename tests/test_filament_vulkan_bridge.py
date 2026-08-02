@@ -241,9 +241,12 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "vec2 grid = vec2(4.0, 3.0);" in source
     assert "sampleRegionCell" in source
     assert "sampleRegionAverage" in source
-    assert "topColor = sampleRegionAverage" in source
     assert "blend = blend * blend" in source
-    assert "neighboring region centers" in source
+    assert "low-frequency enlargement of the" in source
+    assert "centered / vec2(0.86, 0.484)" in source
+    assert "float forwardDistance" in source
+    assert "float perimeterFade" in source
+    assert "sampleBorderColor" not in source
     assert "material.baseColor = vec4(shellColor * glow, 1.0);" in source
     assert "bridge->glow_mode == 5" in source
     assert "bridge->glow_index_buffer, kMaxGlowIndices, 4" in source

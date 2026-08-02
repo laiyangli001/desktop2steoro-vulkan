@@ -601,50 +601,33 @@ int bridge_glow_create(FilamentBridge* bridge) {
                     sampleRegionCell(base + vec2(1.0, 1.0), grid), blend.x);
             return mix(lower, upper, blend.y);
         }
-        vec3 sampleBorderColor(vec2 p) {
-            float x = clamp(p.x, 0.0, 1.0);
-            float y = clamp(p.y, 0.0, 1.0);
-            vec3 topColor = sampleRegionAverage(vec2(x, 0.945));
-            vec3 bottomColor = sampleRegionAverage(vec2(x, 0.055));
-            vec3 leftColor = sampleRegionAverage(vec2(0.055, y));
-            vec3 rightColor = sampleRegionAverage(vec2(0.945, y));
-            float topWeight = smoothstep(0.50, 0.95, p.y);
-            float bottomWeight = smoothstep(0.50, 0.95, 1.0 - p.y);
-            float leftWeight = smoothstep(0.35, 0.95, 1.0 - p.x);
-            float rightWeight = smoothstep(0.35, 0.95, p.x);
-            vec3 border = (topColor * topWeight + bottomColor * bottomWeight +
-                    leftColor * leftWeight + rightColor * rightWeight) /
-                    max(topWeight + bottomWeight + leftWeight + rightWeight, 0.001);
-            return mix(materialParams.glowColor, border, 0.90);
-        }
-        vec3 sampleRegionReflection(vec2 p) {
-            // Keep exactly 4 x 3 representative screen regions, but blend the
-            // neighboring region centers to avoid visible color-block seams.
-            vec3 region = sampleRegionAverage(p);
-            return mix(materialParams.glowColor, region, 0.92);
-        }
         void material(inout MaterialInputs material) {
             prepareMaterial(material);
             vec2 uv = getUV0();
-            float horiz = clamp(1.0 - abs(uv.x - 0.5) * 2.0, 0.0, 1.0);
-            float verticalCore = smoothstep(0.02, 0.20, uv.y) *
-                    (1.0 - smoothstep(0.82, 0.98, uv.y));
-            float verticalEdges = max(
-                    1.0 - smoothstep(0.12, 0.42, uv.y),
-                    smoothstep(0.58, 0.88, uv.y)) * 0.30;
-            float vertical = max(verticalCore, verticalEdges);
-            float frontFocus = pow(horiz, 1.55);
-            float band = 0.58 + 0.42 * sin(uv.y * 3.14159265);
-            float wrap = 0.65 + 0.35 * smoothstep(0.18, 0.70, horiz);
-            float glow = frontFocus * vertical * band * wrap *
+            vec2 centered = uv - vec2(0.5);
+
+            // Treat the surround as a low-frequency enlargement of the
+            // complete screen image. The full 16:9 image occupies a broad
+            // forward-facing patch; outside that patch its edge colors extend
+            // into the dome and fade smoothly instead of radiating from the
+            // north and south pole vertices.
+            vec2 projectedUv = centered / vec2(0.86, 0.484) + vec2(0.5);
+            vec3 projectedColor = sampleRegionAverage(
+                    clamp(projectedUv, vec2(0.0), vec2(1.0)));
+
+            float forwardDistance = length(centered / vec2(0.50, 0.33));
+            float forwardField = 1.0 - smoothstep(0.58, 1.18, forwardDistance);
+            float perimeterFade =
+                    smoothstep(0.00, 0.08, uv.x) *
+                    smoothstep(0.00, 0.08, 1.0 - uv.x) *
+                    smoothstep(0.00, 0.10, uv.y) *
+                    smoothstep(0.00, 0.10, 1.0 - uv.y);
+            float glow = forwardField * perimeterFade *
                     materialParams.glowIntensity;
             if (glow <= 0.0001) discard;
             glow = min(glow, 1.0);
-            vec3 borderColor = sampleBorderColor(uv);
-            vec3 regionColor = sampleRegionReflection(
-                    vec2(uv.x, 0.5 + (uv.y - 0.5) * 0.35));
-            float regionMix = 0.38 + 0.46 * smoothstep(0.12, 0.72, horiz);
-            vec3 shellColor = mix(borderColor, regionColor, regionMix);
+            vec3 shellColor = mix(
+                    materialParams.glowColor, projectedColor, 0.94);
             // Preserve the project's explicit no-transparency Glow contract.
             material.baseColor = vec4(shellColor * glow, 1.0);
         }
