@@ -333,11 +333,14 @@ void rebuild_glow_shell_geometry(FilamentBridge* bridge) {
                 const float along = static_cast<float>(segment) /
                         static_cast<float>(kGlowShellSegments);
                 const auto source_uv = edge_uv(side, along);
-                auto source_direction = screen_surface(
-                        bridge, source_uv.x, source_uv.y) -
-                        bridge->glow_head_position;
+                const auto source_position = screen_surface(
+                        bridge, source_uv.x, source_uv.y);
+                auto source_direction =
+                        source_position - bridge->glow_head_position;
+                float source_distance = length(source_direction);
                 if (length(source_direction) <= 1e-5f) {
                     source_direction = shell_forward;
+                    source_distance = 0.0f;
                 } else {
                     source_direction = normalize(source_direction);
                 }
@@ -348,8 +351,18 @@ void rebuild_glow_shell_geometry(FilamentBridge* bridge) {
                 rim_direction = normalize(rim_direction);
                 const auto direction = spherical_interpolate(
                         source_direction, rim_direction, radial_t);
+                const auto shell_target = shell_position(direction);
+                const float shell_distance = length(
+                        shell_target - bridge->glow_head_position);
+                const float surface_distance =
+                        source_distance * (1.0f - radial_t) +
+                        shell_distance * radial_t;
+                const auto surface_position = radial == 0
+                        ? source_position
+                        : bridge->glow_head_position +
+                                direction * surface_distance;
                 bridge->glow_shell_vertices.push_back({
-                        shell_position(direction), source_uv, {radial_t, 0.0f}});
+                        surface_position, source_uv, {radial_t, 0.0f}});
             }
         }
         for (uint32_t radial = 0; radial < kGlowShellRadialSegments; ++radial) {

@@ -242,6 +242,10 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "{radial_t, 0.0f}" in source
     assert "inverse_distance_squared" in source
     assert "direction * intersection_distance" in source
+    assert "const auto source_position = screen_surface" in source
+    assert "const float surface_distance" in source
+    assert "surface_position = radial == 0" in source
+    assert "? source_position" in source
     assert "vec2 grid = vec2(8.0, 6.0);" in source
     assert "sampleRegionCell" in source
     assert "sampleRegionAverage" in source
