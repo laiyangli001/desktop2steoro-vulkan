@@ -16,7 +16,7 @@ class VulkanGlowSourcePass:
     """Prefilter planar sRGB RGB into a small linear RGBA Vulkan image."""
 
     WORKGROUP_SIZE = 8
-    PUSH_CONSTANTS_SIZE = 20
+    PUSH_CONSTANTS_SIZE = 24
 
     def __init__(
         self,
@@ -85,6 +85,7 @@ class VulkanGlowSourcePass:
         source_width: int,
         source_height: int,
         prefilter_scale: float,
+        surround_region_average: bool = False,
     ) -> None:
         if source_buffer.context is not self.context or output_image.context is not self.context:
             raise ValueError("Glow resources belong to a different Vulkan context")
@@ -102,12 +103,13 @@ class VulkanGlowSourcePass:
         self.descriptor_arena.update_storage_buffer(descriptor_set, 0, source_buffer)
         self.descriptor_arena.update_storage_image(descriptor_set, 1, output_image)
         push_constants = struct.pack(
-            "<IIIIf",
+            "<IIIIfI",
             int(source_width),
             int(source_height),
             self.target_width,
             self.target_height,
             max(1.0, float(prefilter_scale)),
+            int(bool(surround_region_average)),
         )
         self.pipeline.record_dispatch(
             command_buffer,

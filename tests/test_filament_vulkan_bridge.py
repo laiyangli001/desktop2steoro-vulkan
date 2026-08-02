@@ -235,7 +235,15 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "D2S Legacy Frosted Glow" in source
     assert "D2S Legacy Surround Glow" in source
     assert "kGlowShellSegments = 96" in source
+    assert "kGlowShellVerticalSegments = 48" in source
+    assert "const float phi = (v - 0.5f) * kPi;" in source
+    assert "std::cos(phi)" in source
     assert "vec2 grid = vec2(4.0, 3.0);" in source
+    assert "sampleRegionCell" in source
+    assert "sampleRegionAverage" in source
+    assert "topColor = sampleRegionAverage" in source
+    assert "blend = blend * blend" in source
+    assert "neighboring region centers" in source
     assert "material.baseColor = vec4(shellColor * glow, 1.0);" in source
     assert "bridge->glow_mode == 5" in source
     assert "bridge->glow_index_buffer, kMaxGlowIndices, 4" in source

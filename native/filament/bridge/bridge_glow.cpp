@@ -10,12 +10,15 @@ namespace {
 
 constexpr uint32_t kGlowSegments = 64;
 constexpr uint32_t kGlowShellSegments = 96;
+constexpr uint32_t kGlowShellVerticalSegments = 48;
 constexpr uint32_t kFlatFrostDepthSteps = 8;
 constexpr uint32_t kFlatFrostEdgeSteps = 8;
 constexpr uint32_t kMaxGlowVertices = (kGlowSegments + 1) * 2;
 constexpr uint32_t kMaxGlowIndices = kGlowSegments * 6;
-constexpr uint32_t kMaxGlowShellVertices = (kGlowShellSegments + 1) * 2;
-constexpr uint32_t kMaxGlowShellIndices = kGlowShellSegments * 6;
+constexpr uint32_t kMaxGlowShellVertices =
+        (kGlowShellSegments + 1) * (kGlowShellVerticalSegments + 1);
+constexpr uint32_t kMaxGlowShellIndices =
+        kGlowShellSegments * kGlowShellVerticalSegments * 6;
 constexpr uint32_t kFlatFrostQuadCount =
         4 * kFlatFrostDepthSteps * kFlatFrostEdgeSteps;
 constexpr uint32_t kMaxFrostVertices = kFlatFrostQuadCount * 4;
@@ -263,30 +266,38 @@ void rebuild_glow_shell_geometry(FilamentBridge* bridge) {
     constexpr float kPi = 3.14159265358979323846f;
     bridge->glow_shell_vertices.clear();
     bridge->glow_shell_indices.clear();
-    for (uint32_t segment = 0; segment <= kGlowShellSegments; ++segment) {
-        const float u = static_cast<float>(segment) /
-                static_cast<float>(kGlowShellSegments);
-        const float theta = (u - 0.5f) * kPi;
-        const float x = std::sin(theta) * radius;
-        const float z = -std::cos(theta) * radius;
-        const auto bottom = bridge->glow_head_position +
-                filament::math::float3{x, -height * 0.5f, z};
-        const auto top = bridge->glow_head_position +
-                filament::math::float3{x, height * 0.5f, z};
-        bridge->glow_shell_vertices.push_back(
-                {bottom, {u, 0.0f}, {0.0f, 0.0f}});
-        bridge->glow_shell_vertices.push_back(
-                {top, {u, 1.0f}, {0.0f, 0.0f}});
+    const float vertical_radius = std::max(height * 0.5f, 1.0f);
+    for (uint32_t row = 0; row <= kGlowShellVerticalSegments; ++row) {
+        const float v = static_cast<float>(row) /
+                static_cast<float>(kGlowShellVerticalSegments);
+        const float phi = (v - 0.5f) * kPi;
+        const float ring = std::cos(phi);
+        const float y = std::sin(phi) * vertical_radius;
+        for (uint32_t column = 0; column <= kGlowShellSegments; ++column) {
+            const float u = static_cast<float>(column) /
+                    static_cast<float>(kGlowShellSegments);
+            const float theta = (u - 0.5f) * kPi;
+            const auto position = bridge->glow_head_position +
+                    filament::math::float3{
+                            std::sin(theta) * ring * radius,
+                            y,
+                            -std::cos(theta) * ring * radius};
+            bridge->glow_shell_vertices.push_back(
+                    {position, {u, v}, {0.0f, 0.0f}});
+        }
     }
-    for (uint16_t segment = 0; segment < kGlowShellSegments; ++segment) {
-        const uint16_t lower_left = segment * 2;
-        const uint16_t upper_left = lower_left + 1;
-        const uint16_t lower_right = lower_left + 2;
-        const uint16_t upper_right = lower_left + 3;
-        bridge->glow_shell_indices.insert(
-                bridge->glow_shell_indices.end(), {
-                        lower_left, lower_right, upper_left,
-                        lower_right, upper_right, upper_left});
+    const uint32_t stride = kGlowShellSegments + 1;
+    for (uint32_t row = 0; row < kGlowShellVerticalSegments; ++row) {
+        for (uint32_t column = 0; column < kGlowShellSegments; ++column) {
+            const auto lower_left = static_cast<uint16_t>(row * stride + column);
+            const auto lower_right = static_cast<uint16_t>(lower_left + 1);
+            const auto upper_left = static_cast<uint16_t>(lower_left + stride);
+            const auto upper_right = static_cast<uint16_t>(upper_left + 1);
+            bridge->glow_shell_indices.insert(
+                    bridge->glow_shell_indices.end(), {
+                            lower_left, lower_right, upper_left,
+                            lower_right, upper_right, upper_left});
+        }
     }
     upload_geometry(
             bridge, bridge->glow_shell_vertex_buffer,
@@ -570,17 +581,33 @@ int bridge_glow_create(FilamentBridge* bridge) {
         }
     )FILAMENT";
     const char* glow_shell_shader = R"FILAMENT(
+        vec3 sampleRegionCell(vec2 cell, vec2 grid) {
+            vec2 q = (clamp(cell, vec2(0.0), grid - vec2(1.0)) +
+                    vec2(0.5)) / grid;
+            q.y = 1.0 - q.y;
+            return textureLod(materialParams_glowTexture, q, 0.0).rgb;
+        }
+        vec3 sampleRegionAverage(vec2 p) {
+            vec2 grid = vec2(4.0, 3.0);
+            vec2 position = clamp(p, vec2(0.0), vec2(1.0)) * grid - vec2(0.5);
+            vec2 base = floor(position);
+            vec2 blend = fract(position);
+            blend = blend * blend * (vec2(3.0) - vec2(2.0) * blend);
+            vec3 lower = mix(
+                    sampleRegionCell(base, grid),
+                    sampleRegionCell(base + vec2(1.0, 0.0), grid), blend.x);
+            vec3 upper = mix(
+                    sampleRegionCell(base + vec2(0.0, 1.0), grid),
+                    sampleRegionCell(base + vec2(1.0, 1.0), grid), blend.x);
+            return mix(lower, upper, blend.y);
+        }
         vec3 sampleBorderColor(vec2 p) {
             float x = clamp(p.x, 0.0, 1.0);
-            float y = clamp(1.0 - p.y, 0.0, 1.0);
-            vec3 topColor = textureLod(
-                    materialParams_glowTexture, vec2(x, 0.055), 0.0).rgb;
-            vec3 bottomColor = textureLod(
-                    materialParams_glowTexture, vec2(x, 0.945), 0.0).rgb;
-            vec3 leftColor = textureLod(
-                    materialParams_glowTexture, vec2(0.055, y), 0.0).rgb;
-            vec3 rightColor = textureLod(
-                    materialParams_glowTexture, vec2(0.945, y), 0.0).rgb;
+            float y = clamp(p.y, 0.0, 1.0);
+            vec3 topColor = sampleRegionAverage(vec2(x, 0.945));
+            vec3 bottomColor = sampleRegionAverage(vec2(x, 0.055));
+            vec3 leftColor = sampleRegionAverage(vec2(0.055, y));
+            vec3 rightColor = sampleRegionAverage(vec2(0.945, y));
             float topWeight = smoothstep(0.50, 0.95, p.y);
             float bottomWeight = smoothstep(0.50, 0.95, 1.0 - p.y);
             float leftWeight = smoothstep(0.35, 0.95, 1.0 - p.x);
@@ -591,13 +618,9 @@ int bridge_glow_create(FilamentBridge* bridge) {
             return mix(materialParams.glowColor, border, 0.90);
         }
         vec3 sampleRegionReflection(vec2 p) {
-            // Keep the v2.5 surround contract: one representative sample from
-            // each 4 x 3 screen region, sourced from the current Vulkan image.
-            vec2 grid = vec2(4.0, 3.0);
-            vec2 q = (floor(clamp(p, vec2(0.0), vec2(0.999)) * grid) +
-                    vec2(0.5)) / grid;
-            q.y = 1.0 - q.y;
-            vec3 region = textureLod(materialParams_glowTexture, q, 0.0).rgb;
+            // Keep exactly 4 x 3 representative screen regions, but blend the
+            // neighboring region centers to avoid visible color-block seams.
+            vec3 region = sampleRegionAverage(p);
             return mix(materialParams.glowColor, region, 0.92);
         }
         void material(inout MaterialInputs material) {

@@ -196,11 +196,26 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
             if target_height > 180:
                 target_height = 180
                 target_width = max(1, int(round(source_width * target_height / source_height)))
-            sample = functional.interpolate(
-                value.unsqueeze(0).to(dtype=torch.float32),
-                size=(target_height, target_width),
-                mode="area",
-            )[0]
+            float_value = value.unsqueeze(0).to(dtype=torch.float32)
+            if mode == "surround":
+                # Match the Vulkan surround contract: each of the 4 x 3
+                # screen regions contributes its area-average color. Expand
+                # the twelve averages without inventing intermediate colors;
+                # the hemisphere shader performs the final smooth blend.
+                region_average = functional.adaptive_avg_pool2d(
+                    float_value, output_size=(3, 4)
+                )
+                sample = functional.interpolate(
+                    region_average,
+                    size=(target_height, target_width),
+                    mode="nearest",
+                )[0]
+            else:
+                sample = functional.interpolate(
+                    float_value,
+                    size=(target_height, target_width),
+                    mode="area",
+                )[0]
             if source.dtype == torch.uint8:
                 sample = sample.clamp(0.0, 255.0)
             else:

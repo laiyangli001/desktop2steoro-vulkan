@@ -21,6 +21,7 @@ def test_glow_pass_contract_is_fixed_rgba_target() -> None:
 
     assert effect_pass.group_counts == (40, 23, 1)
     assert effect_pass.input_buffer_size(3840, 2160) == 3840 * 2160 * 12
+    assert effect_pass.PUSH_CONSTANTS_SIZE == 24
 
 
 def test_glow_fence_poll_handles_pyvulkan_not_ready_exception() -> None:
@@ -81,4 +82,7 @@ def test_glow_shader_and_spirv_are_checked_in_together() -> None:
     assert "max(base_footprint, vec2(max(params.prefilter_scale, 1.0)))" in source
     assert "srgb_to_linear" in source
     assert "vec2(output_uv.x, 1.0 - output_uv.y)" in source
+    assert "uint surround_region_average;" in source
+    assert "vec2 grid = vec2(4.0, 3.0);" in source
+    assert "footprint = vec2(params.source_width, params.source_height) / grid;" in source
     assert spirv[:4] == b"\x03\x02#\x07"

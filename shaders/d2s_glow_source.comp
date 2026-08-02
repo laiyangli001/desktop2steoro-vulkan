@@ -11,6 +11,7 @@ layout(push_constant) uniform GlowSourceParams {
     uint target_width;
     uint target_height;
     float prefilter_scale;
+    uint surround_region_average;
 } params;
 
 uint source_pixel_count() {
@@ -51,6 +52,19 @@ void main() {
     // prefilter_scale is the legacy MIP footprint in source pixels, not a
     // multiplier of the already-downsampled 320x180 footprint.
     vec2 footprint = max(base_footprint, vec2(max(params.prefilter_scale, 1.0)));
+
+    // Surround uses one average color for each 4 x 3 screen region. Keep the
+    // 320 x 180 external image so the zero-copy ABI remains unchanged, but
+    // fill every region from the same stratified area average. Filament then
+    // blends the twelve representative colors smoothly across the hemisphere.
+    if (params.surround_region_average != 0u) {
+        vec2 grid = vec2(4.0, 3.0);
+        vec2 region = floor(clamp(output_uv, vec2(0.0), vec2(0.999999)) * grid);
+        vec2 region_uv = (region + vec2(0.5)) / grid;
+        source_uv = vec2(region_uv.x, 1.0 - region_uv.y);
+        source_center = source_uv * vec2(params.source_width, params.source_height);
+        footprint = vec2(params.source_width, params.source_height) / grid;
+    }
 
     // A fixed stratified 8x8 reduction bounds work independently of source
     // resolution. Veil uses scale 1, Frosted uses its legacy LOD footprint,

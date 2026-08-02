@@ -264,6 +264,9 @@ class VulkanGlowSourceComputeBackend:
             source_width=source_width,
             source_height=source_height,
             prefilter_scale=self.prefilter_scale(mode, frosted_lod),
+            surround_region_average=(
+                str(mode or "").strip().lower() == "surround"
+            ),
         )
         self.vk.vkEndCommandBuffer(slot.compute_command)
         self.vk.vkQueueSubmit(
