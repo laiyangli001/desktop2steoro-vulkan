@@ -648,7 +648,12 @@ int bridge_glow_create(FilamentBridge* bridge) {
             if (inside > 0.5) discard;
             vec2 outside = max(max(-screenUv, screenUv - vec2(1.0)), vec2(0.0));
             float edgeDistance = length(outside);
-            float edgeField = 1.0 - smoothstep(0.0, 0.72, edgeDistance);
+            // Plane distance tends to infinity as a dome ray approaches the
+            // hemisphere rim. Convert it to a bounded angular distance so the
+            // edge light spans the complete forward hemisphere and reaches
+            // zero only at the outer rim.
+            float angularDistance = atan(edgeDistance) / 1.57079633;
+            float edgeField = 1.0 - smoothstep(0.0, 1.0, angularDistance);
             float glow = edgeField * materialParams.glowIntensity;
             if (glow <= 0.0001) discard;
             glow = min(glow, 1.0);

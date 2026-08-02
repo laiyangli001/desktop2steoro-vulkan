@@ -246,7 +246,9 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "projected_screen_width" in source
     assert "UV0 is the dome ray projected onto the current screen plane" in source
     assert "float edgeDistance" in source
+    assert "float angularDistance = atan(edgeDistance)" in source
     assert "float edgeField" in source
+    assert "complete forward hemisphere" in source
     assert "finite-width" in source
     assert '.parameter("glowColor"' not in source
     assert 'setParameter(\n                "glowColor"' not in source
