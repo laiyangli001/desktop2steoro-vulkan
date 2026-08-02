@@ -251,7 +251,10 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "sampleRegionAverage" in source
     assert "blend = blend * blend" in source
     assert "float radialDistance = clamp(getUV1().x" in source
-    assert "float edgeField = exp2(-5.0 * radialDistance)" in source
+    assert "float seamFeather = mix(" in source
+    assert "0.10, 1.0, smoothstep(0.0, 0.05, radialDistance)" in source
+    assert "float edgeField = seamFeather * exp2(-5.0 * radialDistance)" in source
+    assert "screen texture itself remains untouched and pixel-sharp" in source
     assert "vec3 shellColor = sampleRegionAverage(sourceUv);" in source
     assert "const float phi" not in source
     assert "screen_relative_uv" not in source

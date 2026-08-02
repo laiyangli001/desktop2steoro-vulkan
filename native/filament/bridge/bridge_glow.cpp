@@ -688,7 +688,13 @@ int bridge_glow_create(FilamentBridge* bridge) {
             // sample's independent geodesic to the hemisphere rim.
             vec2 sourceUv = getUV0();
             float radialDistance = clamp(getUV1().x, 0.0, 1.0);
-            float edgeField = exp2(-5.0 * radialDistance) *
+            // Avoid a hard screen/glow seam. The exact screen edge keeps a
+            // small base emission, rises smoothly to the halo peak over the
+            // first few radial rows, then follows the long exponential tail.
+            // The screen texture itself remains untouched and pixel-sharp.
+            float seamFeather = mix(
+                    0.10, 1.0, smoothstep(0.0, 0.05, radialDistance));
+            float edgeField = seamFeather * exp2(-5.0 * radialDistance) *
                     (1.0 - smoothstep(0.88, 1.0, radialDistance));
             float glow = edgeField * materialParams.glowIntensity;
             if (glow <= 0.002) discard;
