@@ -266,6 +266,42 @@ void rebuild_glow_shell_geometry(FilamentBridge* bridge) {
     constexpr float kPi = 3.14159265358979323846f;
     bridge->glow_shell_vertices.clear();
     bridge->glow_shell_indices.clear();
+    auto shell_forward = bridge->screen_center - bridge->glow_head_position;
+    if (length(shell_forward) <= 1e-5f) {
+        shell_forward = -bridge->screen_forward;
+    } else {
+        shell_forward = normalize(shell_forward);
+    }
+    auto shell_right = bridge->screen_right -
+            shell_forward * dot(bridge->screen_right, shell_forward);
+    if (length(shell_right) <= 1e-5f) {
+        shell_right = cross(shell_forward, bridge->screen_up);
+    }
+    shell_right = normalize(shell_right);
+    const auto shell_up = normalize(cross(shell_right, shell_forward));
+    const float projected_screen_width = bridge->screen_curved
+            ? bridge->screen_width * std::sin(kCurvedHalfAngle) / kCurvedHalfAngle
+            : bridge->screen_width;
+    auto screen_relative_uv = [&](const filament::math::float3& direction) {
+        const float denominator = dot(direction, bridge->screen_forward);
+        const float plane_offset = dot(
+                bridge->screen_center - bridge->glow_head_position,
+                bridge->screen_forward);
+        if (std::abs(denominator) <= 1e-5f) {
+            return filament::math::float2{1000.0f, 1000.0f};
+        }
+        const float distance = plane_offset / denominator;
+        if (distance <= 0.0f) {
+            return filament::math::float2{1000.0f, 1000.0f};
+        }
+        const auto hit = bridge->glow_head_position + direction * distance;
+        const auto local = hit - bridge->screen_center;
+        return filament::math::float2{
+                dot(local, bridge->screen_right) /
+                                std::max(projected_screen_width, 1e-5f) + 0.5f,
+                dot(local, bridge->screen_up) /
+                                std::max(bridge->screen_height, 1e-5f) + 0.5f};
+    };
     const float vertical_radius = std::max(height * 0.5f, 1.0f);
     for (uint32_t row = 0; row <= kGlowShellVerticalSegments; ++row) {
         const float v = static_cast<float>(row) /
@@ -277,13 +313,13 @@ void rebuild_glow_shell_geometry(FilamentBridge* bridge) {
             const float u = static_cast<float>(column) /
                     static_cast<float>(kGlowShellSegments);
             const float theta = (u - 0.5f) * kPi;
-            const auto position = bridge->glow_head_position +
-                    filament::math::float3{
-                            std::sin(theta) * ring * radius,
-                            y,
-                            -std::cos(theta) * ring * radius};
+            const auto direction =
+                    shell_right * (std::sin(theta) * ring * radius) +
+                    shell_up * y +
+                    shell_forward * (std::cos(theta) * ring * radius);
+            const auto position = bridge->glow_head_position + direction;
             bridge->glow_shell_vertices.push_back(
-                    {position, {u, v}, {0.0f, 0.0f}});
+                    {position, screen_relative_uv(direction), {0.0f, 0.0f}});
         }
     }
     const uint32_t stride = kGlowShellSegments + 1;
@@ -354,7 +390,6 @@ filament::Material* build_glow_shell_material(
             .material(shader)
             .require(filament::VertexAttribute::UV0)
             .parameter("glowTexture", filamat::MaterialBuilder::SamplerType::SAMPLER_2D)
-            .parameter("glowColor", filamat::MaterialBuilder::UniformType::FLOAT3)
             .parameter("glowIntensity", filamat::MaterialBuilder::UniformType::FLOAT)
             .parameter("externalSource", filamat::MaterialBuilder::UniformType::FLOAT)
             .shading(filament::Shading::UNLIT)
@@ -588,7 +623,7 @@ int bridge_glow_create(FilamentBridge* bridge) {
             return textureLod(materialParams_glowTexture, q, 0.0).rgb;
         }
         vec3 sampleRegionAverage(vec2 p) {
-            vec2 grid = vec2(4.0, 3.0);
+            vec2 grid = vec2(8.0, 6.0);
             vec2 position = clamp(p, vec2(0.0), vec2(1.0)) * grid - vec2(0.5);
             vec2 base = floor(position);
             vec2 blend = fract(position);
@@ -603,31 +638,25 @@ int bridge_glow_create(FilamentBridge* bridge) {
         }
         void material(inout MaterialInputs material) {
             prepareMaterial(material);
-            vec2 uv = getUV0();
-            vec2 centered = uv - vec2(0.5);
-
-            // Treat the surround as a low-frequency enlargement of the
-            // complete screen image. The full 16:9 image occupies a broad
-            // forward-facing patch; outside that patch its edge colors extend
-            // into the dome and fade smoothly instead of radiating from the
-            // north and south pole vertices.
-            vec2 projectedUv = centered / vec2(0.86, 0.484) + vec2(0.5);
-            vec3 projectedColor = sampleRegionAverage(
-                    clamp(projectedUv, vec2(0.0), vec2(1.0)));
-
-            float forwardDistance = length(centered / vec2(0.50, 0.33));
-            float forwardField = 1.0 - smoothstep(0.58, 1.18, forwardDistance);
-            float perimeterFade =
-                    smoothstep(0.00, 0.08, uv.x) *
-                    smoothstep(0.00, 0.08, 1.0 - uv.x) *
-                    smoothstep(0.00, 0.10, uv.y) *
-                    smoothstep(0.00, 0.10, 1.0 - uv.y);
-            float glow = forwardField * perimeterFade *
-                    materialParams.glowIntensity;
+            // UV0 is the dome ray projected onto the current screen plane.
+            // Values inside [0, 1] belong to the screen itself; values outside
+            // describe the distance from its live edge, so resizing, moving,
+            // or rotating the screen moves the surround boundary with it.
+            vec2 screenUv = getUV0();
+            float inside = step(0.0, screenUv.x) * step(screenUv.x, 1.0) *
+                    step(0.0, screenUv.y) * step(screenUv.y, 1.0);
+            if (inside > 0.5) discard;
+            vec2 outside = max(max(-screenUv, screenUv - vec2(1.0)), vec2(0.0));
+            float edgeDistance = length(outside);
+            float edgeField = 1.0 - smoothstep(0.0, 0.72, edgeDistance);
+            float glow = edgeField * materialParams.glowIntensity;
             if (glow <= 0.0001) discard;
             glow = min(glow, 1.0);
-            vec3 shellColor = mix(
-                    materialParams.glowColor, projectedColor, 0.94);
+            // Clamp to the nearest point on the screen perimeter. The 8 x 6
+            // producer grid turns the outer row / column into a finite-width
+            // sampling band rather than a one-pixel sampling line.
+            vec3 shellColor = sampleRegionAverage(
+                    clamp(screenUv, vec2(0.0), vec2(1.0)));
             // Preserve the project's explicit no-transparency Glow contract.
             material.baseColor = vec4(shellColor * glow, 1.0);
         }
@@ -898,8 +927,6 @@ int bridge_glow_set_state(
         bridge->veil_material_instance->setParameter("effectTime", now);
     }
     if (bridge->glow_shell_material_instance) {
-        bridge->glow_shell_material_instance->setParameter(
-                "glowColor", filament::math::float3{0.30f, 0.55f, 1.0f});
         bridge->glow_shell_material_instance->setParameter(
                 "glowIntensity", bridge->glow_intensity *
                         bridge->glow_shell_intensity_multiplier);

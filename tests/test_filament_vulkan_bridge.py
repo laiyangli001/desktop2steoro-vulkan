@@ -238,15 +238,18 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "kGlowShellVerticalSegments = 48" in source
     assert "const float phi = (v - 0.5f) * kPi;" in source
     assert "std::cos(phi)" in source
-    assert "vec2 grid = vec2(4.0, 3.0);" in source
+    assert "vec2 grid = vec2(8.0, 6.0);" in source
     assert "sampleRegionCell" in source
     assert "sampleRegionAverage" in source
     assert "blend = blend * blend" in source
-    assert "low-frequency enlargement of the" in source
-    assert "centered / vec2(0.86, 0.484)" in source
-    assert "float forwardDistance" in source
-    assert "float perimeterFade" in source
-    assert "sampleBorderColor" not in source
+    assert "screen_relative_uv" in source
+    assert "projected_screen_width" in source
+    assert "UV0 is the dome ray projected onto the current screen plane" in source
+    assert "float edgeDistance" in source
+    assert "float edgeField" in source
+    assert "finite-width" in source
+    assert '.parameter("glowColor"' not in source
+    assert 'setParameter(\n                "glowColor"' not in source
     assert "material.baseColor = vec4(shellColor * glow, 1.0);" in source
     assert "bridge->glow_mode == 5" in source
     assert "bridge->glow_index_buffer, kMaxGlowIndices, 4" in source
@@ -398,7 +401,6 @@ def test_legacy_glow_material_shaders_compile_with_pinned_filament(
             "uv0",
             """
                 { type : sampler2d, name : glowTexture },
-                { type : float3, name : glowColor },
                 { type : float, name : glowIntensity },
                 { type : float, name : externalSource }
             """,

@@ -24,14 +24,14 @@ vec3 srgb_to_linear(vec3 encoded) {
     return mix(low, high, greaterThan(encoded, vec3(0.04045)));
 }
 
-vec3 source_at(ivec2 coordinate) {
+vec3 source_encoded_at(ivec2 coordinate) {
     int x = clamp(coordinate.x, 0, int(params.source_width) - 1);
     int y = clamp(coordinate.y, 0, int(params.source_height) - 1);
     uint pixel = uint(y) * params.source_width + uint(x);
     uint plane = source_pixel_count();
-    return srgb_to_linear(clamp(vec3(
+    return clamp(vec3(
             rgb[pixel], rgb[plane + pixel], rgb[2u * plane + pixel]),
-            vec3(0.0), vec3(1.0)));
+            vec3(0.0), vec3(1.0));
 }
 
 void main() {
@@ -53,12 +53,12 @@ void main() {
     // multiplier of the already-downsampled 320x180 footprint.
     vec2 footprint = max(base_footprint, vec2(max(params.prefilter_scale, 1.0)));
 
-    // Surround uses one average color for each 4 x 3 screen region. Keep the
+    // Surround uses one average color for each 8 x 6 screen region. Keep the
     // 320 x 180 external image so the zero-copy ABI remains unchanged, but
-    // fill every region from the same stratified area average. Filament then
-    // blends the twelve representative colors smoothly across the hemisphere.
+    // fill every region from the same stratified area average. The outer row
+    // and column are finite-width screen-edge sampling bands for the dome.
     if (params.surround_region_average != 0u) {
-        vec2 grid = vec2(4.0, 3.0);
+        vec2 grid = vec2(8.0, 6.0);
         vec2 region = floor(clamp(output_uv, vec2(0.0), vec2(0.999999)) * grid);
         vec2 region_uv = (region + vec2(0.5)) / grid;
         source_uv = vec2(region_uv.x, 1.0 - region_uv.y);
@@ -74,8 +74,18 @@ void main() {
         for (uint sample_x = 0u; sample_x < 8u; ++sample_x) {
             vec2 sample_offset = (vec2(sample_x, sample_y) + vec2(0.5)) / 8.0 - 0.5;
             ivec2 source_pixel = ivec2(floor(source_center + sample_offset * footprint));
-            total += source_at(source_pixel);
+            vec3 encoded = source_encoded_at(source_pixel);
+            // A virtual surround surface should preserve perceptual black
+            // levels. Average encoded sRGB only for Surround, then decode the
+            // result once for Filament's linear workflow. Other Glow effects
+            // retain their physical linear-radiance prefilter.
+            total += params.surround_region_average != 0u
+                    ? encoded : srgb_to_linear(encoded);
         }
     }
-    imageStore(glow_image, ivec2(output_pixel), vec4(total / 64.0, 1.0));
+    vec3 average = total / 64.0;
+    if (params.surround_region_average != 0u) {
+        average = srgb_to_linear(average);
+    }
+    imageStore(glow_image, ivec2(output_pixel), vec4(average, 1.0));
 }

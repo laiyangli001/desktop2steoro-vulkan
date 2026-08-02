@@ -83,6 +83,9 @@ def test_glow_shader_and_spirv_are_checked_in_together() -> None:
     assert "srgb_to_linear" in source
     assert "vec2(output_uv.x, 1.0 - output_uv.y)" in source
     assert "uint surround_region_average;" in source
-    assert "vec2 grid = vec2(4.0, 3.0);" in source
+    assert "vec2 grid = vec2(8.0, 6.0);" in source
     assert "footprint = vec2(params.source_width, params.source_height) / grid;" in source
+    assert "source_encoded_at" in source
+    assert "preserve perceptual black" in source
+    assert "average = srgb_to_linear(average);" in source
     assert spirv[:4] == b"\x03\x02#\x07"

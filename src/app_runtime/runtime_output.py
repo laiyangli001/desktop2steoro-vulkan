@@ -203,7 +203,7 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
                 # the twelve averages without inventing intermediate colors;
                 # the hemisphere shader performs the final smooth blend.
                 region_average = functional.adaptive_avg_pool2d(
-                    float_value, output_size=(3, 4)
+                    float_value, output_size=(6, 8)
                 )
                 sample = functional.interpolate(
                     region_average,
