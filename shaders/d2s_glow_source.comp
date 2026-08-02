@@ -76,10 +76,11 @@ void main() {
     // multiplier of the already-downsampled 320x180 footprint.
     vec2 footprint = max(base_footprint, vec2(max(params.prefilter_scale, 1.0)));
 
-    // Surround uses one average color for each 8 x 6 screen region. Keep the
-    // 320 x 180 external image so the zero-copy ABI remains unchanged, but
-    // fill every region from the same stratified area average. The outer row
-    // and column are finite-width screen-edge sampling bands for the dome.
+    // Surround uses one average color for each 8 x 6 screen-edge segment. Keep
+    // the 320 x 180 external image so the zero-copy ABI remains unchanged, but
+    // sample the outer row / column from a narrow inward pixel band instead of
+    // averaging an entire 1/8 x 1/6 screen block. Scale the band with source
+    // resolution: about 4 px at 1080p, 8 px at 4K and 16 px at 8K.
     if (params.surround_region_average != 0u) {
         vec2 grid = vec2(8.0, 6.0);
         vec2 region = floor(clamp(output_uv, vec2(0.0), vec2(0.999999)) * grid);
@@ -87,6 +88,27 @@ void main() {
         source_uv = vec2(region_uv.x, 1.0 - region_uv.y);
         source_center = source_uv * vec2(params.source_width, params.source_height);
         footprint = vec2(params.source_width, params.source_height) / grid;
+
+        float edge_band_pixels = clamp(
+                round(float(min(params.source_width, params.source_height)) / 270.0),
+                4.0, 16.0);
+        if (region.x < 0.5) {
+            source_center.x = edge_band_pixels * 0.5;
+            footprint.x = edge_band_pixels;
+        } else if (region.x > grid.x - 1.5) {
+            source_center.x = float(params.source_width) - edge_band_pixels * 0.5;
+            footprint.x = edge_band_pixels;
+        }
+        // output_uv is top-left based while the external Glow image follows
+        // Filament's bottom-left convention, so the first output row samples
+        // the source's bottom edge and the last row samples its top edge.
+        if (region.y < 0.5) {
+            source_center.y = float(params.source_height) - edge_band_pixels * 0.5;
+            footprint.y = edge_band_pixels;
+        } else if (region.y > grid.y - 1.5) {
+            source_center.y = edge_band_pixels * 0.5;
+            footprint.y = edge_band_pixels;
+        }
     }
 
     // A fixed stratified 8x8 reduction bounds work independently of source

@@ -27,6 +27,8 @@ int bridge_eye_set_camera_projection_frustum(
         double bottom, double top, double near_plane, double far_plane);
 int bridge_eye_begin_frame(FilamentBridge* bridge);
 int bridge_eye_end_frame(FilamentBridge* bridge);
+int bridge_eye_end_frame_deferred(FilamentBridge* bridge);
+int bridge_eye_finish_frame_batch(FilamentBridge* bridge);
 int bridge_eye_set_ready_semaphore(FilamentBridge* bridge, const void* semaphore);
 int bridge_eye_get_finished_semaphore(
         FilamentBridge* bridge, const void** semaphore);

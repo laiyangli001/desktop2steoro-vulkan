@@ -206,26 +206,55 @@ int bridge_eye_begin_frame(FilamentBridge* bridge) {
     return bridge->frame_active ? 1 : 0;
 }
 
-int bridge_eye_end_frame(FilamentBridge* bridge) {
+namespace {
+
+int bridge_eye_end_frame_impl(FilamentBridge* bridge, bool wait_for_idle) {
     if (!bridge || !bridge->renderer || !bridge->frame_active) return 0;
     bridge->renderer->endFrame();
     bridge->frame_active = false;
     bridge->eyes[bridge->active_eye].frame_active = false;
     if (!bridge->engine) return 0;
-    // The shared Engine switches between two external Vulkan swapchains. A
-    // non-blocking flush is insufficient here: the next eye may call
-    // beginFrame while the backend is still consuming the previous swapchain.
-    // Complete this eye before switching targets to keep the external
-    // swapchain lifetime valid. This is the safe baseline until a native
-    // multi-swapchain frame scheduler is added.
-    bridge->engine->flushAndWait();
+    if (wait_for_idle) {
+        // Preserve the original ABI contract for callers that submit one eye
+        // at a time or use an older Python presenter.
+        bridge->engine->flushAndWait();
+    } else {
+        // Each eye owns a distinct Renderer, SwapChain and ExternalSwapChain.
+        // Kick Filament's render thread now, but leave the owner thread free to
+        // enqueue the second eye before the stereo pair waits for completion.
+        bridge->engine->flush();
+    }
     if (bridge->diagnostic_frame_count < 8) {
-        std::fprintf(stderr, "[FilamentBridge] end eye=%u\n", bridge->active_eye);
+        std::fprintf(stderr, "[FilamentBridge] end eye=%u deferred=%d\n",
+                bridge->active_eye, wait_for_idle ? 0 : 1);
         std::fflush(stderr);
         if (bridge->active_eye == 1) {
             ++bridge->diagnostic_frame_count;
         }
     }
+    return 1;
+}
+
+}  // namespace
+
+int bridge_eye_end_frame(FilamentBridge* bridge) {
+    return bridge_eye_end_frame_impl(bridge, true);
+}
+
+int bridge_eye_end_frame_deferred(FilamentBridge* bridge) {
+    return bridge_eye_end_frame_impl(bridge, false);
+}
+
+int bridge_eye_finish_frame_batch(FilamentBridge* bridge) {
+    if (!bridge || !bridge->engine || bridge->frame_active) return 0;
+    for (const auto& eye : bridge->eyes) {
+        if (eye.frame_active) {
+            bridge_set_error(bridge,
+                    "Cannot finish Filament frame batch while an eye frame is active");
+            return 0;
+        }
+    }
+    bridge->engine->flushAndWait();
     return 1;
 }
 

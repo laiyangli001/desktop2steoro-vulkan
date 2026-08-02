@@ -77,16 +77,16 @@ int filament_bridge_set_camera_projection_frustum(
 }
 
 int filament_bridge_begin_frame(FilamentBridge* bridge) {
-    return bridge_eye_begin_frame(bridge);
-}
-
+    return bridge_eye_begin_frame(bridge); }
 int filament_bridge_end_frame(FilamentBridge* bridge) {
-    return bridge_eye_end_frame(bridge);
-}
+    return bridge_eye_end_frame(bridge); }
 
+int filament_bridge_end_frame_deferred(FilamentBridge* bridge) {
+    return bridge_eye_end_frame_deferred(bridge); }
+int filament_bridge_finish_frame_batch(FilamentBridge* bridge) {
+    return bridge_eye_finish_frame_batch(bridge); }
 int filament_bridge_wait_for_idle(FilamentBridge* bridge) {
-    return bridge_context_wait_for_idle(bridge);
-}
+    return bridge_context_wait_for_idle(bridge); }
 
 int filament_bridge_load_glb(
         FilamentBridge* bridge, const uint8_t* bytes, uint32_t byte_count) {

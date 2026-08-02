@@ -1082,8 +1082,6 @@ class VulkanZeroCopyOutputAdapter(CudaVulkanOutputAdapter):
         right_slot = self.right_slots[slot_index]
         try:
             self._update_glow_cpu_source(rgb)
-            if self._release_timelines[slot_index]:
-                self.presenter.vulkan.wait_for_timeline(self._release_timelines[slot_index])
             if self._compute_backend is None:
                 raise RuntimeError("Vulkan zero-copy Compute backend is unavailable")
             compute_timeline, backend_debug = self._compute_backend.submit_to_images(

@@ -688,20 +688,17 @@ int bridge_glow_create(FilamentBridge* bridge) {
             // sample's independent geodesic to the hemisphere rim.
             vec2 sourceUv = getUV0();
             float radialDistance = clamp(getUV1().x, 0.0, 1.0);
-            // Avoid a hard screen/glow seam. The exact screen edge keeps a
-            // small base emission, rises smoothly to the halo peak over the
-            // first few radial rows, then follows the long exponential tail.
-            // The screen texture itself remains untouched and pixel-sharp.
-            float seamFeather = mix(
-                    0.10, 1.0, smoothstep(0.0, 0.05, radialDistance));
-            float edgeField = seamFeather * exp2(-5.0 * radialDistance) *
+            // Start at full edge intensity and follow the long exponential
+            // tail. Seam color matching is handled by the producer's narrow
+            // screen-edge pixel bands, without dimming the first glow row.
+            float edgeField = exp2(-5.0 * radialDistance) *
                     (1.0 - smoothstep(0.88, 1.0, radialDistance));
             float glow = edgeField * materialParams.glowIntensity;
             if (glow <= 0.002) discard;
             glow = min(glow, 1.0);
             // Clamp to the nearest point on the screen perimeter. The 8 x 6
-            // producer grid turns the outer row / column into a finite-width
-            // sampling band rather than a one-pixel sampling line.
+            // producer grid averages a narrow inward pixel band for each edge
+            // segment, then this smooth interpolation removes cell boundaries.
             vec3 shellColor = sampleRegionAverage(sourceUv);
             // Surround is emitted light, not a translucent colored wall.
             // Additive output lets black samples contribute zero instead of

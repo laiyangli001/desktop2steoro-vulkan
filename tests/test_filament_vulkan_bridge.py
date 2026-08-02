@@ -200,6 +200,10 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "pending_ready_semaphore" in source
     assert "screen_texture_cache" in source
     assert "bridge->engine->flushAndWait();" in source
+    assert "bridge->engine->flush();" in source
+    assert "filament_bridge_end_frame_deferred" in facade
+    assert "filament_bridge_finish_frame_batch" in facade
+    assert "bridge_eye_finish_frame_batch" in source
     assert "diagnostic_frame_count < 8" in source
     assert "[FilamentBridge] acquired eye=" in source
     assert "filament_bridge_set_controller_visible" in facade
@@ -251,10 +255,8 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "sampleRegionAverage" in source
     assert "blend = blend * blend" in source
     assert "float radialDistance = clamp(getUV1().x" in source
-    assert "float seamFeather = mix(" in source
-    assert "0.10, 1.0, smoothstep(0.0, 0.05, radialDistance)" in source
-    assert "float edgeField = seamFeather * exp2(-5.0 * radialDistance)" in source
-    assert "screen texture itself remains untouched and pixel-sharp" in source
+    assert "float seamFeather = mix(" not in source
+    assert "float edgeField = exp2(-5.0 * radialDistance)" in source
     assert "vec3 shellColor = sampleRegionAverage(sourceUv);" in source
     assert "const float phi" not in source
     assert "screen_relative_uv" not in source
@@ -262,7 +264,7 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
         "bridge->glow_shell_vertex_buffer =", 1
     )[1].split("bridge->glow_shell_index_buffer =", 1)[0]
     assert "filament::VertexAttribute::UV1" in shell_buffer
-    assert "finite-width" in source
+    assert "narrow inward pixel band" in source
     assert '.parameter("glowColor"' not in source
     assert 'setParameter(\n                "glowColor"' not in source
     assert "material.baseColor = vec4(shellColor * glow, 1.0);" in source

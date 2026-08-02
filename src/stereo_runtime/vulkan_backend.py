@@ -43,13 +43,22 @@ class VulkanStereoImageComputeBackend:
         )
         self._pass: VulkanStereoImagePass | None = None
         self._buffers: tuple[VulkanStorageBuffer, ...] = ()
+        self._host_input_slots: tuple[tuple[VulkanStorageBuffer, VulkanStorageBuffer], ...] = ()
         self._shape: tuple[int, int] | None = None
         self._last_submit_timeline = 0
+        self._input_slot_count = max(
+            1, int(getattr(context, "frame_context_count", 3))
+        )
+        self._input_slot_timelines = [0 for _ in range(self._input_slot_count)]
         self._frame_id = 0
         self._closed = False
         self._cuda_importer = None
-        self._cuda_input_buffers: tuple[VulkanExportableBuffer, ...] = ()
-        self._cuda_input_ready: VulkanExportableSemaphore | None = None
+        self._cuda_input_slots: tuple[
+            tuple[VulkanExportableBuffer, VulkanExportableBuffer], ...
+        ] = ()
+        self._cuda_input_ready: tuple[VulkanExportableSemaphore, ...] = ()
+        self._cuda_input_released: tuple[VulkanExportableSemaphore, ...] = ()
+        self._cuda_slot_used = [False for _ in range(self._input_slot_count)]
         self._cuda_input_error: str | None = None
 
     @property
@@ -81,11 +90,23 @@ class VulkanStereoImageComputeBackend:
             height=shape[0],
             shader_path=self.shader_path,
         )
-        sizes = self._pass.input_buffer_sizes
-        self._buffers = tuple(
-            VulkanStorageBuffer(self.context, sizes[name]) for name in ("rgb", "depth")
-        )
         self._shape = shape
+
+    def _ensure_host_inputs(self) -> None:
+        if len(self._host_input_slots) == self._input_slot_count:
+            return
+        if self._pass is None:
+            raise VulkanStereoBackendUnavailable("Vulkan stereo image pass is unavailable")
+        sizes = self._pass.input_buffer_sizes
+        slots = tuple(
+            (
+                VulkanStorageBuffer(self.context, sizes["rgb"]),
+                VulkanStorageBuffer(self.context, sizes["depth"]),
+            )
+            for _index in range(self._input_slot_count)
+        )
+        self._host_input_slots = slots
+        self._buffers = tuple(buffer for slot in slots for buffer in slot)
 
     def submit_to_images(
         self,
@@ -101,7 +122,7 @@ class VulkanStereoImageComputeBackend:
             raise VulkanStereoBackendUnavailable("Vulkan stereo image backend is closed")
         height, width = self._validate_inputs(rgb, depth)
         self._ensure_shape(height, width)
-        if self._pass is None or len(self._buffers) != 2:
+        if self._pass is None:
             raise VulkanStereoBackendUnavailable("Vulkan stereo image pass is unavailable")
         for image in (left_eye, right_eye):
             if getattr(image, "context", None) is not self.context:
@@ -111,14 +132,12 @@ class VulkanStereoImageComputeBackend:
             if int(getattr(image, "width", 0)) != width or int(getattr(image, "height", 0)) != height:
                 raise ValueError("stereo output image dimensions do not match")
 
-        # Input buffers are reused only after the preceding dispatch has
-        # completed. This wait does not wait for Filament; it protects the
-        # persistent input storage from a data race.
-        if self._last_submit_timeline:
-            self.context.wait_for_timeline(self._last_submit_timeline)
-
+        slot_index = int(self._frame_id) % self._input_slot_count
         input_mode = "host_visible_buffer"
         wait_semaphore = None
+        signal_semaphore = None
+        input_reuse_sync = "timeline_host_wait"
+        input_slot_wait_ms = 0.0
         input_upload_start = time.perf_counter()
         use_cuda_input = (
             str(getattr(getattr(rgb, "device", None), "type", "")) == "cuda"
@@ -132,21 +151,34 @@ class VulkanStereoImageComputeBackend:
             try:
                 self._ensure_cuda_inputs(height, width)
                 importer = self._cuda_importer
-                ready = self._cuda_input_ready
-                if importer is None or ready is None:
+                if (
+                    importer is None
+                    or len(self._cuda_input_slots) != self._input_slot_count
+                    or len(self._cuda_input_ready) != self._input_slot_count
+                    or len(self._cuda_input_released) != self._input_slot_count
+                ):
                     raise VulkanStereoBackendUnavailable(
                         "CUDA Vulkan input interop is unavailable"
                     )
                 stream = int(torch.cuda.current_stream(device=rgb.device).cuda_stream)
+                buffers = self._cuda_input_slots[slot_index]
+                ready = self._cuda_input_ready[slot_index]
+                released = self._cuda_input_released[slot_index]
+                if self._cuda_slot_used[slot_index]:
+                    # Consume the Vulkan completion signal on the CUDA stream.
+                    # This is device-side ordering and does not block Python.
+                    importer.wait_semaphore(released, stream=stream)
                 importer.copy_tensor_to_buffer(
-                    rgb, self._cuda_input_buffers[0], stream=stream
+                    rgb, buffers[0], stream=stream
                 )
                 importer.copy_tensor_to_buffer(
-                    depth, self._cuda_input_buffers[1], stream=stream
+                    depth, buffers[1], stream=stream
                 )
                 importer.signal_semaphore(ready, stream=stream)
                 wait_semaphore = ready.semaphore
+                signal_semaphore = released.semaphore
                 input_mode = "cuda_external_buffer"
+                input_reuse_sync = "cuda_vulkan_external_semaphore"
                 self._cuda_input_error = None
             except Exception as exc:
                 self._cuda_input_error = f"{type(exc).__name__}: {exc}"
@@ -154,17 +186,25 @@ class VulkanStereoImageComputeBackend:
 
         if input_mode == "cuda_external_buffer":
             input_upload_ms = (time.perf_counter() - input_upload_start) * 1000.0
-            input_buffers = self._cuda_input_buffers
+            input_buffers = self._cuda_input_slots[slot_index]
         else:
+            self._ensure_host_inputs()
+            slot_timeline = int(self._input_slot_timelines[slot_index])
+            if slot_timeline:
+                slot_wait_started = time.perf_counter()
+                self.context.wait_for_timeline(slot_timeline)
+                input_slot_wait_ms = (
+                    time.perf_counter() - slot_wait_started
+                ) * 1000.0
             input_upload_start = time.perf_counter()
-            self._buffers[0].write_bytes(
+            input_buffers = self._host_input_slots[slot_index]
+            input_buffers[0].write_bytes(
                 VulkanStereoComputeBackend._planar_bytes(rgb, channels=3)
             )
-            self._buffers[1].write_bytes(
+            input_buffers[1].write_bytes(
                 VulkanStereoComputeBackend._planar_bytes(depth, channels=1)
             )
             input_upload_ms = (time.perf_counter() - input_upload_start) * 1000.0
-            input_buffers = self._buffers
         timeline = self._pass.submit(
             input_buffers[0],
             input_buffers[1],
@@ -175,9 +215,13 @@ class VulkanStereoImageComputeBackend:
             config_version=0,
             ready_timeline=ready_timeline,
             wait_semaphore=wait_semaphore,
+            signal_semaphore=signal_semaphore,
         )
+        if input_mode == "cuda_external_buffer":
+            self._cuda_slot_used[slot_index] = True
+        self._input_slot_timelines[slot_index] = int(timeline)
         self._frame_id += 1
-        self._last_submit_timeline = int(timeline)
+        self._last_submit_timeline = max(self._last_submit_timeline, int(timeline))
         vk = self.context.vk
         output_state = ImageState(
             layout=vk.VK_IMAGE_LAYOUT_GENERAL,
@@ -200,6 +244,10 @@ class VulkanStereoImageComputeBackend:
             "vulkan_compute_output_image_encoding": "linear",
             "vulkan_output_sync": "vulkan_compute_external_semaphore",
             "vulkan_input_path": input_mode,
+            "vulkan_input_ring_slot": slot_index,
+            "vulkan_input_ring_size": self._input_slot_count,
+            "vulkan_input_reuse_sync": input_reuse_sync,
+            "vulkan_input_slot_wait_ms": input_slot_wait_ms,
             "vulkan_input_upload_ms": input_upload_ms,
             "vulkan_input_error": self._cuda_input_error,
             "vulkan_hole_fill_mode": int(params.hole_fill_mode),
@@ -209,8 +257,9 @@ class VulkanStereoImageComputeBackend:
     def _ensure_cuda_inputs(self, height: int, width: int) -> None:
         if (
             self._cuda_importer is not None
-            and self._cuda_input_ready is not None
-            and len(self._cuda_input_buffers) == 2
+            and len(self._cuda_input_slots) == self._input_slot_count
+            and len(self._cuda_input_ready) == self._input_slot_count
+            and len(self._cuda_input_released) == self._input_slot_count
             and self._shape == (int(height), int(width))
         ):
             return
@@ -221,53 +270,80 @@ class VulkanStereoImageComputeBackend:
             raise VulkanStereoBackendUnavailable("Vulkan stereo image pass is unavailable")
         importer = CudaVulkanImageImporter()
         sizes = self._pass.input_buffer_sizes
-        buffers = tuple(
-            VulkanExportableBuffer(
-                self.context,
-                int(sizes[name]),
-                label=f"stereo-input-{name}",
+        slots = tuple(
+            tuple(
+                VulkanExportableBuffer(
+                    self.context,
+                    int(sizes[name]),
+                    label=f"stereo-input-{name}-{index}",
+                )
+                for name in ("rgb", "depth")
             )
-            for name in ("rgb", "depth")
+            for index in range(self._input_slot_count)
         )
-        ready = VulkanExportableSemaphore(self.context, label="stereo-input-ready")
+        ready = tuple(
+            VulkanExportableSemaphore(
+                self.context, label=f"stereo-input-ready-{index}"
+            )
+            for index in range(self._input_slot_count)
+        )
+        released = tuple(
+            VulkanExportableSemaphore(
+                self.context, label=f"stereo-input-released-{index}"
+            )
+            for index in range(self._input_slot_count)
+        )
         try:
-            for buffer in buffers:
-                importer.register_buffer(buffer)
-            importer.register_semaphore(ready)
+            for slot in slots:
+                for buffer in slot:
+                    importer.register_buffer(buffer)
+            for semaphore in (*ready, *released):
+                importer.register_semaphore(semaphore)
         except Exception:
-            ready.close()
-            for buffer in buffers:
-                buffer.close()
+            for semaphore in (*ready, *released):
+                semaphore.close()
+            for slot in slots:
+                for buffer in slot:
+                    buffer.close()
             importer.close()
             raise
         self._cuda_importer = importer
-        self._cuda_input_buffers = buffers
+        self._cuda_input_slots = slots
         self._cuda_input_ready = ready
+        self._cuda_input_released = released
+        self._cuda_slot_used = [False for _ in range(self._input_slot_count)]
 
     def _close_cuda_inputs(self) -> None:
         if self._cuda_importer is not None:
             self._cuda_importer.close()
         self._cuda_importer = None
-        if self._cuda_input_ready is not None:
-            self._cuda_input_ready.close()
-        self._cuda_input_ready = None
-        for buffer in self._cuda_input_buffers:
-            buffer.close()
-        self._cuda_input_buffers = ()
+        for semaphore in (*self._cuda_input_ready, *self._cuda_input_released):
+            semaphore.close()
+        self._cuda_input_ready = ()
+        self._cuda_input_released = ()
+        for slot in self._cuda_input_slots:
+            for buffer in slot:
+                buffer.close()
+        self._cuda_input_slots = ()
+        self._cuda_slot_used = [False for _ in range(self._input_slot_count)]
 
     def _close_resources(self) -> None:
-        self._close_cuda_inputs()
+        # All imported buffers and their release semaphores must outlive the
+        # last Vulkan dispatch that references them.
         if self.context is not None and not getattr(self.context, "closed", False):
             if self._last_submit_timeline:
                 self.context.wait_for_timeline(self._last_submit_timeline)
+        self._close_cuda_inputs()
         for buffer in self._buffers:
             buffer.close()
         self._buffers = ()
+        self._host_input_slots = ()
         if self._pass is not None:
             self._pass.close()
         self._pass = None
         self._shape = None
         self._last_submit_timeline = 0
+        self._input_slot_timelines = [0 for _ in range(self._input_slot_count)]
 
     def close(self) -> None:
         if self._closed:

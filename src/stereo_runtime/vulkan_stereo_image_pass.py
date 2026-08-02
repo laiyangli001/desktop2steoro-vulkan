@@ -106,6 +106,7 @@ class VulkanStereoImagePass:
         config_version: int,
         ready_timeline: int | None = None,
         wait_semaphore: Any | None = None,
+        signal_semaphore: Any | None = None,
     ) -> int:
         if self.pipeline is None or self.descriptor_arena is None:
             raise RuntimeError("Vulkan stereo image pass is closed")
@@ -139,6 +140,8 @@ class VulkanStereoImagePass:
             submit_kwargs["wait_for_timeline"] = int(ready_timeline)
         if wait_semaphore is not None:
             submit_kwargs["wait_semaphore"] = wait_semaphore
+        if signal_semaphore is not None:
+            submit_kwargs["signal_semaphore"] = signal_semaphore
         return self.context.submit_on("compute", self._record_active, **submit_kwargs)
 
     def close(self) -> None:

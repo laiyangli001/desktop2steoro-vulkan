@@ -66,6 +66,7 @@ class FilamentVulkanBridge:
         self._screen_sampling_mode_abi_available = False
         self._screen_sampling_stats_abi_available = False
         self._async_submit_abi_available = False
+        self._stereo_batch_submit_abi_available = False
         self._configure_abi()
         self._handle: ctypes.c_void_p | None = None
         self._owner_thread_id: int | None = None
@@ -117,6 +118,10 @@ class FilamentVulkanBridge:
     @property
     def async_submit_abi_available(self) -> bool:
         return self._async_submit_abi_available
+
+    @property
+    def stereo_batch_submit_abi_available(self) -> bool:
+        return self._stereo_batch_submit_abi_available
 
     @property
     def loaded(self) -> bool:
@@ -281,6 +286,24 @@ class FilamentVulkanBridge:
         self._ensure_loaded()
         self._check_result(
             self._library.filament_bridge_end_frame(self._handle), "end_frame"
+        )
+
+    def end_frame_deferred(self) -> None:
+        self._ensure_loaded()
+        if not self._stereo_batch_submit_abi_available:
+            raise FilamentBridgeError("stereo batch submit ABI is unavailable")
+        self._check_result(
+            self._library.filament_bridge_end_frame_deferred(self._handle),
+            "end_frame_deferred",
+        )
+
+    def finish_frame_batch(self) -> None:
+        self._ensure_loaded()
+        if not self._stereo_batch_submit_abi_available:
+            raise FilamentBridgeError("stereo batch submit ABI is unavailable")
+        self._check_result(
+            self._library.filament_bridge_finish_frame_batch(self._handle),
+            "finish_frame_batch",
         )
 
     def wait_for_idle(self) -> None:
@@ -906,6 +929,18 @@ class FilamentVulkanBridge:
             function = getattr(library, name)
             function.argtypes = [ctypes.c_void_p]
             function.restype = ctypes.c_int
+        deferred_end_frame = getattr(
+            library, "filament_bridge_end_frame_deferred", None
+        )
+        finish_frame_batch = getattr(
+            library, "filament_bridge_finish_frame_batch", None
+        )
+        if deferred_end_frame is not None and finish_frame_batch is not None:
+            deferred_end_frame.argtypes = [ctypes.c_void_p]
+            deferred_end_frame.restype = ctypes.c_int
+            finish_frame_batch.argtypes = [ctypes.c_void_p]
+            finish_frame_batch.restype = ctypes.c_int
+            self._stereo_batch_submit_abi_available = True
         wait_for_idle = getattr(library, "filament_bridge_wait_for_idle", None)
         if wait_for_idle is not None:
             wait_for_idle.argtypes = [ctypes.c_void_p]

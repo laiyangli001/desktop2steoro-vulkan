@@ -527,11 +527,13 @@ class OpenXrVulkanPresenter(
         *,
         on_headset_state: Callable[[str], None] | None = None,
         on_controller_shortcut: Callable[..., bool | None] | None = None,
+        on_breakdown_add_time: Callable[[str, float], None] | None = None,
     ) -> None:
         self.config = config or OpenXrVulkanConfig()
         self._headset_preset = resolve_xr_headset_preset(self.config.headset_model)
         self._on_headset_state = on_headset_state
         self._on_controller_shortcut = on_controller_shortcut
+        self._on_breakdown_add_time = on_breakdown_add_time
         if self.config.render_scale <= 0:
             raise ValueError("render_scale must be greater than zero")
         if len(self.config.clear_color) != 4:
@@ -3609,6 +3611,7 @@ class OpenXrVulkanPresenter(
                     self._output_adapter_error = message
                 return
         try:
+            conversion_started = time.perf_counter()
             left_eye = getattr(runtime_result, "left_eye", None)
             right_eye = getattr(runtime_result, "right_eye", None)
             if not isinstance(left_eye, VulkanImageResource) or not isinstance(
@@ -3631,6 +3634,29 @@ class OpenXrVulkanPresenter(
                     metadata=debug_info,
                     color_space=str(debug_info.get("output_color_space", "srgb")),
                     image_origin=str(debug_info.get("output_image_origin", "top_left")),
+                )
+            callback = self._on_breakdown_add_time
+            if callback is not None:
+                callback(
+                    "openxr_vulkan_output_convert",
+                    max(0.0, time.perf_counter() - conversion_started),
+                )
+                metadata = dict(getattr(frame, "metadata", None) or {})
+                callback(
+                    "openxr_vulkan_input_slot_wait",
+                    max(
+                        0.0,
+                        float(metadata.get("vulkan_input_slot_wait_ms", 0.0))
+                        / 1000.0,
+                    ),
+                )
+                callback(
+                    "openxr_vulkan_input_upload",
+                    max(
+                        0.0,
+                        float(metadata.get("vulkan_input_upload_ms", 0.0))
+                        / 1000.0,
+                    ),
                 )
             self._next_output_frame_id += 1
         except Exception as exc:
@@ -4474,19 +4500,39 @@ class OpenXrVulkanPresenter(
         animation_time = max(0.0, self._frame_now - self._filament_animation_origin)
         acquired_images: list[tuple[_EyeSwapchain, int]] = []
         consumer_release_semaphores: list[int | None] = [None, None]
+        deferred_capture_jobs: list[tuple[int, Any, Any]] = []
         render_succeeded = False
         screen_image_projection = False
+        projection_started = time.perf_counter()
+
+        def record_time(name: str, started: float) -> None:
+            callback = self._on_breakdown_add_time
+            if callback is not None:
+                callback(name, max(0.0, time.perf_counter() - started))
+
         try:
-            # Keep both OpenXR images acquired while Filament queues both eye
-            # submissions. They are released only after the single frame-wide
-            # completion wait below.
+            # Acquire the complete stereo pair before entering either blocking
+            # wait. This gives the runtime both requests up front and avoids
+            # serializing the second acquire behind the first eye's wait.
+            acquire_started = time.perf_counter()
             for eye in self.swapchains:
                 image_index = xr.acquire_swapchain_image(eye.handle)
                 acquired_images.append((eye, image_index))
+            record_time("openxr_projection_acquire_pair", acquire_started)
+
+            wait_pair_started = time.perf_counter()
+            for eye_index, (eye, _image_index) in enumerate(acquired_images):
+                wait_started = time.perf_counter()
                 xr.wait_swapchain_image(
                     eye.handle,
                     xr.SwapchainImageWaitInfo(timeout=xr.INFINITE_DURATION),
-            )
+                )
+                record_time(
+                    f"openxr_projection_wait_eye{eye_index}", wait_started
+                )
+            record_time("openxr_swapchain_wait", wait_pair_started)
+
+            shared_prepare_started = time.perf_counter()
             screen_image_projection = self._can_use_filament_screen_image(output_frame)
             self._report_screen_resolution(views, output_frame)
             self._apply_screen_sampling_policy(
@@ -4510,6 +4556,23 @@ class OpenXrVulkanPresenter(
                     if isinstance(output_frame, VulkanStereoOutputFrame)
                     else None,
                 )
+                # Controller transforms and GLB animation state are shared by
+                # both eye Views. Updating them twice adds owner-thread work
+                # without changing either eye's scene state.
+                self._update_filament_controllers(self.filament_bridge)
+                if hasattr(self.filament_bridge, "apply_animations"):
+                    self.filament_bridge.apply_animations(animation_time)
+            record_time("openxr_projection_shared_prepare", shared_prepare_started)
+
+            batch_filament_submit = bool(
+                self.filament_bridge is not None
+                and getattr(
+                    self.filament_bridge,
+                    "stereo_batch_submit_abi_available",
+                    False,
+                )
+            )
+
             for eye_index, (eye, image_index) in enumerate(acquired_images):
                 screen_source = None
                 if self.filament_bridge is not None:
@@ -4548,31 +4611,57 @@ class OpenXrVulkanPresenter(
                             format=screen_source.format,
                         )
                         bridge.set_screen_ready_semaphore(visible_semaphore)
-                    self._update_filament_controllers(bridge)
-                    if hasattr(bridge, "apply_animations"):
-                        bridge.apply_animations(animation_time)
                     bridge.set_acquired_image(image_index)
+                    queue_started = time.perf_counter()
                     bridge.begin_frame()
-                    bridge.end_frame()
-                    if isinstance(output_frame, VulkanStereoOutputFrame):
-                        self._maybe_capture_visual_regression_frame(
-                            output_frame,
-                            eye_index=eye_index,
-                            source_resource=(
-                                screen_source
-                                if isinstance(screen_source, VulkanImageResource)
-                                else getattr(screen_source, "resource", None)
-                            ),
-                            projection_resource=eye.resources[image_index],
-                            source_layout=self.vulkan.vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                            source_access_mask=self.vulkan.vk.VK_ACCESS_SHADER_READ_BIT,
-                            source_stage_mask=(
-                                self.vulkan.vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
-                                | self.vulkan.vk.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
-                            ),
+                    record_time(
+                        f"openxr_filament_eye{eye_index}_queue", queue_started
+                    )
+                    finish_started = time.perf_counter()
+                    if batch_filament_submit:
+                        bridge.end_frame_deferred()
+                        record_time(
+                            f"openxr_filament_eye{eye_index}_deferred_submit",
+                            finish_started,
                         )
-                    if screen_image_projection and hasattr(
-                        bridge, "get_finished_drawing_semaphore"
+                    else:
+                        bridge.end_frame()
+                        # Older Bridge binaries retain the safe per-eye wait.
+                        record_time(
+                            f"openxr_filament_eye{eye_index}_finish_wait",
+                            finish_started,
+                        )
+                    if isinstance(output_frame, VulkanStereoOutputFrame):
+                        source_resource = (
+                            screen_source
+                            if isinstance(screen_source, VulkanImageResource)
+                            else getattr(screen_source, "resource", None)
+                        )
+                        if batch_filament_submit:
+                            # The projection image is not complete until the
+                            # pair-wide wait below has drained both renderers.
+                            deferred_capture_jobs.append(
+                                (eye_index, source_resource, eye.resources[image_index])
+                            )
+                        else:
+                            self._maybe_capture_visual_regression_frame(
+                                output_frame,
+                                eye_index=eye_index,
+                                source_resource=source_resource,
+                                projection_resource=eye.resources[image_index],
+                                source_layout=self.vulkan.vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                source_access_mask=self.vulkan.vk.VK_ACCESS_SHADER_READ_BIT,
+                                source_stage_mask=(
+                                    self.vulkan.vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                                    | self.vulkan.vk.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+                                ),
+                            )
+                    if (
+                        not batch_filament_submit
+                        and screen_image_projection
+                        and hasattr(
+                            bridge, "get_finished_drawing_semaphore"
+                        )
                     ):
                         consumer_release_semaphores[eye_index] = (
                             bridge.get_finished_drawing_semaphore()
@@ -4610,6 +4699,43 @@ class OpenXrVulkanPresenter(
                         image_address = _ctypes_handle_address(eye.images[image_index].image)
                         image = self.vulkan.image_handle_from_address(image_address)
                         self.vulkan.clear_color_image(image, self.config.clear_color)
+            if batch_filament_submit:
+                bridge = self.filament_bridge
+                batch_finish_started = time.perf_counter()
+                bridge.finish_frame_batch()
+                record_time(
+                    "openxr_filament_stereo_finish_wait",
+                    batch_finish_started,
+                )
+                if screen_image_projection and hasattr(
+                    bridge, "get_finished_drawing_semaphore"
+                ):
+                    # Platform::present runs on Filament's render thread. Read
+                    # each eye's completion semaphore only after the pair-wide
+                    # drain has populated both ExternalSwapChain records.
+                    for eye_index in range(len(acquired_images)):
+                        bridge.set_active_eye(eye_index)
+                        consumer_release_semaphores[eye_index] = (
+                            bridge.get_finished_drawing_semaphore()
+                        )
+                if isinstance(output_frame, VulkanStereoOutputFrame):
+                    for (
+                        eye_index,
+                        source_resource,
+                        projection_resource,
+                    ) in deferred_capture_jobs:
+                        self._maybe_capture_visual_regression_frame(
+                            output_frame,
+                            eye_index=eye_index,
+                            source_resource=source_resource,
+                            projection_resource=projection_resource,
+                            source_layout=self.vulkan.vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                            source_access_mask=self.vulkan.vk.VK_ACCESS_SHADER_READ_BIT,
+                            source_stage_mask=(
+                                self.vulkan.vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                                | self.vulkan.vk.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+                            ),
+                        )
             if screen_image_projection and not all(consumer_release_semaphores):
                 raise RuntimeError(
                     "Filament did not publish render-finished semaphores for both eyes"
@@ -4625,8 +4751,10 @@ class OpenXrVulkanPresenter(
                 ] = tuple(consumer_release_semaphores)
             render_succeeded = True
         finally:
+            release_started = time.perf_counter()
             for eye, _image_index in acquired_images:
                 xr.release_swapchain_image(eye.handle)
+            record_time("openxr_projection_release_pair", release_started)
             if (
                 isinstance(output_frame, VulkanStereoOutputFrame)
                 and not render_succeeded
@@ -4649,6 +4777,7 @@ class OpenXrVulkanPresenter(
                         except Exception:
                             pass
                 self._abort_output_frame(output_frame)
+            record_time("openxr_projection_total", projection_started)
         return OpenXrCompositionBuilder(xr, self.reference_space).projection_layer(
             composition_views, self.swapchains
         )

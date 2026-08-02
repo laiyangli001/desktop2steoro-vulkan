@@ -237,11 +237,19 @@ def test_vulkan_stereo_image_pass_writes_two_storage_images(monkeypatch):
 
     monkeypatch.setattr(image_module, "VulkanComputePipeline", FakePipeline)
     monkeypatch.setattr(image_module, "VulkanDescriptorArena", FakeArena)
+    submit_kwargs = []
+
+    def submit_on(role, record, **kwargs):
+        assert role == "compute"
+        record("command-buffer")
+        submit_kwargs.append(kwargs)
+        return 11
+
     context = SimpleNamespace(
         vk=FakeVk(),
         frame_context_count=2,
         image_state=lambda image: SimpleNamespace(layout=9),
-        submit_on=lambda role, record, **kwargs: (record("command-buffer") or 11),
+        submit_on=submit_on,
     )
     stereo_pass = image_module.VulkanStereoImagePass(context, width=32, height=24)
     sizes = stereo_pass.input_buffer_sizes
@@ -257,7 +265,13 @@ def test_vulkan_stereo_image_pass_writes_two_storage_images(monkeypatch):
         params=VulkanLayeredStereoParams(),
         frame_id=1,
         config_version=1,
+        wait_semaphore="input-ready",
+        signal_semaphore="input-released",
     ) == 11
+    assert submit_kwargs == [{
+        "wait_semaphore": "input-ready",
+        "signal_semaphore": "input-released",
+    }]
     assert stereo_pass.pipeline.calls[0][1]["group_count_x"] == 2
     assert stereo_pass.pipeline.calls[0][1]["group_count_y"] == 2
     stereo_pass.close()

@@ -2618,6 +2618,231 @@ def test_swapchain_image_is_released_after_wait_when_render_fails() -> None:
     assert calls == ["acquire", "wait", "release"]
 
 
+def test_projection_acquires_stereo_pair_before_waiting(monkeypatch) -> None:
+    calls: list[str] = []
+    timing_names: list[str] = []
+
+    class FakeXr:
+        INFINITE_DURATION = 1
+
+        @staticmethod
+        def acquire_swapchain_image(handle):
+            calls.append(f"acquire:{handle}")
+            return 0
+
+        @staticmethod
+        def wait_swapchain_image(handle, _wait_info):
+            calls.append(f"wait:{handle}")
+
+        @staticmethod
+        def release_swapchain_image(handle):
+            calls.append(f"release:{handle}")
+
+        @staticmethod
+        def SwapchainImageWaitInfo(*, timeout):
+            return timeout
+
+    class FakeVulkan:
+        @staticmethod
+        def image_handle_from_address(address):
+            return address
+
+        @staticmethod
+        def clear_color_image(_image, _color):
+            calls.append("clear")
+
+    presenter = OpenXrVulkanPresenter(
+        on_breakdown_add_time=lambda name, _seconds: timing_names.append(name)
+    )
+    presenter.xr = FakeXr
+    presenter.vulkan = FakeVulkan()
+    presenter.swapchains = [
+        _EyeSwapchain("left", [SimpleNamespace(image=ctypes.c_void_p(1))], 1, 1),
+        _EyeSwapchain("right", [SimpleNamespace(image=ctypes.c_void_p(2))], 1, 1),
+    ]
+    presenter._apply_filament_profile = lambda views: views
+    presenter._report_screen_resolution = lambda *_args: None
+    presenter._apply_screen_sampling_policy = lambda *_args: None
+    presenter._report_filament_screen_image_status = lambda *_args: None
+    presenter._can_use_filament_screen_image = lambda *_args: False
+    monkeypatch.setattr(
+        OpenXrCompositionBuilder,
+        "projection_layer",
+        lambda *_args: "projection",
+    )
+
+    assert presenter._render_projection_layer([object(), object()], None) == "projection"
+    assert calls[:4] == [
+        "acquire:left",
+        "acquire:right",
+        "wait:left",
+        "wait:right",
+    ]
+    assert calls[-2:] == ["release:left", "release:right"]
+    assert "openxr_projection_acquire_pair" in timing_names
+    assert "openxr_projection_wait_eye0" in timing_names
+    assert "openxr_projection_wait_eye1" in timing_names
+    assert "openxr_projection_total" in timing_names
+
+
+def test_projection_updates_shared_filament_state_once_per_stereo_pair(
+    monkeypatch,
+) -> None:
+    calls: list[str] = []
+
+    class FakeXr:
+        INFINITE_DURATION = 1
+
+        @staticmethod
+        def acquire_swapchain_image(_handle):
+            return 0
+
+        @staticmethod
+        def wait_swapchain_image(_handle, _wait_info):
+            return None
+
+        @staticmethod
+        def release_swapchain_image(_handle):
+            return None
+
+        @staticmethod
+        def SwapchainImageWaitInfo(*, timeout):
+            return timeout
+
+    class FakeBridge:
+        def apply_animations(self, _seconds):
+            calls.append("animations")
+
+        def set_active_eye(self, eye_index):
+            calls.append(f"active:{eye_index}")
+
+        def set_acquired_image(self, image_index):
+            calls.append(f"image:{image_index}")
+
+        def begin_frame(self):
+            calls.append("begin")
+
+        def end_frame(self):
+            calls.append("end")
+
+    presenter = OpenXrVulkanPresenter()
+    presenter.xr = FakeXr
+    presenter.swapchains = [
+        _EyeSwapchain("left", [SimpleNamespace(image=None)], 1, 1),
+        _EyeSwapchain("right", [SimpleNamespace(image=None)], 1, 1),
+    ]
+    presenter.filament_bridge = FakeBridge()
+    presenter._apply_filament_profile = lambda views: views
+    presenter._report_screen_resolution = lambda *_args: None
+    presenter._apply_screen_sampling_policy = lambda *_args: None
+    presenter._report_filament_screen_image_status = lambda *_args: None
+    presenter._can_use_filament_screen_image = lambda *_args: False
+    presenter._update_filament_screen_light = lambda *_args: None
+    presenter._update_filament_glow = lambda *_args: None
+    presenter._update_filament_controllers = lambda *_args: calls.append("controllers")
+    monkeypatch.setattr(
+        "xr_viewer.core_openxr_vulkan._update_filament_camera",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        OpenXrCompositionBuilder,
+        "projection_layer",
+        lambda *_args: "projection",
+    )
+
+    assert presenter._render_projection_layer([object(), object()], None) == "projection"
+    assert calls.count("controllers") == 1
+    assert calls.count("animations") == 1
+    assert calls.count("begin") == 2
+    assert calls.count("end") == 2
+
+
+def test_projection_batches_filament_stereo_pair_into_one_finish_wait(
+    monkeypatch,
+) -> None:
+    calls: list[str] = []
+    timing_names: list[str] = []
+
+    class FakeXr:
+        INFINITE_DURATION = 1
+
+        @staticmethod
+        def acquire_swapchain_image(_handle):
+            return 0
+
+        @staticmethod
+        def wait_swapchain_image(_handle, _wait_info):
+            return None
+
+        @staticmethod
+        def release_swapchain_image(_handle):
+            return None
+
+        @staticmethod
+        def SwapchainImageWaitInfo(*, timeout):
+            return timeout
+
+    class FakeBridge:
+        stereo_batch_submit_abi_available = True
+
+        def apply_animations(self, _seconds):
+            pass
+
+        def set_active_eye(self, eye_index):
+            calls.append(f"active:{eye_index}")
+
+        def set_acquired_image(self, image_index):
+            calls.append(f"image:{image_index}")
+
+        def begin_frame(self):
+            calls.append("begin")
+
+        def end_frame(self):
+            raise AssertionError("legacy per-eye wait must not be used")
+
+        def end_frame_deferred(self):
+            calls.append("deferred")
+
+        def finish_frame_batch(self):
+            calls.append("finish_batch")
+
+    presenter = OpenXrVulkanPresenter(
+        on_breakdown_add_time=lambda name, _seconds: timing_names.append(name)
+    )
+    presenter.xr = FakeXr
+    presenter.swapchains = [
+        _EyeSwapchain("left", [SimpleNamespace(image=None)], 1, 1),
+        _EyeSwapchain("right", [SimpleNamespace(image=None)], 1, 1),
+    ]
+    presenter.filament_bridge = FakeBridge()
+    presenter._apply_filament_profile = lambda views: views
+    presenter._report_screen_resolution = lambda *_args: None
+    presenter._apply_screen_sampling_policy = lambda *_args: None
+    presenter._report_filament_screen_image_status = lambda *_args: None
+    presenter._can_use_filament_screen_image = lambda *_args: False
+    presenter._update_filament_screen_light = lambda *_args: None
+    presenter._update_filament_glow = lambda *_args: None
+    presenter._update_filament_controllers = lambda *_args: None
+    monkeypatch.setattr(
+        "xr_viewer.core_openxr_vulkan._update_filament_camera",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        OpenXrCompositionBuilder,
+        "projection_layer",
+        lambda *_args: "projection",
+    )
+
+    assert presenter._render_projection_layer([object(), object()], None) == "projection"
+    assert calls.count("begin") == 2
+    assert calls.count("deferred") == 2
+    assert calls.count("finish_batch") == 1
+    assert "openxr_filament_eye0_deferred_submit" in timing_names
+    assert "openxr_filament_eye1_deferred_submit" in timing_names
+    assert "openxr_filament_stereo_finish_wait" in timing_names
+    assert not any(name.endswith("finish_wait") for name in timing_names if "eye" in name)
+
+
 def test_projection_layer_builder_owns_only_layer_assembly() -> None:
     class FakeXr:
         CompositionLayerProjectionView = staticmethod(lambda **kwargs: kwargs)

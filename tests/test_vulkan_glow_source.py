@@ -88,7 +88,15 @@ def test_glow_shader_and_spirv_are_checked_in_together() -> None:
     assert "vec2(output_uv.x, 1.0 - output_uv.y)" in source
     assert "uint surround_region_average;" in source
     assert "vec2 grid = vec2(8.0, 6.0);" in source
-    assert "footprint = vec2(params.source_width, params.source_height) / grid;" in source
+    assert "float edge_band_pixels = clamp(" in source
+    assert "/ 270.0)" in source
+    assert "4.0, 16.0" in source
+    assert "if (region.x < 0.5)" in source
+    assert "region.x > grid.x - 1.5" in source
+    assert "if (region.y < 0.5)" in source
+    assert "region.y > grid.y - 1.5" in source
+    assert "footprint.x = edge_band_pixels;" in source
+    assert "footprint.y = edge_band_pixels;" in source
     assert "source_encoded_at" in source
     assert "preserve perceptual black" in source
     assert "average = srgb_to_linear(average);" in source
