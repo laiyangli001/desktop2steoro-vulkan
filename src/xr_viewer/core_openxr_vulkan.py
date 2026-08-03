@@ -4766,15 +4766,6 @@ class OpenXrVulkanPresenter(
                     "openxr_filament_stereo_finish_wait",
                     batch_finish_started,
                 )
-                if finished_semaphore_available:
-                    # Platform::present runs on Filament's render thread. Read
-                    # each eye's completion semaphore only after the pair-wide
-                    # drain has populated both ExternalSwapChain records.
-                    for eye_index in range(len(acquired_images)):
-                        bridge.set_active_eye(eye_index)
-                        consumer_release_semaphores[eye_index] = (
-                            bridge.get_finished_drawing_semaphore()
-                        )
                 if isinstance(output_frame, VulkanStereoOutputFrame):
                     for (
                         eye_index,
@@ -4793,13 +4784,13 @@ class OpenXrVulkanPresenter(
                                 | self.vulkan.vk.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
                             ),
                         )
-            if finished_semaphore_available and not all(
+            if not batch_filament_submit and finished_semaphore_available and not all(
                 consumer_release_semaphores
             ):
                 raise RuntimeError(
                     "Filament did not publish render-finished semaphores for both eyes"
                 )
-            if all(consumer_release_semaphores):
+            if not batch_filament_submit and all(consumer_release_semaphores):
                 drain_started = time.perf_counter()
                 completion_drain_attempted = True
                 consumer_completion_timeline = self.vulkan.submit_on(
@@ -4817,6 +4808,16 @@ class OpenXrVulkanPresenter(
                         ),
                         int(consumer_completion_timeline),
                     )
+            if (
+                batch_filament_submit
+                and isinstance(output_frame, VulkanStereoOutputFrame)
+                and screen_image_projection
+            ):
+                # finish_frame_batch() already drained Filament's GPU work.
+                # The shared backend command stream does not expose a safe
+                # per-swapchain finished semaphore, so source release must not
+                # consume Filament binary signals after the batch wait.
+                output_frame.metadata["_vulkan_consumer_release_semaphores"] = ()
             render_succeeded = True
         finally:
             if (
@@ -4829,7 +4830,7 @@ class OpenXrVulkanPresenter(
                         consumer_release_semaphores
                     ):
                         self.filament_bridge.wait_for_idle()
-                    if finished_semaphore_available:
+                    if not batch_filament_submit and finished_semaphore_available:
                         for eye_index in submitted_filament_eyes:
                             if consumer_release_semaphores[eye_index] is not None:
                                 continue
@@ -4838,7 +4839,8 @@ class OpenXrVulkanPresenter(
                                 self.filament_bridge.get_finished_drawing_semaphore()
                             )
                     if (
-                        not completion_drain_attempted
+                        not batch_filament_submit
+                        and not completion_drain_attempted
                         and any(consumer_release_semaphores)
                         and not bool(getattr(self.vulkan, "device_lost", False))
                     ):
@@ -4884,7 +4886,11 @@ class OpenXrVulkanPresenter(
                     else:
                         output_frame.metadata[
                             "_vulkan_consumer_release_semaphores"
-                        ] = tuple(consumer_release_semaphores)
+                        ] = (
+                            ()
+                            if batch_filament_submit
+                            else tuple(consumer_release_semaphores)
+                        )
                 self._abort_output_frame(output_frame)
             record_time("openxr_projection_total", projection_started)
         return OpenXrCompositionBuilder(xr, self.reference_space).projection_layer(

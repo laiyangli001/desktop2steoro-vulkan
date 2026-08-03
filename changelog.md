@@ -3,6 +3,11 @@
 本文件只记录用户可感知的功能、行为变化、重要修复和架构里程碑，不记录逐次调试过程。新记录按日期倒序追加，并将同一目标的连续修改归纳为一条有效结果。
 
 ## 2026-08-03
+- 修复 OpenXR batch 路径读取 Filament 全局 finished semaphore 造成的 device-lost：
+  `finish_frame_batch()` 已经执行帧级 `flushAndWait()`，Python 不再消费左右眼的
+  render-finished binary semaphore，也不再提交 completion drain；源图释放改为在 batch
+  同步完成后直接提交无 semaphore 依赖的 barrier，避免共享 backend command stream
+  在双 SwapChain 下误用 semaphore 导致 GPU watchdog。
 - 修复 Filament Vulkan backend 对 OpenXR 左右眼两个 SwapChain 的单例默认 RenderTarget
   污染：`VulkanDriver::acquireNextSwapchainImage()` 现在记录当前绑定的 SwapChain/image，
   切换眼时先释放旧绑定再绑定当前眼，避免第二只眼误渲染到第一只眼的图像并触发

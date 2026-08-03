@@ -115,6 +115,12 @@ SwapChain，导致切换到 eye1 时仍绑定 eye0 的默认 RenderTarget。D2S 
 目标 image 变化时先 `releaseSwapchain()` 再 `bindSwapChain()`，从而消除双 SwapChain
 的渲染目标污染和 device-lost。
 
+Filament 的 `VulkanCommands`/semaphore pool 仍是全局共享的，两个 SwapChain 的
+`acquireFinishedSignal()` 在 batch 连续入队时可能拿到对方的 semaphore。当前 batch 路径
+不再读取或消费 Filament render-finished semaphore：`finish_frame_batch()` 已执行
+`flushAndWait()`，源图释放直接走无 semaphore 依赖的 barrier，避免共享 command stream
+的 semaphore 误用再次触发 device-lost。
+
 ### 阶段 1：VulkanContext 真正分队列
 
 当前 `VulkanContext` 仍使用全局锁和共享 `_frame_index`，会串行化 graphics、compute、transfer 的主机提交。

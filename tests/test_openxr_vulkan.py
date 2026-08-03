@@ -2862,7 +2862,7 @@ def test_projection_updates_shared_filament_state_once_per_stereo_pair(
 
 
 @pytest.mark.parametrize("fail_second_eye", [False, True])
-def test_projection_batches_eyes_and_consumes_finished_semaphores_once(
+def test_projection_batches_eyes_without_filament_finished_drain(
     monkeypatch, fail_second_eye,
 ) -> None:
     calls: list[str] = []
@@ -2975,24 +2975,9 @@ def test_projection_batches_eyes_and_consumes_finished_semaphores_once(
     assert calls.count("deferred") == 2
     assert calls.count("finish") == (0 if fail_second_eye else 1)
     assert calls.count("wait-idle") == (1 if fail_second_eye else 0)
-    assert [call for call in calls if isinstance(call, tuple)] == [
-        (
-            "drain",
-            "graphics",
-            {
-                "wait_semaphore": (
-                    ("finished:0",)
-                    if fail_second_eye
-                    else ("finished:0", "finished:1")
-                )
-            },
-        )
-    ]
-    assert presenter._displayed_output.metadata[
-        "_vulkan_consumer_release_timeline"
-    ] == 23
+    assert [call for call in calls if isinstance(call, tuple)] == []
     assert ("openxr_filament_stereo_finish_wait" in timing_names) is not fail_second_eye
-    assert ("openxr_filament_completion_drain" in timing_names) is not fail_second_eye
+    assert "openxr_filament_completion_drain" not in timing_names
 
 
 def test_projection_layer_builder_owns_only_layer_assembly() -> None:
