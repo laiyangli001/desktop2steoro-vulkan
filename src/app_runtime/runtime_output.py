@@ -433,16 +433,10 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
             else self.right_visible_semaphores[slot_index]
         )
         if (frame_key, eye) in self._prepared_source_eyes:
-            # A reused output frame is presented for multiple XR ticks. The
-            # ready semaphore is consumed once, but Filament consumes the
-            # binary visible semaphore on every acquire. Re-signal visible
-            # without waiting for the producer-ready semaphore again.
-            self.presenter.vulkan.submit_on(
-                "graphics",
-                lambda _command_buffer: None,
-                signal_semaphore=visible.semaphore,
-            )
-            return visible.semaphore
+            # A reused output frame is already producer-ready and in sampling
+            # layout. Filament must not wait on another binary semaphore; the
+            # previous acquire consumed it and the source content is unchanged.
+            return None
         resource = left if eye == 0 else right
         ready = (
             self.left_ready_semaphores[slot_index]
@@ -1057,14 +1051,9 @@ class VulkanZeroCopyOutputAdapter(CudaVulkanOutputAdapter):
         )
         if (frame_key, eye) in self._prepared_source_eyes:
             # Vulkan compute signalled visible once when the frame was
-            # produced. A reused frame must re-signal it for every Filament
-            # acquire while leaving the ready/producer path untouched.
-            self.presenter.vulkan.submit_on(
-                "graphics",
-                lambda _command_buffer: None,
-                signal_semaphore=visible.semaphore,
-            )
-            return visible.semaphore
+            # produced. A reused frame has the same layout and content, so
+            # Filament can sample it without another ready semaphore.
+            return None
         self._prepared_source_eyes.add((frame_key, eye))
         return visible.semaphore
 

@@ -86,9 +86,9 @@ def test_cuda_source_prepare_is_idempotent_for_reused_frame() -> None:
     )
 
     assert adapter.prepare_source_for_sampling(7, 0) == "left-visible"
-    assert adapter.prepare_source_for_sampling(7, 0) == "left-visible"
+    assert adapter.prepare_source_for_sampling(7, 0) is None
     assert len(calls) == 1
-    assert re_signals == [{"signal_semaphore": "left-visible"}]
+    assert re_signals == []
 
 
 def test_rocm_external_semaphore_is_capability_gated_by_default(monkeypatch) -> None:

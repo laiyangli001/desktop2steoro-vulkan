@@ -3,6 +3,9 @@
 本文件只记录用户可感知的功能、行为变化、重要修复和架构里程碑，不记录逐次调试过程。新记录按日期倒序追加，并将同一目标的连续修改归纳为一条有效结果。
 
 ## 2026-08-03
+- 修复 `finish_frame_batch()` 永久卡死：复用源帧时不再重新 signal binary visible
+  semaphore，Filament 直接采样已经就绪的外部图像，避免等待一个排在卡住队列后的
+  signal 提交而触发 GPU/设备级死锁。
 - 修复 Vulkan 优化后 XR/SBS 被拖到约 16 FPS 的屏幕 MIP 回归：虚拟屏幕源帧不变时
   Bridge 不再每帧重复执行 4K Lanczos/RCAS/MIP 生成，只有 `frame_id` 变化时才重建，
   静态画面保持原有清晰度，动态画面继续实时更新。

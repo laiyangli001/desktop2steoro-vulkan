@@ -4675,7 +4675,8 @@ class OpenXrVulkanPresenter(
                             bridge.set_screen_source_version(
                                 int(output_frame.frame_id)
                             )
-                        bridge.set_screen_ready_semaphore(visible_semaphore)
+                        if visible_semaphore is not None:
+                            bridge.set_screen_ready_semaphore(visible_semaphore)
                     bridge.set_acquired_image(image_index)
                     queue_started = time.perf_counter()
                     bridge.begin_frame()
