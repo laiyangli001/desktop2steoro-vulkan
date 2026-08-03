@@ -156,7 +156,9 @@ int bridge_eye_set_camera_look_at(
             filament::math::float3{eye_x, eye_y, eye_z},
             filament::math::float3{center_x, center_y, center_z},
             filament::math::float3{up_x, up_y, up_z});
-    bridge_material_update_controller_lights(bridge, eye_x, eye_y, eye_z);
+    if (bridge->active_eye == 0) {
+        bridge_material_update_controller_lights(bridge, eye_x, eye_y, eye_z);
+    }
     return 1;
 }
 

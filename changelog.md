@@ -3,6 +3,10 @@
 本文件只记录用户可感知的功能、行为变化、重要修复和架构里程碑，不记录逐次调试过程。新记录按日期倒序追加，并将同一目标的连续修改归纳为一条有效结果。
 
 ## 2026-08-03
+- 修复双眼 deferred batch 中仍存在的共享场景写入：右眼设置独立 Camera 时不再再次移动
+  控制器共享灯光，避免 eye0 已入队后改写 Filament 场景状态并触发 Vulkan descriptor
+  validation，最终随机演变为 `VK_ERROR_DEVICE_LOST`；共享灯光改为每帧仅随 eye0 更新一次，
+  不恢复逐眼 `flushAndWait()`，CUDA/Vulkan external semaphore 路径保持启用。
 - 修复 Filament 屏幕资源在双眼 deferred batch 中仍复用 Renderable/View，导致第二眼在
   第一眼 GPU 工作未完成时改写绑定并最终触发 `VK_ERROR_DEVICE_LOST`：最终屏幕与 MIP
   copy 的 material instance、Renderable entity 和 View 现全部按眼隔离，并由 layer mask

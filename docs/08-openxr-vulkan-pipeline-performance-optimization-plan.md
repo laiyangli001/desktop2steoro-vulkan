@@ -50,9 +50,8 @@ xrWaitFrame
   -> 更新一次公共场景状态
   -> enqueue eye0
   -> enqueue eye1
-  -> frame-wide flush/completion
-  -> 一次 Vulkan submit 消费两个 render-finished binary semaphore
-  -> signal Vulkan timeline
+  -> frame-wide flushAndWait/completion
+  -> source release barrier
   -> release eye0 + eye1
   -> xrEndFrame
 ```
@@ -64,7 +63,7 @@ xrWaitFrame
 | 优先级 | 优化项 | 当前状态 | 后续动作 |
 |---|---|---|---|
 | P0 | 双眼先 acquire、再分别 wait | 已实现 | 保留实机计时 |
-| P0 | 控制器状态和 GLB 动画每帧只更新一次 | 已实现 | 视觉回归确认双眼一致 |
+| P0 | 控制器状态、共享灯光和 GLB 动画每帧只更新一次 | 已实现；右眼 Camera 更新不再改共享灯光 | 视觉回归确认双眼一致 |
 | P0 | 双眼 deferred submit + frame-wide completion | 新 Bridge 已用每眼独立 material、Renderable 和 copy View 恢复屏幕 batch；旧 Bridge 逐眼回退 | 长时间实机验收输入 FPS 与稳定性 |
 | P0 | CUDA/Vulkan ready/release 跨 API timeline 同步 | 已实现；Filament visible 信号仍为 Vulkan binary | 连续实机验收无卡死、无 device lost |
 | P0 | Vulkan Compute RGB/Depth 输入环形槽 | 已实现 | CUDA 路径确认无 host wait；host fallback 只允许槽位复用时等待 |
@@ -130,6 +129,12 @@ eye0 deferred 后切到 eye1 仍可能在前一眼 GPU 工作未完成时改写�
 View，并用 layer mask 固定每个 View 只看到对应眼资源，不再调用
 `setMaterialInstanceAt()` 切换共享 Renderable。新版 ABI 探针只在完整隔离 Bridge 上存在，
 旧二进制自动逐眼 `flushAndWait()`，避免兼容路径重新暴露 device-lost。
+
+屏幕资源隔离后仍出现的 descriptor validation 来自另一个隐藏共享写入：逐眼
+`set_camera_look_at()` 除了更新各自 Camera，还会移动同一组控制器灯光。eye1 的相机更新
+发生在 eye0 `end_frame_deferred()` 之后，因此会改写已入队帧使用的共享场景状态。Bridge
+现只在 eye0 更新这组共享灯光；eye1 仍更新自己的 Camera，但不再触碰共享灯光，也不靠
+关闭 external semaphore 或恢复逐眼等待规避问题。
 
 CUDA 与 Vulkan 之间不再交替复用 binary ready/release semaphore。每个输出 slot/eye
 改用独立 exportable timeline semaphore，并以单调递增 generation 表示 producer-ready

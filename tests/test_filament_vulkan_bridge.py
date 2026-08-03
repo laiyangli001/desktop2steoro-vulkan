@@ -215,6 +215,9 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "renderables.setMaterialInstanceAt" not in (
         bridge_dir / "bridge_eye.cpp"
     ).read_text(encoding="utf-8")
+    assert "if (bridge->active_eye == 0)" in (
+        bridge_dir / "bridge_eye.cpp"
+    ).read_text(encoding="utf-8")
     assert "bridge_eye_finish_frame_batch" in source
     assert "diagnostic_frame_count < 8" in source
     assert "[FilamentBridge] acquired eye=" in source
