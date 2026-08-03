@@ -67,15 +67,24 @@ FilamentBridge* bridge_context_create(
         bridge_set_error(bridge.get(), "Filament Vulkan resource creation failed");
         return bridge.release();
     }
+    // Filament's Vulkan backend is not safe for two Renderer frames that are
+    // simultaneously in-flight on the same Engine. Both OpenXR eyes share one
+    // Renderer and only differ by View/Camera/SwapChain; deferred submission
+    // remains possible because endFrame() is followed by a single flushAndWait.
+    auto* shared_renderer = bridge->engine->createRenderer();
+    if (!shared_renderer) {
+        bridge_set_error(bridge.get(), "Filament Vulkan renderer creation failed");
+        return bridge.release();
+    }
     for (auto& eye : bridge->eyes) {
-        eye.renderer = bridge->engine->createRenderer();
+        eye.renderer = shared_renderer;
         eye.view = bridge->engine->createView();
         eye.foreground_view = bridge->engine->createView();
         eye.controller_view = bridge->engine->createView();
         eye.controller_guide_view = bridge->engine->createView();
         eye.camera = bridge->engine->createCamera(
                 utils::EntityManager::get().create());
-        if (!eye.renderer || !eye.view || !eye.foreground_view ||
+        if (!eye.view || !eye.foreground_view ||
                 !eye.controller_view || !eye.controller_guide_view || !eye.camera) {
             bridge_set_error(bridge.get(), "Filament Vulkan eye resource creation failed");
             return bridge.release();
@@ -178,10 +187,12 @@ void bridge_context_destroy(FilamentBridge* bridge) {
     bridge_controller_guide_destroy(bridge);
     bridge_text_overlay_destroy(bridge);
     bridge_screen_destroy(bridge);
+    if (bridge->renderer && bridge->engine) {
+        bridge->engine->destroy(bridge->renderer);
+        bridge->renderer = nullptr;
+    }
     for (auto& eye : bridge->eyes) {
-        if (eye.renderer && bridge->engine) {
-            bridge->engine->destroy(eye.renderer);
-        }
+        eye.renderer = nullptr;
         if (eye.swapchain && bridge->engine) {
             bridge->engine->destroy(eye.swapchain);
         }

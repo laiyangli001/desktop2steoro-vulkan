@@ -102,10 +102,12 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert len(facade.splitlines()) < 400
     assert all(name in cmake for name in module_names if name.endswith(".cpp"))
     assert "filament::Renderer* renderer = nullptr;" in source
-    assert "eye.renderer = bridge->engine->createRenderer();" in source
+    assert "auto* shared_renderer = bridge->engine->createRenderer();" in source
+    assert "eye.renderer = shared_renderer;" in source
     assert "eye.controller_view = bridge->engine->createView();" in source
     assert "eye.controller_guide_view = bridge->engine->createView();" in source
-    assert "bridge->engine->destroy(eye.renderer);" in source
+    assert "bridge->engine->destroy(bridge->renderer);" in source
+    assert "bridge->engine->destroy(eye.renderer);" not in source
     assert "bridge->engine->destroy(eye.controller_view);" in source
     assert "bridge->engine->destroy(eye.controller_guide_view);" in source
     assert "filament::View* laser_view = nullptr;" not in source

@@ -65,7 +65,7 @@ xrWaitFrame
 |---|---|---|---|
 | P0 | 双眼先 acquire、再分别 wait | 已实现 | 保留实机计时 |
 | P0 | 控制器状态和 GLB 动画每帧只更新一次 | 已实现 | 视觉回归确认双眼一致 |
-| P0 | 双眼 deferred submit + frame-wide completion | 已实现，待长时间实机验收 | 观察 55 FPS 路径是否稳定 |
+| P0 | 双眼 deferred submit + frame-wide completion | 已实现，双眼共享一个 Filament Renderer | 长时间实机验收无 VK_ERROR_DEVICE_LOST |
 | P0 | 每帧消费两个 Filament 完成信号并转为 timeline | 已实现，含异常回收 | 验证无卡死、无 device lost |
 | P0 | Vulkan Compute RGB/Depth 输入环形槽 | 已实现 | CUDA 路径确认无 host wait；host fallback 只允许槽位复用时等待 |
 | P0 | graphics/compute/transfer 分离提交锁和帧索引 | 未实现 | 先确认实际 queue handle 拓扑 |
@@ -102,6 +102,11 @@ xrWaitFrame
 4. 不得出现 `VK_ERROR_DEVICE_LOST`、access violation、30 Hz 锁定或 XR 输入帧率随 SBS 降低。
 
 失败时自动使用旧 Bridge 的逐眼完成等待兼容路径；不得在运行中无日志地切换。
+
+Virtual Desktop OpenXR 实机上，两个 Filament Renderer 同时处于 in-flight 状态会触发
+`VK_ERROR_DEVICE_LOST`。Bridge 已改为双眼共享一个 Renderer，左右眼只保留独立
+View/Camera/Swapchain；batch 仍使用 `end_frame_deferred()` 连续入队，并在
+`finish_frame_batch()` 统一等待，不再创建两个并发 Renderer 帧。
 
 ### 阶段 1：VulkanContext 真正分队列
 
