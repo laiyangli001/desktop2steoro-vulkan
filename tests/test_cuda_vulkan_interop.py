@@ -53,7 +53,7 @@ def test_cuda_external_buffer_desc_matches_runtime_abi() -> None:
 
 def test_cuda_external_semaphore_enabled_by_default_and_can_be_disabled(monkeypatch) -> None:
     monkeypatch.delenv("D2S_ENABLE_CUDA_EXTERNAL_SEMAPHORE", raising=False)
-    assert CudaVulkanOutputAdapter._external_semaphore_requested()
+    assert not CudaVulkanOutputAdapter._external_semaphore_requested()
     monkeypatch.setenv("D2S_ENABLE_CUDA_EXTERNAL_SEMAPHORE", "1")
     assert CudaVulkanOutputAdapter._external_semaphore_requested()
     monkeypatch.setenv("D2S_ENABLE_CUDA_EXTERNAL_SEMAPHORE", "0")

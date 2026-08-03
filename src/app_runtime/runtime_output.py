@@ -36,7 +36,9 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
 
     @staticmethod
     def _external_semaphore_requested() -> bool:
-        value = os.environ.get("D2S_ENABLE_CUDA_EXTERNAL_SEMAPHORE", "1")
+        # Disabled by default while isolating the CUDA/Vulkan binary semaphore
+        # deadlock observed on Virtual Desktop. Set the env var to 1 to opt in.
+        value = os.environ.get("D2S_ENABLE_CUDA_EXTERNAL_SEMAPHORE", "0")
         return value.strip().lower() in {"1", "true", "yes", "on"}
 
     def __init__(self, presenter):

@@ -3,6 +3,9 @@
 本文件只记录用户可感知的功能、行为变化、重要修复和架构里程碑，不记录逐次调试过程。新记录按日期倒序追加，并将同一目标的连续修改归纳为一条有效结果。
 
 ## 2026-08-03
+- 默认关闭 CUDA/Vulkan binary external semaphore 路径，用于隔离 Virtual Desktop 下
+  producer 等待 release、Vulkan 等待 ready 的 GPU 队列死锁；`D2S_ENABLE_CUDA_EXTERNAL_SEMAPHORE=1`
+  仍可显式开启，待 external semaphore 状态机修复后再恢复默认。
 - 修复 OpenXR batch 路径读取 Filament 全局 finished semaphore 造成的 device-lost：
   `finish_frame_batch()` 已经执行帧级 `flushAndWait()`，Python 不再消费左右眼的
   render-finished binary semaphore，也不再提交 completion drain；源图释放改为在 batch
