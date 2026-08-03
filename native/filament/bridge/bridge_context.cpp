@@ -47,10 +47,14 @@ FilamentBridge* bridge_context_create(
             info->graphics_queue_family_index;
     bridge->shared_context.graphicsQueueIndex = info->graphics_queue_index;
     bridge->platform = new OpenXrVulkanPlatform();
+    filament::Engine::Config engine_config{};
+    engine_config.stereoscopicType = filament::Engine::StereoscopicType::MULTIVIEW;
+    engine_config.stereoscopicEyeCount = 2;
     bridge->engine = filament::Engine::Builder()
             .backend(filament::Engine::Backend::VULKAN)
             .platform(bridge->platform)
             .sharedContext(&bridge->shared_context)
+            .config(&engine_config)
             .build();
     if (!bridge->engine) {
         bridge_set_error(bridge.get(), "Filament Vulkan Engine creation failed");
@@ -58,6 +62,8 @@ FilamentBridge* bridge_context_create(
         bridge->platform = nullptr;
         return bridge.release();
     }
+    bridge->multiview_supported = bridge->engine->isStereoSupported(
+            filament::Engine::StereoscopicType::MULTIVIEW);
     bridge->scene = bridge->engine->createScene();
     bridge->foreground_scene = bridge->engine->createScene();
     bridge->materials = filament::gltfio::createJitShaderProvider(bridge->engine);

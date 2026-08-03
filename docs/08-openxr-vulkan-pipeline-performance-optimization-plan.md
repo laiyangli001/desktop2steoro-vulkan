@@ -64,15 +64,15 @@ xrWaitFrame
 |---|---|---|---|
 | P0 | 双眼先 acquire、再分别 wait | 已实现 | 保留实机计时 |
 | P0 | 控制器状态、共享灯光和 GLB 动画每帧只更新一次 | 已实现；右眼 Camera 更新不再改共享灯光 | 视觉回归确认双眼一致 |
-| P0 | 双眼 deferred submit + frame-wide completion | 新 Bridge 已用每眼独立 material、Renderable 和 copy View 恢复屏幕 batch；旧 Bridge 逐眼回退 | 长时间实机验收输入 FPS 与稳定性 |
+| P0 | 双眼一次提交 + frame-wide completion | `array_size=2` + Filament multiview 已实现；双 SwapChain deferred 保持禁用 | 远程原生构建与长时间实机验收 |
 | P0 | CUDA/Vulkan ready/release 跨 API timeline 同步 | 已实现；Filament visible 信号仍为 Vulkan binary | 连续实机验收无卡死、无 device lost |
 | P0 | Vulkan Compute RGB/Depth 输入环形槽 | 已实现 | CUDA 路径确认无 host wait；host fallback 只允许槽位复用时等待 |
-| P0 | Glow/Filament 共享 graphics queue 外部同步 | 已实现；复用 VulkanContext 设备锁覆盖完整 Filament batch 和 Glow 直接提交 | 实机确认无 device lost |
+| P0 | Glow/Filament 共享 graphics queue 外部同步 | 已实现；复用 VulkanContext 设备锁覆盖 Projection 和 Glow 直接提交 | 实机确认无 device lost |
 | P0 | graphics/compute/transfer 分离提交锁和帧索引 | 未实现 | 先确认实际 queue handle 拓扑 |
 | P1 | Compute 移出 Presenter，交给 Output Worker | 未实现 | 必须在队列锁与资源所有权改造后进行 |
 | P1 | 左右眼 transition 合并为一个命令缓冲和一次提交 | 未实现 | 与 Output Worker 一起实施 |
 | P1 | Glow 合并到立体 Compute 后处理命令链 | 未实现 | 先测量独立 Glow 提交成本 |
-| P2 | `array_size=2` projection swapchain + multiview | 未实现 | 最后开发，并保留双 swapchain 回退 |
+| P2 | `array_size=2` projection swapchain + multiview | 已实现；能力或初始化失败时保留双 swapchain 逐眼回退 | 三平台远程构建、画质与稳定性验收 |
 | P2 | layered MIP/SPD 一次处理双眼 | 未实现 | 先完成视觉回归和 GPU timestamp 基线 |
 | P3 | Quad/MSDF 双缓冲或三缓冲异步更新 | 未实现 | 仅在 timeline wait 被测为瓶颈后实施 |
 
@@ -88,26 +88,23 @@ xrWaitFrame
 
 ### 阶段 0：稳定当前高吞吐路径
 
-先验证现有双眼批提交，不同时引入其它架构变化。
+先以逐眼完成路径建立稳定基线，不同时引入其它架构变化。
 
 要求：
 
 1. 每 15 秒输出一次 `FPSBreakdown`，共 5 次，用于固定性能窗口。
 2. 连续运行至少 10 分钟，用于稳定性验收。
-3. 无外部屏幕纹理时，日志应满足：
-   - `eye0_deferred > 0`、`eye1_deferred > 0`
-   - `eye0_finish_wait=0`、`eye1_finish_wait=0`
-   - `stereo_finish_wait` 只出现一次帧级等待
-   - `filament_drain` 持续存在且不随运行时间增长
-4. 使用左右眼外部屏幕纹理时，新 Bridge 必须进入 deferred batch；旧 Bridge 必须逐眼回退。
+3. 日志应满足 `eye0_finish_wait > 0`、`eye1_finish_wait > 0`、`eye0_deferred=0`、
+   `eye1_deferred=0`，并持续消费每眼 Filament 完成信号。
+4. 新旧 Bridge 均使用逐眼完成路径，直到 array swapchain + multiview 通过长时间实机验收。
 5. 不得出现 `VK_ERROR_DEVICE_LOST`、access violation、30 Hz 锁定或 XR 输入帧率随 SBS 降低。
 
-失败时自动使用旧 Bridge 的逐眼完成等待兼容路径；不得在运行中无日志地切换。
-
-Virtual Desktop OpenXR 实机上，两个 Filament Renderer 同时处于 in-flight 状态会触发
-`VK_ERROR_DEVICE_LOST`。Bridge 已改为双眼共享一个 Renderer，左右眼只保留独立
-View/Camera/Swapchain；batch 仍使用 `end_frame_deferred()` 连续入队，并在
-`finish_frame_batch()` 统一等待，不再创建两个并发 Renderer 帧。
+Virtual Desktop OpenXR 实机已经证明双 SwapChain deferred batch 不满足 Filament 帧
+生命周期：两个 Renderer 同时 in-flight 会触发 `VK_ERROR_DEVICE_LOST`；改成共享一个
+Renderer 后，连续对两个 SwapChain 执行 deferred frame 又会在固定运行时间后于
+`finish_frame_batch()` 内发生原生 access violation。因此 capability ABI 不能作为默认启用
+条件，Presenter 当前固定使用逐眼 `endFrame()` + `flushAndWait()`，完成一眼后才切换
+SwapChain。真正的一次双眼提交必须建立在单个 array swapchain / multiview frame 上。
 
 共享 Renderer 后仍需修复 Filament 1.74 Vulkan backend 的多 SwapChain 状态：
 `VulkanDriver` 只保存一个 `mDefaultRenderTarget`，且 `isSwapchainBound()` 不区分左右眼
@@ -116,11 +113,13 @@ SwapChain，导致切换到 eye1 时仍绑定 eye0 的默认 RenderTarget。D2S 
 目标 image 变化时先 `releaseSwapchain()` 再 `bindSwapChain()`，从而消除双 SwapChain
 的渲染目标污染和 device-lost。
 
-Filament 的 `VulkanCommands`/semaphore pool 仍是全局共享的，两个 SwapChain 的
-`acquireFinishedSignal()` 在 batch 连续入队时可能拿到对方的 semaphore。当前 batch 路径
-不再读取或消费 Filament render-finished semaphore：`finish_frame_batch()` 已执行
-`flushAndWait()`，源图释放直接走无 semaphore 依赖的 barrier，避免共享 command stream
-的 semaphore 误用再次触发 device-lost。
+Filament 的 `VulkanCommands`/semaphore pool 仍是全局共享的，但自定义 OpenXR
+`Platform::present()` 不会像 `vkQueuePresentKHR` 一样自动消费 `finished_drawing` binary
+semaphore。`flushAndWait()` 只保证 GPU 完成，不会把 binary semaphore 恢复为未信号状态；
+若跳过消费，semaphore pool 复用该信号时会形成非法重复 signal 并最终触发 device-lost。
+因此当前逐眼路径在两眼完成后读取各 ExternalSwapChain 记录的完成信号，用一次 Vulkan
+completion drain 消费并转换为 timeline，再据此释放 zero-copy 源图；未来 batch 方案也必须
+满足同一信号消费契约。
 
 外部屏幕纹理原先共用同一个 `screen_material_instance`。第一次修复仅拆分 material
 instance，但最终屏幕 Renderable、MIP copy Renderable 和 copy View 仍被左右眼复用；
@@ -189,14 +188,22 @@ Capture
 
 ### 阶段 4：Array Swapchain 与 Multiview
 
-最后评估一个 `array_size=2` 的 projection swapchain：layer 0/1 分别对应左右眼，使用 Vulkan multiview/layered rendering 减少场景遍历、顶点处理和提交次数。
+当前实现优先创建一个 `array_size=2` 的 Projection SwapChain，layer 0/1 分别对应左右眼。
+Filament Engine 使用双眼 Vulkan multiview，一个 `beginFrame()` / `endFrame()` 同时渲染两层；
+OpenXR 仍提交两个 Projection View，但两者共享同一个 SwapChain handle，并分别引用 array
+layer 0/1。左右眼源图 ready semaphore 在进入 Filament 前由同一 graphics queue submit
+消费，Filament 完成后只读取并消费一个 render-finished semaphore。
 
-必须保留双 swapchain 回退，以下情况不启用 multiview：
+以下情况不启用 multiview，并保留原双 SwapChain 逐眼稳定路径：
 
 - Runtime 不支持目标 Vulkan/OpenXR 特性。
 - 两眼推荐尺寸或采样要求不同。
-- Filament Bridge 无法保证 array layer 的正确绑定与完成同步。
-- 视觉回归、性能或稳定性未超过当前双 swapchain 路径。
+- Filament Bridge ABI 或 GPU 不支持 multiview。
+- layered OpenXR 或 Filament 目标创建失败。
+
+初始化失败只销毁临时 layered SwapChain，不销毁原左右眼 SwapChain；运行路径不调用
+`end_frame_deferred()` 或 `finish_frame_batch()`。远程原生构建、视觉回归、性能和至少
+10 分钟稳定性验收未通过前，不删除双 SwapChain 回退。
 
 Multiview 不会减少两眼的全部像素着色量，不得按“两倍帧率”估算收益。
 
@@ -208,8 +215,8 @@ Multiview 不会减少两眼的全部像素着色量，不得按“两倍帧率�
 - `xr_acquire_pair`、`xr_wait_l`、`xr_wait_r`、`xr_release_pair`
 - `xr_shared`
 - `eye0_queue`、`eye1_queue`
-- `eye0_deferred`、`eye1_deferred`
-- `stereo_finish_wait`
+- `eye0_finish_wait`、`eye1_finish_wait`
+- `eye0_deferred`、`eye1_deferred`（当前必须为 0）
 - `filament_drain`
 - Compute slot wait、输入上传、输出转换和 Presenter command drain
 
@@ -235,7 +242,7 @@ CPU 提交耗时不能替代 GPU timestamp；`xrWaitFrame` 也不能计入应用
 | 延迟 | `rt_pending_age`、source latency 和 Presenter queue age 不持续增长 |
 | 同步 | 跨 API ready/release timeline generation 单调递增；每个新源帧的 Filament visible binary 只 signal/wait 一次 |
 | 画质 | 固定输入视觉回归通过；左右眼顺序、颜色空间、屏幕清晰度和 Glow 不变 |
-| 兼容 | 新 Bridge 走批提交，旧 Bridge 明确回退逐眼等待；三平台远程构建通过 |
+| 兼容 | 新 Bridge 在能力满足时走 array multiview，旧 Bridge 或初始化失败走逐眼回退；三平台远程构建通过 |
 
 ## 6. 风险与回退
 

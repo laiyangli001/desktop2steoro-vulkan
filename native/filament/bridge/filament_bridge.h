@@ -44,6 +44,12 @@ FILAMENT_BRIDGE_API int filament_bridge_create_eye_swapchain(
         FilamentBridge* bridge, uint32_t eye_index,
         const void* const* image_handles, uint32_t image_count,
         int32_t format, uint32_t width, uint32_t height);
+FILAMENT_BRIDGE_API int filament_bridge_multiview_abi_available();
+FILAMENT_BRIDGE_API int filament_bridge_multiview_supported(
+        const FilamentBridge* bridge);
+FILAMENT_BRIDGE_API int filament_bridge_create_stereo_swapchain(
+        FilamentBridge* bridge, const void* const* image_handles,
+        uint32_t image_count, int32_t format, uint32_t width, uint32_t height);
 FILAMENT_BRIDGE_API int filament_bridge_set_active_eye(
         FilamentBridge* bridge, uint32_t eye_index);
 FILAMENT_BRIDGE_API int filament_bridge_set_acquired_image(
@@ -61,6 +67,9 @@ FILAMENT_BRIDGE_API int filament_bridge_set_camera_projection_frustum(
         FilamentBridge* bridge,
         double left, double right, double bottom, double top,
         double near_plane, double far_plane);
+FILAMENT_BRIDGE_API int filament_bridge_set_stereo_camera(
+        FilamentBridge* bridge, const float* eye_model_matrices32,
+        const double* eye_frustums8, double near_plane, double far_plane);
 FILAMENT_BRIDGE_API int filament_bridge_begin_frame(FilamentBridge* bridge);
 FILAMENT_BRIDGE_API int filament_bridge_end_frame(FilamentBridge* bridge);
 // Queue one eye without blocking, then wait once after both eyes are queued.

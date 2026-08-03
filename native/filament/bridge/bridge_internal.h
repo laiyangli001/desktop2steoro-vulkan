@@ -90,6 +90,7 @@ public:
         std::vector<VkImage> images;
         VkFormat format = VK_FORMAT_UNDEFINED;
         VkExtent2D extent{0, 0};
+        uint32_t layer_count = 1;
         uint32_t pending_image = kInvalidImageIndex;
         VkSemaphore pending_ready_semaphore = VK_NULL_HANDLE;
         uint32_t current_image = kInvalidImageIndex;
@@ -101,8 +102,10 @@ public:
             uint32_t image_count,
             VkFormat format,
             uint32_t width,
-            uint32_t height) {
-        if (!image_handles || image_count == 0 || width == 0 || height == 0) {
+            uint32_t height,
+            uint32_t layer_count = 1) {
+        if (!image_handles || image_count == 0 || width == 0 || height == 0 ||
+                layer_count == 0) {
             return nullptr;
         }
         auto swapchain = std::make_unique<ExternalSwapChain>();
@@ -117,6 +120,7 @@ public:
         }
         swapchain->format = format;
         swapchain->extent = {width, height};
+        swapchain->layer_count = layer_count;
         return swapchain.release();
     }
 
@@ -159,7 +163,7 @@ public:
         }
         bundle.colorFormat = swapchain->format;
         bundle.extent = swapchain->extent;
-        bundle.layerCount = 1;
+        bundle.layerCount = swapchain->layer_count;
         return bundle;
     }
 
@@ -439,6 +443,8 @@ struct FilamentBridge {
     std::string last_error;
     uint32_t diagnostic_frame_count = 0;
     bool frame_active = false;
+    bool multiview_supported = false;
+    bool multiview_active = false;
 };
 
 struct FilamentPreview {

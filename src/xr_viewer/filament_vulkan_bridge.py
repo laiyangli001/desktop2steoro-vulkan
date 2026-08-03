@@ -69,6 +69,7 @@ class FilamentVulkanBridge:
         self._async_submit_abi_available = False
         self._stereo_batch_submit_abi_available = False
         self._screen_eye_renderables_abi_available = False
+        self._multiview_abi_available = False
         self._configure_abi()
         self._handle: ctypes.c_void_p | None = None
         self._owner_thread_id: int | None = None
@@ -128,6 +129,18 @@ class FilamentVulkanBridge:
     @property
     def screen_eye_renderables_abi_available(self) -> bool:
         return self._screen_eye_renderables_abi_available
+
+    @property
+    def multiview_abi_available(self) -> bool:
+        return self._multiview_abi_available
+
+    @property
+    def multiview_supported(self) -> bool:
+        if not self._multiview_abi_available or not self.loaded:
+            return False
+        return bool(
+            self._library.filament_bridge_multiview_supported(self._handle)
+        )
 
     @property
     def loaded(self) -> bool:
@@ -209,6 +222,33 @@ class FilamentVulkanBridge:
             "create_eye_swapchain",
         )
 
+    def create_stereo_swapchain(
+        self,
+        image_handles: Iterable[Any],
+        *,
+        format: int,
+        width: int,
+        height: int,
+    ) -> None:
+        self._ensure_loaded()
+        if not self.multiview_supported:
+            raise FilamentBridgeError("Filament Vulkan multiview is unavailable")
+        values = [ctypes.c_void_p(_as_pointer_value(image)) for image in image_handles]
+        if not values:
+            raise ValueError("Filament stereo swapchain requires at least one VkImage")
+        array_type = ctypes.c_void_p * len(values)
+        self._check_result(
+            self._library.filament_bridge_create_stereo_swapchain(
+                self._handle,
+                array_type(*values),
+                len(values),
+                int(format),
+                int(width),
+                int(height),
+            ),
+            "create_stereo_swapchain",
+        )
+
     def set_active_eye(self, eye_index: int) -> None:
         self._ensure_loaded()
         if int(eye_index) not in (0, 1):
@@ -280,6 +320,32 @@ class FilamentVulkanBridge:
                 float(near_plane), float(far_plane),
             ),
             "set_camera_projection_frustum",
+        )
+
+    def set_stereo_camera(
+        self,
+        eye_model_matrices: Iterable[float],
+        eye_frustums: Iterable[float],
+        *,
+        near_plane: float = 0.05,
+        far_plane: float = 1000.0,
+    ) -> None:
+        self._ensure_loaded()
+        if not self._multiview_abi_available:
+            raise FilamentBridgeError("Filament Vulkan multiview ABI is unavailable")
+        matrices = tuple(float(value) for value in eye_model_matrices)
+        frustums = tuple(float(value) for value in eye_frustums)
+        if len(matrices) != 32 or len(frustums) != 8:
+            raise ValueError("stereo camera requires 32 matrix and 8 frustum values")
+        self._check_result(
+            self._library.filament_bridge_set_stereo_camera(
+                self._handle,
+                (ctypes.c_float * 32)(*matrices),
+                (ctypes.c_double * 8)(*frustums),
+                float(near_plane),
+                float(far_plane),
+            ),
+            "set_stereo_camera",
         )
 
     def begin_frame(self) -> None:
@@ -915,6 +981,49 @@ class FilamentVulkanBridge:
             ctypes.c_uint32,
         ]
         library.filament_bridge_create_eye_swapchain.restype = ctypes.c_int
+        multiview_abi = getattr(
+            library, "filament_bridge_multiview_abi_available", None
+        )
+        multiview_supported = getattr(
+            library, "filament_bridge_multiview_supported", None
+        )
+        create_stereo_swapchain = getattr(
+            library, "filament_bridge_create_stereo_swapchain", None
+        )
+        set_stereo_camera = getattr(
+            library, "filament_bridge_set_stereo_camera", None
+        )
+        if all(
+            function is not None
+            for function in (
+                multiview_abi,
+                multiview_supported,
+                create_stereo_swapchain,
+                set_stereo_camera,
+            )
+        ):
+            multiview_abi.argtypes = []
+            multiview_abi.restype = ctypes.c_int
+            multiview_supported.argtypes = [ctypes.c_void_p]
+            multiview_supported.restype = ctypes.c_int
+            create_stereo_swapchain.argtypes = [
+                ctypes.c_void_p,
+                ctypes.POINTER(ctypes.c_void_p),
+                ctypes.c_uint32,
+                ctypes.c_int32,
+                ctypes.c_uint32,
+                ctypes.c_uint32,
+            ]
+            create_stereo_swapchain.restype = ctypes.c_int
+            set_stereo_camera.argtypes = [
+                ctypes.c_void_p,
+                ctypes.POINTER(ctypes.c_float),
+                ctypes.POINTER(ctypes.c_double),
+                ctypes.c_double,
+                ctypes.c_double,
+            ]
+            set_stereo_camera.restype = ctypes.c_int
+            self._multiview_abi_available = bool(multiview_abi())
         library.filament_bridge_set_active_eye.argtypes = [
             ctypes.c_void_p, ctypes.c_uint32
         ]

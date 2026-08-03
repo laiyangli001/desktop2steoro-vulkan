@@ -53,12 +53,15 @@ void bind_screen_display_texture(FilamentBridge* bridge, uint32_t eye_index) {
     if (eye_index == bridge->active_eye) {
         bridge->screen_texture = texture;
     }
-    if (texture && bridge->screen_material_instance) {
-        bridge->screen_material_instance->setParameter(
-                "screenTexture", texture,
-                use_mip ? bridge->screen_texture_sampler
-                        : bridge->screen_source_texture_sampler);
-        bridge->screen_material_instance->setParameter(
+    auto* material = bridge->screen_material_instances[eye_index];
+    if (texture && material) {
+        const auto& sampler = use_mip ? bridge->screen_texture_sampler
+                                     : bridge->screen_source_texture_sampler;
+        material->setParameter(
+                "screenTextureLeft", texture, sampler);
+        material->setParameter(
+                "screenTextureRight", texture, sampler);
+        material->setParameter(
                 "screenTexelSize", filament::math::float2{
                         1.0f / static_cast<float>(texture->getWidth()),
                         1.0f / static_cast<float>(texture->getHeight())});
@@ -70,7 +73,9 @@ void bind_screen_copy_source(
         uint32_t width, uint32_t height) {
     if (!bridge || !source || !bridge->screen_mip_copy_material_instance) return;
     bridge->screen_mip_copy_material_instance->setParameter(
-            "screenTexture", source, bridge->screen_source_texture_sampler);
+            "screenTextureLeft", source, bridge->screen_source_texture_sampler);
+    bridge->screen_mip_copy_material_instance->setParameter(
+            "screenTextureRight", source, bridge->screen_source_texture_sampler);
     bridge->screen_mip_copy_material_instance->setParameter(
             "screenTexelSize", filament::math::float2{
                     1.0f / static_cast<float>(width),
@@ -494,12 +499,18 @@ int bridge_screen_create(FilamentBridge* bridge) {
             return color.b * 0.5 + (color.r * 0.5 + color.g);
         }
 
+        vec3 screen_sample(vec2 uv, float lod) {
+            if (getEyeIndex() == 0) {
+                return texture(materialParams_screenTextureLeft, uv, lod).rgb;
+            }
+            return texture(materialParams_screenTextureRight, uv, lod).rgb;
+        }
+
         void material(inout MaterialInputs material) {
             prepareMaterial(material);
             vec2 uv = getUV0();
             vec2 texel = materialParams.screenTexelSize;
-            vec3 center = texture(materialParams_screenTexture, uv,
-                    materialParams.screenLodBias).rgb;
+            vec3 center = screen_sample(uv, materialParams.screenLodBias);
             vec3 output_color = center;
             float quality_pass = materialParams.screenQualityPass;
 
@@ -517,9 +528,9 @@ int bridge_screen_create(FilamentBridge* bridge) {
                         float weight = screen_lanczos2(delta.x) *
                                 screen_lanczos2(delta.y);
                         vec2 sample_uv = (sample_position + vec2(0.5)) * texel;
-                        accum += texture(materialParams_screenTexture,
+                        accum += screen_sample(
                                 clamp(sample_uv, vec2(0.0), vec2(1.0)),
-                                materialParams.screenLodBias).rgb * weight;
+                                materialParams.screenLodBias) * weight;
                         weight_sum += weight;
                     }
                 }
@@ -536,15 +547,11 @@ int bridge_screen_create(FilamentBridge* bridge) {
                         vec2(0.0), vec2(1.0));
                 vec2 south_uv = clamp(uv + vec2(0.0, texel.y),
                         vec2(0.0), vec2(1.0));
-                vec3 b = texture(materialParams_screenTexture, north_uv,
-                        materialParams.screenLodBias).rgb;
-                vec3 d = texture(materialParams_screenTexture, west_uv,
-                        materialParams.screenLodBias).rgb;
+                vec3 b = screen_sample(north_uv, materialParams.screenLodBias);
+                vec3 d = screen_sample(west_uv, materialParams.screenLodBias);
                 vec3 e = center;
-                vec3 f = texture(materialParams_screenTexture, east_uv,
-                        materialParams.screenLodBias).rgb;
-                vec3 h = texture(materialParams_screenTexture, south_uv,
-                        materialParams.screenLodBias).rgb;
+                vec3 f = screen_sample(east_uv, materialParams.screenLodBias);
+                vec3 h = screen_sample(south_uv, materialParams.screenLodBias);
                 float b_luma = screen_luma(b);
                 float d_luma = screen_luma(d);
                 float e_luma = screen_luma(e);
@@ -594,7 +601,8 @@ int bridge_screen_create(FilamentBridge* bridge) {
     builder.name("D2S OpenXR Screen")
             .material(shader)
             .require(filament::VertexAttribute::UV0)
-            .parameter("screenTexture", filamat::MaterialBuilder::SamplerType::SAMPLER_2D)
+            .parameter("screenTextureLeft", filamat::MaterialBuilder::SamplerType::SAMPLER_2D)
+            .parameter("screenTextureRight", filamat::MaterialBuilder::SamplerType::SAMPLER_2D)
             .parameter("screenTexelSize", filamat::MaterialBuilder::UniformType::FLOAT2)
             .parameter("screenFilterScale", filamat::MaterialBuilder::UniformType::FLOAT)
             .parameter("screenSharpness", filamat::MaterialBuilder::UniformType::FLOAT)
@@ -611,6 +619,8 @@ int bridge_screen_create(FilamentBridge* bridge) {
             .culling(filament::backend::CullingMode::NONE)
             .depthWrite(false)
             .depthCulling(true)
+            .stereoscopicType(filamat::MaterialBuilder::StereoscopicType::MULTIVIEW)
+            .stereoscopicEyeCount(2)
             .targetApi(filamat::MaterialBuilder::TargetApi::ALL)
             .platform(filamat::MaterialBuilder::Platform::ALL);
     const filamat::Package package = builder.build(bridge->engine->getJobSystem());
@@ -899,91 +909,111 @@ int bridge_screen_set_source_version(
     return 1;
 }
 
-int bridge_screen_prepare_frame(FilamentBridge* bridge) {
+int bridge_screen_prepare_eye(FilamentBridge* bridge, uint32_t eye_index) {
     if (!bridge || !bridge->frame_active || !bridge->renderer ||
             !bridge->screen_mip_experiment_enabled ||
-            bridge->active_eye >= bridge->screen_mip_textures.size() ||
-            !bridge->screen_source_textures[bridge->active_eye] ||
-            !bridge->screen_mip_copy_view ||
-            !bridge->screen_mip_copy_material_instance) {
+            eye_index >= bridge->screen_mip_textures.size() ||
+            !bridge->screen_source_textures[eye_index] ||
+            !bridge->screen_mip_copy_views[eye_index] ||
+            !bridge->screen_mip_copy_material_instances[eye_index]) {
         return 0;
     }
-    const uint32_t eye_index = bridge->active_eye;
     if (bridge->screen_mip_ready[eye_index] &&
             bridge->screen_source_versions[eye_index] ==
                     bridge->screen_last_mip_versions[eye_index]) {
         return 1;
     }
-    auto* source = bridge->screen_source_textures[bridge->active_eye];
+    auto* source = bridge->screen_source_textures[eye_index];
     if (!ensure_screen_quality_targets(
-            bridge, bridge->active_eye, source->getWidth(), source->getHeight(),
-            bridge->screen_source_formats[bridge->active_eye])) {
+            bridge, eye_index, source->getWidth(), source->getHeight(),
+            bridge->screen_source_formats[eye_index])) {
         return 0;
     }
-    auto* lanczos_texture = bridge->screen_lanczos_textures[bridge->active_eye];
-    auto* mip_texture = bridge->screen_mip_textures[bridge->active_eye];
-    auto* lanczos_target = bridge->screen_lanczos_render_targets[bridge->active_eye];
-    auto* mip_target = bridge->screen_mip_render_targets[bridge->active_eye];
+    auto* material = bridge->screen_mip_copy_material_instances[eye_index];
+    auto* view = bridge->screen_mip_copy_views[eye_index];
+    auto* lanczos_texture = bridge->screen_lanczos_textures[eye_index];
+    auto* mip_texture = bridge->screen_mip_textures[eye_index];
+    auto* lanczos_target = bridge->screen_lanczos_render_targets[eye_index];
+    auto* mip_target = bridge->screen_mip_render_targets[eye_index];
+
+    const auto bind_source = [&](filament::Texture* texture,
+                                 const filament::TextureSampler& sampler) {
+        material->setParameter("screenTextureLeft", texture, sampler);
+        material->setParameter("screenTextureRight", texture, sampler);
+        material->setParameter("screenTexelSize", filament::math::float2{
+                1.0f / static_cast<float>(texture->getWidth()),
+                1.0f / static_cast<float>(texture->getHeight())});
+    };
 
     // Match the legacy OpenGL default: a matched input/headset tier must not
     // pass through an additional Lanczos2 + RCAS filter. Keep the dynamic MIP
     // chain, but copy the source directly into LOD 0 first.
     if (bridge->screen_filter_scale <= 1.0001f) {
-        bridge->screen_mip_copy_material_instance->setParameter(
-                "screenTexture", source, bridge->screen_source_texture_sampler);
-        bridge->screen_mip_copy_material_instance->setParameter(
-                "screenTexelSize", filament::math::float2{
-                        1.0f / static_cast<float>(source->getWidth()),
-                        1.0f / static_cast<float>(source->getHeight())});
-        bridge->screen_mip_copy_material_instance->setParameter(
-                "screenQualityPass", 0.0f);
-        bridge->screen_mip_copy_view->setRenderTarget(mip_target);
-        bridge->screen_mip_copy_view->setViewport(filament::Viewport{
+        bind_source(source, bridge->screen_source_texture_sampler);
+        material->setParameter("screenQualityPass", 0.0f);
+        view->setRenderTarget(mip_target);
+        view->setViewport(filament::Viewport{
                 0, 0, static_cast<uint32_t>(mip_texture->getWidth()),
                 static_cast<uint32_t>(mip_texture->getHeight())});
-        bridge->renderer->render(bridge->screen_mip_copy_view);
+        bridge->renderer->render(view);
         mip_texture->generateMipmaps(*bridge->engine);
-        ++bridge->screen_mip_generation_count[bridge->active_eye];
-        bridge->screen_last_mip_versions[bridge->active_eye] =
-                bridge->screen_source_versions[bridge->active_eye];
+        ++bridge->screen_mip_generation_count[eye_index];
+        bridge->screen_last_mip_versions[eye_index] =
+                bridge->screen_source_versions[eye_index];
+        bridge->screen_mip_ready[eye_index] = true;
         return 1;
     }
 
     // Pass 1: reconstruct the external source into the bounded quality target.
-    bridge->screen_mip_copy_material_instance->setParameter(
-            "screenTexture", source, bridge->screen_source_texture_sampler);
-    bridge->screen_mip_copy_material_instance->setParameter(
-            "screenTexelSize", filament::math::float2{
-                    1.0f / static_cast<float>(source->getWidth()),
-                    1.0f / static_cast<float>(source->getHeight())});
-    bridge->screen_mip_copy_material_instance->setParameter(
-            "screenQualityPass", 1.0f);
-    bridge->screen_mip_copy_view->setRenderTarget(lanczos_target);
-    bridge->screen_mip_copy_view->setViewport(filament::Viewport{
+    bind_source(source, bridge->screen_source_texture_sampler);
+    material->setParameter("screenQualityPass", 1.0f);
+    view->setRenderTarget(lanczos_target);
+    view->setViewport(filament::Viewport{
             0, 0, static_cast<uint32_t>(lanczos_texture->getWidth()),
             static_cast<uint32_t>(lanczos_texture->getHeight())});
-    bridge->renderer->render(bridge->screen_mip_copy_view);
+    bridge->renderer->render(view);
 
     // Pass 2: sharpen the reconstructed image, then generate the stable MIP
     // chain from the final quality result for video minification.
-    bridge->screen_mip_copy_material_instance->setParameter(
-            "screenTexture", lanczos_texture,
-            bridge->screen_source_texture_sampler);
-    bridge->screen_mip_copy_material_instance->setParameter(
-            "screenTexelSize", filament::math::float2{
-                    1.0f / static_cast<float>(lanczos_texture->getWidth()),
-                    1.0f / static_cast<float>(lanczos_texture->getHeight())});
-    bridge->screen_mip_copy_material_instance->setParameter(
-            "screenQualityPass", 2.0f);
-    bridge->screen_mip_copy_view->setRenderTarget(mip_target);
-    bridge->screen_mip_copy_view->setViewport(filament::Viewport{
+    bind_source(lanczos_texture, bridge->screen_source_texture_sampler);
+    material->setParameter("screenQualityPass", 2.0f);
+    view->setRenderTarget(mip_target);
+    view->setViewport(filament::Viewport{
             0, 0, static_cast<uint32_t>(mip_texture->getWidth()),
             static_cast<uint32_t>(mip_texture->getHeight())});
-    bridge->renderer->render(bridge->screen_mip_copy_view);
+    bridge->renderer->render(view);
     mip_texture->generateMipmaps(*bridge->engine);
-    ++bridge->screen_mip_generation_count[bridge->active_eye];
-    bridge->screen_last_mip_versions[bridge->active_eye] =
-            bridge->screen_source_versions[bridge->active_eye];
+    ++bridge->screen_mip_generation_count[eye_index];
+    bridge->screen_last_mip_versions[eye_index] =
+            bridge->screen_source_versions[eye_index];
+    bridge->screen_mip_ready[eye_index] = true;
+    return 1;
+}
+
+int bridge_screen_prepare_frame(FilamentBridge* bridge) {
+    return bridge ? bridge_screen_prepare_eye(bridge, bridge->active_eye) : 0;
+}
+
+int bridge_screen_bind_stereo_textures(FilamentBridge* bridge) {
+    if (!bridge || !bridge->multiview_active ||
+            !bridge->screen_material_instances[0]) return 0;
+    bind_screen_display_texture(bridge, 0);
+    bind_screen_display_texture(bridge, 1);
+    auto* left = bridge->screen_textures[0];
+    auto* right = bridge->screen_textures[1];
+    if (!left || !right) return 0;
+    auto* material = bridge->screen_material_instances[0];
+    material->setParameter(
+            "screenTextureLeft", left,
+            bridge->screen_mip_ready[0] ? bridge->screen_texture_sampler
+                                        : bridge->screen_source_texture_sampler);
+    material->setParameter(
+            "screenTextureRight", right,
+            bridge->screen_mip_ready[1] ? bridge->screen_texture_sampler
+                                        : bridge->screen_source_texture_sampler);
+    material->setParameter("screenTexelSize", filament::math::float2{
+            1.0f / static_cast<float>(left->getWidth()),
+            1.0f / static_cast<float>(left->getHeight())});
     return 1;
 }
 

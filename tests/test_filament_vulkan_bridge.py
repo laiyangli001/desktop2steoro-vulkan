@@ -176,7 +176,7 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "kLegacyScreenLodBias = -0.35f" in source
     assert '"screenLodBias", kLegacyScreenLodBias' in source
     assert "materialParams.screenLodBias" in source
-    assert "bridge->renderer->render(bridge->screen_mip_copy_view);" in source
+    assert "bridge->renderer->render(view);" in source
     assert "Match the legacy OpenGL default" in source
     assert "bridge->screen_filter_scale <= 1.0001f" in source
     assert "fwidth(uv)" not in source
@@ -184,7 +184,7 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "generateMipmaps(*bridge->engine)" in source
     assert "screen_mip_copy_view" in source
     assert "bridge_screen_prepare_frame(bridge);" in (bridge_dir / "bridge_eye.cpp").read_text(encoding="utf-8")
-    assert "screen_mip_generation_count[bridge->active_eye]" in source
+    assert "screen_mip_generation_count[eye_index]" in source
     assert "LINEAR_MIPMAP_LINEAR" in source
     assert "screen_texture_sampler.setAnisotropy(16.0f)" in source
     assert "v=0 is the bottom edge" in source

@@ -3,15 +3,24 @@
 本文件只记录用户可感知的功能、行为变化、重要修复和架构里程碑，不记录逐次调试过程。新记录按日期倒序追加，并将同一目标的连续修改归纳为一条有效结果。
 
 ## 2026-08-03
+- OpenXR Projection 新增稳定的双眼一次提交路径：优先创建一个 `array_size=2` SwapChain，
+  由单个 Filament multiview frame 同时写入左右 array layer，并在一次完成信号消费后提交
+  两个 Projection View。仅在 Bridge ABI、GPU multiview 能力和双眼尺寸均满足时启用；
+  layered 目标创建失败会只销毁临时资源并保留原双 SwapChain 逐眼路径，不再调用已证实
+  不稳定的 `end_frame_deferred()` / `finish_frame_batch()`。
+- 禁用 OpenXR 双 SwapChain 的 Filament deferred batch 默认路径：实机确认该路径无论使用
+  双 Renderer 还是共享 Renderer，都会在固定运行时间后于 `finish_frame_batch()` 内触发
+  `VK_ERROR_DEVICE_LOST` 或原生 access violation。Projection 恢复逐眼完成后再切换
+  SwapChain，并继续消费每眼 render-finished semaphore；真正的双眼一次提交改由后续
+  array swapchain + multiview 实现。设备丢失后不再调用 `xrEndFrame` 覆盖首个 Vulkan 异常。
 - 修复双眼 deferred batch 中仍存在的共享场景写入：右眼设置独立 Camera 时不再再次移动
   控制器共享灯光，避免 eye0 已入队后改写 Filament 场景状态并触发 Vulkan descriptor
   validation，最终随机演变为 `VK_ERROR_DEVICE_LOST`；共享灯光改为每帧仅随 eye0 更新一次，
-  不恢复逐眼 `flushAndWait()`，CUDA/Vulkan external semaphore 路径保持启用。
+  当前逐眼完成路径与 CUDA/Vulkan external semaphore 路径均保留该隔离修复。
 - 修复 Filament 屏幕资源在双眼 deferred batch 中仍复用 Renderable/View，导致第二眼在
   第一眼 GPU 工作未完成时改写绑定并最终触发 `VK_ERROR_DEVICE_LOST`：最终屏幕与 MIP
   copy 的 material instance、Renderable entity 和 View 现全部按眼隔离，并由 layer mask
-  固定到对应眼；新 Bridge 恢复屏幕 batch，解除逐眼 `flushAndWait()` 将 XR 输入压到约
-  16 FPS 的阻塞，旧 Bridge 通过新版 ABI 探针自动保留逐眼安全回退。
+  固定到对应眼；该资源隔离继续用于当前逐眼安全路径和后续 multiview 实现。
 - 修复 CUDA/Vulkan binary external semaphore 在环形输出 slot 多代复用时仍会触发
   `VK_ERROR_DEVICE_LOST`：跨 API ready/release 改为每 slot/eye 独立的 exportable
   timeline semaphore 和单调递增 generation；Filament visible 信号继续使用 Vulkan-only
@@ -31,19 +40,14 @@
   signal/wait：同一 frame/eye 复用只等待一次 producer-ready semaphore，但每个 XR tick
   重新 signal Filament 消费的 visible semaphore；同时恢复
   `D2S_ENABLE_CUDA_EXTERNAL_SEMAPHORE` 默认开启。
-- 修复 OpenXR batch 路径读取 Filament 全局 finished semaphore 造成的 device-lost：
-  `finish_frame_batch()` 已经执行帧级 `flushAndWait()`，Python 不再消费左右眼的
-  render-finished binary semaphore，也不再提交 completion drain；源图释放改为在 batch
-  同步完成后直接提交无 semaphore 依赖的 barrier，避免共享 backend command stream
-  在双 SwapChain 下误用 semaphore 导致 GPU watchdog。
+- 修复 OpenXR 未消费 Filament render-finished binary semaphore 导致的
+  `VK_ERROR_DEVICE_LOST`：逐眼完成后读取各眼 SwapChain 的完成信号，使用一次 completion
+  drain 消费并转换为 Vulkan timeline，再释放 zero-copy 源图。
 - 修复 Filament Vulkan backend 对 OpenXR 左右眼两个 SwapChain 的单例默认 RenderTarget
   污染：`VulkanDriver::acquireNextSwapchainImage()` 现在记录当前绑定的 SwapChain/image，
   切换眼时先释放旧绑定再绑定当前眼，避免第二只眼误渲染到第一只眼的图像并触发
   `VK_ERROR_DEVICE_LOST`。
-- 修复 OpenXR 双眼 deferred batch 触发 Virtual Desktop `VK_ERROR_DEVICE_LOST` 的根因：
-  左右眼不再创建两个 Filament Renderer 同时 in-flight，改为共享一个 Renderer；
-  左右眼仍保留独立 View/Camera/Swapchain，batch 提交和一次帧级完成等待继续生效。
-- 修复 OpenXR 双眼 deferred batch 高吞吐路径运行数秒后卡死、降至 30Hz 或触发 GPU watchdog/runtime 异常退出：每个 XR tick 产生的左右眼 Filament render-finished 二进制信号现在都会在同一次 Vulkan graphics 提交中各消费一次，再转换为 timeline 供 zero-copy 源图安全释放；静态复用帧和第二眼提交失败等异常路径同样回收完成信号，避免未消费信号被重复使用。支持新 ABI 的 Bridge 恢复双眼批提交，旧 Bridge 自动保留逐眼完成等待；满足双 TensorRT 隔离槽、Triton、无 Temporal 的路径继续允许两帧在途，使 CPU 入队与上一帧 GPU 执行重叠。最高质量补洞不再为双眼复制 4K mask、depth 和 shift，并跳过无破洞像素的邻域采样；Vulkan 设备丢失后只清理 CPU 租约，不再向失效设备重复提交。性能诊断每 15 秒输出一次、累计 5 次，并新增 Filament 完成信号回收耗时；FPS 面板的 SBS 数值只统计唯一生产帧。
+- 完成立体流水并行与同步收敛：每个 XR tick 产生的左右眼 Filament render-finished 二进制信号都会在同一次 Vulkan graphics 提交中各消费一次，再转换为 timeline 供 zero-copy 源图安全释放；静态复用帧和异常路径同样回收完成信号。满足双 TensorRT 隔离槽、Triton、无 Temporal 的路径允许两帧在途，使 CPU 入队与上一帧 GPU 执行重叠。最高质量补洞不再为双眼复制 4K mask、depth 和 shift，并跳过无破洞像素的邻域采样；Vulkan 设备丢失后只清理 CPU 租约，不再向失效设备重复提交。性能诊断每 15 秒输出一次、累计 5 次，并新增 Filament 完成信号回收耗时；FPS 面板的 SBS 数值只统计唯一生产帧。
 - OpenXR Vulkan 完成双眼提交和 Compute 流水并行化优化：Projection 路径先获取完整左右眼 swapchain 图像，再分别等待两眼就绪，避免右眼 acquire 被左眼 wait 串行阻塞；控制器场景状态和 GLB 动画改为每个 XR 帧只更新一次。Filament Bridge 新增兼容的 frame-wide 双眼提交 ABI，两眼仍在 Presenter 所在线程顺序生成渲染命令，但每眼只做非阻塞提交，待两眼全部入队后统一执行一次完成等待；旧 Bridge 二进制自动保留逐眼安全等待路径。Vulkan Stereo Compute 输入改为与 FrameContext 对齐的环形槽，CUDA 与 Vulkan 通过每槽外部信号量完成“可覆盖/输入就绪”双向 GPU 同步，不再逐帧主机等待；zero-copy 输出槽复用也只保留 GPU timeline 依赖。CUDA 单帧在途期间不再主动清空最新捕捉队列，生产者仍可覆盖旧帧，GPU 完成后可立即消费当时最新画面；OpenXR CUDA Triton 路径进一步启用双 TensorRT execution context、独立输入/输出缓冲和逐槽 CUDA Graph，在同一 CUDA stream 上允许两帧命令排队，使 CPU 准备与上一帧 GPU 执行重叠，同时避免双流争抢 TensorRT、Triton 和 Filament 的 GPU 资源。Vulkan deferred、Temporal、动态 convergence 或不具备隔离槽的 provider 自动保持单帧在途。FPSBreakdown 新增双眼 acquire/wait、Filament 每眼入队/延迟提交、整对完成等待、双眼 release、Vulkan 输入等待/上传和 TensorRT 执行槽统计。
 
 ## 2026-08-02

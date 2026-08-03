@@ -402,6 +402,8 @@ filament::Material* build_material(
             .blending(filament::BlendingMode::TRANSPARENT)
             .culling(filament::backend::CullingMode::NONE)
             .depthWrite(false).depthCulling(false)
+            .stereoscopicType(filamat::MaterialBuilder::StereoscopicType::MULTIVIEW)
+            .stereoscopicEyeCount(2)
             .targetApi(filamat::MaterialBuilder::TargetApi::ALL)
             .platform(filamat::MaterialBuilder::Platform::ALL);
     if (glow_material) {
@@ -443,6 +445,8 @@ filament::Material* build_glow_shell_material(
             .blending(filament::BlendingMode::ADD)
             .culling(filament::backend::CullingMode::NONE)
             .depthWrite(false).depthCulling(false)
+            .stereoscopicType(filamat::MaterialBuilder::StereoscopicType::MULTIVIEW)
+            .stereoscopicEyeCount(2)
             .targetApi(filamat::MaterialBuilder::TargetApi::ALL)
             .platform(filamat::MaterialBuilder::Platform::ALL)
             .build(bridge->engine->getJobSystem());

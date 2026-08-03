@@ -16,6 +16,33 @@ const void* semaphore_handle_as_void(T handle) {
     }
 }
 
+void set_multiview_views(FilamentBridge* bridge, bool enabled) {
+    if (!bridge) return;
+    auto& eye = bridge->eyes[0];
+    filament::StereoscopicOptions options{};
+    options.enabled = enabled;
+    eye.view->setStereoscopicOptions(options);
+    eye.foreground_view->setStereoscopicOptions(options);
+    eye.controller_view->setStereoscopicOptions(options);
+    eye.controller_guide_view->setStereoscopicOptions(options);
+    eye.view->setFrustumCullingEnabled(!enabled);
+    eye.foreground_view->setFrustumCullingEnabled(!enabled);
+    eye.controller_view->setFrustumCullingEnabled(!enabled);
+    eye.controller_guide_view->setFrustumCullingEnabled(!enabled);
+    eye.view->setPostProcessingEnabled(!enabled);
+    eye.foreground_view->setPostProcessingEnabled(!enabled);
+    eye.controller_view->setPostProcessingEnabled(!enabled);
+    eye.controller_guide_view->setPostProcessingEnabled(!enabled);
+}
+
+filament::math::mat4 matrix_from_columns(const float* values) {
+    return filament::math::mat4(filament::math::mat4f(
+            values[0], values[1], values[2], values[3],
+            values[4], values[5], values[6], values[7],
+            values[8], values[9], values[10], values[11],
+            values[12], values[13], values[14], values[15]));
+}
+
 } // namespace
 
 void bridge_eye_activate(FilamentBridge* bridge, uint32_t eye_index) {
@@ -47,14 +74,21 @@ void bridge_eye_activate(FilamentBridge* bridge, uint32_t eye_index) {
     bridge->screen_texture = bridge->screen_textures[eye_index];
     if (bridge->screen_texture && bridge->screen_material_instance) {
         bridge->screen_material_instance->setParameter(
-                "screenTexture", bridge->screen_texture,
+                "screenTextureLeft", bridge->screen_texture,
+                use_mip ? bridge->screen_texture_sampler
+                        : bridge->screen_source_texture_sampler);
+        bridge->screen_material_instance->setParameter(
+                "screenTextureRight", bridge->screen_texture,
                 use_mip ? bridge->screen_texture_sampler
                         : bridge->screen_source_texture_sampler);
     }
     if (bridge->screen_mip_copy_material_instance &&
             bridge->screen_source_textures[eye_index]) {
         bridge->screen_mip_copy_material_instance->setParameter(
-                "screenTexture", bridge->screen_source_textures[eye_index],
+                "screenTextureLeft", bridge->screen_source_textures[eye_index],
+                bridge->screen_source_texture_sampler);
+        bridge->screen_mip_copy_material_instance->setParameter(
+                "screenTextureRight", bridge->screen_source_textures[eye_index],
                 bridge->screen_source_texture_sampler);
     }
 }
@@ -77,6 +111,10 @@ int bridge_eye_create_target_swapchain(
     if (!bridge || !bridge->engine || !bridge->platform ||
             eye_index >= bridge->eyes.size()) return 0;
     auto& eye = bridge->eyes[eye_index];
+    if (bridge->multiview_active) {
+        set_multiview_views(bridge, false);
+        bridge->multiview_active = false;
+    }
     if (eye.swapchain) {
         bridge->engine->destroy(eye.swapchain);
         eye.swapchain = nullptr;
@@ -119,6 +157,58 @@ int bridge_eye_create_target_swapchain(
     eye.controller_view->setViewport(filament::Viewport{0, 0, width, height});
     eye.controller_guide_view->setViewport(filament::Viewport{0, 0, width, height});
     bridge_eye_activate(bridge, eye_index);
+    return 1;
+}
+
+int bridge_eye_multiview_supported(const FilamentBridge* bridge) {
+    return bridge && bridge->multiview_supported ? 1 : 0;
+}
+
+int bridge_eye_create_stereo_swapchain(
+        FilamentBridge* bridge, const void* const* image_handles,
+        uint32_t image_count, int32_t format, uint32_t width, uint32_t height) {
+    if (!bridge || !bridge->engine || !bridge->platform ||
+            !bridge->multiview_supported) return 0;
+    auto& eye = bridge->eyes[0];
+    if (eye.swapchain) {
+        bridge->engine->destroy(eye.swapchain);
+        eye.swapchain = nullptr;
+        eye.external_swapchain = nullptr;
+    }
+    auto* external = bridge->platform->create_external_swapchain(
+            image_handles, image_count, static_cast<VkFormat>(format),
+            width, height, 2);
+    if (!external) {
+        bridge_set_error(bridge, "Invalid layered OpenXR Vulkan swapchain image list");
+        return 0;
+    }
+    uint64_t swapchain_flags = 0;
+    if (static_cast<VkFormat>(format) == VK_FORMAT_R8G8B8A8_SRGB ||
+            static_cast<VkFormat>(format) == VK_FORMAT_B8G8R8A8_SRGB) {
+        swapchain_flags = filament::SwapChain::CONFIG_SRGB_COLORSPACE;
+    }
+    eye.swapchain = bridge->engine->createSwapChain(external, swapchain_flags);
+    if (!eye.swapchain) {
+        bridge->platform->destroy(external);
+        bridge_set_error(bridge, "Filament layered Vulkan SwapChain creation failed");
+        return 0;
+    }
+    eye.external_swapchain =
+            static_cast<OpenXrVulkanPlatform::ExternalSwapChain*>(external);
+    eye.view->setViewport(filament::Viewport{0, 0, width, height});
+    eye.foreground_view->setViewport(filament::Viewport{0, 0, width, height});
+    eye.controller_view->setViewport(filament::Viewport{0, 0, width, height});
+    eye.controller_guide_view->setViewport(filament::Viewport{0, 0, width, height});
+    eye.foreground_view->setVisibleLayers(
+            0xff, static_cast<uint8_t>(0x02u | (1u << kScreenLayerBase)));
+    set_multiview_views(bridge, true);
+    bridge->multiview_active = true;
+    bridge_eye_activate(bridge, 0);
+    std::fprintf(stderr,
+            "[FilamentBridge] stereo swapchain created images=%u format=%d "
+            "extent=%ux%u layers=2\n",
+            image_count, format, width, height);
+    std::fflush(stderr);
     return 1;
 }
 
@@ -189,6 +279,35 @@ int bridge_eye_set_camera_projection_frustum(
     return 1;
 }
 
+int bridge_eye_set_stereo_camera(
+        FilamentBridge* bridge, const float* eye_model_matrices32,
+        const double* eye_frustums8, double near_plane, double far_plane) {
+    if (!bridge || !bridge->multiview_active || !bridge->camera ||
+            !eye_model_matrices32 || !eye_frustums8 || near_plane <= 0.0 ||
+            far_plane <= near_plane) return 0;
+    filament::math::mat4 eye_models[2] = {
+            matrix_from_columns(eye_model_matrices32),
+            matrix_from_columns(eye_model_matrices32 + 16)};
+    filament::math::mat4 projections[2] = {
+            filament::math::mat4::frustum(
+                    eye_frustums8[0], eye_frustums8[1], eye_frustums8[2],
+                    eye_frustums8[3], near_plane, far_plane),
+            filament::math::mat4::frustum(
+                    eye_frustums8[4], eye_frustums8[5], eye_frustums8[6],
+                    eye_frustums8[7], near_plane, far_plane)};
+    bridge->camera->setModelMatrix(filament::math::mat4{});
+    bridge->camera->setEyeModelMatrix(0, eye_models[0]);
+    bridge->camera->setEyeModelMatrix(1, eye_models[1]);
+    bridge->camera->setCustomEyeProjection(
+            projections, 2, projections[0], near_plane, far_plane);
+    bridge_material_update_controller_lights(
+            bridge,
+            0.5f * (eye_model_matrices32[12] + eye_model_matrices32[28]),
+            0.5f * (eye_model_matrices32[13] + eye_model_matrices32[29]),
+            0.5f * (eye_model_matrices32[14] + eye_model_matrices32[30]));
+    return 1;
+}
+
 int bridge_eye_begin_frame(FilamentBridge* bridge) {
     if (!bridge || !bridge->renderer || !bridge->swapchain || bridge->frame_active) {
         return 0;
@@ -205,7 +324,13 @@ int bridge_eye_begin_frame(FilamentBridge* bridge) {
                 static_cast<void*>(bridge->swapchain), bridge->frame_active ? 1 : 0);
         std::fflush(stderr);
     }
-    bridge_screen_prepare_frame(bridge);
+    if (bridge->multiview_active) {
+        bridge_screen_prepare_eye(bridge, 0);
+        bridge_screen_prepare_eye(bridge, 1);
+        bridge_screen_bind_stereo_textures(bridge);
+    } else {
+        bridge_screen_prepare_frame(bridge);
+    }
     bridge->renderer->render(bridge->view);
     // Composite screen and transparent Glow first, then controllers and laser,
     // and finally the B-button guide. Splitting these layers across Views makes

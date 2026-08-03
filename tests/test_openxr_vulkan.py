@@ -41,6 +41,7 @@ from xr_viewer.core_openxr_vulkan import (
     _select_swapchain_format,
     _select_vulkan_api_version,
     _update_filament_camera,
+    _update_filament_stereo_camera,
 )
 from xr_viewer.controller_models import controller_button_local_position
 from xr_viewer.overlay_textures import build_controller_callout_rgba, build_keyboard_rgba
@@ -2406,6 +2407,48 @@ def test_presenter_close_skips_openxr_instance_destroy_after_device_loss() -> No
     assert presenter.instance is None
 
 
+def test_presenter_skips_end_frame_after_vulkan_device_loss() -> None:
+    calls = []
+    device = SimpleNamespace(device_lost=False)
+
+    def locate_views(*_args, **_kwargs):
+        device.device_lost = True
+        raise RuntimeError("original Vulkan failure")
+
+    presenter = OpenXrVulkanPresenter()
+    presenter._initialized = True
+    presenter.session_running = True
+    presenter.session = object()
+    presenter.reference_space = object()
+    presenter.vulkan = device
+    presenter.xr = SimpleNamespace(
+        wait_frame=lambda _session: SimpleNamespace(
+            should_render=True,
+            predicted_display_time=1,
+        ),
+        begin_frame=lambda _session: calls.append("begin"),
+        end_frame=lambda *_args: calls.append("end"),
+        locate_views=locate_views,
+        ViewLocateInfo=lambda **kwargs: kwargs,
+    )
+    presenter._drain_presenter_commands = lambda: None
+    presenter.poll_events = lambda: None
+    presenter._sync_controller_inputs = lambda *_args: None
+    presenter._update_aim_poses = lambda *_args: None
+    presenter._update_grip_poses = lambda *_args: None
+    presenter._smooth_controller_poses = lambda: None
+    presenter._controller_input = lambda *_args: {}
+    presenter._handle_keyboard_input = lambda: None
+    presenter._handle_vulkan_pointer_input = lambda: None
+    presenter._handle_controller_shortcuts = lambda: None
+    presenter._handle_controller_guide_input = lambda *_args: None
+
+    with pytest.raises(RuntimeError, match="original Vulkan failure"):
+        presenter.run_frame()
+
+    assert calls == ["begin"]
+
+
 def test_presenter_waits_for_headset_and_retries_initialization(capsys) -> None:
     presenter = OpenXrVulkanPresenter(OpenXrVulkanConfig(
         openxr_no_headset_retry_interval=0.001,
@@ -2601,6 +2644,71 @@ def test_filament_bridge_binds_each_openxr_eye(monkeypatch) -> None:
     ]
 
 
+def test_filament_multiview_replaces_equal_eye_swapchains_only_after_success() -> None:
+    presenter = OpenXrVulkanPresenter()
+    left = _EyeSwapchain("left", [], 10, 20)
+    right = _EyeSwapchain("right", [], 10, 20)
+    layered = _EyeSwapchain(
+        "layered", [SimpleNamespace(image="stereo-image")], 10, 20, array_size=2
+    )
+    presenter.swapchains = [left, right]
+    presenter.swapchain_format = 43
+    presenter._create_projection_swapchain = lambda *args, **kwargs: layered
+    destroyed = []
+    presenter._destroy_projection_swapchain = destroyed.append
+
+    class FakeBridge:
+        multiview_abi_available = True
+        multiview_supported = True
+
+        def create_stereo_swapchain(self, images, **kwargs):
+            assert list(images) == ["stereo-image"]
+            assert kwargs == {"format": 43, "width": 10, "height": 20}
+
+    assert presenter._try_enable_filament_multiview(FakeBridge())
+    assert presenter.swapchains == [layered]
+    assert destroyed == [left, right]
+
+
+def test_filament_multiview_failure_preserves_two_swapchain_fallback() -> None:
+    presenter = OpenXrVulkanPresenter()
+    left = _EyeSwapchain("left", [], 10, 20)
+    right = _EyeSwapchain("right", [], 10, 20)
+    layered = _EyeSwapchain("layered", [], 10, 20, array_size=2)
+    presenter.swapchains = [left, right]
+    presenter.swapchain_format = 43
+    presenter._create_projection_swapchain = lambda *args, **kwargs: layered
+    destroyed = []
+    presenter._destroy_projection_swapchain = destroyed.append
+
+    class FakeBridge:
+        multiview_abi_available = True
+        multiview_supported = True
+
+        @staticmethod
+        def create_stereo_swapchain(_images, **_kwargs):
+            raise RuntimeError("layered target rejected")
+
+    assert not presenter._try_enable_filament_multiview(FakeBridge())
+    assert presenter.swapchains == [left, right]
+    assert destroyed == [layered]
+
+
+def test_filament_multiview_keeps_fallback_for_mismatched_eye_extents() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter.swapchains = [
+        _EyeSwapchain("left", [], 10, 20),
+        _EyeSwapchain("right", [], 11, 20),
+    ]
+    bridge = SimpleNamespace(
+        multiview_abi_available=True,
+        multiview_supported=True,
+    )
+
+    assert not presenter._try_enable_filament_multiview(bridge)
+    assert [eye.handle for eye in presenter.swapchains] == ["left", "right"]
+
+
 def test_filament_camera_receives_openxr_pose_and_fov() -> None:
     calls: list[tuple[str, tuple[float, ...]]] = []
 
@@ -2633,6 +2741,39 @@ def test_filament_camera_receives_openxr_pose_and_fov() -> None:
     assert calls[1][0] == "projection"
     assert calls[1][1][0] == pytest.approx(68.7549, rel=1e-4)
     assert calls[1][1][2]["far_plane"] == 1000.0
+
+
+def test_filament_stereo_camera_receives_two_column_major_eyes() -> None:
+    calls = []
+    views = [
+        SimpleNamespace(
+            pose=SimpleNamespace(
+                position=SimpleNamespace(x=x, y=2.0, z=3.0),
+                orientation=SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0),
+            ),
+            fov=SimpleNamespace(
+                angle_left=-0.5,
+                angle_right=0.5,
+                angle_down=-0.4,
+                angle_up=0.4,
+            ),
+        )
+        for x in (-0.03, 0.03)
+    ]
+    bridge = SimpleNamespace(
+        set_stereo_camera=lambda matrices, frustums, **kwargs: calls.append(
+            (matrices, frustums, kwargs)
+        )
+    )
+
+    _update_filament_stereo_camera(bridge, views, near_plane=0.1, far_plane=50.0)
+
+    matrices, frustums, options = calls[0]
+    assert len(matrices) == 32
+    assert matrices[12] == pytest.approx(-0.03)
+    assert matrices[28] == pytest.approx(0.03)
+    assert len(frustums) == 8
+    assert options == {"near_plane": 0.1, "far_plane": 50.0}
 
 
 def test_swapchain_image_is_released_when_wait_fails() -> None:
@@ -2861,17 +3002,14 @@ def test_projection_updates_shared_filament_state_once_per_stereo_pair(
     assert calls.count("end") == 2
 
 
-@pytest.mark.parametrize("fail_second_eye", [False, True])
 @pytest.mark.parametrize(
-    ("screen_image_projection", "screen_eye_renderables_available", "batch_submit"),
-    [(False, False, True), (True, False, False), (True, True, True)],
+    ("screen_image_projection", "screen_eye_renderables_available"),
+    [(False, False), (True, False), (True, True)],
 )
-def test_projection_selects_safe_filament_submit_mode(
+def test_projection_keeps_unsafe_stereo_batch_disabled(
     monkeypatch,
-    fail_second_eye,
     screen_image_projection,
     screen_eye_renderables_available,
-    batch_submit,
 ) -> None:
     calls: list[str] = []
     timing_names: list[str] = []
@@ -2929,20 +3067,13 @@ def test_projection_selects_safe_filament_submit_mode(
             calls.append("begin")
 
         def end_frame(self):
-            assert not batch_submit
             calls.append("end")
 
         def end_frame_deferred(self):
-            assert queue_lock.held
-            assert batch_submit
-            calls.append("deferred")
-            if fail_second_eye and self.active_eye == 1:
-                raise RuntimeError("second eye submit failed")
+            raise AssertionError("unsafe stereo batch must remain disabled")
 
         def finish_frame_batch(self):
-            assert queue_lock.held
-            assert batch_submit
-            calls.append("finish")
+            raise AssertionError("unsafe stereo batch must remain disabled")
 
         def wait_for_idle(self):
             assert queue_lock.held
@@ -2994,28 +3125,173 @@ def test_projection_selects_safe_filament_submit_mode(
         lambda *_args: "projection",
     )
 
-    if fail_second_eye and batch_submit:
-        with pytest.raises(RuntimeError, match="second eye submit failed"):
-            presenter._render_projection_layer([object(), object()], None)
-    else:
-        assert presenter._render_projection_layer([object(), object()], None) == "projection"
+    assert presenter._render_projection_layer([object(), object()], None) == "projection"
     assert calls.count("begin") == 2
-    assert calls.count("end") == (0 if batch_submit else 2)
-    assert calls.count("deferred") == (2 if batch_submit else 0)
-    assert calls.count("finish") == (1 if batch_submit and not fail_second_eye else 0)
-    assert calls.count("wait-idle") == (
-        1 if fail_second_eye and batch_submit else 0
-    )
-    assert len([call for call in calls if isinstance(call, tuple)]) == (
-        0 if batch_submit else 1
-    )
-    assert ("openxr_filament_stereo_finish_wait" in timing_names) is (
-        batch_submit and not fail_second_eye
-    )
-    assert ("openxr_filament_completion_drain" in timing_names) is (
-        not batch_submit
-    )
+    assert calls.count("end") == 2
+    assert calls.count("wait-idle") == 0
+    assert len([call for call in calls if isinstance(call, tuple)]) == 1
+    assert "openxr_filament_stereo_finish_wait" not in timing_names
+    assert "openxr_filament_completion_drain" in timing_names
+    assert presenter._displayed_output.metadata[
+        "_vulkan_consumer_release_timeline"
+    ] == 23
     assert not queue_lock.held
+
+
+def test_multiview_projection_renders_one_layered_filament_frame(monkeypatch) -> None:
+    calls = []
+
+    class FakeXr:
+        INFINITE_DURATION = 1
+
+        @staticmethod
+        def acquire_swapchain_image(handle):
+            calls.append(("acquire", handle))
+            return 0
+
+        @staticmethod
+        def wait_swapchain_image(handle, _wait_info):
+            calls.append(("wait", handle))
+
+        @staticmethod
+        def release_swapchain_image(handle):
+            calls.append(("release", handle))
+
+        @staticmethod
+        def SwapchainImageWaitInfo(*, timeout):
+            return timeout
+
+    class FakeBridge:
+        finished_drawing_semaphore_abi_available = True
+
+        def set_active_eye(self, eye_index):
+            calls.append(("active", eye_index))
+
+        def set_screen_image(self, image, **_kwargs):
+            calls.append(("screen", image))
+
+        def set_screen_source_version(self, version):
+            calls.append(("version", version))
+
+        def set_screen_ready_semaphore(self, _semaphore):
+            raise AssertionError("multiview consumes source semaphores before Filament")
+
+        def set_acquired_image(self, image_index):
+            calls.append(("image", image_index))
+
+        def begin_frame(self):
+            calls.append("begin")
+
+        def end_frame(self):
+            calls.append("end")
+
+        def end_frame_deferred(self):
+            raise AssertionError("unsafe deferred path must remain disabled")
+
+        def finish_frame_batch(self):
+            raise AssertionError("unsafe deferred path must remain disabled")
+
+        def get_finished_drawing_semaphore(self):
+            return "filament-finished"
+
+        def apply_animations(self, _seconds):
+            pass
+
+    lock = threading.RLock()
+
+    def submit_on(role, record, **kwargs):
+        record("command-buffer")
+        calls.append(("submit", role, kwargs.get("wait_semaphore")))
+        return 41 if kwargs.get("wait_semaphore") == ("left-ready", "right-ready") else 42
+
+    presenter = OpenXrVulkanPresenter()
+    presenter.xr = FakeXr
+    presenter.vulkan = SimpleNamespace(_lock=lock, submit_on=submit_on)
+    presenter.swapchains = [
+        _EyeSwapchain(
+            "layered",
+            [SimpleNamespace(image=ctypes.c_void_p(1))],
+            10,
+            20,
+            array_size=2,
+        )
+    ]
+    presenter._multiview_active = True
+    presenter.filament_bridge = FakeBridge()
+    presenter._filament_screen = ((0.0, 0.0, -2.0), 2.0, 1.0, (0.0, 0.0, 0.0))
+    presenter._apply_filament_profile = lambda views: views
+    presenter._report_screen_resolution = lambda *_args: None
+    presenter._apply_screen_sampling_policy = lambda *_args: None
+    presenter._report_filament_screen_image_status = lambda *_args: None
+    presenter._can_use_filament_screen_image = lambda *_args: True
+    presenter._update_filament_screen_light = lambda *_args: None
+    presenter._update_filament_glow = lambda *_args: None
+    presenter._update_filament_controllers = lambda *_args: None
+    monkeypatch.setattr(
+        "xr_viewer.core_openxr_vulkan._update_filament_stereo_camera",
+        lambda *_args, **_kwargs: calls.append("stereo-camera"),
+    )
+    monkeypatch.setattr(
+        OpenXrCompositionBuilder,
+        "projection_layer",
+        lambda *_args: "projection",
+    )
+    frame = VulkanStereoOutputFrame(
+        frame_id=7,
+        timestamp=0.0,
+        left_eye=SimpleNamespace(image="left", width=10, height=20, format=43),
+        right_eye=SimpleNamespace(image="right", width=10, height=20, format=43),
+        metadata={
+            "_vulkan_source_prepare_for_sampling": (
+                lambda _frame_id, eye_index: ("left-ready", "right-ready")[eye_index]
+            )
+        },
+    )
+
+    assert presenter._render_projection_layer([object(), object()], frame) == "projection"
+    assert calls.count(("acquire", "layered")) == 1
+    assert calls.count(("wait", "layered")) == 1
+    assert calls.count(("release", "layered")) == 1
+    assert calls.count("begin") == 1
+    assert calls.count("end") == 1
+    assert ("submit", "graphics", ("left-ready", "right-ready")) in calls
+    assert ("submit", "graphics", ("filament-finished",)) in calls
+    assert frame.metadata["_vulkan_consumer_release_timeline"] == 42
+
+
+def test_multiview_source_failure_restores_active_eye(monkeypatch) -> None:
+    active_eyes = []
+
+    class FakeBridge:
+        def set_active_eye(self, eye_index):
+            active_eyes.append(eye_index)
+
+        @staticmethod
+        def set_screen_image(image, **_kwargs):
+            if image == "right":
+                raise RuntimeError("right source rejected")
+
+    presenter = OpenXrVulkanPresenter()
+    presenter.filament_bridge = FakeBridge()
+    presenter._filament_screen = ((0.0, 0.0, -2.0), 2.0, 1.0, (0.0, 0.0, 0.0))
+    frame = VulkanStereoOutputFrame(
+        frame_id=7,
+        timestamp=0.0,
+        left_eye=SimpleNamespace(image="left", width=10, height=20, format=43),
+        right_eye=SimpleNamespace(image="right", width=10, height=20, format=43),
+        metadata={"_vulkan_source_prepare_for_sampling": lambda *_args: None},
+    )
+    monkeypatch.setattr(
+        "xr_viewer.core_openxr_vulkan._update_filament_stereo_camera",
+        lambda *_args, **_kwargs: None,
+    )
+
+    with pytest.raises(RuntimeError, match="right source rejected"):
+        presenter._render_filament_multiview(
+            [object(), object()], frame, True, (None, 0), False, lambda *_args: None
+        )
+
+    assert active_eyes[-1] == 0
 
 
 def test_projection_layer_builder_owns_only_layer_assembly() -> None:
@@ -3044,6 +3320,34 @@ def test_projection_layer_builder_owns_only_layer_assembly() -> None:
         "width": 30,
         "height": 40,
     }
+
+
+def test_projection_layer_builder_maps_multiview_to_array_layers() -> None:
+    class FakeXr:
+        CompositionLayerProjectionView = staticmethod(lambda **kwargs: kwargs)
+        SwapchainSubImage = staticmethod(lambda **kwargs: kwargs)
+        Rect2Di = staticmethod(lambda **kwargs: kwargs)
+        Offset2Di = staticmethod(lambda **kwargs: kwargs)
+        Extent2Di = staticmethod(lambda **kwargs: kwargs)
+        CompositionLayerProjection = staticmethod(lambda **kwargs: kwargs)
+
+    views = [
+        SimpleNamespace(pose="left-pose", fov="left-fov"),
+        SimpleNamespace(pose="right-pose", fov="right-fov"),
+    ]
+    swapchain = _EyeSwapchain("stereo-chain", [], 10, 20, array_size=2)
+
+    layer = OpenXrCompositionBuilder(FakeXr, "local-space").projection_layer(
+        views, [swapchain]
+    )
+
+    assert [
+        view["sub_image"]["image_array_index"] for view in layer["views"]
+    ] == [0, 1]
+    assert [view["sub_image"]["swapchain"] for view in layer["views"]] == [
+        "stereo-chain",
+        "stereo-chain",
+    ]
 
 
 def test_standalone_vulkan_context_smoke() -> None:

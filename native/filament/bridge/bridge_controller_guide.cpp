@@ -63,6 +63,8 @@ int bridge_controller_guide_set_texture(
             .culling(filament::backend::CullingMode::NONE)
             .depthWrite(false)
             .depthCulling(false)
+            .stereoscopicType(filamat::MaterialBuilder::StereoscopicType::MULTIVIEW)
+            .stereoscopicEyeCount(2)
             .targetApi(filamat::MaterialBuilder::TargetApi::ALL)
             .platform(filamat::MaterialBuilder::Platform::ALL);
     const filamat::Package package = builder.build(bridge->engine->getJobSystem());

@@ -445,6 +445,7 @@ class _EyeSwapchain:
     width: int
     height: int
     resources: list[VulkanImageResource] = field(default_factory=list)
+    array_size: int = 1
 
 
 class OpenXrCompositionBuilder:
@@ -457,10 +458,16 @@ class OpenXrCompositionBuilder:
     def projection_layer(
         self, views: list[Any], swapchains: list[_EyeSwapchain]
     ) -> Any:
-        if len(views) < len(swapchains):
+        layered = len(swapchains) == 1 and swapchains[0].array_size >= 2
+        eye_swapchains = (
+            [(swapchains[0], 0), (swapchains[0], 1)]
+            if layered
+            else [(eye, 0) for eye in swapchains]
+        )
+        if len(views) < len(eye_swapchains):
             raise ValueError("projection layer requires one view per eye swapchain")
         projection_views = []
-        for eye_index, eye in enumerate(swapchains):
+        for eye_index, (eye, array_index) in enumerate(eye_swapchains):
             projection_views.append(
                 self.xr.CompositionLayerProjectionView(
                     pose=views[eye_index].pose,
@@ -471,7 +478,7 @@ class OpenXrCompositionBuilder:
                             offset=self.xr.Offset2Di(x=0, y=0),
                             extent=self.xr.Extent2Di(width=eye.width, height=eye.height),
                         ),
-                        image_array_index=0,
+                        image_array_index=array_index,
                     ),
                 )
             )
@@ -552,6 +559,7 @@ class OpenXrVulkanPresenter(
         self.vulkan: VulkanContext | None = None
         self.swapchain_format: int | None = None
         self.swapchains: list[_EyeSwapchain] = []
+        self._multiview_active = False
         self._quad_swapchains: list[_EyeSwapchain] = []
         self._quad_swapchain_format: int | None = None
         self._quad_swapchain_extent: tuple[int, int] | None = None
@@ -1140,18 +1148,19 @@ class OpenXrVulkanPresenter(
                             ctypes.pointer(item) for item in self._last_quad_layers
                         )
         finally:
-            end_info = xr.FrameEndInfo(
-                display_time=frame_state.predicted_display_time,
-                environment_blend_mode=self._environment_blend_mode,
-                layer_count=len(layer_pointers),
-                layers=layer_pointers or None,
-            )
-            end_started = time.perf_counter()
-            xr.end_frame(self.session, end_info)
-            if self._on_breakdown_add_time is not None:
-                self._on_breakdown_add_time(
-                    "openxr_end_frame", time.perf_counter() - end_started
+            if not bool(getattr(self.vulkan, "device_lost", False)):
+                end_info = xr.FrameEndInfo(
+                    display_time=frame_state.predicted_display_time,
+                    environment_blend_mode=self._environment_blend_mode,
+                    layer_count=len(layer_pointers),
+                    layers=layer_pointers or None,
                 )
+                end_started = time.perf_counter()
+                xr.end_frame(self.session, end_info)
+                if self._on_breakdown_add_time is not None:
+                    self._on_breakdown_add_time(
+                        "openxr_end_frame", time.perf_counter() - end_started
+                    )
         self.frame_count += 1
         return not self.exit_requested
 
@@ -2317,10 +2326,7 @@ class OpenXrVulkanPresenter(
         if output_frame is None:
             return
         metadata = dict(output_frame.metadata or {}) if output_frame is not None else {}
-        target_extent = tuple(
-            (int(getattr(eye, "width", 0)), int(getattr(eye, "height", 0)))
-            for eye in self.swapchains[:2]
-        )
+        target_extent = self._projection_eye_extents()
         status = (
             bool(active),
             reason or "active",
@@ -2473,13 +2479,7 @@ class OpenXrVulkanPresenter(
                 int(getattr(output_frame.right_eye, "height", 0)),
             ),
         )
-        targets = tuple(
-            (
-                int(getattr(eye, "width", 0)),
-                int(getattr(eye, "height", 0)),
-            )
-            for eye in self.swapchains[:2]
-        )
+        targets = self._projection_eye_extents()
         if len(views) < 2 or len(targets) < 2:
             return
         footprints = tuple(
@@ -3200,6 +3200,7 @@ class OpenXrVulkanPresenter(
                 except Exception:
                     pass
             self.swapchains.clear()
+            self._multiview_active = False
 
             if self.reference_space is not None:
                 try:
@@ -3491,39 +3492,55 @@ class OpenXrVulkanPresenter(
                 view_config.max_image_rect_height,
                 self.config.render_scale,
             )
-            handle = xr.create_swapchain(
-                self.session,
-                xr.SwapchainCreateInfo(
-                    usage_flags=(
-                        xr.SwapchainUsageFlags.COLOR_ATTACHMENT_BIT
-                        | xr.SwapchainUsageFlags.TRANSFER_DST_BIT
-                    ),
-                    format=self.swapchain_format,
-                    sample_count=1,
-                    width=width,
-                    height=height,
-                    face_count=1,
-                    array_size=1,
-                    mip_count=1,
+            self.swapchains.append(self._create_projection_swapchain(width, height))
+
+    def _create_projection_swapchain(
+        self, width: int, height: int, *, array_size: int = 1
+    ) -> _EyeSwapchain:
+        xr = self.xr
+        handle = xr.create_swapchain(
+            self.session,
+            xr.SwapchainCreateInfo(
+                usage_flags=(
+                    xr.SwapchainUsageFlags.COLOR_ATTACHMENT_BIT
+                    | xr.SwapchainUsageFlags.TRANSFER_DST_BIT
                 ),
+                format=self.swapchain_format,
+                sample_count=1,
+                width=width,
+                height=height,
+                face_count=1,
+                array_size=array_size,
+                mip_count=1,
+            ),
+        )
+        images = list(
+            xr.enumerate_swapchain_images(handle, xr.SwapchainImageVulkan2KHR)
+        )
+        if not images:
+            xr.destroy_swapchain(handle)
+            raise OpenXrVulkanUnavailableError(
+                "OpenXR runtime returned an empty Vulkan swapchain"
             )
-            images = list(
-                xr.enumerate_swapchain_images(handle, xr.SwapchainImageVulkan2KHR)
-            )
-            if not images:
-                xr.destroy_swapchain(handle)
-                raise OpenXrVulkanUnavailableError(
-                    "OpenXR runtime returned an empty Vulkan swapchain"
-                )
-            self.swapchains.append(
-                _EyeSwapchain(
-                    handle=handle,
-                    images=images,
-                    width=width,
-                    height=height,
-                    resources=self._register_swapchain_images(images, width, height),
-                )
-            )
+        return _EyeSwapchain(
+            handle=handle,
+            images=images,
+            width=width,
+            height=height,
+            resources=self._register_swapchain_images(images, width, height),
+            array_size=array_size,
+        )
+
+    def _destroy_projection_swapchain(self, eye: _EyeSwapchain) -> None:
+        for resource in reversed(eye.resources):
+            self.vulkan.unregister_external_image(resource)
+        self.xr.destroy_swapchain(eye.handle)
+
+    def _projection_eye_extents(self) -> tuple[tuple[int, int], ...]:
+        if len(self.swapchains) == 1 and self.swapchains[0].array_size >= 2:
+            extent = (self.swapchains[0].width, self.swapchains[0].height)
+            return (extent, extent)
+        return tuple((eye.width, eye.height) for eye in self.swapchains[:2])
 
     def _register_swapchain_images(
         self, images: list[Any], width: int, height: int,
@@ -3856,14 +3873,16 @@ class OpenXrVulkanPresenter(
                 queue_family_index=self.vulkan.queue_family_index,
                 queue_index=0,
             )
-            for eye_index, eye in enumerate(self.swapchains):
-                bridge.create_eye_swapchain(
-                    eye_index,
-                    (image.image for image in eye.images),
-                    format=self.swapchain_format,
-                    width=eye.width,
-                    height=eye.height,
-                )
+            self._multiview_active = self._try_enable_filament_multiview(bridge)
+            if not self._multiview_active:
+                for eye_index, eye in enumerate(self.swapchains):
+                    bridge.create_eye_swapchain(
+                        eye_index,
+                        (image.image for image in eye.images),
+                        format=self.swapchain_format,
+                        width=eye.width,
+                        height=eye.height,
+                    )
             glb_path = self.config.filament_glb_path
             if glb_path:
                 bridge.load_glb(asset_reads["environment"].result())
@@ -3951,6 +3970,49 @@ class OpenXrVulkanPresenter(
             raise
         finally:
             file_reader.shutdown(wait=True)
+
+    def _try_enable_filament_multiview(self, bridge: Any) -> bool:
+        if not (
+            getattr(bridge, "multiview_abi_available", False)
+            and getattr(bridge, "multiview_supported", False)
+            and len(self.swapchains) == 2
+        ):
+            return False
+        left, right = self.swapchains
+        if (left.width, left.height) != (right.width, right.height):
+            print(
+                "[OpenXRViewer] Filament multiview unavailable: eye extents differ",
+                flush=True,
+            )
+            return False
+        layered = self._create_projection_swapchain(
+            left.width, left.height, array_size=2
+        )
+        try:
+            bridge.create_stereo_swapchain(
+                (image.image for image in layered.images),
+                format=self.swapchain_format,
+                width=layered.width,
+                height=layered.height,
+            )
+        except Exception as exc:
+            self._destroy_projection_swapchain(layered)
+            print(
+                "[OpenXRViewer] Filament multiview fallback: "
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            return False
+        previous = self.swapchains
+        self.swapchains = [layered]
+        for eye in previous:
+            self._destroy_projection_swapchain(eye)
+        print(
+            "[OpenXRViewer] Filament projection path: "
+            f"multiview array_size=2 extent={layered.width}x{layered.height}",
+            flush=True,
+        )
+        return True
 
     def _initialize_msdf_text_atlas(self) -> None:
         """Load the shared atlas for the MSDF-to-Quad OSD path."""
@@ -4512,12 +4574,82 @@ class OpenXrVulkanPresenter(
         leveled[:3, 3] = pos
         return leveled
 
+    def _render_filament_multiview(
+        self,
+        render_views: list[Any],
+        output_frame: VulkanStereoOutputFrame | None,
+        screen_image_projection: bool,
+        acquired_image: tuple[_EyeSwapchain, int],
+        finished_semaphore_available: bool,
+        record_time: Callable[[str, float], None],
+    ) -> int | None:
+        bridge = self.filament_bridge
+        eye, image_index = acquired_image
+        bridge.set_active_eye(0)
+        _update_filament_stereo_camera(
+            bridge,
+            render_views,
+            near_plane=self._profile_near_plane,
+            far_plane=self._profile_far_plane,
+        )
+        if (
+            output_frame is not None
+            and screen_image_projection
+            and self._filament_screen is not None
+        ):
+            prepare_source = (output_frame.metadata or {}).get(
+                "_vulkan_source_prepare_for_sampling"
+            )
+            visible_semaphores = []
+            try:
+                for eye_index, source in enumerate(
+                    (output_frame.left_eye, output_frame.right_eye)
+                ):
+                    bridge.set_active_eye(eye_index)
+                    visible = prepare_source(output_frame.frame_id, eye_index)
+                    bridge.set_screen_image(
+                        source.image,
+                        width=source.width,
+                        height=source.height,
+                        format=source.format,
+                    )
+                    if hasattr(bridge, "set_screen_source_version"):
+                        bridge.set_screen_source_version(int(output_frame.frame_id))
+                    if visible is not None:
+                        visible_semaphores.append(visible)
+            finally:
+                bridge.set_active_eye(0)
+            if visible_semaphores:
+                source_wait_started = time.perf_counter()
+                self.vulkan.submit_on(
+                    "graphics",
+                    lambda _command_buffer: None,
+                    wait_semaphore=tuple(visible_semaphores),
+                )
+                record_time(
+                    "openxr_filament_multiview_source_wait", source_wait_started
+                )
+        bridge.set_active_eye(0)
+        bridge.set_acquired_image(image_index)
+        queue_started = time.perf_counter()
+        bridge.begin_frame()
+        record_time("openxr_filament_multiview_queue", queue_started)
+        finish_started = time.perf_counter()
+        bridge.end_frame()
+        record_time("openxr_filament_multiview_finish_wait", finish_started)
+        return (
+            bridge.get_finished_drawing_semaphore()
+            if finished_semaphore_available
+            else None
+        )
+
     def _render_projection_layer(
         self,
         views: list[Any],
         output_frame: VulkanStereoOutputFrame | None | object = _OUTPUT_FRAME_UNSET,
     ) -> Any | None:
-        if len(views) < len(self.swapchains):
+        required_views = 2 if self._multiview_active else len(self.swapchains)
+        if len(views) < required_views:
             return None
         # The profile adjusts the Filament camera relative to the model. The
         # composition layer must retain the runtime-provided eye poses so the
@@ -4547,8 +4679,6 @@ class OpenXrVulkanPresenter(
         submitted_filament_eyes: list[int] = []
         completion_drain_attempted = False
         finished_semaphore_available = False
-        batch_filament_submit = False
-        deferred_capture_jobs: list[tuple[int, Any, Any]] = []
         render_succeeded = False
         screen_image_projection = False
         filament_queue_lock = getattr(self.vulkan, "_lock", None)
@@ -4630,101 +4760,75 @@ class OpenXrVulkanPresenter(
                     False,
                 )
             )
-            batch_filament_submit = bool(
-                finished_semaphore_available
-                and (
-                    not screen_image_projection
-                    or getattr(
-                        self.filament_bridge,
-                        "screen_eye_renderables_abi_available",
-                        False,
-                    )
+            if self._multiview_active and self.filament_bridge is not None:
+                consumer_release_semaphores[0] = self._render_filament_multiview(
+                    render_views,
+                    output_frame,
+                    screen_image_projection,
+                    acquired_images[0],
+                    finished_semaphore_available,
+                    record_time,
                 )
-                and getattr(
-                    self.filament_bridge,
-                    "stereo_batch_submit_abi_available",
-                    False,
-                )
-                and getattr(self.vulkan, "_timeline_semaphore", None) is not None
-            )
-
-            for eye_index, (eye, image_index) in enumerate(acquired_images):
-                screen_source = None
-                if self.filament_bridge is not None:
-                    bridge = self.filament_bridge
-                    bridge.set_active_eye(eye_index)
-                    _update_filament_camera(
-                        bridge,
-                        render_views[eye_index],
-                        near_plane=self._profile_near_plane,
-                        far_plane=self._profile_far_plane,
-                    )
-                    if (
-                        output_frame is not None
-                        and screen_image_projection
-                        and self._filament_screen is not None
-                    ):
-                        screen_source = (
-                            output_frame.left_eye
-                            if eye_index == 0
-                            else output_frame.right_eye
+                submitted_filament_eyes.append(0)
+            else:
+                for eye_index, (eye, image_index) in enumerate(acquired_images):
+                    screen_source = None
+                    if self.filament_bridge is not None:
+                        bridge = self.filament_bridge
+                        bridge.set_active_eye(eye_index)
+                        _update_filament_camera(
+                            bridge,
+                            render_views[eye_index],
+                            near_plane=self._profile_near_plane,
+                            far_plane=self._profile_far_plane,
                         )
-                        prepare_source = (output_frame.metadata or {}).get(
-                            "_vulkan_source_prepare_for_sampling"
-                        )
-                        visible_semaphore = prepare_source(
-                            output_frame.frame_id, eye_index
-                        )
-                        # Bind the matching runtime eye image to the Filament
-                        # screen material. The native bridge caches imported
-                        # VkImages by handle, so this is not a per-frame
-                        # texture allocation.
-                        bridge.set_screen_image(
-                            screen_source.image,
-                            width=screen_source.width,
-                            height=screen_source.height,
-                            format=screen_source.format,
-                        )
-                        if hasattr(bridge, "set_screen_source_version"):
-                            bridge.set_screen_source_version(
-                                int(output_frame.frame_id)
+                        if (
+                            output_frame is not None
+                            and screen_image_projection
+                            and self._filament_screen is not None
+                        ):
+                            screen_source = (
+                                output_frame.left_eye
+                                if eye_index == 0
+                                else output_frame.right_eye
                             )
-                        if visible_semaphore is not None:
-                            bridge.set_screen_ready_semaphore(visible_semaphore)
-                    bridge.set_acquired_image(image_index)
-                    queue_started = time.perf_counter()
-                    bridge.begin_frame()
-                    record_time(
-                        f"openxr_filament_eye{eye_index}_queue", queue_started
-                    )
-                    finish_started = time.perf_counter()
-                    if batch_filament_submit:
-                        bridge.end_frame_deferred()
+                            prepare_source = (output_frame.metadata or {}).get(
+                                "_vulkan_source_prepare_for_sampling"
+                            )
+                            visible_semaphore = prepare_source(
+                                output_frame.frame_id, eye_index
+                            )
+                            bridge.set_screen_image(
+                                screen_source.image,
+                                width=screen_source.width,
+                                height=screen_source.height,
+                                format=screen_source.format,
+                            )
+                            if hasattr(bridge, "set_screen_source_version"):
+                                bridge.set_screen_source_version(
+                                    int(output_frame.frame_id)
+                                )
+                            if visible_semaphore is not None:
+                                bridge.set_screen_ready_semaphore(visible_semaphore)
+                        bridge.set_acquired_image(image_index)
+                        queue_started = time.perf_counter()
+                        bridge.begin_frame()
                         record_time(
-                            f"openxr_filament_eye{eye_index}_deferred_submit",
-                            finish_started,
+                            f"openxr_filament_eye{eye_index}_queue", queue_started
                         )
-                    else:
+                        finish_started = time.perf_counter()
                         bridge.end_frame()
-                        # Older Bridge binaries retain the safe per-eye wait.
                         record_time(
                             f"openxr_filament_eye{eye_index}_finish_wait",
                             finish_started,
                         )
-                    submitted_filament_eyes.append(eye_index)
-                    if isinstance(output_frame, VulkanStereoOutputFrame):
-                        source_resource = (
-                            screen_source
-                            if isinstance(screen_source, VulkanImageResource)
-                            else getattr(screen_source, "resource", None)
-                        )
-                        if batch_filament_submit:
-                            # The projection image is not complete until the
-                            # pair-wide wait below has drained both renderers.
-                            deferred_capture_jobs.append(
-                                (eye_index, source_resource, eye.resources[image_index])
+                        submitted_filament_eyes.append(eye_index)
+                        if isinstance(output_frame, VulkanStereoOutputFrame):
+                            source_resource = (
+                                screen_source
+                                if isinstance(screen_source, VulkanImageResource)
+                                else getattr(screen_source, "resource", None)
                             )
-                        else:
                             self._maybe_capture_visual_regression_frame(
                                 output_frame,
                                 eye_index=eye_index,
@@ -4737,85 +4841,60 @@ class OpenXrVulkanPresenter(
                                     | self.vulkan.vk.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
                                 ),
                             )
-                    if (
-                        not batch_filament_submit
-                        and finished_semaphore_available
-                    ):
-                        consumer_release_semaphores[eye_index] = (
-                            bridge.get_finished_drawing_semaphore()
-                        )
-                else:
-                    if output_frame is not None:
-                        source = (
-                            output_frame.left_eye
-                            if eye_index == 0
-                            else output_frame.right_eye
-                        )
-                        copy_timeline = self.vulkan.copy_image(
-                            source,
-                            eye.resources[image_index],
-                            wait_for_timeline=output_frame.ready_timeline,
-                        )
-                        output_frame.metadata["_vulkan_fallback_copy_timeline"] = max(
-                            int(output_frame.metadata.get("_vulkan_fallback_copy_timeline", 0)),
-                            int(copy_timeline),
-                        )
-                        self._maybe_capture_visual_regression_frame(
-                            output_frame,
-                            eye_index=eye_index,
-                            source_resource=(
-                                source
-                                if isinstance(source, VulkanImageResource)
-                                else getattr(source, "resource", None)
-                            ),
-                            projection_resource=eye.resources[image_index],
-                            source_layout=self.vulkan.vk.VK_IMAGE_LAYOUT_GENERAL,
-                            source_access_mask=self.vulkan.vk.VK_ACCESS_MEMORY_WRITE_BIT,
-                            source_stage_mask=self.vulkan.vk.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                        )
+                        if finished_semaphore_available:
+                            consumer_release_semaphores[eye_index] = (
+                                bridge.get_finished_drawing_semaphore()
+                            )
                     else:
-                        image_address = _ctypes_handle_address(eye.images[image_index].image)
-                        image = self.vulkan.image_handle_from_address(image_address)
-                        self.vulkan.clear_color_image(image, self.config.clear_color)
-            if batch_filament_submit:
-                bridge = self.filament_bridge
-                batch_finish_started = time.perf_counter()
-                bridge.finish_frame_batch()
-                record_time(
-                    "openxr_filament_stereo_finish_wait",
-                    batch_finish_started,
-                )
-                if isinstance(output_frame, VulkanStereoOutputFrame):
-                    for (
-                        eye_index,
-                        source_resource,
-                        projection_resource,
-                    ) in deferred_capture_jobs:
-                        self._maybe_capture_visual_regression_frame(
-                            output_frame,
-                            eye_index=eye_index,
-                            source_resource=source_resource,
-                            projection_resource=projection_resource,
-                            source_layout=self.vulkan.vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                            source_access_mask=self.vulkan.vk.VK_ACCESS_SHADER_READ_BIT,
-                            source_stage_mask=(
-                                self.vulkan.vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
-                                | self.vulkan.vk.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
-                            ),
-                        )
-            if not batch_filament_submit and finished_semaphore_available and not all(
-                consumer_release_semaphores
-            ):
+                        if output_frame is not None:
+                            source = (
+                                output_frame.left_eye
+                                if eye_index == 0
+                                else output_frame.right_eye
+                            )
+                            copy_timeline = self.vulkan.copy_image(
+                                source,
+                                eye.resources[image_index],
+                                wait_for_timeline=output_frame.ready_timeline,
+                            )
+                            output_frame.metadata["_vulkan_fallback_copy_timeline"] = max(
+                                int(output_frame.metadata.get("_vulkan_fallback_copy_timeline", 0)),
+                                int(copy_timeline),
+                            )
+                            self._maybe_capture_visual_regression_frame(
+                                output_frame,
+                                eye_index=eye_index,
+                                source_resource=(
+                                    source
+                                    if isinstance(source, VulkanImageResource)
+                                    else getattr(source, "resource", None)
+                                ),
+                                projection_resource=eye.resources[image_index],
+                                source_layout=self.vulkan.vk.VK_IMAGE_LAYOUT_GENERAL,
+                                source_access_mask=self.vulkan.vk.VK_ACCESS_MEMORY_WRITE_BIT,
+                                source_stage_mask=self.vulkan.vk.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                            )
+                        else:
+                            image_address = _ctypes_handle_address(eye.images[image_index].image)
+                            image = self.vulkan.image_handle_from_address(image_address)
+                            self.vulkan.clear_color_image(image, self.config.clear_color)
+            published_semaphores = tuple(
+                semaphore
+                for semaphore in consumer_release_semaphores
+                if semaphore is not None
+            )
+            expected_semaphores = 1 if self._multiview_active else 2
+            if finished_semaphore_available and len(published_semaphores) != expected_semaphores:
                 raise RuntimeError(
-                    "Filament did not publish render-finished semaphores for both eyes"
+                    "Filament did not publish the expected render-finished semaphores"
                 )
-            if not batch_filament_submit and all(consumer_release_semaphores):
+            if published_semaphores:
                 drain_started = time.perf_counter()
                 completion_drain_attempted = True
                 consumer_completion_timeline = self.vulkan.submit_on(
                     "graphics",
                     lambda _command_buffer: None,
-                    wait_semaphore=tuple(consumer_release_semaphores),
+                    wait_semaphore=published_semaphores,
                 )
                 record_time("openxr_filament_completion_drain", drain_started)
                 if isinstance(sampling_frame, VulkanStereoOutputFrame):
@@ -4827,16 +4906,6 @@ class OpenXrVulkanPresenter(
                         ),
                         int(consumer_completion_timeline),
                     )
-            if (
-                batch_filament_submit
-                and isinstance(output_frame, VulkanStereoOutputFrame)
-                and screen_image_projection
-            ):
-                # finish_frame_batch() already drained Filament's GPU work.
-                # The shared backend command stream does not expose a safe
-                # per-swapchain finished semaphore, so source release must not
-                # consume Filament binary signals after the batch wait.
-                output_frame.metadata["_vulkan_consumer_release_semaphores"] = ()
             render_succeeded = True
         finally:
             if (
@@ -4845,11 +4914,9 @@ class OpenXrVulkanPresenter(
                 and (submitted_filament_eyes or screen_image_projection)
             ):
                 try:
-                    if batch_filament_submit or not any(
-                        consumer_release_semaphores
-                    ):
+                    if not any(consumer_release_semaphores):
                         self.filament_bridge.wait_for_idle()
-                    if not batch_filament_submit and finished_semaphore_available:
+                    if finished_semaphore_available:
                         for eye_index in submitted_filament_eyes:
                             if consumer_release_semaphores[eye_index] is not None:
                                 continue
@@ -4858,8 +4925,7 @@ class OpenXrVulkanPresenter(
                                 self.filament_bridge.get_finished_drawing_semaphore()
                             )
                     if (
-                        not batch_filament_submit
-                        and not completion_drain_attempted
+                        not completion_drain_attempted
                         and any(consumer_release_semaphores)
                         and not bool(getattr(self.vulkan, "device_lost", False))
                     ):
@@ -4909,9 +4975,7 @@ class OpenXrVulkanPresenter(
                         output_frame.metadata[
                             "_vulkan_consumer_release_semaphores"
                         ] = (
-                            ()
-                            if batch_filament_submit
-                            else tuple(consumer_release_semaphores)
+                            tuple(consumer_release_semaphores)
                         )
                 self._abort_output_frame(output_frame)
             record_time("openxr_projection_total", projection_started)
@@ -6390,6 +6454,37 @@ def _update_filament_camera(
     bridge.set_camera_projection(
         math.degrees(vertical),
         aspect,
+        near_plane=near_plane,
+        far_plane=far_plane,
+    )
+
+
+def _update_filament_stereo_camera(
+    bridge: Any,
+    views: list[Any],
+    *,
+    near_plane: float = 0.05,
+    far_plane: float = 1000.0,
+) -> None:
+    matrices: list[float] = []
+    frustums: list[float] = []
+    for view in views[:2]:
+        matrices.extend(
+            float(value)
+            for value in _xr_view_pose_to_model_mat4(view.pose).reshape(-1, order="F")
+        )
+        fov = view.fov
+        frustums.extend(
+            (
+                math.tan(float(fov.angle_left)) * near_plane,
+                math.tan(float(fov.angle_right)) * near_plane,
+                math.tan(float(fov.angle_down)) * near_plane,
+                math.tan(float(fov.angle_up)) * near_plane,
+            )
+        )
+    bridge.set_stereo_camera(
+        matrices,
+        frustums,
         near_plane=near_plane,
         far_plane=far_plane,
     )
