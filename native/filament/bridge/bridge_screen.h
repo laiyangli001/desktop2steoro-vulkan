@@ -21,6 +21,8 @@ int bridge_screen_set_sampling_mode(FilamentBridge* bridge, int use_mip);
 int bridge_screen_set_image(
         FilamentBridge* bridge, const void* image,
         uint32_t width, uint32_t height, int32_t format);
+int bridge_screen_set_source_version(
+        FilamentBridge* bridge, uint64_t version);
 int bridge_screen_set_fixed_image(
         FilamentBridge* bridge, const uint8_t* rgba,
         uint32_t width, uint32_t height);

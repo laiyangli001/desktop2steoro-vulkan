@@ -51,6 +51,7 @@ class FilamentVulkanBridge:
         self._controller_guide_abi_available = False
         self._text_overlay_abi_available = False
         self._screen_image_abi_available = False
+        self._screen_source_version_abi_available = False
         self._fixed_screen_image_abi_available = False
         self._vulkan_external_image_abi_available = False
         self._screen_curved_abi_available = False
@@ -803,6 +804,17 @@ class FilamentVulkanBridge:
             "set_screen_image",
         )
 
+    def set_screen_source_version(self, version: int) -> None:
+        """Mark the active eye's source version to reuse unchanged MIPs."""
+        self._ensure_loaded()
+        self._check_result(
+            self._library.filament_bridge_set_screen_source_version(
+                self._handle,
+                int(version),
+            ),
+            "set_screen_source_version",
+        )
+
     def set_fixed_screen_image(self, rgba) -> None:
         """Upload one deterministic RGBA image for screen A/B regression."""
         self._ensure_loaded()
@@ -1162,6 +1174,16 @@ class FilamentVulkanBridge:
             ]
             library.filament_bridge_set_screen_image.restype = ctypes.c_int
             self._screen_image_abi_available = True
+        set_screen_source_version = getattr(
+            library, "filament_bridge_set_screen_source_version", None
+        )
+        if set_screen_source_version is not None:
+            set_screen_source_version.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_uint64,
+            ]
+            set_screen_source_version.restype = ctypes.c_int
+            self._screen_source_version_abi_available = True
         fixed_screen_image = getattr(
             library, "filament_bridge_set_fixed_screen_image", None
         )

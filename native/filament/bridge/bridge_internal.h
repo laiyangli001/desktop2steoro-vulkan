@@ -329,6 +329,8 @@ struct FilamentBridge {
     std::array<bool, 2> screen_mip_ready{};
     std::array<uint64_t, 2> screen_source_bind_count{};
     std::array<uint64_t, 2> screen_mip_generation_count{};
+    std::array<uint64_t, 2> screen_source_versions{};
+    std::array<uint64_t, 2> screen_last_mip_versions{};
     filament::Texture* screen_fixed_source_texture = nullptr;
     filament::MaterialInstance* screen_mip_copy_material_instance = nullptr;
     utils::Entity screen_mip_copy_entity;

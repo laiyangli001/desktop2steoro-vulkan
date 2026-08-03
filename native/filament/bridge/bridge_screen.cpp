@@ -839,6 +839,15 @@ int bridge_screen_set_image(FilamentBridge* bridge, const void* image,
     return 1;
 }
 
+int bridge_screen_set_source_version(
+        FilamentBridge* bridge, uint64_t version) {
+    if (!bridge || bridge->active_eye >= bridge->screen_source_versions.size()) {
+        return 0;
+    }
+    bridge->screen_source_versions[bridge->active_eye] = version;
+    return 1;
+}
+
 int bridge_screen_prepare_frame(FilamentBridge* bridge) {
     if (!bridge || !bridge->frame_active || !bridge->renderer ||
             !bridge->screen_mip_experiment_enabled ||
@@ -847,6 +856,12 @@ int bridge_screen_prepare_frame(FilamentBridge* bridge) {
             !bridge->screen_mip_copy_view ||
             !bridge->screen_mip_copy_material_instance) {
         return 0;
+    }
+    const uint32_t eye_index = bridge->active_eye;
+    if (bridge->screen_mip_ready[eye_index] &&
+            bridge->screen_source_versions[eye_index] ==
+                    bridge->screen_last_mip_versions[eye_index]) {
+        return 1;
     }
     auto* source = bridge->screen_source_textures[bridge->active_eye];
     if (!ensure_screen_quality_targets(
@@ -878,6 +893,8 @@ int bridge_screen_prepare_frame(FilamentBridge* bridge) {
         bridge->renderer->render(bridge->screen_mip_copy_view);
         mip_texture->generateMipmaps(*bridge->engine);
         ++bridge->screen_mip_generation_count[bridge->active_eye];
+        bridge->screen_last_mip_versions[bridge->active_eye] =
+                bridge->screen_source_versions[bridge->active_eye];
         return 1;
     }
 
@@ -914,6 +931,8 @@ int bridge_screen_prepare_frame(FilamentBridge* bridge) {
     bridge->renderer->render(bridge->screen_mip_copy_view);
     mip_texture->generateMipmaps(*bridge->engine);
     ++bridge->screen_mip_generation_count[bridge->active_eye];
+    bridge->screen_last_mip_versions[bridge->active_eye] =
+            bridge->screen_source_versions[bridge->active_eye];
     return 1;
 }
 

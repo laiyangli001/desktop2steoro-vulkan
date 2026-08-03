@@ -259,6 +259,11 @@ int filament_bridge_set_screen_image(
     return bridge_screen_set_image(bridge, image, width, height, format);
 }
 
+int filament_bridge_set_screen_source_version(
+        FilamentBridge* bridge, uint64_t version) {
+    return bridge_screen_set_source_version(bridge, version);
+}
+
 int filament_bridge_set_fixed_screen_image(
         FilamentBridge* bridge, const uint8_t* rgba,
         uint32_t width, uint32_t height) {

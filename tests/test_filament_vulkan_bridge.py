@@ -99,7 +99,8 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
         for name in module_names
     )
     assert "filament::" not in facade
-    assert len(facade.splitlines()) < 400
+    assert len(facade.splitlines()) < 420
+    assert "filament_bridge_set_screen_source_version" in facade
     assert all(name in cmake for name in module_names if name.endswith(".cpp"))
     assert "filament::Renderer* renderer = nullptr;" in source
     assert "auto* shared_renderer = bridge->engine->createRenderer();" in source

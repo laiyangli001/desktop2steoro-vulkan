@@ -163,6 +163,8 @@ FILAMENT_BRIDGE_API int filament_bridge_set_screen_sampling_mode(
 FILAMENT_BRIDGE_API int filament_bridge_set_screen_image(
         FilamentBridge* bridge, const void* image,
         uint32_t width, uint32_t height, int32_t format);
+FILAMENT_BRIDGE_API int filament_bridge_set_screen_source_version(
+        FilamentBridge* bridge, uint64_t version);
 FILAMENT_BRIDGE_API int filament_bridge_set_fixed_screen_image(
         FilamentBridge* bridge, const uint8_t* rgba,
         uint32_t width, uint32_t height);
