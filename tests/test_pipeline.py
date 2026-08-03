@@ -9,6 +9,7 @@ from stereo_runtime.pipeline import (
     _motion_sample,
     _motion_score,
     _runtime_motion_gate_enabled,
+    _runtime_pending_depth_limit,
 )
 
 
@@ -68,6 +69,96 @@ def test_publish_runtime_item_marks_inference_pipeline_ready():
 
     assert ready.is_set()
     assert runtime_q.qsize() == 1
+
+
+def test_pending_cuda_retains_latest_raw_frame(monkeypatch):
+    raw_q = queue.Queue(maxsize=1)
+    raw_q.put_nowait("latest-frame")
+    stats = []
+    breakdown = []
+    sleeps = []
+    loop = object.__new__(RuntimePipelineLoop)
+    loop.context = SimpleNamespace(
+        raw_q=raw_q,
+        time_sleep=1.0 / 60.0,
+        source_stat_inc=lambda name, *args, **kwargs: stats.append(name),
+        breakdown_inc=lambda name, *args, **kwargs: breakdown.append(name),
+    )
+    monkeypatch.setattr(
+        "stereo_runtime.pipeline.time.sleep",
+        lambda seconds: sleeps.append(seconds),
+    )
+
+    loop._retain_latest_raw_while_cuda_pending()
+
+    assert raw_q.get_nowait() == "latest-frame"
+    assert stats == ["runtime_pending_cuda_inflight"]
+    assert breakdown == ["runtime_pending_cuda_inflight"]
+    assert sleeps == [0.001]
+
+
+def _dual_pending_context(*, backend="cuda_triton", slots=2, temporal=False):
+    runtime = SimpleNamespace(
+        depth_provider=SimpleNamespace(pipeline_slot_count=slots),
+        config=SimpleNamespace(profile_sync=False),
+        stereo_config=SimpleNamespace(temporal=temporal, convergence=0.0),
+        _resolved_stereo_compute_backend=backend,
+    )
+    return SimpleNamespace(
+        run_mode="OpenXR",
+        openxr_runtime_direct=False,
+        stereo_active_preset="cinema",
+        stereo_runtime=runtime,
+    )
+
+
+def test_openxr_safe_dual_slot_defaults_to_two_pending(monkeypatch):
+    monkeypatch.delenv("D2S_RUNTIME_PENDING_CUDA_DEPTH", raising=False)
+
+    assert _runtime_pending_depth_limit(_dual_pending_context()) == 2
+
+
+def test_openxr_dual_pending_can_be_forced_back_to_one(monkeypatch):
+    monkeypatch.setenv("D2S_RUNTIME_PENDING_CUDA_DEPTH", "1")
+
+    assert _runtime_pending_depth_limit(_dual_pending_context()) == 1
+
+
+def test_openxr_dual_pending_requires_explicit_experimental_override(monkeypatch):
+    monkeypatch.setenv("D2S_RUNTIME_PENDING_CUDA_DEPTH", "2")
+
+    assert _runtime_pending_depth_limit(_dual_pending_context()) == 2
+
+
+def test_vulkan_deferred_pipeline_remains_single_pending(monkeypatch):
+    monkeypatch.delenv("D2S_RUNTIME_PENDING_CUDA_DEPTH", raising=False)
+
+    assert _runtime_pending_depth_limit(_dual_pending_context(backend="vulkan")) == 1
+
+
+def test_unisolated_depth_provider_remains_single_pending(monkeypatch):
+    monkeypatch.delenv("D2S_RUNTIME_PENDING_CUDA_DEPTH", raising=False)
+
+    assert _runtime_pending_depth_limit(_dual_pending_context(slots=1)) == 1
+
+
+def test_dual_pending_backs_off_when_presenter_has_not_consumed_output():
+    runtime_q = queue.Queue(maxsize=1)
+    runtime_q.put_nowait("previous")
+    loop = object.__new__(RuntimePipelineLoop)
+    loop.context = _dual_pending_context()
+    loop.context.runtime_q = runtime_q
+    loop.context.runtime_ready_event = None
+    loop.context.queue_put_latest = lambda q, item: (q.get_nowait(), q.put_nowait(item))
+    loop.context.breakdown_inc = lambda *args, **kwargs: None
+    loop.context.breakdown_add_time = lambda *args, **kwargs: None
+    loop.context.source_stat_inc = lambda *args, **kwargs: None
+    loop._dual_pending_cooldown_until = 0.0
+    loop._last_algorithm_output_time = 0.0
+
+    loop._publish_runtime_item((object(), 1.0, 0.01, 0.02, None))
+
+    assert loop._pending_depth_limit() == 1
 
 
 def test_pipeline_rebuilds_provider_after_consecutive_failures(monkeypatch):

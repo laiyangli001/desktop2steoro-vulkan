@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 import threading
 import time
@@ -53,15 +53,25 @@ def _infer_model_metadata_from_paths(
     return model_id, model_name
 
 
+@dataclass
+class _NativeTensorRtExecutionSlot:
+    index: int
+    context: object
+    input_tensor: torch.Tensor | None = None
+    output_buffers: dict[str, torch.Tensor] = field(default_factory=dict)
+    graph_input: torch.Tensor | None = None
+    graph_output_name: str | None = None
+    graph: torch.cuda.CUDAGraph | None = None
+    available_event: object | None = None
+
+
 class NativeTensorRtEngine:
     def __init__(self, engine_path: str | Path, *, device: str | torch.device = "cuda", dtype: torch.dtype = torch.float16) -> None:
         self.engine_path = Path(engine_path)
         self.device = torch.device(device)
         self.dtype = dtype
-        self._output_buffers: dict[str, torch.Tensor] = {}
-        self._graph_input: torch.Tensor | None = None
-        self._graph_output_name: str | None = None
-        self._graph: torch.cuda.CUDAGraph | None = None
+        self._slots: list[_NativeTensorRtExecutionSlot] = []
+        self._next_slot_index = 0
         if self.device.type != "cuda":
             raise RuntimeError("Native TensorRT engine requires CUDA")
         if not self.engine_path.exists():
@@ -76,9 +86,21 @@ class NativeTensorRtEngine:
             self.engine = self.runtime.deserialize_cuda_engine(file.read())
         if self.engine is None:
             raise RuntimeError(f"failed to deserialize TensorRT engine: {self.engine_path}")
-        self.context = self.engine.create_execution_context()
-        if self.context is None:
+        first_context = self.engine.create_execution_context()
+        if first_context is None:
             raise RuntimeError("failed to create TensorRT execution context")
+        self._slots.append(_NativeTensorRtExecutionSlot(0, first_context))
+        second_context = self.engine.create_execution_context()
+        if second_context is not None:
+            self._slots.append(_NativeTensorRtExecutionSlot(1, second_context))
+        else:
+            print(
+                "[TensorRT] second execution context unavailable; using single-slot inference",
+                flush=True,
+            )
+        # Preserve the legacy attribute for diagnostics and integrations that
+        # inspect the primary context. Runtime execution uses slot.context.
+        self.context = first_context
 
         self.input_names: list[str] = []
         self.output_names: list[str] = []
@@ -93,6 +115,10 @@ class NativeTensorRtEngine:
             raise RuntimeError("TensorRT engine has no input tensors")
         if not self.output_names:
             raise RuntimeError("TensorRT engine has no output tensors")
+
+    @property
+    def pipeline_slot_count(self) -> int:
+        return len(self._slots)
 
     @property
     def input_shape(self) -> tuple[int, ...]:
@@ -121,82 +147,169 @@ class NativeTensorRtEngine:
             mapping[trt.bfloat16] = torch.bfloat16
         return mapping.get(dtype, torch.float32)
 
-    def _bind_input_output(self, tensor: torch.Tensor) -> dict[str, torch.Tensor]:
+    @staticmethod
+    def _event_ready(event: object | None) -> bool:
+        if event is None:
+            return True
+        query = getattr(event, "query", None)
+        if not callable(query):
+            return False
+        try:
+            return bool(query())
+        except Exception:
+            return False
+
+    def _acquire_slot(self) -> _NativeTensorRtExecutionSlot:
+        slot_count = len(self._slots)
+        for offset in range(slot_count):
+            index = (self._next_slot_index + offset) % slot_count
+            slot = self._slots[index]
+            if self._event_ready(slot.available_event):
+                slot.available_event = None
+                self._next_slot_index = (index + 1) % slot_count
+                return slot
+        # This is a correctness fallback for callers that exceed the advertised
+        # slot count. The normal OpenXR pipeline never reaches it because its
+        # pending depth is capped to pipeline_slot_count.
+        slot = self._slots[self._next_slot_index]
+        synchronize = getattr(slot.available_event, "synchronize", None)
+        if not callable(synchronize):
+            raise RuntimeError("TensorRT execution slots are still in flight")
+        synchronize()
+        slot.available_event = None
+        self._next_slot_index = (slot.index + 1) % slot_count
+        return slot
+
+    def _bind_input_output(
+        self,
+        tensor: torch.Tensor,
+        slot: _NativeTensorRtExecutionSlot,
+    ) -> dict[str, torch.Tensor]:
         tensor = tensor.contiguous().to(device=self.device, dtype=self.dtype)
+        # execute_async_v3 does not retain the Python Tensor object. Keep the
+        # actual converted allocation alive until this slot is acquired again
+        # after its completion event has fired.
+        slot.input_tensor = tensor
         input_name = self.input_names[0]
-        self.context.set_input_shape(input_name, tuple(tensor.shape))
-        self.context.set_tensor_address(input_name, tensor.data_ptr())
+        slot.context.set_input_shape(input_name, tuple(tensor.shape))
+        slot.context.set_tensor_address(input_name, tensor.data_ptr())
 
         outputs: dict[str, torch.Tensor] = {}
         for name in self.output_names:
-            shape = tuple(int(dim) for dim in self.context.get_tensor_shape(name))
+            shape = tuple(int(dim) for dim in slot.context.get_tensor_shape(name))
             output_dtype = self._torch_dtype_from_trt(self.engine.get_tensor_dtype(name))
-            output = self._output_buffers.get(name)
+            output = slot.output_buffers.get(name)
             if output is None or tuple(output.shape) != shape or output.dtype != output_dtype:
                 output = torch.empty(shape, device=self.device, dtype=output_dtype)
-                self._output_buffers[name] = output
+                slot.output_buffers[name] = output
             outputs[name] = output
-            self.context.set_tensor_address(name, output.data_ptr())
+            slot.context.set_tensor_address(name, output.data_ptr())
         return outputs
 
-    def _execute(self) -> None:
+    def _execute(self, slot: _NativeTensorRtExecutionSlot) -> None:
         stream = torch.cuda.current_stream(self.device)
-        ok = self.context.execute_async_v3(stream_handle=stream.cuda_stream)
+        ok = slot.context.execute_async_v3(stream_handle=stream.cuda_stream)
         if ok is False:
             raise RuntimeError("TensorRT execute_async_v3 failed")
 
     def __call__(self, tensor: torch.Tensor, *, synchronize: bool = True) -> torch.Tensor:
-        outputs = self._bind_input_output(tensor)
-        self._execute()
+        output, _slot_index = self.run_with_slot(tensor, synchronize=synchronize)
+        return output
+
+    def run_with_slot(
+        self,
+        tensor: torch.Tensor,
+        *,
+        synchronize: bool = True,
+    ) -> tuple[torch.Tensor, int]:
+        slot = self._acquire_slot()
+        outputs = self._bind_input_output(tensor, slot)
+        self._execute(slot)
         if synchronize:
             stream = torch.cuda.current_stream(self.device)
             stream.synchronize()
 
         if "predicted_depth" in outputs:
-            return outputs["predicted_depth"]
-        return outputs[self.output_names[0]]
+            return outputs["predicted_depth"], slot.index
+        return outputs[self.output_names[0]], slot.index
 
-    def capture_graph(self, input_shape: tuple[int, ...]) -> None:
-        if self._graph is not None:
+    def _capture_graph_for_slot(
+        self,
+        input_shape: tuple[int, ...],
+        slot: _NativeTensorRtExecutionSlot,
+    ) -> None:
+        if slot.graph is not None:
             return
         if self.device.type != "cuda":
             raise RuntimeError("CUDA graph requires CUDA")
         static_input = torch.empty(input_shape, device=self.device, dtype=self.dtype)
-        outputs = self._bind_input_output(static_input)
+        outputs = self._bind_input_output(static_input, slot)
         output_name = "predicted_depth" if "predicted_depth" in outputs else self.output_names[0]
 
         for _ in range(3):
-            self._execute()
+            self._execute(slot)
         torch.cuda.synchronize(self.device)
 
         graph = torch.cuda.CUDAGraph()
         with torch.cuda.graph(graph):
-            self._execute()
+            self._execute(slot)
         torch.cuda.synchronize(self.device)
 
-        self._graph_input = static_input
-        self._graph_output_name = output_name
-        self._graph = graph
+        slot.graph_input = static_input
+        slot.graph_output_name = output_name
+        slot.graph = graph
+
+    def capture_graph(self, input_shape: tuple[int, ...]) -> None:
+        for slot in self._slots:
+            self._capture_graph_for_slot(input_shape, slot)
 
     def clear_graph(self) -> None:
-        self._graph = None
-        self._graph_input = None
-        self._graph_output_name = None
+        for slot in self._slots:
+            slot.graph = None
+            slot.graph_input = None
+            slot.graph_output_name = None
 
     def run_graph(self, tensor: torch.Tensor) -> torch.Tensor:
-        if self._graph is None or self._graph_input is None or self._graph_output_name is None:
-            self.capture_graph(tuple(tensor.shape))
-        assert self._graph is not None
-        assert self._graph_input is not None
-        assert self._graph_output_name is not None
+        output, _slot_index = self.run_graph_with_slot(tensor)
+        return output
+
+    def run_graph_with_slot(self, tensor: torch.Tensor) -> tuple[torch.Tensor, int]:
+        slot = self._acquire_slot()
+        if slot.graph is None or slot.graph_input is None or slot.graph_output_name is None:
+            self._capture_graph_for_slot(tuple(tensor.shape), slot)
+        assert slot.graph is not None
+        assert slot.graph_input is not None
+        assert slot.graph_output_name is not None
         tensor = tensor.contiguous().to(device=self.device, dtype=self.dtype)
-        if tuple(tensor.shape) != tuple(self._graph_input.shape):
-            raise RuntimeError(f"CUDA graph input shape mismatch: expected {tuple(self._graph_input.shape)}, got {tuple(tensor.shape)}")
-        self._graph_input.copy_(tensor)
-        self._graph.replay()
-        return self._output_buffers[self._graph_output_name]
+        if tuple(tensor.shape) != tuple(slot.graph_input.shape):
+            raise RuntimeError(f"CUDA graph input shape mismatch: expected {tuple(slot.graph_input.shape)}, got {tuple(tensor.shape)}")
+        slot.graph_input.copy_(tensor)
+        slot.graph.replay()
+        return slot.output_buffers[slot.graph_output_name], slot.index
+
+    def mark_slot_available_after_current_stream(self, slot_index: int | None) -> None:
+        if slot_index is None:
+            return
+        slot = self._slots[int(slot_index)]
+        event = torch.cuda.Event(blocking=False)
+        event.record(torch.cuda.current_stream(self.device))
+        slot.available_event = event
 
     def close(self) -> None:
+        for slot in self._slots:
+            synchronize = getattr(slot.available_event, "synchronize", None)
+            if callable(synchronize):
+                try:
+                    synchronize()
+                except Exception:
+                    pass
+        self.clear_graph()
+        for slot in self._slots:
+            slot.input_tensor = None
+            slot.output_buffers.clear()
+            slot.available_event = None
+            slot.context = None
+        self._slots.clear()
         for attr in ("context", "engine", "runtime"):
             try:
                 setattr(self, attr, None)
@@ -434,6 +547,10 @@ class DistillAnyDepthBaseNativeTensorRt:
             fixed_input_size=_input_size_from_artifact_name(self.onnx_path) if self._explicit_onnx_path else None,
         )
 
+    @property
+    def pipeline_slot_count(self) -> int:
+        return max(1, int(getattr(self._engine, "pipeline_slot_count", 1)))
+
     def _set_artifact_paths(self, onnx_path: Path, engine_path: Path, input_size: tuple[int, int]) -> None:
         dtype = _dtype_from_onnx_name(onnx_path, self.dtype)
         if onnx_path != self.onnx_path or engine_path != self.engine_path or dtype != self.dtype:
@@ -525,10 +642,15 @@ class DistillAnyDepthBaseNativeTensorRt:
         sync()
         _record_cuda_event(cuda_events, "depth_model_start", tensor)
         start = time.perf_counter()
+        execution_slot: int | None = None
         try_cuda_graph = self.use_cuda_graph and self._cuda_graph_disabled_reason is None
         if try_cuda_graph:
             try:
-                predicted = engine.run_graph(tensor)
+                run_graph_with_slot = getattr(engine, "run_graph_with_slot", None)
+                if callable(run_graph_with_slot):
+                    predicted, execution_slot = run_graph_with_slot(tensor)
+                else:
+                    predicted = engine.run_graph(tensor)
             except RuntimeError as exc:
                 self._cuda_graph_disabled_reason = f"{type(exc).__name__}: {exc}"
                 clear_graph = getattr(engine, "clear_graph", None)
@@ -544,38 +666,69 @@ class DistillAnyDepthBaseNativeTensorRt:
                     flush=True,
                 )
                 try:
-                    predicted = engine(tensor, synchronize=self.profile_sync)
+                    run_with_slot = getattr(engine, "run_with_slot", None)
+                    if callable(run_with_slot):
+                        predicted, execution_slot = run_with_slot(
+                            tensor,
+                            synchronize=self.profile_sync,
+                        )
+                    else:
+                        predicted = engine(tensor, synchronize=self.profile_sync)
                 except TypeError:
                     predicted = engine(tensor)
         else:
             try:
-                predicted = engine(tensor, synchronize=self.profile_sync)
+                run_with_slot = getattr(engine, "run_with_slot", None)
+                if callable(run_with_slot):
+                    predicted, execution_slot = run_with_slot(
+                        tensor,
+                        synchronize=self.profile_sync,
+                    )
+                else:
+                    predicted = engine(tensor, synchronize=self.profile_sync)
             except TypeError:
                 predicted = engine(tensor)
         sync()
         _record_cuda_event(cuda_events, "depth_model_end", predicted)
         model_ms = (time.perf_counter() - start) * 1000.0
 
-        start = time.perf_counter()
-        _record_cuda_event(cuda_events, "depth_post_start", predicted)
-        _record_cuda_event(cuda_events, "depth_norm_start", predicted)
-        depth = ensure_b1hw(predicted.float())
-        depth = _normalize_depth(depth)
-        _record_cuda_event(cuda_events, "depth_norm_end", depth)
-        _record_cuda_event(cuda_events, "depth_upsample_start", depth)
-        depth = upsample_depth(
-            depth,
-            height,
-            width,
-            rgb=rgb,
-            mode=self.depth_upsample,
-            edge_strength=self.depth_upsample_edge_strength,
-        )
-        sync()
-        _record_cuda_event(cuda_events, "depth_upsample_end", depth)
-        _record_cuda_event(cuda_events, "depth_post_end", depth)
-        postprocess_ms = (time.perf_counter() - start) * 1000.0
-        return DepthProfileResult(depth, preprocess_ms, model_ms, postprocess_ms, cuda_events)
+        try:
+            start = time.perf_counter()
+            _record_cuda_event(cuda_events, "depth_post_start", predicted)
+            _record_cuda_event(cuda_events, "depth_norm_start", predicted)
+            depth = ensure_b1hw(predicted.float())
+            depth = _normalize_depth(depth)
+            _record_cuda_event(cuda_events, "depth_norm_end", depth)
+            _record_cuda_event(cuda_events, "depth_upsample_start", depth)
+            depth = upsample_depth(
+                depth,
+                height,
+                width,
+                rgb=rgb,
+                mode=self.depth_upsample,
+                edge_strength=self.depth_upsample_edge_strength,
+            )
+            sync()
+            _record_cuda_event(cuda_events, "depth_upsample_end", depth)
+            _record_cuda_event(cuda_events, "depth_post_end", depth)
+            postprocess_ms = (time.perf_counter() - start) * 1000.0
+            return DepthProfileResult(
+                depth,
+                preprocess_ms,
+                model_ms,
+                postprocess_ms,
+                cuda_events,
+                execution_slot=execution_slot,
+                execution_slot_count=max(1, int(getattr(engine, "pipeline_slot_count", 1))),
+            )
+        finally:
+            mark_slot_available = getattr(
+                engine,
+                "mark_slot_available_after_current_stream",
+                None,
+            )
+            if callable(mark_slot_available):
+                mark_slot_available(execution_slot)
 
 
 NativeTensorRtDepthProvider = DistillAnyDepthBaseNativeTensorRt

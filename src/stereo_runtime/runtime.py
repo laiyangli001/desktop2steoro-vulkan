@@ -1564,6 +1564,11 @@ class StereoRuntime:
         debug["vulkan_zero_copy_request"] = int(vulkan_compute_request is not None)
         debug["vulkan_zero_copy_reason"] = str(deferred_reason)
         debug["runtime_depth_backend"] = self.depth_config.backend
+        debug["runtime_depth_execution_slot"] = getattr(profile, "execution_slot", None)
+        debug["runtime_depth_execution_slot_count"] = max(
+            1,
+            int(getattr(profile, "execution_slot_count", 1)),
+        )
         debug["runtime_output_format"] = output_format
         debug["packing_format"] = "none"
         debug["active_settings_version"] = int(self.active_settings_version)

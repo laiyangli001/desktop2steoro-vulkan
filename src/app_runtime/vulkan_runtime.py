@@ -3,7 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from stereo_runtime.vulkan_image_pass import VulkanImageCopyPass
-from viewer.vulkan_context import VulkanCapabilityError, VulkanContext
+from viewer.vulkan_context import (
+    VulkanCapabilityError,
+    VulkanContext,
+    is_vulkan_device_lost_error,
+)
 from viewer.vulkan_descriptors import VulkanStorageImage
 from viewer.vulkan_resources import VulkanImageResource
 
@@ -178,5 +182,4 @@ class VulkanRuntimeSession:
 
 
 def _is_device_lost(exc: BaseException) -> bool:
-    marker = f"{type(exc).__name__} {exc}".lower().replace("_", " ")
-    return "device lost" in marker or "error device lost" in marker
+    return is_vulkan_device_lost_error(exc)

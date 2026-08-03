@@ -6,7 +6,7 @@ import time
 from typing import Any
 
 from viewer.cuda_vulkan_interop import CudaVulkanImageImporter
-from viewer.vulkan_context import ImageState
+from viewer.vulkan_context import ImageState, is_vulkan_device_lost_error
 from viewer.vulkan_resources import (
     VulkanBinarySemaphore,
     VulkanExportableBuffer,
@@ -161,6 +161,10 @@ class VulkanGlowSourceComputeBackend:
             not_ready = getattr(self.vk, "VkNotReady", None)
             if not_ready is not None and isinstance(exc, not_ready):
                 return False
+            if is_vulkan_device_lost_error(exc):
+                mark_device_lost = getattr(self.context, "mark_device_lost", None)
+                if callable(mark_device_lost):
+                    mark_device_lost(exc)
             raise
 
     def _reset_command(self, command: Any, fence: Any) -> None:
@@ -464,7 +468,7 @@ class VulkanGlowSourceComputeBackend:
         slot.state = "releasing"
 
     def poll(self) -> None:
-        if self._closed:
+        if self._closed or bool(getattr(self.context, "device_lost", False)):
             return
         completed = sorted(
             (
@@ -524,9 +528,10 @@ class VulkanGlowSourceComputeBackend:
             return
         self._closed = True
         try:
-            if getattr(self, "compute_queue", None) is not None:
+            device_lost = bool(getattr(self.context, "device_lost", False))
+            if not device_lost and getattr(self, "compute_queue", None) is not None:
                 self.vk.vkQueueWaitIdle(self.compute_queue)
-            if getattr(self, "graphics_queue", None) is not None:
+            if not device_lost and getattr(self, "graphics_queue", None) is not None:
                 self.vk.vkQueueWaitIdle(self.graphics_queue)
         finally:
             importer = getattr(self, "importer", None)

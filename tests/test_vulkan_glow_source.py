@@ -47,6 +47,19 @@ def test_glow_fence_poll_handles_pyvulkan_not_ready_exception() -> None:
     assert backend._fence_complete(object()) is True
 
 
+def test_glow_poll_short_circuits_after_device_loss() -> None:
+    backend = object.__new__(VulkanGlowSourceComputeBackend)
+    backend._closed = False
+    backend.context = SimpleNamespace(device_lost=True)
+    backend.slots = SimpleNamespace(
+        __iter__=lambda _self: (_ for _ in ()).throw(
+            AssertionError("dead Vulkan device must not poll fences")
+        )
+    )
+
+    backend.poll()
+
+
 def test_glow_frame_lease_is_counted_once_and_released() -> None:
     slot = SimpleNamespace(
         image=SimpleNamespace(

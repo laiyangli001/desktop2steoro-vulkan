@@ -407,6 +407,16 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
                         getattr(self, "_source_frames", {}).pop(int(frame_id), None)
                     return
 
+    def _discard_source_frame_after_device_loss(self, frame_id: int) -> None:
+        """Release only Python-side leases after the Vulkan device is dead."""
+        frame_key = int(frame_id)
+        self._prepared_source_eyes = {
+            item for item in self._prepared_source_eyes if item[0] != frame_key
+        }
+        self.release_frame(frame_key)
+        self._released_source_frames.add(frame_key)
+        self._source_frames.pop(frame_key, None)
+
     def prepare_source_for_sampling(self, frame_id: int, eye_index: int):
         """Wait for the producer and publish a post-barrier semaphore to Filament."""
         entry = self._source_frames.get(int(frame_id))
@@ -446,21 +456,30 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
             return
         left, right, slot_index = entry
         waits = tuple(consumer_semaphores or ())
-        for eye_index, resource, release_semaphore in (
-            (0, left.resource, self.left_release_semaphores[slot_index]),
-            (1, right.resource, self.right_release_semaphores[slot_index]),
-        ):
-            if (frame_key, eye_index) not in self._prepared_source_eyes:
-                continue
-            self.presenter.vulkan.release_external_image_from_sampling(
-                resource,
-                wait_semaphore=(
-                    waits[eye_index] if eye_index < len(waits) else None
-                ),
-                signal_semaphore=release_semaphore.semaphore,
-            )
-            self._release_signaled.add((eye_index, slot_index))
-            self._prepared_source_eyes.discard((frame_key, eye_index))
+        context = self.presenter.vulkan
+        if bool(getattr(context, "device_lost", False)):
+            self._discard_source_frame_after_device_loss(frame_key)
+            return
+        try:
+            for eye_index, resource, release_semaphore in (
+                (0, left.resource, self.left_release_semaphores[slot_index]),
+                (1, right.resource, self.right_release_semaphores[slot_index]),
+            ):
+                if (frame_key, eye_index) not in self._prepared_source_eyes:
+                    continue
+                context.release_external_image_from_sampling(
+                    resource,
+                    wait_semaphore=(
+                        waits[eye_index] if eye_index < len(waits) else None
+                    ),
+                    signal_semaphore=release_semaphore.semaphore,
+                )
+                self._release_signaled.add((eye_index, slot_index))
+                self._prepared_source_eyes.discard((frame_key, eye_index))
+        except Exception:
+            if bool(getattr(context, "device_lost", False)):
+                self._discard_source_frame_after_device_loss(frame_key)
+            raise
         self.release_frame(frame_key)
         self._released_source_frames.add(frame_key)
         self._source_frames.pop(frame_key, None)
@@ -1029,17 +1048,25 @@ class VulkanZeroCopyOutputAdapter(CudaVulkanOutputAdapter):
         left, right, slot_index = entry
         waits = tuple(consumer_semaphores or ())
         context = self.presenter.vulkan
-        for eye_index, slot in ((0, left), (1, right)):
-            if (frame_key, eye_index) not in self._prepared_source_eyes:
-                continue
-            timeline = context.release_external_image_from_sampling(
-                slot.resource,
-                wait_semaphore=waits[eye_index] if eye_index < len(waits) else None,
-            )
-            self._release_timelines[slot_index] = max(
-                int(self._release_timelines[slot_index]), int(timeline)
-            )
-            self._prepared_source_eyes.discard((frame_key, eye_index))
+        if bool(getattr(context, "device_lost", False)):
+            self._discard_source_frame_after_device_loss(frame_key)
+            return
+        try:
+            for eye_index, slot in ((0, left), (1, right)):
+                if (frame_key, eye_index) not in self._prepared_source_eyes:
+                    continue
+                timeline = context.release_external_image_from_sampling(
+                    slot.resource,
+                    wait_semaphore=waits[eye_index] if eye_index < len(waits) else None,
+                )
+                self._release_timelines[slot_index] = max(
+                    int(self._release_timelines[slot_index]), int(timeline)
+                )
+                self._prepared_source_eyes.discard((frame_key, eye_index))
+        except Exception:
+            if bool(getattr(context, "device_lost", False)):
+                self._discard_source_frame_after_device_loss(frame_key)
+            raise
         self.release_frame(frame_key)
         self._released_source_frames.add(frame_key)
         self._source_frames.pop(frame_key, None)
@@ -1052,6 +1079,9 @@ class VulkanZeroCopyOutputAdapter(CudaVulkanOutputAdapter):
             self.release_frame(frame_key)
             return
         left, right, slot_index = entry
+        if bool(getattr(self.presenter.vulkan, "device_lost", False)):
+            self._discard_source_frame_after_device_loss(frame_key)
+            return
         for slot in (left, right):
             state = self.presenter.vulkan.image_state(slot.resource.image)
             if state.layout == self.presenter.vulkan.vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:

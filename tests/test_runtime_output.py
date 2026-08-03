@@ -11,6 +11,31 @@ from app_runtime.runtime_output import (
 )
 
 
+def test_cuda_consumer_release_discards_cpu_lease_after_device_loss():
+    calls = []
+
+    class LostContext:
+        device_lost = True
+
+        @staticmethod
+        def release_external_image_from_sampling(*_args, **_kwargs):
+            raise AssertionError("dead Vulkan device must not be accessed")
+
+    adapter = object.__new__(CudaVulkanOutputAdapter)
+    adapter.presenter = SimpleNamespace(vulkan=LostContext())
+    adapter._released_source_frames = set()
+    adapter._source_frames = {7: (SimpleNamespace(), SimpleNamespace(), 0)}
+    adapter._prepared_source_eyes = {(7, 0), (7, 1)}
+    adapter.release_frame = lambda frame_id: calls.append(frame_id)
+
+    adapter.release_consumer_frame(7, ("left", "right"))
+
+    assert calls == [7]
+    assert adapter._prepared_source_eyes == set()
+    assert adapter._source_frames == {}
+    assert adapter._released_source_frames == {7}
+
+
 def test_screen_light_sample_completion_is_non_blocking_and_clamped():
     adapter = CudaVulkanOutputAdapter(None)
     adapter._screen_light_pending = (

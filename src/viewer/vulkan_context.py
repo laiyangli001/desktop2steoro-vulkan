@@ -13,6 +13,12 @@ class VulkanCapabilityError(RuntimeError):
     pass
 
 
+def is_vulkan_device_lost_error(exc: BaseException) -> bool:
+    """Return whether a Vulkan binding exception reports a lost device."""
+    marker = f"{type(exc).__name__} {exc}".lower().replace("_", " ")
+    return "devicelost" in "".join(marker.split())
+
+
 def make_vulkan_version(major: int, minor: int, patch: int = 0) -> int:
     return (int(major) << 22) | (int(minor) << 12) | int(patch)
 
@@ -249,6 +255,8 @@ class VulkanContext:
         )
         self._lock = RLock()
         self._closed = False
+        self._device_lost = False
+        self._device_lost_error: str | None = None
         self._create_command_resources()
         if self.device_info.timeline_semaphore_enabled:
             self._timeline_semaphore = _create_timeline_semaphore(vk, self.device)
@@ -706,6 +714,11 @@ class VulkanContext:
         signal_semaphore: Any | None = None,
     ) -> int:
         """Return a Filament source image to producer-writable GENERAL layout."""
+        # Device loss is terminal.  Cleanup must only release CPU-side leases;
+        # submitting another barrier or querying another fence merely creates a
+        # cascade of secondary exceptions on an already dead device.
+        if self._device_lost:
+            return 0
         self._ensure_open()
         if getattr(resource, "context", self) is not self:
             raise VulkanCapabilityError("external image belongs to a different context")
@@ -980,6 +993,29 @@ class VulkanContext:
         wait_semaphore: Any | None = None,
         signal_semaphore: Any | None = None,
     ) -> int:
+        try:
+            return self._submit_on_unchecked(
+                role,
+                record,
+                wait_for_timeline=wait_for_timeline,
+                wait_semaphore=wait_semaphore,
+                signal_semaphore=signal_semaphore,
+            )
+        except Exception as exc:
+            # Device loss may surface from any command-buffer or queue call,
+            # not only the fence wait observed in the original crash.
+            self.mark_device_lost(exc)
+            raise
+
+    def _submit_on_unchecked(
+        self,
+        role: str,
+        record: Callable[[Any], None],
+        *,
+        wait_for_timeline: int | None = None,
+        wait_semaphore: Any | None = None,
+        signal_semaphore: Any | None = None,
+    ) -> int:
         with self._lock:
             self._ensure_open()
             vk = self.vk
@@ -989,9 +1025,13 @@ class VulkanContext:
             frame = self._frame_contexts[self._frame_index]
             queue_resources = frame.queue_resources[queue_role]
             # Reuse is bounded by the frame fence instead of allocating per submit.
-            wait_result = vk.vkWaitForFences(
-                self.device, 1, [queue_resources.fence], vk.VK_TRUE, 10_000_000_000
-            )
+            try:
+                wait_result = vk.vkWaitForFences(
+                    self.device, 1, [queue_resources.fence], vk.VK_TRUE, 10_000_000_000
+                )
+            except Exception as exc:
+                self.mark_device_lost(exc)
+                raise
             timeout = getattr(vk, "VK_TIMEOUT", None)
             if timeout is not None and wait_result == timeout:
                 raise VulkanCapabilityError(
@@ -1015,22 +1055,30 @@ class VulkanContext:
                 raise
             self._timeline_value += 1
             queue_resources.timeline_value = self._timeline_value
-            self._submit_frame(
-                queue=self.get_queue(role),
-                command_buffer=queue_resources.command_buffer,
-                fence=queue_resources.fence,
-                timeline_value=queue_resources.timeline_value,
-                wait_timeline_value=wait_for_timeline,
-                wait_semaphore=wait_semaphore,
-                signal_semaphore=signal_semaphore,
-            )
+            try:
+                self._submit_frame(
+                    queue=self.get_queue(role),
+                    command_buffer=queue_resources.command_buffer,
+                    fence=queue_resources.fence,
+                    timeline_value=queue_resources.timeline_value,
+                    wait_timeline_value=wait_for_timeline,
+                    wait_semaphore=wait_semaphore,
+                    signal_semaphore=signal_semaphore,
+                )
+            except Exception as exc:
+                self.mark_device_lost(exc)
+                raise
             self._frame_index = (self._frame_index + 1) % self.frame_context_count
             return queue_resources.timeline_value
 
     def wait_idle(self) -> None:
         with self._lock:
-            if not self._closed and self.device is not None:
-                self.vk.vkDeviceWaitIdle(self.device)
+            if not self._closed and self.device is not None and not self._device_lost:
+                try:
+                    self.vk.vkDeviceWaitIdle(self.device)
+                except Exception as exc:
+                    self.mark_device_lost(exc)
+                    raise
 
     def wait_for_timeline(self, value: int, *, timeout_ns: int = 10_000_000_000) -> None:
         """Wait on this context's timeline without forcing a device-wide idle."""
@@ -1048,16 +1096,20 @@ class VulkanContext:
             if wait_fn is None or wait_info_type is None or wait_info_structure is None:
                 self.vk.vkDeviceWaitIdle(self.device)
                 return
-            result = wait_fn(
-                self.device,
-                wait_info_type(
-                    sType=wait_info_structure,
-                    semaphoreCount=1,
-                    pSemaphores=[self._timeline_semaphore],
-                    pValues=[target],
-                ),
-                int(timeout_ns),
-            )
+            try:
+                result = wait_fn(
+                    self.device,
+                    wait_info_type(
+                        sType=wait_info_structure,
+                        semaphoreCount=1,
+                        pSemaphores=[self._timeline_semaphore],
+                        pValues=[target],
+                    ),
+                    int(timeout_ns),
+                )
+            except Exception as exc:
+                self.mark_device_lost(exc)
+                raise
             if result is not None and int(result) != int(self.vk.VK_SUCCESS):
                 raise VulkanCapabilityError(
                     f"timed out waiting for Vulkan timeline value {target}: {result}"
@@ -1069,14 +1121,22 @@ class VulkanContext:
                 return
             vk = self.vk
             try:
-                if self.device is not None:
-                    vk.vkDeviceWaitIdle(self.device)
+                if self.device is not None and not self._device_lost:
+                    try:
+                        vk.vkDeviceWaitIdle(self.device)
+                    except Exception as exc:
+                        self.mark_device_lost(exc)
+                        if not self._device_lost:
+                            raise
                 registry = getattr(self, "_external_image_registry", None)
                 if registry is not None:
-                    try:
-                        registry.close()
-                    except Exception:
+                    if self._device_lost:
                         registry.discard()
+                    else:
+                        try:
+                            registry.close()
+                        except Exception:
+                            registry.discard()
             finally:
                 if self.device is not None:
                     if self._timeline_semaphore is not None:
@@ -1266,6 +1326,25 @@ class VulkanContext:
     def _ensure_open(self) -> None:
         if self._closed:
             raise RuntimeError("VulkanContext is closed")
+        if self._device_lost:
+            raise VulkanCapabilityError("Vulkan device is lost")
+
+    @property
+    def device_lost(self) -> bool:
+        return bool(self._device_lost)
+
+    @property
+    def device_lost_error(self) -> str | None:
+        return self._device_lost_error
+
+    def mark_device_lost(self, exc: BaseException) -> bool:
+        """Latch device loss and report whether *exc* represented that state."""
+        if not is_vulkan_device_lost_error(exc):
+            return False
+        self._device_lost = True
+        if self._device_lost_error is None:
+            self._device_lost_error = str(exc) or type(exc).__name__
+        return True
 
 
 def _import_vulkan() -> Any:

@@ -487,3 +487,93 @@ def test_native_tensorrt_provider_uses_engine_static_input_size(monkeypatch, tmp
 
     assert captured["tensor_shape"] == (1, 3, 294, 518)
     assert result.depth.shape == (1, 1, 2160, 1920)
+
+
+def test_native_tensorrt_provider_reports_execution_slot(monkeypatch, tmp_path):
+    import stereo_runtime.providers.nvidia.tensorrt_native as native_module
+
+    calls = []
+
+    class FakeEngine:
+        input_image_size = (2, 2)
+        pipeline_slot_count = 2
+
+        def run_with_slot(self, tensor, *, synchronize):
+            calls.append(("run", synchronize, tuple(tensor.shape)))
+            return torch.zeros(1, 1, 2, 2, dtype=torch.float32), 1
+
+        def mark_slot_available_after_current_stream(self, slot_index):
+            calls.append(("release", slot_index))
+
+    class FakePreprocessor:
+        fixed_input_size = (2, 2)
+
+        def __call__(self, rgb):
+            return torch.zeros(1, 3, 2, 2, dtype=torch.float32)
+
+    provider = native_module.NativeTensorRtDepthProvider(
+        device="cuda",
+        cache_dir=tmp_path,
+        engine_path=tmp_path / "model.trt",
+    )
+    provider._engine = FakeEngine()
+    provider._preprocessor = FakePreprocessor()
+    provider._artifact_input_size = (2, 2)
+    monkeypatch.setattr(provider, "_ensure_artifacts_for_input", lambda height, width: None)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+
+    result = provider.predict_profile(torch.zeros(1, 3, 4, 4))
+
+    assert result.execution_slot == 1
+    assert result.execution_slot_count == 2
+    assert calls == [("run", False, (1, 3, 2, 2)), ("release", 1)]
+
+
+def test_native_tensorrt_engine_skips_slot_with_unfinished_event():
+    from stereo_runtime.providers.nvidia.tensorrt_native import (
+        NativeTensorRtEngine,
+        _NativeTensorRtExecutionSlot,
+    )
+
+    class Event:
+        def query(self):
+            return False
+
+    engine = object.__new__(NativeTensorRtEngine)
+    engine._slots = [
+        _NativeTensorRtExecutionSlot(0, object(), available_event=Event()),
+        _NativeTensorRtExecutionSlot(1, object()),
+    ]
+    engine._next_slot_index = 0
+
+    slot = engine._acquire_slot()
+
+    assert slot.index == 1
+    assert engine._next_slot_index == 0
+
+
+def test_native_tensorrt_engine_close_waits_for_slot_event():
+    from stereo_runtime.providers.nvidia.tensorrt_native import (
+        NativeTensorRtEngine,
+        _NativeTensorRtExecutionSlot,
+    )
+
+    calls = []
+
+    class Event:
+        def synchronize(self):
+            calls.append("sync")
+
+    engine = object.__new__(NativeTensorRtEngine)
+    engine._slots = [
+        _NativeTensorRtExecutionSlot(0, object(), available_event=Event()),
+    ]
+    engine.context = object()
+    engine.engine = object()
+    engine.runtime = object()
+
+    engine.close()
+
+    assert calls == ["sync"]
+    assert engine._slots == []
+    assert engine.context is None

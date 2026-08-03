@@ -844,6 +844,22 @@ def test_release_output_frame_releases_glow_after_screen_consumer() -> None:
     ]
 
 
+def test_release_output_frame_is_idempotent_during_exception_unwind() -> None:
+    calls = []
+    frame = SimpleNamespace(
+        frame_id=20,
+        metadata={
+            "_vulkan_output_release": lambda frame_id: calls.append(frame_id),
+            "_vulkan_glow_release": lambda frame_id: calls.append(("glow", frame_id)),
+        },
+    )
+
+    OpenXrVulkanPresenter._release_output_frame(frame)
+    OpenXrVulkanPresenter._release_output_frame(frame)
+
+    assert calls == [20, ("glow", 20)]
+
+
 def test_release_displayed_output_for_reuse_releases_matching_ring_slot() -> None:
     calls = []
     presenter = OpenXrVulkanPresenter()
@@ -2302,6 +2318,55 @@ def test_presenter_run_until_owns_shutdown_close() -> None:
     assert calls == ["initialize", "frame", "close"]
 
 
+def test_presenter_close_destroys_bound_vulkan_before_openxr() -> None:
+    calls = []
+
+    class FakeVulkan:
+        device_lost = False
+
+        def wait_idle(self):
+            pass
+
+        def close(self):
+            calls.append("vulkan")
+
+    presenter = OpenXrVulkanPresenter()
+    presenter.xr = SimpleNamespace(
+        destroy_instance=lambda _instance: calls.append("openxr")
+    )
+    presenter.instance = object()
+    presenter.vulkan = FakeVulkan()
+
+    presenter.close()
+
+    assert calls == ["vulkan", "openxr"]
+
+
+def test_presenter_close_skips_openxr_instance_destroy_after_device_loss() -> None:
+    calls = []
+
+    class FakeVulkan:
+        device_lost = True
+
+        def wait_idle(self):
+            raise AssertionError("device-lost Vulkan must not wait for idle")
+
+        def close(self):
+            calls.append("vulkan")
+
+    presenter = OpenXrVulkanPresenter()
+    presenter.xr = SimpleNamespace(
+        destroy_instance=lambda _instance: calls.append("openxr")
+    )
+    presenter.instance = object()
+    presenter.vulkan = FakeVulkan()
+
+    presenter.close()
+
+    assert calls == ["vulkan"]
+    assert presenter.instance is None
+
+
 def test_presenter_waits_for_headset_and_retries_initialization(capsys) -> None:
     presenter = OpenXrVulkanPresenter(OpenXrVulkanConfig(
         openxr_no_headset_retry_interval=0.001,
@@ -2757,7 +2822,7 @@ def test_projection_updates_shared_filament_state_once_per_stereo_pair(
     assert calls.count("end") == 2
 
 
-def test_projection_batches_filament_stereo_pair_into_one_finish_wait(
+def test_projection_uses_safe_per_eye_finish_even_when_batch_abi_exists(
     monkeypatch,
 ) -> None:
     calls: list[str] = []
@@ -2784,11 +2849,16 @@ def test_projection_batches_filament_stereo_pair_into_one_finish_wait(
 
     class FakeBridge:
         stereo_batch_submit_abi_available = True
+        finished_drawing_semaphore_abi_available = True
+
+        def __init__(self):
+            self.active_eye = 0
 
         def apply_animations(self, _seconds):
             pass
 
         def set_active_eye(self, eye_index):
+            self.active_eye = eye_index
             calls.append(f"active:{eye_index}")
 
         def set_acquired_image(self, image_index):
@@ -2798,13 +2868,16 @@ def test_projection_batches_filament_stereo_pair_into_one_finish_wait(
             calls.append("begin")
 
         def end_frame(self):
-            raise AssertionError("legacy per-eye wait must not be used")
+            calls.append("end")
 
         def end_frame_deferred(self):
-            calls.append("deferred")
+            raise AssertionError("unstable deferred submit must not be used")
 
         def finish_frame_batch(self):
-            calls.append("finish_batch")
+            raise AssertionError("unstable batch finish must not be used")
+
+        def get_finished_drawing_semaphore(self):
+            return f"finished:{self.active_eye}"
 
     presenter = OpenXrVulkanPresenter(
         on_breakdown_add_time=lambda name, _seconds: timing_names.append(name)
@@ -2815,6 +2888,7 @@ def test_projection_batches_filament_stereo_pair_into_one_finish_wait(
         _EyeSwapchain("right", [SimpleNamespace(image=None)], 1, 1),
     ]
     presenter.filament_bridge = FakeBridge()
+    presenter.vulkan = SimpleNamespace()
     presenter._apply_filament_profile = lambda views: views
     presenter._report_screen_resolution = lambda *_args: None
     presenter._apply_screen_sampling_policy = lambda *_args: None
@@ -2835,12 +2909,10 @@ def test_projection_batches_filament_stereo_pair_into_one_finish_wait(
 
     assert presenter._render_projection_layer([object(), object()], None) == "projection"
     assert calls.count("begin") == 2
-    assert calls.count("deferred") == 2
-    assert calls.count("finish_batch") == 1
-    assert "openxr_filament_eye0_deferred_submit" in timing_names
-    assert "openxr_filament_eye1_deferred_submit" in timing_names
-    assert "openxr_filament_stereo_finish_wait" in timing_names
-    assert not any(name.endswith("finish_wait") for name in timing_names if "eye" in name)
+    assert calls.count("end") == 2
+    assert "openxr_filament_eye0_finish_wait" in timing_names
+    assert "openxr_filament_eye1_finish_wait" in timing_names
+    assert "openxr_filament_stereo_finish_wait" not in timing_names
 
 
 def test_projection_layer_builder_owns_only_layer_assembly() -> None:

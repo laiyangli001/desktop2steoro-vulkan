@@ -16,6 +16,8 @@ class OpenXRAsyncValidation:
 LATEST_KEYS = {
     "rt_backend",
     "rt_depth_backend",
+    "rt_depth_slot",
+    "rt_depth_slot_count",
     "rt_output_format",
     "rt_output_dtype",
     "rt_output_pack",
@@ -66,7 +68,7 @@ class FPSBreakdown:
         }
         self.last_log = time.perf_counter()
         self.log_count = 0
-        self.log_limit = 1
+        self.log_limit = 5
         self.log_delay = 15.0
 
     def inc(self, name: str, amount: int | float = 1) -> None:
@@ -135,6 +137,14 @@ class FPSBreakdown:
                     self.stats[f"rt_{key}"] = float(value)
             self.stats["rt_backend"] = str(debug.get("backend", "unknown"))
             self.stats["rt_depth_backend"] = str(debug.get("runtime_depth_backend", "unknown"))
+            self.stats["rt_depth_slot"] = (
+                debug.get("runtime_depth_execution_slot")
+                if debug.get("runtime_depth_execution_slot") is not None
+                else "n/a"
+            )
+            self.stats["rt_depth_slot_count"] = int(
+                debug.get("runtime_depth_execution_slot_count", 1) or 1
+            )
             self.stats["rt_output_format"] = str(
                 getattr(runtime_result, "output_format", None) or debug.get("runtime_output_format", "unknown")
             )
@@ -374,6 +384,7 @@ class FPSBreakdown:
             f"rt_synth={stats.get('rt_synthesis_ms', 0.0):.2f}ms "
             f"rt_total={stats.get('rt_total_ms', 0.0):.2f}ms "
             f"rt_depth_backend={stats.get('rt_depth_backend', 'unknown')} "
+            f"rt_depth_slot={stats.get('rt_depth_slot', 'n/a')}/{stats.get('rt_depth_slot_count', 1)} "
             f"rt_out={stats.get('rt_output_dtype', 'unknown')} "
             f"rt_pack={stats.get('rt_output_pack', 'n/a')} "
             f"rt_sbs={stats.get('rt_sbs_backend', 'unknown')} "

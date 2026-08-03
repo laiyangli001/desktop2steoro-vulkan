@@ -379,12 +379,47 @@ def _cuda_event_ready(event) -> bool:
         return True
 
 
-def _runtime_pending_depth_limit() -> int:
-    value = str(os.environ.get("D2S_RUNTIME_PENDING_CUDA_DEPTH", "1") or "1").strip()
+def _runtime_supports_dual_cuda_pending(ctx: RuntimePipelineContext) -> bool:
+    if ctx.run_mode != "OpenXR" or not _openxr_full_synthesis_enabled(ctx):
+        return False
+    runtime = ctx.stereo_runtime
+    provider = getattr(runtime, "depth_provider", None)
+    if int(getattr(provider, "pipeline_slot_count", 1)) < 2:
+        return False
+    if bool(getattr(getattr(runtime, "config", None), "profile_sync", False)):
+        return False
+    resolved_backend = str(
+        getattr(runtime, "_resolved_stereo_compute_backend", "") or ""
+    ).strip().lower()
+    if resolved_backend not in {"triton", "cuda", "cuda_triton"}:
+        # The Presenter-delayed Vulkan request has a separate consumer lease.
+        # Keep that path single-pending until the lease reaches the depth slot.
+        return False
+    realtime_config = _openxr_realtime_synthesis_config(
+        getattr(runtime, "stereo_config", None)
+    )
+    if bool(getattr(realtime_config, "temporal", False)):
+        return False
+    convergence = getattr(realtime_config, "convergence", None)
+    if str(getattr(type(convergence), "__module__", "")).startswith("torch"):
+        return False
+    return True
+
+
+def _runtime_pending_depth_limit(ctx: RuntimePipelineContext | None = None) -> int:
+    raw = str(os.environ.get("D2S_RUNTIME_PENDING_CUDA_DEPTH", "auto") or "auto").strip().lower()
+    requested: int | None
     try:
-        return max(1, int(value))
+        requested = max(1, int(raw))
     except ValueError:
+        requested = None
+    if requested is None:
+        requested = 2
+    if ctx is None or not _runtime_supports_dual_cuda_pending(ctx):
         return 1
+    provider = getattr(ctx.stereo_runtime, "depth_provider", None)
+    slot_count = max(1, int(getattr(provider, "pipeline_slot_count", 1)))
+    return min(slot_count, requested)
 
 
 def _runtime_pending_cuda_wait_s(ctx) -> float:
@@ -559,6 +594,13 @@ class RuntimePipelineLoop:
         self._last_algorithm_output_time = 0.0
         self._prepared = False
         self._consecutive_runtime_errors = 0
+        self._dual_pending_cooldown_until = 0.0
+
+    def _pending_depth_limit(self) -> int:
+        limit = _runtime_pending_depth_limit(self.context)
+        if limit > 1 and time.perf_counter() < self._dual_pending_cooldown_until:
+            return 1
+        return limit
 
     def _rebuild_after_consecutive_failures(self) -> None:
         threshold_text = os.environ.get("D2S_RUNTIME_REBUILD_AFTER_ERRORS", "3")
@@ -619,6 +661,10 @@ class RuntimePipelineLoop:
         if runtime_q_was_full:
             ctx.breakdown_inc("runtime_overwrite")
             ctx.source_stat_inc("runtime_overwrite")
+            if _runtime_pending_depth_limit(ctx) > 1:
+                self._dual_pending_cooldown_until = time.perf_counter() + 1.0
+                ctx.breakdown_inc("runtime_pending_cuda_backoff")
+                ctx.source_stat_inc("runtime_pending_cuda_backoff")
         ctx.breakdown_add_time("rt_put", time.perf_counter() - queue_put_start_time)
         if pending_since is not None:
             ctx.breakdown_add_time("rt_pending_age", time.perf_counter() - pending_since)
@@ -641,7 +687,7 @@ class RuntimePipelineLoop:
                 ready_index = index
                 break
         if ready_index is None:
-            pending_limit = _runtime_pending_depth_limit()
+            pending_limit = self._pending_depth_limit()
             if len(self._pending_runtime_items) > pending_limit:
                 self._pending_runtime_items[:] = self._pending_runtime_items[-pending_limit:]
             return 0
@@ -677,6 +723,18 @@ class RuntimePipelineLoop:
         ctx.breakdown_add_time("rt_pending_wait", time.perf_counter() - wait_start)
         return 0
 
+    def _retain_latest_raw_while_cuda_pending(self) -> None:
+        """Leave raw_q populated so CUDA completion can consume it immediately."""
+        ctx = self.context
+        # raw_q is a latest-frame overwrite queue. Removing its current item
+        # here creates an avoidable empty interval: when the CUDA event becomes
+        # ready, the runtime has to wait for the following capture tick. Keep
+        # the slot occupied instead; the capture producer will atomically
+        # replace it with newer content while preserving low-latency semantics.
+        ctx.source_stat_inc("runtime_pending_cuda_inflight")
+        ctx.breakdown_inc("runtime_pending_cuda_inflight")
+        time.sleep(min(max(float(ctx.time_sleep), 0.0005), 0.001))
+
     def run(self) -> None:
         ctx = self.context
         while not ctx.shutdown_event.is_set():
@@ -701,19 +759,10 @@ class RuntimePipelineLoop:
                     time.sleep(0.01)
                     continue
                 self._publish_ready_pending_items()
-                if len(self._pending_runtime_items) >= _runtime_pending_depth_limit():
+                if len(self._pending_runtime_items) >= self._pending_depth_limit():
                     if self._publish_ready_pending_items_until(_runtime_pending_cuda_wait_s(ctx)):
                         continue
-                    try:
-                        ctx.queue_drain_latest(ctx.raw_q, ctx.raw_q.get_nowait())
-                        ctx.source_stat_inc("raw_get", last_raw_get_ts=time.perf_counter())
-                        ctx.breakdown_inc("raw_get")
-                        ctx.source_stat_inc("runtime_drop_cuda_inflight")
-                        ctx.breakdown_inc("runtime_drop_cuda_inflight")
-                    except queue.Empty:
-                        ctx.source_stat_inc("runtime_pending_cuda_inflight")
-                        ctx.breakdown_inc("runtime_pending_cuda_inflight")
-                        time.sleep(min(ctx.time_sleep, 0.001))
+                    self._retain_latest_raw_while_cuda_pending()
                     continue
 
                 _apply_latest_settings_snapshot(ctx)
@@ -735,7 +784,7 @@ class RuntimePipelineLoop:
                     ctx.breakdown_inc("runtime_diag_raw")
                     continue
 
-                if len(self._pending_runtime_items) >= _runtime_pending_depth_limit() and not _cuda_event_ready(self._last_cuda_ready_event):
+                if len(self._pending_runtime_items) >= self._pending_depth_limit() and not _cuda_event_ready(self._last_cuda_ready_event):
                     ctx.source_stat_inc("runtime_drop_cuda_inflight")
                     ctx.breakdown_inc("runtime_drop_cuda_inflight")
                     continue
@@ -912,7 +961,7 @@ class RuntimePipelineLoop:
                     self._pending_runtime_items.append(
                         (runtime_result, capture_start_time, process_latency, runtime_latency, time.perf_counter())
                     )
-                    pending_limit = _runtime_pending_depth_limit()
+                    pending_limit = self._pending_depth_limit()
                     if len(self._pending_runtime_items) > pending_limit:
                         self._pending_runtime_items[:] = self._pending_runtime_items[-pending_limit:]
                     ctx.breakdown_inc("runtime_pending_cuda")

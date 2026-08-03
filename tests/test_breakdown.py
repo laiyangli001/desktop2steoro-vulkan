@@ -1,7 +1,7 @@
 from utils.breakdown import FPSBreakdown
 
 
-def test_fps_breakdown_logs_once_after_initial_delay(capsys):
+def test_fps_breakdown_logs_five_times_at_15_second_intervals(capsys):
     breakdown = FPSBreakdown(enabled=True, target_fps=60)
     start = breakdown.last_log
     breakdown.inc("capture", 10)
@@ -13,7 +13,11 @@ def test_fps_breakdown_logs_once_after_initial_delay(capsys):
     first = capsys.readouterr().out
     assert first.count("[FPSBreakdown]") == 1
 
-    breakdown.log(now=start + 30.0)
+    for index in range(2, 6):
+        breakdown.log(now=start + 15.0 * index)
+        assert capsys.readouterr().out.count("[FPSBreakdown]") == 1
+
+    breakdown.log(now=start + 90.0)
     assert "[FPSBreakdown]" not in capsys.readouterr().out
 
 

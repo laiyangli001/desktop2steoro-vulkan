@@ -21,6 +21,9 @@ def _directional_content_aware_radius3_kernel(
     depth_edge_threshold,
     shift_edge_threshold_px,
     has_shift: tl.constexpr,
+    mask_batches: tl.constexpr,
+    depth_batches: tl.constexpr,
+    shift_batches: tl.constexpr,
     feather_radius: tl.constexpr,
     block: tl.constexpr,
 ):
@@ -31,22 +34,43 @@ def _directional_content_aware_radius3_kernel(
     x = pixel - y * width
 
     image_base = batch * 3 * pixels
-    aux_base = batch * pixels
+    mask_base = tl.minimum(batch, mask_batches - 1) * pixels
+    depth_base = tl.minimum(batch, depth_batches - 1) * pixels
+    shift_base = tl.minimum(batch, shift_batches - 1) * pixels
+    if feather_radius == 0:
+        fill_mask = tl.load(mask + mask_base + pixel, mask=active, other=0.0)
+    else:
+        mask_acc = tl.zeros((block,), tl.float32)
+        for dy in tl.static_range(-feather_radius, feather_radius + 1):
+            yy = y + dy
+            valid_y = (yy >= 0) & (yy < height)
+            safe_y = tl.minimum(tl.maximum(yy, 0), height - 1)
+            for dx in tl.static_range(-feather_radius, feather_radius + 1):
+                xx = x + dx
+                valid = active & valid_y & (xx >= 0) & (xx < width)
+                safe_x = tl.minimum(tl.maximum(xx, 0), width - 1)
+                sample_pixel = safe_y * width + safe_x
+                mask_acc += tl.load(mask + mask_base + sample_pixel, mask=valid, other=0.0)
+        feather_width: tl.constexpr = feather_radius * 2 + 1
+        fill_mask = mask_acc / float(feather_width * feather_width)
+    fill_mask = tl.minimum(tl.maximum(fill_mask, 0.0), 1.0)
+    active = active & (fill_mask > 0.0)
+
     image0 = tl.load(image + image_base + pixel, mask=active, other=0.0)
     image1 = tl.load(image + image_base + pixels + pixel, mask=active, other=0.0)
     image2 = tl.load(image + image_base + 2 * pixels + pixel, mask=active, other=0.0)
-    depth_value = tl.load(depth + aux_base + pixel, mask=active, other=0.0)
+    depth_value = tl.load(depth + depth_base + pixel, mask=active, other=0.0)
 
     x_left = tl.maximum(x - 1, 0)
     x_right = tl.minimum(x + 1, width - 1)
     left_pixel = y * width + x_left
     right_pixel = y * width + x_right
-    left_depth = tl.load(depth + aux_base + left_pixel, mask=active, other=0.0)
-    right_depth = tl.load(depth + aux_base + right_pixel, mask=active, other=0.0)
+    left_depth = tl.load(depth + depth_base + left_pixel, mask=active, other=0.0)
+    right_depth = tl.load(depth + depth_base + right_pixel, mask=active, other=0.0)
     reliable = tl.abs(right_depth - left_depth) > depth_edge_threshold
     if has_shift:
-        left_shift = tl.load(shift_px + aux_base + left_pixel, mask=active, other=0.0)
-        right_shift = tl.load(shift_px + aux_base + right_pixel, mask=active, other=0.0)
+        left_shift = tl.load(shift_px + shift_base + left_pixel, mask=active, other=0.0)
+        right_shift = tl.load(shift_px + shift_base + right_pixel, mask=active, other=0.0)
         reliable = reliable | (tl.abs(right_shift - left_shift) > shift_edge_threshold_px)
 
     use_right = right_depth < left_depth
@@ -108,32 +132,14 @@ def _directional_content_aware_radius3_kernel(
     rgb_edge = tl.maximum(rgb_edge_x, rgb_edge_y)
     protection = tl.minimum(tl.maximum((rgb_edge - 0.20) / 0.30, 0.0), 1.0)
 
-    left_depth_for_edge = tl.load(depth + aux_base + left_pixel, mask=active, other=0.0)
-    up_depth = tl.load(depth + aux_base + up_pixel, mask=active, other=0.0)
+    left_depth_for_edge = tl.load(depth + depth_base + left_pixel, mask=active, other=0.0)
+    up_depth = tl.load(depth + depth_base + up_pixel, mask=active, other=0.0)
     depth_edge_x = tl.where(x > 0, tl.abs(depth_value - left_depth_for_edge), 0.0)
     depth_edge_y = tl.where(y > 0, tl.abs(depth_value - up_depth), 0.0)
     depth_edge = tl.maximum(depth_edge_x, depth_edge_y)
     depth_protection = tl.minimum(tl.maximum((depth_edge - 0.04) / 0.12, 0.0), 1.0) * 0.5
     protection = tl.maximum(protection, depth_protection)
 
-    if feather_radius == 0:
-        fill_mask = tl.load(mask + aux_base + pixel, mask=active, other=0.0)
-    else:
-        mask_acc = tl.zeros((block,), tl.float32)
-        for dy in tl.static_range(-feather_radius, feather_radius + 1):
-            yy = y + dy
-            valid_y = (yy >= 0) & (yy < height)
-            safe_y = tl.minimum(tl.maximum(yy, 0), height - 1)
-            for dx in tl.static_range(-feather_radius, feather_radius + 1):
-                xx = x + dx
-                valid = active & valid_y & (xx >= 0) & (xx < width)
-                safe_x = tl.minimum(tl.maximum(xx, 0), width - 1)
-                sample_pixel = safe_y * width + safe_x
-                mask_acc += tl.load(mask + aux_base + sample_pixel, mask=valid, other=0.0)
-        feather_width: tl.constexpr = feather_radius * 2 + 1
-        fill_mask = mask_acc / float(feather_width * feather_width)
-
-    fill_mask = tl.minimum(tl.maximum(fill_mask, 0.0), 1.0)
     blend = fill_mask * strength * (1.0 - protection * 0.70)
     blend = tl.minimum(tl.maximum(blend, 0.0), 1.0)
     out0 = image0 + (fill0 - image0) * blend
@@ -199,15 +205,15 @@ def directional_content_aware_fill_radius3(
 ) -> torch.Tensor:
     image = image.contiguous()
     batch, _, height, width = image.shape
-    mask = mask.expand(batch, -1, -1, -1).contiguous()
-    depth = depth.expand(batch, -1, -1, -1).contiguous()
+    mask = mask.contiguous()
+    depth = depth.contiguous()
     if shift_px is None:
         shift = depth
         has_shift = False
     else:
-        shift = shift_px.expand(batch, -1, -1, -1).contiguous()
+        shift = shift_px.contiguous()
         has_shift = True
-    out = torch.empty_like(image)
+    out = image.clone()
     pixels = height * width
     block = 128
     grid = (triton.cdiv(pixels, block), batch)
@@ -224,6 +230,9 @@ def directional_content_aware_fill_radius3(
         float(depth_edge_threshold),
         float(shift_edge_threshold_px),
         has_shift,
+        int(mask.shape[0]),
+        int(depth.shape[0]),
+        int(shift.shape[0]),
         int(mask_feather_radius),
         block,
     )

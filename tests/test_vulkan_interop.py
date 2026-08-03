@@ -2,6 +2,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from viewer.vulkan_context import VulkanContext
+
 from viewer.vulkan_interop import (
     RegisteredImageImporter,
     VulkanImageImportRequest,
@@ -95,3 +97,28 @@ def test_sampling_transition_is_explicitly_separate_from_cuda_prepare() -> None:
     assert "signal_semaphore: Any | None = None" in source
     assert "pWaitSemaphores=wait_semaphores or None" in source
     assert "pSignalSemaphores=signal_semaphores or None" in source
+
+
+def test_external_image_release_short_circuits_after_device_loss() -> None:
+    context = object.__new__(VulkanContext)
+    context._device_lost = True
+
+    assert context.release_external_image_from_sampling(object()) == 0
+
+
+def test_submit_on_latches_device_loss_from_any_vulkan_stage() -> None:
+    class VkErrorDeviceLost(Exception):
+        pass
+
+    context = object.__new__(VulkanContext)
+    context._device_lost = False
+    context._device_lost_error = None
+    context._submit_on_unchecked = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        VkErrorDeviceLost()
+    )
+
+    with pytest.raises(VkErrorDeviceLost):
+        context.submit_on("graphics", lambda _command: None)
+
+    assert context.device_lost is True
+    assert context.device_lost_error == "VkErrorDeviceLost"

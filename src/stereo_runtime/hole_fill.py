@@ -53,8 +53,6 @@ def _match_aux_to_image(aux: torch.Tensor | None, image: torch.Tensor) -> torch.
     aux = ensure_b1hw(aux).to(device=image.device, dtype=image.dtype)
     if aux.shape[-2:] != image.shape[-2:]:
         aux = F.interpolate(aux, size=image.shape[-2:], mode="bilinear", align_corners=False)
-    if aux.shape[0] == 1 and image.shape[0] > 1:
-        aux = aux.expand(image.shape[0], -1, -1, -1)
     return aux
 
 
@@ -114,8 +112,6 @@ def directional_edge_aware_fill(
     mask = ensure_b1hw(mask).to(device=image.device, dtype=image.dtype).clamp(0, 1)
     if mask.shape[-2:] != image.shape[-2:]:
         mask = F.interpolate(mask, size=image.shape[-2:], mode="bilinear", align_corners=False)
-    if mask.shape[0] == 1 and image.shape[0] > 1:
-        mask = mask.expand(image.shape[0], -1, -1, -1)
     depth = _match_aux_to_image(depth, image)
     shift_px = _match_aux_to_image(shift_px, image)
     backend = directional_edge_aware_fill_backend(

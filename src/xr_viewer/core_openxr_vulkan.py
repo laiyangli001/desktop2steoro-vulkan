@@ -3119,7 +3119,11 @@ class OpenXrVulkanPresenter(
 
     def close(self) -> None:
         xr = self.xr
-        if self.vulkan is not None:
+        vulkan_device_lost = bool(
+            self.vulkan is not None
+            and getattr(self.vulkan, "device_lost", False)
+        )
+        if self.vulkan is not None and not vulkan_device_lost:
             try:
                 self.vulkan.wait_idle()
             except Exception:
@@ -3129,7 +3133,7 @@ class OpenXrVulkanPresenter(
         # objects are still alive.
         self._drop_output_frames()
 
-        if self.vulkan is not None:
+        if self.vulkan is not None and not vulkan_device_lost:
             try:
                 self.vulkan.wait_idle()
             except Exception:
@@ -3213,10 +3217,11 @@ class OpenXrVulkanPresenter(
         self._provisional_vk_instance = None
 
         if xr is not None and self.instance is not None:
-            try:
-                xr.destroy_instance(self.instance)
-            except Exception:
-                pass
+            if not vulkan_device_lost:
+                try:
+                    xr.destroy_instance(self.instance)
+                except Exception:
+                    pass
             self.instance = None
 
         self.system_id = None
@@ -3723,6 +3728,13 @@ class OpenXrVulkanPresenter(
         if frame is None:
             return
         metadata = frame.metadata or {}
+        if metadata.get("_vulkan_release_attempted"):
+            return
+        # A frame can appear in displayed/rendering/pending bookkeeping while
+        # unwinding an exception.  Its callbacks own idempotent CPU cleanup,
+        # but Vulkan submissions must never be attempted twice—especially
+        # after VK_ERROR_DEVICE_LOST made every handle terminal.
+        metadata["_vulkan_release_attempted"] = True
         consumer_release = metadata.get("_vulkan_source_consumer_release")
         consumer_semaphores = metadata.get(
             "_vulkan_consumer_release_semaphores"
@@ -4564,14 +4576,10 @@ class OpenXrVulkanPresenter(
                     self.filament_bridge.apply_animations(animation_time)
             record_time("openxr_projection_shared_prepare", shared_prepare_started)
 
-            batch_filament_submit = bool(
-                self.filament_bridge is not None
-                and getattr(
-                    self.filament_bridge,
-                    "stereo_batch_submit_abi_available",
-                    False,
-                )
-            )
+            # Pair-wide deferred submission can trigger a Windows GPU watchdog
+            # reset with the Virtual Desktop OpenXR runtime. Keep the proven
+            # per-eye flushAndWait path until that native ABI is stable.
+            batch_filament_submit = False
 
             for eye_index, (eye, image_index) in enumerate(acquired_images):
                 screen_source = None
