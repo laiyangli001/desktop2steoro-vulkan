@@ -22,6 +22,9 @@ def main() -> int:
     platform = root / "filament/backend/include/backend/Platform.h"
     vulkan_platform_h = root / "filament/backend/include/backend/platforms/VulkanPlatform.h"
     vulkan_platform_cpp = root / "filament/backend/src/vulkan/platform/VulkanPlatform.cpp"
+    vulkan_driver_cpp = root / "filament/backend/src/vulkan/VulkanDriver.cpp"
+    vulkan_handles_h = root / "filament/backend/src/vulkan/VulkanHandles.h"
+    vulkan_handles_cpp = root / "filament/backend/src/vulkan/VulkanHandles.cpp"
 
     replace_once(
         platform,
@@ -79,6 +82,107 @@ def main() -> int:
 """,
         """    virtual ImageData createVkImageFromExternal(ExternalImageHandleRef image,
             uint32_t logicalWidth, uint32_t logicalHeight) const;
+""",
+    )
+
+    # Filament's Vulkan driver keeps a single default RenderTarget. With two
+    # OpenXR eye SwapChains, isSwapchainBound() can return true for eye0 while
+    # the driver is now making eye1 current, so eye1 renders into eye0's image
+    # and the shared semaphores eventually trigger VK_ERROR_DEVICE_LOST. Track
+    # which swapchain/image is actually bound and rebind on eye switches.
+    replace_once(
+        vulkan_handles_h,
+        """    bool isSwapchainBound() const {
+        return isSwapChain() && mInfo->colors[0];
+    }
+""",
+        """    bool isSwapchainBound() const {
+        return isSwapChain() && mInfo->colors[0];
+    }
+
+    bool isBoundToSwapChain(void const* swapchain, void const* image) const {
+        return isSwapchainBound() &&
+                mBoundSwapChain == swapchain &&
+                mBoundSwapChainImage == image;
+    }
+""",
+    )
+    replace_once(
+        vulkan_handles_h,
+        """    bool mOffscreen;
+    bool mProtected;
+
+    std::unique_ptr<Auxiliary> mInfo;
+""",
+        """    bool mOffscreen;
+    bool mProtected;
+    void const* mBoundSwapChain = nullptr;
+    void const* mBoundSwapChainImage = nullptr;
+
+    std::unique_ptr<Auxiliary> mInfo;
+""",
+    )
+    replace_once(
+        vulkan_handles_h,
+        """        std::swap(mInfo, target.mInfo);
+""",
+        """        std::swap(mInfo, target.mInfo);
+        std::swap(mBoundSwapChain, target.mBoundSwapChain);
+        std::swap(mBoundSwapChainImage, target.mBoundSwapChainImage);
+""",
+    )
+    replace_once(
+        vulkan_handles_cpp,
+        """    mInfo->colors.set(0);
+}
+
+void VulkanRenderTarget::releaseSwapchain() {
+    mInfo->colors = {};
+    mInfo->attachments.clear();
+}
+""",
+        """    mInfo->colors.set(0);
+    mBoundSwapChain = swapchain.get();
+    mBoundSwapChainImage = swapchain->getCurrentColor().get();
+}
+
+void VulkanRenderTarget::releaseSwapchain() {
+    mInfo->colors = {};
+    mInfo->attachments.clear();
+    mBoundSwapChain = nullptr;
+    mBoundSwapChainImage = nullptr;
+}
+""",
+    )
+    replace_once(
+        vulkan_driver_cpp,
+        """    // Swapchain has already been bound to the default render target.  We just return.
+    if (mDefaultRenderTarget->isSwapchainBound()) {
+        // true means that the rendertarget has the right images attached.
+        return true;
+    }
+
+    auto const [acquired, backingChanged] = mCurrentSwapChain->acquire();
+""",
+        """    auto const [acquired, backingChanged] = mCurrentSwapChain->acquire();
+""",
+    )
+    replace_once(
+        vulkan_driver_cpp,
+        """    if (acquired) {
+        mDefaultRenderTarget->bindSwapChain(mCurrentSwapChain);
+        return true;
+    }
+""",
+        """    if (acquired) {
+        void const* color = mCurrentSwapChain->getCurrentColor().get();
+        if (!mDefaultRenderTarget->isBoundToSwapChain(
+                mCurrentSwapChain.get(), color)) {
+            mDefaultRenderTarget->releaseSwapchain();
+            mDefaultRenderTarget->bindSwapChain(mCurrentSwapChain);
+        }
+        return true;
+    }
 """,
     )
 

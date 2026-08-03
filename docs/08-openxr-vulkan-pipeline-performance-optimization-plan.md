@@ -108,6 +108,13 @@ Virtual Desktop OpenXR 实机上，两个 Filament Renderer 同时处于 in-flig
 View/Camera/Swapchain；batch 仍使用 `end_frame_deferred()` 连续入队，并在
 `finish_frame_batch()` 统一等待，不再创建两个并发 Renderer 帧。
 
+共享 Renderer 后仍需修复 Filament 1.74 Vulkan backend 的多 SwapChain 状态：
+`VulkanDriver` 只保存一个 `mDefaultRenderTarget`，且 `isSwapchainBound()` 不区分左右眼
+SwapChain，导致切换到 eye1 时仍绑定 eye0 的默认 RenderTarget。D2S backend patch 让
+`VulkanRenderTarget` 记录当前绑定的 SwapChain/image，`acquireNextSwapchainImage()` 在
+目标 image 变化时先 `releaseSwapchain()` 再 `bindSwapChain()`，从而消除双 SwapChain
+的渲染目标污染和 device-lost。
+
 ### 阶段 1：VulkanContext 真正分队列
 
 当前 `VulkanContext` 仍使用全局锁和共享 `_frame_index`，会串行化 graphics、compute、transfer 的主机提交。

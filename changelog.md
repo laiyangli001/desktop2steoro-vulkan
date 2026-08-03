@@ -3,6 +3,10 @@
 本文件只记录用户可感知的功能、行为变化、重要修复和架构里程碑，不记录逐次调试过程。新记录按日期倒序追加，并将同一目标的连续修改归纳为一条有效结果。
 
 ## 2026-08-03
+- 修复 Filament Vulkan backend 对 OpenXR 左右眼两个 SwapChain 的单例默认 RenderTarget
+  污染：`VulkanDriver::acquireNextSwapchainImage()` 现在记录当前绑定的 SwapChain/image，
+  切换眼时先释放旧绑定再绑定当前眼，避免第二只眼误渲染到第一只眼的图像并触发
+  `VK_ERROR_DEVICE_LOST`。
 - 修复 OpenXR 双眼 deferred batch 触发 Virtual Desktop `VK_ERROR_DEVICE_LOST` 的根因：
   左右眼不再创建两个 Filament Renderer 同时 in-flight，改为共享一个 Renderer；
   左右眼仍保留独立 View/Camera/Swapchain，batch 提交和一次帧级完成等待继续生效。
