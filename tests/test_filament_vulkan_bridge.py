@@ -29,6 +29,18 @@ def test_default_bridge_path_matches_platform() -> None:
     assert path.name.startswith(("filament_bridge", "libfilament_bridge"))
 
 
+def test_remote_filament_build_enables_multiview_without_stale_sdk_cache() -> None:
+    workflow = (
+        Path(__file__).resolve().parents[1] / ".github/workflows/filament-bridge.yml"
+    ).read_text(encoding="utf-8")
+
+    assert workflow.count("-DFILAMENT_ENABLE_MULTIVIEW=ON") == 2
+    assert workflow.count(
+        "hashFiles('native/filament/version.json', "
+        "'native/filament/patches/**', '.github/workflows/filament-bridge.yml')"
+    ) == 2
+
+
 def test_pointer_value_accepts_integer_and_c_void_p() -> None:
     assert _as_pointer_value(17) == 17
     assert _as_pointer_value(ctypes.c_void_p(23)) == 23

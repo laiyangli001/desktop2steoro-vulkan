@@ -7,7 +7,9 @@
   由单个 Filament multiview frame 同时写入左右 array layer，并在一次完成信号消费后提交
   两个 Projection View。仅在 Bridge ABI、GPU multiview 能力和双眼尺寸均满足时启用；
   layered 目标创建失败会只销毁临时资源并保留原双 SwapChain 逐眼路径，不再调用已证实
-  不稳定的 `end_frame_deferred()` / `finish_frame_batch()`。
+  不稳定的 `end_frame_deferred()` / `finish_frame_batch()`。远程 Filament SDK 构建现强制开启
+  `FILAMENT_ENABLE_MULTIVIEW`，并随工作流配置变更失效旧缓存，避免 Engine 启动时解析缺失的
+  内置 multiview 材质而异常退出。
 - 禁用 OpenXR 双 SwapChain 的 Filament deferred batch 默认路径：实机确认该路径无论使用
   双 Renderer 还是共享 Renderer，都会在固定运行时间后于 `finish_frame_batch()` 内触发
   `VK_ERROR_DEVICE_LOST` 或原生 access violation。Projection 恢复逐眼完成后再切换

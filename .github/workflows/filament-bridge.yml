@@ -32,7 +32,7 @@ jobs:
           path: |
             ${{ runner.temp }}/filament-source
             ${{ runner.temp }}/filament-install
-          key: filament-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/filament/version.json', 'native/filament/patches/**') }}
+          key: filament-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/filament/version.json', 'native/filament/patches/**', '.github/workflows/filament-bridge.yml') }}
 
       - name: Build patched Filament Vulkan backend
         shell: pwsh
@@ -50,6 +50,7 @@ jobs:
               -DCMAKE_BUILD_TYPE=Release `
               -DCMAKE_INSTALL_PREFIX="$installRoot" `
               -DFILAMENT_SUPPORTS_VULKAN=ON `
+              -DFILAMENT_ENABLE_MULTIVIEW=ON `
               -DFILAMENT_BUILD_FILAMAT=ON `
               -DFILAMENT_SKIP_SAMPLES=ON
             cmake --build (Join-Path $sourceRoot 'out/d2s') --config Release --target INSTALL --parallel 2
@@ -107,7 +108,7 @@ jobs:
           path: |
             ${{ runner.temp }}/filament-source
             ${{ runner.temp }}/filament-install
-          key: filament-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/filament/version.json', 'native/filament/patches/**') }}
+          key: filament-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/filament/version.json', 'native/filament/patches/**', '.github/workflows/filament-bridge.yml') }}
 
       - name: Install Linux Vulkan development files
         if: matrix.needs_vulkan_dev
@@ -137,6 +138,7 @@ jobs:
               -DCMAKE_CXX_COMPILER=clang++ \
               -DCMAKE_INSTALL_PREFIX="$install_root" \
               -DFILAMENT_SUPPORTS_VULKAN=ON \
+              -DFILAMENT_ENABLE_MULTIVIEW=ON \
               -DFILAMENT_BUILD_FILAMAT=ON \
               -DFILAMENT_SKIP_SAMPLES=ON
             cmake --build "$source_root/out/d2s" --target install --parallel 2
