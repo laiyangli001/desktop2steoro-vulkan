@@ -3147,6 +3147,7 @@ def test_projection_keeps_unsafe_stereo_batch_disabled(
 
 def test_multiview_projection_renders_one_layered_filament_frame(monkeypatch) -> None:
     calls = []
+    capture_calls = []
 
     class FakeXr:
         INFINITE_DURATION = 1
@@ -3213,13 +3214,23 @@ def test_multiview_projection_renders_one_layered_filament_frame(monkeypatch) ->
 
     presenter = OpenXrVulkanPresenter()
     presenter.xr = FakeXr
-    presenter.vulkan = SimpleNamespace(_lock=lock, submit_on=submit_on)
+    presenter.vulkan = SimpleNamespace(
+        _lock=lock,
+        submit_on=submit_on,
+        vk=SimpleNamespace(
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL=1,
+            VK_ACCESS_SHADER_READ_BIT=2,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT=4,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT=8,
+        ),
+    )
     presenter.swapchains = [
         _EyeSwapchain(
             "layered",
             [SimpleNamespace(image=ctypes.c_void_p(1))],
             10,
             20,
+            resources=["layered-resource"],
             array_size=2,
         )
     ]
@@ -3234,6 +3245,9 @@ def test_multiview_projection_renders_one_layered_filament_frame(monkeypatch) ->
     presenter._update_filament_screen_light = lambda *_args: None
     presenter._update_filament_glow = lambda *_args: None
     presenter._update_filament_controllers = lambda *_args: None
+    presenter._maybe_capture_visual_regression_frame = (
+        lambda _frame, **kwargs: capture_calls.append(kwargs)
+    )
     monkeypatch.setattr(
         "xr_viewer.core_openxr_vulkan._update_filament_stereo_camera",
         lambda *_args, **_kwargs: calls.append("stereo-camera"),
@@ -3246,9 +3260,14 @@ def test_multiview_projection_renders_one_layered_filament_frame(monkeypatch) ->
     frame = VulkanStereoOutputFrame(
         frame_id=7,
         timestamp=0.0,
-        left_eye=SimpleNamespace(image="left", width=10, height=20, format=43),
-        right_eye=SimpleNamespace(image="right", width=10, height=20, format=43),
+        left_eye=SimpleNamespace(
+            image="left", width=10, height=20, format=43, resource="left-resource"
+        ),
+        right_eye=SimpleNamespace(
+            image="right", width=10, height=20, format=43, resource="right-resource"
+        ),
         metadata={
+            "visual_regression_dir": "capture",
             "_vulkan_source_prepare_for_sampling": (
                 lambda _frame_id, eye_index: ("left-ready", "right-ready")[eye_index]
             )
@@ -3264,6 +3283,15 @@ def test_multiview_projection_renders_one_layered_filament_frame(monkeypatch) ->
     assert ("submit", "graphics", ("left-ready", "right-ready")) in calls
     assert ("submit", "graphics", ("filament-finished",)) in calls
     assert frame.metadata["_vulkan_consumer_release_timeline"] == 42
+    assert [call["projection_array_layer"] for call in capture_calls] == [0, 1]
+    assert [call["projection_resource"] for call in capture_calls] == [
+        "layered-resource",
+        "layered-resource",
+    ]
+    assert [call["source_resource"] for call in capture_calls] == [
+        "left-resource",
+        "right-resource",
+    ]
 
 
 def test_multiview_source_failure_restores_active_eye(monkeypatch) -> None:
@@ -3355,6 +3383,53 @@ def test_projection_layer_builder_maps_multiview_to_array_layers() -> None:
         "stereo-chain",
         "stereo-chain",
     ]
+
+
+def test_copy_image_reads_selected_source_layer_into_destination_layer_zero() -> None:
+    barriers = []
+    copies = []
+
+    class RecordingVk:
+        def __getattr__(self, name):
+            return getattr(vk, name)
+
+        def vkCmdPipelineBarrier(self, *args):
+            barriers.append(args[-1])
+
+        def vkCmdCopyImage(self, *args):
+            copies.append(args[-1][0])
+
+    context = object.__new__(VulkanContext)
+    context.vk = RecordingVk()
+    context.queue_family_index = 0
+    context._closed = False
+    context._device_lost = False
+    context._image_states = ImageStateTracker(default_queue_family_index=0)
+    context.submit_on = lambda _role, record, **_kwargs: (record("commands"), 7)[1]
+    source = SimpleNamespace(
+        context=context,
+        image=vk.ffi.cast("VkImage", 1),
+        width=8,
+        height=4,
+        format=vk.VK_FORMAT_R8G8B8A8_UNORM,
+    )
+    destination = SimpleNamespace(
+        context=context,
+        image=vk.ffi.cast("VkImage", 2),
+        width=8,
+        height=4,
+        format=vk.VK_FORMAT_R8G8B8A8_UNORM,
+    )
+    context._image_states.update(1, ImageState(10, 11, 12, 0))
+    context._image_states.update(2, ImageState(20, 21, 22, 0))
+
+    assert context.copy_image(source, destination, source_array_layer=1) == 7
+    assert barriers[0][0].subresourceRange.baseArrayLayer == 1
+    assert barriers[0][1].subresourceRange.baseArrayLayer == 0
+    assert copies[0].srcSubresource.baseArrayLayer == 1
+    assert copies[0].dstSubresource.baseArrayLayer == 0
+    assert barriers[1][0].subresourceRange.baseArrayLayer == 1
+    assert barriers[1][1].subresourceRange.baseArrayLayer == 0
 
 
 def test_standalone_vulkan_context_smoke() -> None:

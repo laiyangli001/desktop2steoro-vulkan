@@ -601,7 +601,7 @@ def test_native_controller_animation_preserves_touch_semantics_without_abi_growt
     assert "uint32_t button_mask" in public_header
 
 
-def test_native_screen_glow_and_controllers_use_explicit_view_order() -> None:
+def test_native_foreground_uses_one_view_for_multiview_stereo() -> None:
     root = Path(__file__).resolve().parents[1]
     screen_source = (root / "native/filament/bridge/bridge_screen.cpp").read_text(
         encoding="utf-8"
@@ -635,3 +635,5 @@ def test_native_screen_glow_and_controllers_use_explicit_view_order() -> None:
         "bridge->renderer->render(eye.controller_guide_view);"
     )
     assert room < glow < controllers < guide
+    assert "0x01u | 0x02u | 0x04u | (1u << kScreenLayerBase)" in eye_source
+    assert "if (!bridge->multiview_active) {" in eye_source

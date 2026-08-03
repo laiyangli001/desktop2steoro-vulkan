@@ -793,8 +793,9 @@ class VulkanContext:
         wait_for_timeline: int | None = None,
         flip_x: bool = False,
         flip_y: bool = False,
+        source_array_layer: int = 0,
     ) -> int:
-        """Copy registered Vulkan images, optionally flipping the image on Y."""
+        """Copy one registered Vulkan image layer, optionally flipping it."""
 
         self._ensure_open()
         for resource in (source, destination):
@@ -804,6 +805,8 @@ class VulkanContext:
             raise VulkanCapabilityError("source and destination Vulkan images must differ")
         if int(source.width) != int(destination.width) or int(source.height) != int(destination.height):
             raise ValueError("Vulkan image copy dimensions must match")
+        if int(source_array_layer) < 0:
+            raise ValueError("source_array_layer must not be negative")
 
         vk = self.vk
         source_format = int(source.format)
@@ -852,7 +855,9 @@ class VulkanContext:
                     srcQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
                     dstQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
                     image=source.image,
-                    subresourceRange=_color_subresource_range(vk),
+                    subresourceRange=_color_subresource_range(
+                        vk, base_array_layer=source_array_layer
+                    ),
                 ),
                 vk.VkImageMemoryBarrier(
                     sType=vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
@@ -878,7 +883,13 @@ class VulkanContext:
                 len(to_transfer),
                 to_transfer,
             )
-            subresource = vk.VkImageSubresourceLayers(
+            source_subresource = vk.VkImageSubresourceLayers(
+                aspectMask=vk.VK_IMAGE_ASPECT_COLOR_BIT,
+                mipLevel=0,
+                baseArrayLayer=int(source_array_layer),
+                layerCount=1,
+            )
+            destination_subresource = vk.VkImageSubresourceLayers(
                 aspectMask=vk.VK_IMAGE_ASPECT_COLOR_BIT,
                 mipLevel=0,
                 baseArrayLayer=0,
@@ -900,12 +911,12 @@ class VulkanContext:
                     1,
                     [
                         vk.VkImageBlit(
-                            srcSubresource=subresource,
+                            srcSubresource=source_subresource,
                             srcOffsets=[
                                 vk.VkOffset3D(x=src_x0, y=src_y0, z=0),
                                 vk.VkOffset3D(x=src_x1, y=src_y1, z=1),
                             ],
-                            dstSubresource=subresource,
+                            dstSubresource=destination_subresource,
                             dstOffsets=[
                                 vk.VkOffset3D(x=0, y=0, z=0),
                                 vk.VkOffset3D(x=int(destination.width), y=int(destination.height), z=1),
@@ -924,9 +935,9 @@ class VulkanContext:
                     1,
                     [
                         vk.VkImageCopy(
-                            srcSubresource=subresource,
+                            srcSubresource=source_subresource,
                             srcOffset=vk.VkOffset3D(x=0, y=0, z=0),
-                            dstSubresource=subresource,
+                            dstSubresource=destination_subresource,
                             dstOffset=vk.VkOffset3D(x=0, y=0, z=0),
                             extent=vk.VkExtent3D(
                                 width=int(source.width), height=int(source.height), depth=1
@@ -944,7 +955,9 @@ class VulkanContext:
                     srcQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
                     dstQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
                     image=source.image,
-                    subresourceRange=_color_subresource_range(vk),
+                    subresourceRange=_color_subresource_range(
+                        vk, base_array_layer=source_array_layer
+                    ),
                 ),
                 vk.VkImageMemoryBarrier(
                 sType=vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
@@ -1650,12 +1663,12 @@ def _create_device(
     )
 
 
-def _color_subresource_range(vk: Any) -> Any:
+def _color_subresource_range(vk: Any, *, base_array_layer: int = 0) -> Any:
     return vk.VkImageSubresourceRange(
         aspectMask=vk.VK_IMAGE_ASPECT_COLOR_BIT,
         baseMipLevel=0,
         levelCount=1,
-        baseArrayLayer=0,
+        baseArrayLayer=int(base_array_layer),
         layerCount=1,
     )
 

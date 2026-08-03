@@ -2,6 +2,9 @@
 
 本文件只记录用户可感知的功能、行为变化、重要修复和架构里程碑，不记录逐次调试过程。新记录按日期倒序追加，并将同一目标的连续修改归纳为一条有效结果。
 
+## 2026-08-04
+- OpenXR multiview 视觉回归现可从同一个 `array_size=2` Projection SwapChain 分别导出 layer 0/1，稳定生成左右眼 Projection 截图与运行清单；实测定位并修复手柄和指南独立 View 丢失双眼视差的问题，multiview 现在通过同一个 foreground View 按既有渲染优先级一次输出屏幕、辉光、手柄和指南，旧双 SwapChain 路径保持原有分层渲染。
+
 ## 2026-08-03
 - 修复 OpenXR Filament multiview 将虚拟屏幕、房间和手柄渲染成单眼 2D 画面的问题：相机现在按
   Filament 契约使用中心头部绝对姿态和左右眼相对姿态，保留真实 IPD 视差；Bridge ABI 升级后，

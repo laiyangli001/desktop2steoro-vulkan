@@ -200,7 +200,8 @@ int bridge_eye_create_stereo_swapchain(
     eye.controller_view->setViewport(filament::Viewport{0, 0, width, height});
     eye.controller_guide_view->setViewport(filament::Viewport{0, 0, width, height});
     eye.foreground_view->setVisibleLayers(
-            0xff, static_cast<uint8_t>(0x02u | (1u << kScreenLayerBase)));
+            0xff, static_cast<uint8_t>(
+                    0x01u | 0x02u | 0x04u | (1u << kScreenLayerBase)));
     set_multiview_views(bridge, true);
     bridge->multiview_active = true;
     bridge_eye_activate(bridge, 0);
@@ -326,13 +327,14 @@ int bridge_eye_begin_frame(FilamentBridge* bridge) {
         bridge_screen_prepare_frame(bridge);
     }
     bridge->renderer->render(bridge->view);
-    // Composite screen and transparent Glow first, then controllers and laser,
-    // and finally the B-button guide. Splitting these layers across Views makes
-    // the ordering independent of Filament's opaque/transparent sorting.
+    // Multiview must render all foreground layers through one View. Sequential
+    // layered Views preserve only the first View's per-eye camera state.
     auto& eye = bridge->eyes[bridge->active_eye];
     bridge->renderer->render(eye.foreground_view);
-    bridge->renderer->render(eye.controller_view);
-    bridge->renderer->render(eye.controller_guide_view);
+    if (!bridge->multiview_active) {
+        bridge->renderer->render(eye.controller_view);
+        bridge->renderer->render(eye.controller_guide_view);
+    }
     return bridge->frame_active ? 1 : 0;
 }
 

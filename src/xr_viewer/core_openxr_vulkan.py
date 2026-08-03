@@ -4637,6 +4637,32 @@ class OpenXrVulkanPresenter(
         finish_started = time.perf_counter()
         bridge.end_frame()
         record_time("openxr_filament_multiview_finish_wait", finish_started)
+        if (
+            isinstance(output_frame, VulkanStereoOutputFrame)
+            and str(
+                (output_frame.metadata or {}).get("visual_regression_dir", "")
+            ).strip()
+        ):
+            for eye_index, source in enumerate(
+                (output_frame.left_eye, output_frame.right_eye)
+            ):
+                self._maybe_capture_visual_regression_frame(
+                    output_frame,
+                    eye_index=eye_index,
+                    source_resource=(
+                        source
+                        if isinstance(source, VulkanImageResource)
+                        else getattr(source, "resource", None)
+                    ),
+                    projection_resource=eye.resources[image_index],
+                    projection_array_layer=eye_index,
+                    source_layout=self.vulkan.vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    source_access_mask=self.vulkan.vk.VK_ACCESS_SHADER_READ_BIT,
+                    source_stage_mask=(
+                        self.vulkan.vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                        | self.vulkan.vk.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+                    ),
+                )
         return (
             bridge.get_finished_drawing_semaphore()
             if finished_semaphore_available
@@ -5007,6 +5033,7 @@ class OpenXrVulkanPresenter(
         eye_index: int,
         source_resource: VulkanImageResource | None,
         projection_resource: VulkanImageResource | None,
+        projection_array_layer: int = 0,
         source_layout: int,
         source_access_mask: int,
         source_stage_mask: int,
@@ -5098,6 +5125,7 @@ class OpenXrVulkanPresenter(
                 projection_timeline = self.vulkan.copy_image(
                     projection_resource,
                     projection_host_image.resource,
+                    source_array_layer=projection_array_layer,
                 )
             except VulkanCapabilityError as first_exc:
                 # Some OpenXR runtimes leave the Python-side swapchain state
@@ -5116,6 +5144,7 @@ class OpenXrVulkanPresenter(
                     projection_timeline = self.vulkan.copy_image(
                         projection_resource,
                         projection_host_image.resource,
+                        source_array_layer=projection_array_layer,
                     )
                 except Exception as retry_exc:
                     raise VulkanCapabilityError(
@@ -5129,7 +5158,7 @@ class OpenXrVulkanPresenter(
                 output_dir / f"06_openxr_projection_{'left' if eye == 0 else 'right'}_eye.png",
             )
             self._visual_regression_capture_eyes.add(eye)
-            if len(self._visual_regression_capture_eyes) >= min(2, len(self.swapchains)):
+            if len(self._visual_regression_capture_eyes) >= 2:
                 manifest = {
                     "frame_id": int(output_frame.frame_id),
                     "source_stage": "vulkan_output_image",
