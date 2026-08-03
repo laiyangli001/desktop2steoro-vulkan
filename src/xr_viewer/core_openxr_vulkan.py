@@ -4636,7 +4636,7 @@ class OpenXrVulkanPresenter(
                     not screen_image_projection
                     or getattr(
                         self.filament_bridge,
-                        "screen_eye_materials_abi_available",
+                        "screen_eye_renderables_abi_available",
                         False,
                     )
                 )

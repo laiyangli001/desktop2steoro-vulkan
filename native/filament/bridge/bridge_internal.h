@@ -52,6 +52,8 @@ using VkImage = ::VkImage;
 using VkSemaphore = ::VkSemaphore;
 
 constexpr uint32_t kInvalidImageIndex = UINT32_MAX;
+constexpr uint8_t kScreenLayerBase = 3;
+constexpr uint8_t kScreenMipCopyLayerBase = 5;
 
 struct PreviewScreenVertex {
     filament::math::float3 position;
@@ -307,6 +309,7 @@ struct FilamentBridge {
     filament::math::float3 screen_light_position{0.0f, 0.0f, 0.0f};
     filament::math::float3 screen_light_direction{0.0f, 0.0f, -1.0f};
     float screen_light_falloff = 2.0f;
+    std::array<utils::Entity, 2> screen_entities{};
     utils::Entity screen_entity;
     filament::VertexBuffer* screen_vertex_buffer = nullptr;
     filament::IndexBuffer* screen_index_buffer = nullptr;
@@ -336,9 +339,11 @@ struct FilamentBridge {
     std::array<filament::MaterialInstance*, 2>
             screen_mip_copy_material_instances{};
     filament::MaterialInstance* screen_mip_copy_material_instance = nullptr;
+    std::array<utils::Entity, 2> screen_mip_copy_entities{};
     utils::Entity screen_mip_copy_entity;
     filament::VertexBuffer* screen_mip_copy_vertex_buffer = nullptr;
     filament::IndexBuffer* screen_mip_copy_index_buffer = nullptr;
+    std::array<filament::View*, 2> screen_mip_copy_views{};
     filament::View* screen_mip_copy_view = nullptr;
     filament::Camera* screen_mip_copy_camera = nullptr;
     std::array<PreviewScreenVertex, 4> screen_mip_copy_vertices{};

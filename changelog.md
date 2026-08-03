@@ -3,10 +3,11 @@
 本文件只记录用户可感知的功能、行为变化、重要修复和架构里程碑，不记录逐次调试过程。新记录按日期倒序追加，并将同一目标的连续修改归纳为一条有效结果。
 
 ## 2026-08-03
-- 修复 Filament 屏幕材质在双眼 deferred batch 中被第二眼提前改写 descriptor，导致
-  validation 报告 render pass 内更新绑定并最终触发 `VK_ERROR_DEVICE_LOST`：最终屏幕与
-  MIP copy material instance 现按眼独立，新 Bridge 恢复屏幕 batch，解除逐眼
-  `flushAndWait()` 将 XR 输入压到约 16 FPS 的阻塞；旧 Bridge 自动保留逐眼安全回退。
+- 修复 Filament 屏幕资源在双眼 deferred batch 中仍复用 Renderable/View，导致第二眼在
+  第一眼 GPU 工作未完成时改写绑定并最终触发 `VK_ERROR_DEVICE_LOST`：最终屏幕与 MIP
+  copy 的 material instance、Renderable entity 和 View 现全部按眼隔离，并由 layer mask
+  固定到对应眼；新 Bridge 恢复屏幕 batch，解除逐眼 `flushAndWait()` 将 XR 输入压到约
+  16 FPS 的阻塞，旧 Bridge 通过新版 ABI 探针自动保留逐眼安全回退。
 - 修复 CUDA/Vulkan binary external semaphore 在环形输出 slot 多代复用时仍会触发
   `VK_ERROR_DEVICE_LOST`：跨 API ready/release 改为每 slot/eye 独立的 exportable
   timeline semaphore 和单调递增 generation；Filament visible 信号继续使用 Vulkan-only

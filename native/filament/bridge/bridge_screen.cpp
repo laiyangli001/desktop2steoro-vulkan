@@ -15,7 +15,6 @@ constexpr float kControllerScreenLightWeight = 0.80f;
 // Match the legacy OpenGL runtime-eye sampler bias. Without this, the
 // trilinear MIP sampler selects a softer level for the same screen footprint.
 constexpr float kLegacyScreenLodBias = -0.35f;
-constexpr uint8_t kScreenMipCopyLayer = 2;
 
 void destroy_screen_mip_target(FilamentBridge* bridge, uint32_t eye_index) {
     if (!bridge || eye_index >= bridge->screen_mip_textures.size()) return;
@@ -82,8 +81,9 @@ bool ensure_screen_mip_target(
         FilamentBridge* bridge, uint32_t eye_index,
         uint32_t width, uint32_t height, int32_t format) {
     if (!bridge || !bridge->engine || !bridge->screen_mip_experiment_enabled ||
-            !bridge->screen_mip_copy_view || bridge->screen_mip_copy_entity.isNull() ||
             eye_index >= bridge->screen_mip_textures.size() ||
+            !bridge->screen_mip_copy_views[eye_index] ||
+            bridge->screen_mip_copy_entities[eye_index].isNull() ||
             width == 0 || height == 0) {
         return false;
     }
@@ -191,22 +191,34 @@ bool ensure_screen_quality_targets(
             ensure_screen_mip_target(bridge, eye_index, width, height, format);
 }
 
+void add_screen_entities(FilamentBridge* bridge) {
+    if (!bridge || !bridge->foreground_scene || bridge->screen_in_scene) return;
+    for (uint32_t eye_index = 0; eye_index < bridge->screen_entities.size(); ++eye_index) {
+        const auto entity = bridge->screen_entities[eye_index];
+        if (entity.isNull()) continue;
+        bridge->foreground_scene->addEntity(entity);
+        bridge_set_renderable_layer(
+                bridge, entity, kScreenLayerBase + eye_index, true);
+    }
+    bridge->screen_in_scene = true;
+}
+
 }  // namespace
 
 void bridge_screen_destroy(FilamentBridge* bridge) {
     if (!bridge || !bridge->engine) return;
     bridge_glow_destroy(bridge);
-    if (bridge->scene && !bridge->screen_mip_copy_entity.isNull()) {
-        bridge->scene->remove(bridge->screen_mip_copy_entity);
+    for (auto& entity : bridge->screen_mip_copy_entities) {
+        if (bridge->scene && !entity.isNull()) bridge->scene->remove(entity);
+        if (!entity.isNull()) bridge->engine->destroy(entity);
+        entity = {};
     }
-    if (!bridge->screen_mip_copy_entity.isNull()) {
-        bridge->engine->destroy(bridge->screen_mip_copy_entity);
-        bridge->screen_mip_copy_entity = {};
+    bridge->screen_mip_copy_entity = {};
+    for (auto*& view : bridge->screen_mip_copy_views) {
+        if (view) bridge->engine->destroy(view);
+        view = nullptr;
     }
-    if (bridge->screen_mip_copy_view) {
-        bridge->engine->destroy(bridge->screen_mip_copy_view);
-        bridge->screen_mip_copy_view = nullptr;
-    }
+    bridge->screen_mip_copy_view = nullptr;
     if (bridge->screen_mip_copy_camera) {
         bridge->engine->destroy(bridge->screen_mip_copy_camera->getEntity());
         bridge->screen_mip_copy_camera = nullptr;
@@ -235,14 +247,15 @@ void bridge_screen_destroy(FilamentBridge* bridge) {
         destroy_screen_lanczos_target(bridge, eye_index);
         destroy_screen_mip_target(bridge, eye_index);
     }
-    if (bridge->foreground_scene && bridge->screen_in_scene && !bridge->screen_entity.isNull()) {
-        bridge->foreground_scene->remove(bridge->screen_entity);
+    for (auto& entity : bridge->screen_entities) {
+        if (bridge->foreground_scene && bridge->screen_in_scene && !entity.isNull()) {
+            bridge->foreground_scene->remove(entity);
+        }
+        if (!entity.isNull()) bridge->engine->destroy(entity);
+        entity = {};
     }
     bridge->screen_in_scene = false;
-    if (!bridge->screen_entity.isNull()) {
-        bridge->engine->destroy(bridge->screen_entity);
-        bridge->screen_entity = {};
-    }
+    bridge->screen_entity = {};
     if (bridge->screen_vertex_buffer) {
         bridge->engine->destroy(bridge->screen_vertex_buffer);
         bridge->screen_vertex_buffer = nullptr;
@@ -664,23 +677,28 @@ int bridge_screen_create(FilamentBridge* bridge) {
             filament::IndexBuffer::BufferDescriptor(
                     bridge->screen_indices.data(),
                     bridge->screen_indices.size() * sizeof(uint16_t), nullptr));
-    bridge->screen_entity = utils::EntityManager::get().create();
-    const auto result = filament::RenderableManager::Builder(1)
-            .boundingBox({{-20000.0f, -20000.0f, -20000.0f}, {20000.0f, 20000.0f, 20000.0f}})
-            .material(0, bridge->screen_material_instance)
-            .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES,
-                    bridge->screen_vertex_buffer, bridge->screen_index_buffer,
-                    0, static_cast<uint32_t>(bridge->screen_indices.size()))
-            // The surround shell is the background effect (priority 0), then
-            // the display is drawn, followed by foreground edge effects.
-            .priority(2).culling(false).castShadows(false).receiveShadows(false)
-            .build(*bridge->engine, bridge->screen_entity);
-    if (result != filament::RenderableManager::Builder::Success) {
-        bridge_set_error(bridge, "Filament could not create OpenXR screen renderable");
-        return 0;
+    for (uint32_t eye_index = 0; eye_index < bridge->screen_entities.size(); ++eye_index) {
+        auto& entity = bridge->screen_entities[eye_index];
+        entity = utils::EntityManager::get().create();
+        const auto result = filament::RenderableManager::Builder(1)
+                .boundingBox({{-20000.0f, -20000.0f, -20000.0f}, {20000.0f, 20000.0f, 20000.0f}})
+                .material(0, bridge->screen_material_instances[eye_index])
+                .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES,
+                        bridge->screen_vertex_buffer, bridge->screen_index_buffer,
+                        0, static_cast<uint32_t>(bridge->screen_indices.size()))
+                // The surround shell is the background effect (priority 0), then
+                // the display is drawn, followed by foreground edge effects.
+                .priority(2).culling(false).castShadows(false).receiveShadows(false)
+                .build(*bridge->engine, entity);
+        if (result != filament::RenderableManager::Builder::Success) {
+            bridge_set_error(bridge, "Filament could not create OpenXR screen renderable");
+            return 0;
+        }
+        bridge_set_renderable_layer(
+                bridge, entity, kScreenLayerBase + eye_index, false);
     }
+    bridge->screen_entity = bridge->screen_entities[bridge->active_eye];
     // Display-referred screen content bypasses the HDR scene view.
-    bridge_set_renderable_layer(bridge, bridge->screen_entity, 1, false);
     for (auto*& material_instance :
             bridge->screen_mip_copy_material_instances) {
         material_instance = bridge->screen_material->createInstance();
@@ -738,27 +756,32 @@ int bridge_screen_create(FilamentBridge* bridge) {
             filament::IndexBuffer::BufferDescriptor(
                     bridge->screen_mip_copy_indices.data(),
                     bridge->screen_mip_copy_indices.size() * sizeof(uint16_t), nullptr));
-    bridge->screen_mip_copy_entity = utils::EntityManager::get().create();
-    const auto copy_result = filament::RenderableManager::Builder(1)
-            .boundingBox({{-1.0f, -1.0f, -1.0f}, {1.0f, 1.0f, 1.0f}})
-            .material(0, bridge->screen_mip_copy_material_instance)
-            .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES,
-                    bridge->screen_mip_copy_vertex_buffer,
-                    bridge->screen_mip_copy_index_buffer,
-                    0, static_cast<uint32_t>(bridge->screen_mip_copy_indices.size()))
-            .priority(0).culling(false).castShadows(false).receiveShadows(false)
-            .build(*bridge->engine, bridge->screen_mip_copy_entity);
-    if (copy_result != filament::RenderableManager::Builder::Success) {
-        bridge_set_error(bridge, "Filament could not create screen MIP copy renderable");
-        return 0;
+    for (uint32_t eye_index = 0;
+            eye_index < bridge->screen_mip_copy_entities.size(); ++eye_index) {
+        auto& entity = bridge->screen_mip_copy_entities[eye_index];
+        entity = utils::EntityManager::get().create();
+        const auto copy_result = filament::RenderableManager::Builder(1)
+                .boundingBox({{-1.0f, -1.0f, -1.0f}, {1.0f, 1.0f, 1.0f}})
+                .material(0, bridge->screen_mip_copy_material_instances[eye_index])
+                .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES,
+                        bridge->screen_mip_copy_vertex_buffer,
+                        bridge->screen_mip_copy_index_buffer,
+                        0, static_cast<uint32_t>(bridge->screen_mip_copy_indices.size()))
+                .priority(0).culling(false).castShadows(false).receiveShadows(false)
+                .build(*bridge->engine, entity);
+        if (copy_result != filament::RenderableManager::Builder::Success) {
+            bridge_set_error(bridge, "Filament could not create screen MIP copy renderable");
+            return 0;
+        }
+        bridge->scene->addEntity(entity);
+        bridge_set_renderable_layer(
+                bridge, entity, kScreenMipCopyLayerBase + eye_index, true);
     }
-    bridge->scene->addEntity(bridge->screen_mip_copy_entity);
-    bridge_set_renderable_layer(
-            bridge, bridge->screen_mip_copy_entity, kScreenMipCopyLayer, true);
+    bridge->screen_mip_copy_entity =
+            bridge->screen_mip_copy_entities[bridge->active_eye];
     bridge->screen_mip_copy_camera = bridge->engine->createCamera(
             utils::EntityManager::get().create());
-    bridge->screen_mip_copy_view = bridge->engine->createView();
-    if (!bridge->screen_mip_copy_camera || !bridge->screen_mip_copy_view) {
+    if (!bridge->screen_mip_copy_camera) {
         bridge_set_error(bridge, "Filament could not create screen MIP copy view");
         return 0;
     }
@@ -769,12 +792,24 @@ int bridge_screen_create(FilamentBridge* bridge) {
             filament::math::float3{0.0f, 0.0f, 1.0f},
             filament::math::float3{0.0f, 0.0f, 0.0f},
             filament::math::float3{0.0f, 1.0f, 0.0f});
-    bridge->screen_mip_copy_view->setScene(bridge->scene);
-    bridge->screen_mip_copy_view->setCamera(bridge->screen_mip_copy_camera);
-    bridge->screen_mip_copy_view->setVisibleLayers(
-            0xff, static_cast<uint8_t>(1u << kScreenMipCopyLayer));
-    bridge->screen_mip_copy_view->setPostProcessingEnabled(false);
-    bridge->screen_mip_copy_view->setAntiAliasing(filament::AntiAliasing::NONE);
+    for (uint32_t eye_index = 0;
+            eye_index < bridge->screen_mip_copy_views.size(); ++eye_index) {
+        auto*& view = bridge->screen_mip_copy_views[eye_index];
+        view = bridge->engine->createView();
+        if (!view) {
+            bridge_set_error(bridge, "Filament could not create screen MIP copy view");
+            return 0;
+        }
+        view->setScene(bridge->scene);
+        view->setCamera(bridge->screen_mip_copy_camera);
+        view->setVisibleLayers(
+                0xff, static_cast<uint8_t>(
+                        1u << (kScreenMipCopyLayerBase + eye_index)));
+        view->setPostProcessingEnabled(false);
+        view->setAntiAliasing(filament::AntiAliasing::NONE);
+    }
+    bridge->screen_mip_copy_view =
+            bridge->screen_mip_copy_views[bridge->active_eye];
     // The sampler is required by the material. Keep the renderable detached
     // until a valid runtime Vulkan image has been imported.
     if (!bridge_glow_create(bridge)) {
@@ -802,11 +837,7 @@ int bridge_screen_set_image(FilamentBridge* bridge, const void* image,
             ensure_screen_quality_targets(bridge, eye_index, width, height, format);
             bind_screen_display_texture(bridge, eye_index);
             ++bridge->screen_source_bind_count[eye_index];
-            if (!bridge->screen_in_scene && !bridge->screen_entity.isNull()) {
-                bridge->foreground_scene->addEntity(bridge->screen_entity);
-                bridge_set_renderable_layer(bridge, bridge->screen_entity, 1, true);
-                bridge->screen_in_scene = true;
-            }
+            add_screen_entities(bridge);
             return 1;
         }
     }
@@ -855,11 +886,7 @@ int bridge_screen_set_image(FilamentBridge* bridge, const void* image,
     ensure_screen_quality_targets(bridge, eye_index, width, height, format);
     bind_screen_display_texture(bridge, eye_index);
     ++bridge->screen_source_bind_count[eye_index];
-    if (!bridge->screen_in_scene && !bridge->screen_entity.isNull()) {
-        bridge->foreground_scene->addEntity(bridge->screen_entity);
-        bridge_set_renderable_layer(bridge, bridge->screen_entity, 1, true);
-        bridge->screen_in_scene = true;
-    }
+    add_screen_entities(bridge);
     return 1;
 }
 
@@ -1004,11 +1031,7 @@ int bridge_screen_set_fixed_image(
     }
     bind_screen_copy_source(bridge, texture, width, height);
     bind_screen_display_texture(bridge, bridge->active_eye);
-    if (!bridge->screen_in_scene && !bridge->screen_entity.isNull()) {
-        bridge->foreground_scene->addEntity(bridge->screen_entity);
-        bridge_set_renderable_layer(bridge, bridge->screen_entity, 1, true);
-        bridge->screen_in_scene = true;
-    }
+    add_screen_entities(bridge);
     return 1;
 }
 

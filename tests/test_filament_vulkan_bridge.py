@@ -120,7 +120,7 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "eye.controller_view->setChannelDepthClearEnabled(2, true);" in source
     assert "eye.controller_guide_view->setChannelDepthClearEnabled(2, true);" in source
     assert "eye.foreground_view->setChannelDepthClearEnabled(0, true);" not in source
-    assert "eye.foreground_view->setVisibleLayers(0xff, 0x02);" in source
+    assert "kScreenLayerBase + eye_index" in source
     assert "eye.controller_view->setVisibleLayers(0xff, 0x01);" in source
     assert "eye.controller_guide_view->setVisibleLayers(0xff, 0x04);" in source
     assert "Renderer::ClearOptions clear_options;" in source
@@ -146,7 +146,7 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "VK_FORMAT_R8G8B8A8_SRGB" in source
     assert "Virtual screen requires VK_FORMAT_R8G8B8A8_SRGB" in source
     assert "Display-referred screen content bypasses the HDR scene view." in source
-    assert "bridge_set_renderable_layer(bridge, bridge->screen_entity, 1, true);" in source
+    assert "add_screen_entities(bridge);" in source
     assert "bool screen_in_scene = false;" in source
     assert "The sampler is required by the material" in source
     assert "TextureSampler::MinFilter::LINEAR" in source
@@ -206,10 +206,15 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "bridge->engine->flush();" in source
     assert "filament_bridge_end_frame_deferred" in facade
     assert "filament_bridge_finish_frame_batch" in facade
-    assert "filament_bridge_screen_eye_materials_abi_available" in facade
+    assert "filament_bridge_screen_eye_renderables_abi_available" in facade
     assert "screen_material_instances" in source
     assert "screen_mip_copy_material_instances" in source
-    assert "renderables.setMaterialInstanceAt" in source
+    assert "screen_entities" in source
+    assert "screen_mip_copy_entities" in source
+    assert "screen_mip_copy_views" in source
+    assert "renderables.setMaterialInstanceAt" not in (
+        bridge_dir / "bridge_eye.cpp"
+    ).read_text(encoding="utf-8")
     assert "bridge_eye_finish_frame_batch" in source
     assert "diagnostic_frame_count < 8" in source
     assert "[FilamentBridge] acquired eye=" in source

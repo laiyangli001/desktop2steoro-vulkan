@@ -85,7 +85,7 @@ int filament_bridge_end_frame_deferred(FilamentBridge* bridge) {
     return bridge_eye_end_frame_deferred(bridge); }
 int filament_bridge_finish_frame_batch(FilamentBridge* bridge) {
     return bridge_eye_finish_frame_batch(bridge); }
-int filament_bridge_screen_eye_materials_abi_available() { return 1; }
+int filament_bridge_screen_eye_renderables_abi_available() { return 1; }
 int filament_bridge_wait_for_idle(FilamentBridge* bridge) {
     return bridge_context_wait_for_idle(bridge); }
 

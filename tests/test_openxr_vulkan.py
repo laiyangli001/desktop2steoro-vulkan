@@ -2863,14 +2863,14 @@ def test_projection_updates_shared_filament_state_once_per_stereo_pair(
 
 @pytest.mark.parametrize("fail_second_eye", [False, True])
 @pytest.mark.parametrize(
-    ("screen_image_projection", "screen_eye_materials_available", "batch_submit"),
+    ("screen_image_projection", "screen_eye_renderables_available", "batch_submit"),
     [(False, False, True), (True, False, False), (True, True, True)],
 )
 def test_projection_selects_safe_filament_submit_mode(
     monkeypatch,
     fail_second_eye,
     screen_image_projection,
-    screen_eye_materials_available,
+    screen_eye_renderables_available,
     batch_submit,
 ) -> None:
     calls: list[str] = []
@@ -2909,7 +2909,7 @@ def test_projection_selects_safe_filament_submit_mode(
     class FakeBridge:
         stereo_batch_submit_abi_available = True
         finished_drawing_semaphore_abi_available = True
-        screen_eye_materials_abi_available = screen_eye_materials_available
+        screen_eye_renderables_abi_available = screen_eye_renderables_available
 
         def __init__(self):
             self.active_eye = 0

@@ -65,7 +65,7 @@ xrWaitFrame
 |---|---|---|---|
 | P0 | 双眼先 acquire、再分别 wait | 已实现 | 保留实机计时 |
 | P0 | 控制器状态和 GLB 动画每帧只更新一次 | 已实现 | 视觉回归确认双眼一致 |
-| P0 | 双眼 deferred submit + frame-wide completion | 新 Bridge 已用每眼独立 material/descriptor 恢复屏幕 batch；旧 Bridge 逐眼回退 | 长时间实机验收输入 FPS 与稳定性 |
+| P0 | 双眼 deferred submit + frame-wide completion | 新 Bridge 已用每眼独立 material、Renderable 和 copy View 恢复屏幕 batch；旧 Bridge 逐眼回退 | 长时间实机验收输入 FPS 与稳定性 |
 | P0 | CUDA/Vulkan ready/release 跨 API timeline 同步 | 已实现；Filament visible 信号仍为 Vulkan binary | 连续实机验收无卡死、无 device lost |
 | P0 | Vulkan Compute RGB/Depth 输入环形槽 | 已实现 | CUDA 路径确认无 host wait；host fallback 只允许槽位复用时等待 |
 | P0 | Glow/Filament 共享 graphics queue 外部同步 | 已实现；复用 VulkanContext 设备锁覆盖完整 Filament batch 和 Glow 直接提交 | 实机确认无 device lost |
@@ -123,11 +123,13 @@ Filament 的 `VulkanCommands`/semaphore pool 仍是全局共享的，两个 Swap
 `flushAndWait()`，源图释放直接走无 semaphore 依赖的 barrier，避免共享 command stream
 的 semaphore 误用再次触发 device-lost。
 
-外部屏幕纹理原先共用同一个 `screen_material_instance`。eye0 只 deferred submit 后，eye1
-立即把同一 descriptor 改成右眼纹理，会在 eye0 render pass 尚未结束时更新绑定并触发
-validation 错误与 GPU watchdog。Bridge 现为最终屏幕和 MIP copy 分别保存每眼独立
-material instance，切眼时只选择对应实例；新 ABI 允许屏幕路径恢复 deferred batch，
-旧二进制仍自动逐眼 `flushAndWait()`，避免兼容路径重新暴露 device-lost。
+外部屏幕纹理原先共用同一个 `screen_material_instance`。第一次修复仅拆分 material
+instance，但最终屏幕 Renderable、MIP copy Renderable 和 copy View 仍被左右眼复用；
+eye0 deferred 后切到 eye1 仍可能在前一眼 GPU 工作未完成时改写共享对象。Bridge 现为
+最终屏幕和 MIP copy 分别保存每眼独立 material instance、Renderable entity 和 copy
+View，并用 layer mask 固定每个 View 只看到对应眼资源，不再调用
+`setMaterialInstanceAt()` 切换共享 Renderable。新版 ABI 探针只在完整隔离 Bridge 上存在，
+旧二进制自动逐眼 `flushAndWait()`，避免兼容路径重新暴露 device-lost。
 
 CUDA 与 Vulkan 之间不再交替复用 binary ready/release semaphore。每个输出 slot/eye
 改用独立 exportable timeline semaphore，并以单调递增 generation 表示 producer-ready

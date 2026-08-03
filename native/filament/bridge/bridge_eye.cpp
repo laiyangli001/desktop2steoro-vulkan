@@ -31,25 +31,13 @@ void bridge_eye_activate(FilamentBridge* bridge, uint32_t eye_index) {
     bridge->frame_active = eye.frame_active;
     bridge->screen_material_instance =
             bridge->screen_material_instances[eye_index];
+    bridge->screen_entity = bridge->screen_entities[eye_index];
     bridge->screen_mip_copy_material_instance =
             bridge->screen_mip_copy_material_instances[eye_index];
-    auto& renderables = bridge->engine->getRenderableManager();
-    if (!bridge->screen_entity.isNull() && bridge->screen_material_instance) {
-        const auto instance = renderables.getInstance(bridge->screen_entity);
-        if (instance.isValid()) {
-            renderables.setMaterialInstanceAt(
-                    instance, 0, bridge->screen_material_instance);
-        }
-    }
-    if (!bridge->screen_mip_copy_entity.isNull() &&
-            bridge->screen_mip_copy_material_instance) {
-        const auto instance = renderables.getInstance(
-                bridge->screen_mip_copy_entity);
-        if (instance.isValid()) {
-            renderables.setMaterialInstanceAt(
-                    instance, 0, bridge->screen_mip_copy_material_instance);
-        }
-    }
+    bridge->screen_mip_copy_entity =
+            bridge->screen_mip_copy_entities[eye_index];
+    bridge->screen_mip_copy_view =
+            bridge->screen_mip_copy_views[eye_index];
     const bool use_mip = bridge->screen_mip_experiment_enabled &&
             bridge->screen_mip_ready[eye_index] &&
             bridge->screen_mip_textures[eye_index];
@@ -240,9 +228,8 @@ int bridge_eye_end_frame_impl(FilamentBridge* bridge, bool wait_for_idle) {
         // at a time or use an older Python presenter.
         bridge->engine->flushAndWait();
     } else {
-        // Each eye owns a distinct Renderer, SwapChain and ExternalSwapChain.
-        // Kick Filament's render thread now, but leave the owner thread free to
-        // enqueue the second eye before the stereo pair waits for completion.
+        // Kick the shared Renderer's render thread now, but leave the owner
+        // thread free to enqueue the second eye before the stereo pair waits.
         bridge->engine->flush();
     }
     if (bridge->diagnostic_frame_count < 8) {

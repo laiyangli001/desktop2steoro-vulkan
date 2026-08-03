@@ -66,7 +66,7 @@ FILAMENT_BRIDGE_API int filament_bridge_end_frame(FilamentBridge* bridge);
 // Queue one eye without blocking, then wait once after both eyes are queued.
 FILAMENT_BRIDGE_API int filament_bridge_end_frame_deferred(FilamentBridge* bridge);
 FILAMENT_BRIDGE_API int filament_bridge_finish_frame_batch(FilamentBridge* bridge);
-FILAMENT_BRIDGE_API int filament_bridge_screen_eye_materials_abi_available();
+FILAMENT_BRIDGE_API int filament_bridge_screen_eye_renderables_abi_available();
 // Submit queued work without blocking; wait once after the complete XR frame.
 FILAMENT_BRIDGE_API int filament_bridge_wait_for_idle(FilamentBridge* bridge);
 

@@ -76,7 +76,8 @@ FilamentBridge* bridge_context_create(
         bridge_set_error(bridge.get(), "Filament Vulkan renderer creation failed");
         return bridge.release();
     }
-    for (auto& eye : bridge->eyes) {
+    for (uint32_t eye_index = 0; eye_index < bridge->eyes.size(); ++eye_index) {
+        auto& eye = bridge->eyes[eye_index];
         eye.renderer = shared_renderer;
         eye.view = bridge->engine->createView();
         eye.foreground_view = bridge->engine->createView();
@@ -116,9 +117,11 @@ FilamentBridge* bridge_context_create(
         eye.view->setChannelDepthClearEnabled(2, true);
         eye.foreground_view->setScene(bridge->foreground_scene);
         eye.foreground_view->setCamera(eye.camera);
-        // Layer 1 contains the screen and transparent Glow. Render it before
-        // layer 0 controllers so transparent sorting cannot cover the hands.
-        eye.foreground_view->setVisibleLayers(0xff, 0x02);
+        // Layer 1 contains transparent Glow; each eye also sees only its own
+        // screen layer. Render them before layer 0 controllers.
+        eye.foreground_view->setVisibleLayers(
+                0xff, static_cast<uint8_t>(
+                        0x02u | (1u << (kScreenLayerBase + eye_index))));
         eye.foreground_view->setAntiAliasing(filament::AntiAliasing::NONE);
         // PBR foreground assets must use the same exposure and output color
         // transform as the room. A translucent View keeps untouched pixels
