@@ -36,6 +36,55 @@ def test_cuda_consumer_release_discards_cpu_lease_after_device_loss():
     assert adapter._released_source_frames == {7}
 
 
+def test_cuda_consumer_release_uses_filament_completion_timeline_once():
+    submissions = []
+
+    class Context:
+        device_lost = False
+
+        @staticmethod
+        def release_external_image_from_sampling(resource, **kwargs):
+            submissions.append((resource, kwargs))
+            return 40 + len(submissions)
+
+    adapter = object.__new__(CudaVulkanOutputAdapter)
+    adapter.presenter = SimpleNamespace(vulkan=Context())
+    adapter._released_source_frames = set()
+    adapter._prepared_source_eyes = {(7, 0), (7, 1)}
+    adapter._release_signaled = set()
+    adapter._source_frames = {
+        7: (
+            SimpleNamespace(resource="left"),
+            SimpleNamespace(resource="right"),
+            0,
+        )
+    }
+    adapter.left_release_semaphores = [SimpleNamespace(semaphore="left-release")]
+    adapter.right_release_semaphores = [SimpleNamespace(semaphore="right-release")]
+    adapter.release_frame = lambda _frame_id: None
+
+    adapter.release_consumer_frame(7, wait_for_timeline=39)
+
+    assert submissions == [
+        (
+            "left",
+            {
+                "wait_for_timeline": 39,
+                "wait_semaphore": None,
+                "signal_semaphore": "left-release",
+            },
+        ),
+        (
+            "right",
+            {
+                "wait_for_timeline": 39,
+                "wait_semaphore": None,
+                "signal_semaphore": "right-release",
+            },
+        ),
+    ]
+
+
 def test_screen_light_sample_completion_is_non_blocking_and_clamped():
     adapter = CudaVulkanOutputAdapter(None)
     adapter._screen_light_pending = (

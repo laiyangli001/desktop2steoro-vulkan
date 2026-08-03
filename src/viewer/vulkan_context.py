@@ -1221,6 +1221,16 @@ class VulkanContext:
         signal_semaphore: Any | None = None,
     ) -> None:
         vk = self.vk
+        wait_binary = (
+            list(wait_semaphore)
+            if isinstance(wait_semaphore, (tuple, list))
+            else ([] if wait_semaphore is None else [wait_semaphore])
+        )
+        signal_binary = (
+            list(signal_semaphore)
+            if isinstance(signal_semaphore, (tuple, list))
+            else ([] if signal_semaphore is None else [signal_semaphore])
+        )
         if wait_timeline_value is not None and self._timeline_semaphore is None:
             raise VulkanCapabilityError(
                 "timeline wait requested but the Vulkan context has no timeline semaphore"
@@ -1243,11 +1253,11 @@ class VulkanContext:
                 deviceIndex=0,
             )
             wait_infos = []
-            if wait_semaphore is not None:
+            for semaphore in wait_binary:
                 wait_infos.append(
                     vk.VkSemaphoreSubmitInfo(
                         sType=vk.VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-                        semaphore=wait_semaphore,
+                        semaphore=semaphore,
                         value=0,
                         stageMask=_pipeline_stage_2_all_commands(vk),
                         deviceIndex=0,
@@ -1264,11 +1274,11 @@ class VulkanContext:
                     )
                 )
             signal_infos = [signal_info]
-            if signal_semaphore is not None:
+            for semaphore in signal_binary:
                 signal_infos.append(
                     vk.VkSemaphoreSubmitInfo(
                         sType=vk.VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-                        semaphore=signal_semaphore,
+                        semaphore=semaphore,
                         value=0,
                         stageMask=_pipeline_stage_2_all_commands(vk),
                         deviceIndex=0,
@@ -1286,21 +1296,9 @@ class VulkanContext:
             vk.vkQueueSubmit2(queue, 1, [submit_info], fence)
             return
 
-        timeline_info = None
-        if self._timeline_semaphore is not None:
-            timeline_info = vk.VkTimelineSemaphoreSubmitInfo(
-                sType=vk.VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
-                waitSemaphoreValueCount=1 if wait_timeline_value is not None else 0,
-                pWaitSemaphoreValues=[int(wait_timeline_value)]
-                if wait_timeline_value is not None
-                else None,
-                signalSemaphoreValueCount=1,
-                pSignalSemaphoreValues=[timeline_value],
-            )
-        wait_semaphores = []
+        wait_semaphores = list(wait_binary)
         wait_stage_masks = []
-        if wait_semaphore is not None:
-            wait_semaphores.append(wait_semaphore)
+        for _semaphore in wait_binary:
             wait_stage_masks.append(vk.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT)
         if wait_timeline_value is not None:
             wait_semaphores.append(self._timeline_semaphore)
@@ -1308,8 +1306,20 @@ class VulkanContext:
         signal_semaphores = []
         if self._timeline_semaphore is not None:
             signal_semaphores.append(self._timeline_semaphore)
-        if signal_semaphore is not None:
-            signal_semaphores.append(signal_semaphore)
+        signal_semaphores.extend(signal_binary)
+        timeline_info = None
+        if self._timeline_semaphore is not None:
+            wait_values = [0] * len(wait_binary)
+            if wait_timeline_value is not None:
+                wait_values.append(int(wait_timeline_value))
+            signal_values = [timeline_value] + [0] * len(signal_binary)
+            timeline_info = vk.VkTimelineSemaphoreSubmitInfo(
+                sType=vk.VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
+                waitSemaphoreValueCount=len(wait_values),
+                pWaitSemaphoreValues=wait_values or None,
+                signalSemaphoreValueCount=len(signal_values),
+                pSignalSemaphoreValues=signal_values,
+            )
         submit_info = vk.VkSubmitInfo(
             sType=vk.VK_STRUCTURE_TYPE_SUBMIT_INFO,
             pNext=timeline_info,

@@ -122,3 +122,32 @@ def test_submit_on_latches_device_loss_from_any_vulkan_stage() -> None:
 
     assert context.device_lost is True
     assert context.device_lost_error == "VkErrorDeviceLost"
+
+
+def test_submit_frame_waits_for_stereo_binary_semaphores_together() -> None:
+    submissions = []
+
+    class FakeVk:
+        VK_STRUCTURE_TYPE_SUBMIT_INFO = 1
+        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT = 2
+        VkSubmitInfo = staticmethod(lambda **kwargs: SimpleNamespace(**kwargs))
+
+        @staticmethod
+        def vkQueueSubmit(queue, count, infos, fence):
+            submissions.append((queue, count, infos, fence))
+
+    context = object.__new__(VulkanContext)
+    context.vk = FakeVk()
+    context._timeline_semaphore = None
+
+    context._submit_frame(
+        queue="graphics",
+        command_buffer="commands",
+        fence="fence",
+        timeline_value=1,
+        wait_semaphore=("left-finished", "right-finished"),
+    )
+
+    submit = submissions[0][2][0]
+    assert submit.waitSemaphoreCount == 2
+    assert submit.pWaitSemaphores == ["left-finished", "right-finished"]

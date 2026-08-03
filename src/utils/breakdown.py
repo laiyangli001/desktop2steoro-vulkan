@@ -309,6 +309,7 @@ class FPSBreakdown:
             f"eye1_deferred={avg_ms('openxr_filament_eye1_deferred_submit'):.2f}ms "
             f"eye1_finish_wait={avg_ms('openxr_filament_eye1_finish_wait'):.2f}ms "
             f"stereo_finish_wait={avg_ms('openxr_filament_stereo_finish_wait'):.2f}ms "
+            f"filament_drain={avg_ms('openxr_filament_completion_drain'):.2f}ms "
             f"xr_release_pair={avg_ms('openxr_projection_release_pair'):.2f}ms "
             f"xr_projection_total={avg_ms('openxr_projection_total'):.2f}ms "
             f"vk_out_convert={avg_ms('openxr_vulkan_output_convert'):.2f}ms "

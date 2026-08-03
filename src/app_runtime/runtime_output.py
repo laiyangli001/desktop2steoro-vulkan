@@ -443,7 +443,11 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
         return visible.semaphore
 
     def release_consumer_frame(
-        self, frame_id: int, consumer_semaphores=None
+        self,
+        frame_id: int,
+        consumer_semaphores=None,
+        *,
+        wait_for_timeline: int | None = None,
     ) -> None:
         """Signal producer-release semaphores after Filament has finished sampling."""
         frame_key = int(frame_id)
@@ -469,6 +473,7 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
                     continue
                 context.release_external_image_from_sampling(
                     resource,
+                    wait_for_timeline=wait_for_timeline,
                     wait_semaphore=(
                         waits[eye_index] if eye_index < len(waits) else None
                     ),
@@ -1036,7 +1041,13 @@ class VulkanZeroCopyOutputAdapter(CudaVulkanOutputAdapter):
         self._prepared_source_eyes.add((int(frame_id), int(eye_index)))
         return visible.semaphore
 
-    def release_consumer_frame(self, frame_id: int, consumer_semaphores=None) -> None:
+    def release_consumer_frame(
+        self,
+        frame_id: int,
+        consumer_semaphores=None,
+        *,
+        wait_for_timeline: int | None = None,
+    ) -> None:
         frame_key = int(frame_id)
         if frame_key in self._released_source_frames:
             return
@@ -1057,6 +1068,7 @@ class VulkanZeroCopyOutputAdapter(CudaVulkanOutputAdapter):
                     continue
                 timeline = context.release_external_image_from_sampling(
                     slot.resource,
+                    wait_for_timeline=wait_for_timeline,
                     wait_semaphore=waits[eye_index] if eye_index < len(waits) else None,
                 )
                 self._release_timelines[slot_index] = max(

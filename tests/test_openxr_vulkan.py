@@ -12,6 +12,7 @@ import pytest
 import vulkan as vk
 import xr
 
+from app_runtime.output_contract import VulkanStereoOutputFrame
 from xr_viewer import core_input_helpers
 from xr_viewer.core_input_helpers import CoreInputHelpersMixin
 from viewer.vulkan_context import (
@@ -605,6 +606,26 @@ def test_tool_overlay_metrics_snapshot_latency_with_fps_window() -> None:
     assert presenter._tool_overlay_depth_strength == pytest.approx(1.75)
 
 
+def test_tool_overlay_sbs_fps_counts_unique_producer_frames() -> None:
+    presenter = OpenXrVulkanPresenter()
+    frame = type(
+        "Frame",
+        (),
+        {"frame_id": 1, "timestamp": 20.0, "metadata": {}},
+    )()
+
+    for now, output in ((20.0, frame), (20.25, frame), (20.5, None), (21.0, None)):
+        presenter._frame_now = now
+        presenter._update_tool_overlay_metrics(output)
+
+    assert presenter._tool_overlay_xr_fps == pytest.approx(4.0)
+    assert presenter._tool_overlay_sbs_fps == pytest.approx(1.0)
+
+    presenter._frame_now = 22.0
+    presenter._update_tool_overlay_metrics(None)
+    assert presenter._tool_overlay_sbs_fps == 0.0
+
+
 def test_depth_shortcut_triggers_quad_osd_with_runtime_value() -> None:
     presenter = OpenXrVulkanPresenter(
         on_controller_shortcut=lambda _action, **_values: True
@@ -819,6 +840,24 @@ def test_release_output_frame_waits_for_filament_finished_semaphores() -> None:
     OpenXrVulkanPresenter._release_output_frame(frame)
 
     assert calls == [(17, ("left-finished", "right-finished"))]
+
+
+def test_release_output_frame_prefers_consumed_filament_timeline() -> None:
+    calls = []
+    frame = SimpleNamespace(
+        frame_id=18,
+        metadata={
+            "_vulkan_source_consumer_release": lambda frame_id, **kwargs: calls.append(
+                (frame_id, kwargs)
+            ),
+            "_vulkan_consumer_release_timeline": 41,
+            "_vulkan_consumer_release_semaphores": ("stale-left", "stale-right"),
+        },
+    )
+
+    OpenXrVulkanPresenter._release_output_frame(frame)
+
+    assert calls == [(18, {"wait_for_timeline": 41})]
 
 
 def test_release_output_frame_releases_glow_after_screen_consumer() -> None:
@@ -2822,8 +2861,9 @@ def test_projection_updates_shared_filament_state_once_per_stereo_pair(
     assert calls.count("end") == 2
 
 
-def test_projection_uses_safe_per_eye_finish_even_when_batch_abi_exists(
-    monkeypatch,
+@pytest.mark.parametrize("fail_second_eye", [False, True])
+def test_projection_batches_eyes_and_consumes_finished_semaphores_once(
+    monkeypatch, fail_second_eye,
 ) -> None:
     calls: list[str] = []
     timing_names: list[str] = []
@@ -2868,13 +2908,18 @@ def test_projection_uses_safe_per_eye_finish_even_when_batch_abi_exists(
             calls.append("begin")
 
         def end_frame(self):
-            calls.append("end")
+            raise AssertionError("batch-capable bridge must not flush each eye")
 
         def end_frame_deferred(self):
-            raise AssertionError("unstable deferred submit must not be used")
+            calls.append("deferred")
+            if fail_second_eye and self.active_eye == 1:
+                raise RuntimeError("second eye submit failed")
 
         def finish_frame_batch(self):
-            raise AssertionError("unstable batch finish must not be used")
+            calls.append("finish")
+
+        def wait_for_idle(self):
+            calls.append("wait-idle")
 
         def get_finished_drawing_semaphore(self):
             return f"finished:{self.active_eye}"
@@ -2888,7 +2933,21 @@ def test_projection_uses_safe_per_eye_finish_even_when_batch_abi_exists(
         _EyeSwapchain("right", [SimpleNamespace(image=None)], 1, 1),
     ]
     presenter.filament_bridge = FakeBridge()
-    presenter.vulkan = SimpleNamespace()
+    presenter.vulkan = SimpleNamespace(
+        _timeline_semaphore=object(),
+        submit_on=lambda role, record, **kwargs: (
+            record("command-buffer"),
+            calls.append(("drain", role, kwargs)),
+            23,
+        )[-1],
+    )
+    presenter._displayed_output = VulkanStereoOutputFrame(
+        frame_id=7,
+        timestamp=0.0,
+        left_eye=object(),
+        right_eye=object(),
+        metadata={},
+    )
     presenter._apply_filament_profile = lambda views: views
     presenter._report_screen_resolution = lambda *_args: None
     presenter._apply_screen_sampling_policy = lambda *_args: None
@@ -2907,12 +2966,33 @@ def test_projection_uses_safe_per_eye_finish_even_when_batch_abi_exists(
         lambda *_args: "projection",
     )
 
-    assert presenter._render_projection_layer([object(), object()], None) == "projection"
+    if fail_second_eye:
+        with pytest.raises(RuntimeError, match="second eye submit failed"):
+            presenter._render_projection_layer([object(), object()], None)
+    else:
+        assert presenter._render_projection_layer([object(), object()], None) == "projection"
     assert calls.count("begin") == 2
-    assert calls.count("end") == 2
-    assert "openxr_filament_eye0_finish_wait" in timing_names
-    assert "openxr_filament_eye1_finish_wait" in timing_names
-    assert "openxr_filament_stereo_finish_wait" not in timing_names
+    assert calls.count("deferred") == 2
+    assert calls.count("finish") == (0 if fail_second_eye else 1)
+    assert calls.count("wait-idle") == (1 if fail_second_eye else 0)
+    assert [call for call in calls if isinstance(call, tuple)] == [
+        (
+            "drain",
+            "graphics",
+            {
+                "wait_semaphore": (
+                    ("finished:0",)
+                    if fail_second_eye
+                    else ("finished:0", "finished:1")
+                )
+            },
+        )
+    ]
+    assert presenter._displayed_output.metadata[
+        "_vulkan_consumer_release_timeline"
+    ] == 23
+    assert ("openxr_filament_stereo_finish_wait" in timing_names) is not fail_second_eye
+    assert ("openxr_filament_completion_drain" in timing_names) is not fail_second_eye
 
 
 def test_projection_layer_builder_owns_only_layer_assembly() -> None:
