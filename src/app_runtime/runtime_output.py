@@ -36,9 +36,9 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
 
     @staticmethod
     def _external_semaphore_requested() -> bool:
-        # Disabled by default while isolating the CUDA/Vulkan binary semaphore
-        # deadlock observed on Virtual Desktop. Set the env var to 1 to opt in.
-        value = os.environ.get("D2S_ENABLE_CUDA_EXTERNAL_SEMAPHORE", "0")
+        # The CUDA/Vulkan external semaphore loop is enabled again after making
+        # prepare_source_for_sampling idempotent for reused source frames.
+        value = os.environ.get("D2S_ENABLE_CUDA_EXTERNAL_SEMAPHORE", "1")
         return value.strip().lower() in {"1", "true", "yes", "on"}
 
     def __init__(self, presenter):
@@ -421,27 +421,40 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
 
     def prepare_source_for_sampling(self, frame_id: int, eye_index: int):
         """Wait for the producer and publish a post-barrier semaphore to Filament."""
-        entry = self._source_frames.get(int(frame_id))
+        frame_key = int(frame_id)
+        eye = int(eye_index)
+        entry = self._source_frames.get(frame_key)
         if entry is None:
             raise RuntimeError(f"unknown Vulkan source frame {frame_id}")
         left, right, slot_index = entry
-        resource = left if int(eye_index) == 0 else right
-        ready = (
-            self.left_ready_semaphores[slot_index]
-            if int(eye_index) == 0
-            else self.right_ready_semaphores[slot_index]
-        )
         visible = (
             self.left_visible_semaphores[slot_index]
-            if int(eye_index) == 0
+            if eye == 0
             else self.right_visible_semaphores[slot_index]
+        )
+        if (frame_key, eye) in self._prepared_source_eyes:
+            # A reused output frame is presented for multiple XR ticks. The
+            # ready semaphore is consumed once, but Filament consumes the
+            # binary visible semaphore on every acquire. Re-signal visible
+            # without waiting for the producer-ready semaphore again.
+            self.presenter.vulkan.submit_on(
+                "graphics",
+                lambda _command_buffer: None,
+                signal_semaphore=visible.semaphore,
+            )
+            return visible.semaphore
+        resource = left if eye == 0 else right
+        ready = (
+            self.left_ready_semaphores[slot_index]
+            if eye == 0
+            else self.right_ready_semaphores[slot_index]
         )
         self.presenter.vulkan.prepare_external_image_for_sampling(
             resource.resource,
             wait_semaphore=ready.semaphore,
             signal_semaphore=visible.semaphore,
         )
-        self._prepared_source_eyes.add((int(frame_id), int(eye_index)))
+        self._prepared_source_eyes.add((frame_key, eye))
         return visible.semaphore
 
     def release_consumer_frame(
@@ -1031,16 +1044,28 @@ class VulkanZeroCopyOutputAdapter(CudaVulkanOutputAdapter):
         self._extent = extent
 
     def prepare_source_for_sampling(self, frame_id: int, eye_index: int):
-        entry = self._source_frames.get(int(frame_id))
+        frame_key = int(frame_id)
+        eye = int(eye_index)
+        entry = self._source_frames.get(frame_key)
         if entry is None:
             raise RuntimeError(f"unknown Vulkan zero-copy source frame {frame_id}")
         _left, _right, slot_index = entry
         visible = (
             self.left_visible_semaphores[slot_index]
-            if int(eye_index) == 0
+            if eye == 0
             else self.right_visible_semaphores[slot_index]
         )
-        self._prepared_source_eyes.add((int(frame_id), int(eye_index)))
+        if (frame_key, eye) in self._prepared_source_eyes:
+            # Vulkan compute signalled visible once when the frame was
+            # produced. A reused frame must re-signal it for every Filament
+            # acquire while leaving the ready/producer path untouched.
+            self.presenter.vulkan.submit_on(
+                "graphics",
+                lambda _command_buffer: None,
+                signal_semaphore=visible.semaphore,
+            )
+            return visible.semaphore
+        self._prepared_source_eyes.add((frame_key, eye))
         return visible.semaphore
 
     def release_consumer_frame(

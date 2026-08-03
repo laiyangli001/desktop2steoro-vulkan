@@ -3,6 +3,10 @@
 本文件只记录用户可感知的功能、行为变化、重要修复和架构里程碑，不记录逐次调试过程。新记录按日期倒序追加，并将同一目标的连续修改归纳为一条有效结果。
 
 ## 2026-08-03
+- 修复 CUDA/Vulkan external semaphore 在静态源帧复用时的 binary semaphore 重复
+  signal/wait：同一 frame/eye 复用只等待一次 producer-ready semaphore，但每个 XR tick
+  重新 signal Filament 消费的 visible semaphore；同时恢复
+  `D2S_ENABLE_CUDA_EXTERNAL_SEMAPHORE` 默认开启。
 - 默认关闭 CUDA/Vulkan binary external semaphore 路径，用于隔离 Virtual Desktop 下
   producer 等待 release、Vulkan 等待 ready 的 GPU 队列死锁；`D2S_ENABLE_CUDA_EXTERNAL_SEMAPHORE=1`
   仍可显式开启，待 external semaphore 状态机修复后再恢复默认。

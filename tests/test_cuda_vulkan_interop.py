@@ -53,11 +53,42 @@ def test_cuda_external_buffer_desc_matches_runtime_abi() -> None:
 
 def test_cuda_external_semaphore_enabled_by_default_and_can_be_disabled(monkeypatch) -> None:
     monkeypatch.delenv("D2S_ENABLE_CUDA_EXTERNAL_SEMAPHORE", raising=False)
-    assert not CudaVulkanOutputAdapter._external_semaphore_requested()
+    assert CudaVulkanOutputAdapter._external_semaphore_requested()
     monkeypatch.setenv("D2S_ENABLE_CUDA_EXTERNAL_SEMAPHORE", "1")
     assert CudaVulkanOutputAdapter._external_semaphore_requested()
     monkeypatch.setenv("D2S_ENABLE_CUDA_EXTERNAL_SEMAPHORE", "0")
     assert not CudaVulkanOutputAdapter._external_semaphore_requested()
+
+
+def test_cuda_source_prepare_is_idempotent_for_reused_frame() -> None:
+    adapter = CudaVulkanOutputAdapter.__new__(CudaVulkanOutputAdapter)
+    adapter._prepared_source_eyes = set()
+    adapter._source_frames = {
+        7: (
+            SimpleNamespace(resource=object()),
+            SimpleNamespace(resource=object()),
+            0,
+        )
+    }
+    adapter.left_ready_semaphores = [SimpleNamespace(semaphore="left-ready")]
+    adapter.right_ready_semaphores = [SimpleNamespace(semaphore="right-ready")]
+    adapter.left_visible_semaphores = [SimpleNamespace(semaphore="left-visible")]
+    adapter.right_visible_semaphores = [SimpleNamespace(semaphore="right-visible")]
+    calls: list[object] = []
+    re_signals: list[object] = []
+    adapter.presenter = SimpleNamespace(
+        vulkan=SimpleNamespace(
+            prepare_external_image_for_sampling=lambda *_args, **_kwargs: calls.append(
+                (_args, _kwargs)
+            ),
+            submit_on=lambda _role, _record, **_kwargs: re_signals.append(_kwargs),
+        )
+    )
+
+    assert adapter.prepare_source_for_sampling(7, 0) == "left-visible"
+    assert adapter.prepare_source_for_sampling(7, 0) == "left-visible"
+    assert len(calls) == 1
+    assert re_signals == [{"signal_semaphore": "left-visible"}]
 
 
 def test_rocm_external_semaphore_is_capability_gated_by_default(monkeypatch) -> None:
