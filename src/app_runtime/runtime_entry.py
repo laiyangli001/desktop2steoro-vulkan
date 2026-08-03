@@ -203,6 +203,13 @@ def _wait_for_runtime_ready(
 def run_processing_runtime(*, max_seconds: float | None = None) -> int:
     """Run capture, inference, and pipeline threads until shutdown is requested."""
 
+    import faulthandler
+
+    # The OpenXR presenter has been observed hanging inside native GPU waits
+    # without a Python traceback. Dump every thread after 60 seconds so the
+    # next failure identifies the exact call instead of exiting with rc=1.
+    faulthandler.dump_traceback_later(60, exit=True)
+
     shutdown_event.clear()
     settings = _get_settings()
     context = create_runtime_context(
