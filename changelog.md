@@ -3,6 +3,9 @@
 本文件只记录用户可感知的功能、行为变化、重要修复和架构里程碑，不记录逐次调试过程。新记录按日期倒序追加，并将同一目标的连续修改归纳为一条有效结果。
 
 ## 2026-08-03
+- 修复 CUDA/Vulkan binary release semaphore 跨 API 异步交替导致的 device-lost：
+  producer 在复用 slot 前等待 CUDA 真正消费上一次 release signal，再允许 Vulkan
+  下一帧 signal 同一 binary semaphore，避免驱动触发 `VK_ERROR_DEVICE_LOST`。
 - 修复 `finish_frame_batch()` 永久卡死：复用源帧时不再重新 signal binary visible
   semaphore，Filament 直接采样已经就绪的外部图像，避免等待一个排在卡住队列后的
   signal 提交而触发 GPU/设备级死锁。

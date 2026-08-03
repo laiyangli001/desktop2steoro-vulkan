@@ -668,6 +668,7 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
                 print(external_sync_message, flush=True)
                 self._logged_external_sync_mode = True
             if use_external_semaphore:
+                waited_releases: list[tuple[int, int]] = []
                 for eye_index, release_semaphore in (
                     (0, self.left_release_semaphores[slot_index]),
                     (1, self.right_release_semaphores[slot_index]),
@@ -675,7 +676,15 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
                     if (eye_index, slot_index) not in self._release_signaled:
                         continue
                     self.importer.wait_semaphore(release_semaphore)
-                    self._release_signaled.discard((eye_index, slot_index))
+                    waited_releases.append((eye_index, slot_index))
+                if waited_releases:
+                    # The release semaphore is binary. Python may submit the
+                    # next Vulkan release signal before CUDA has consumed the
+                    # previous one, which makes the driver reset the device.
+                    # Wait only for the consume step, then copy/signal below.
+                    self.importer.synchronize()
+                    for waited in waited_releases:
+                        self._release_signaled.discard(waited)
                 self.importer.copy_tensor(left, self.left_slot)
                 self.importer.copy_tensor(right, self.right_slot)
                 left_ready = self.left_ready_semaphores[slot_index]
