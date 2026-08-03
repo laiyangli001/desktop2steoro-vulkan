@@ -580,10 +580,12 @@ int bridge_screen_create(FilamentBridge* bridge) {
             .shading(filament::Shading::UNLIT)
             .materialDomain(filament::MaterialDomain::SURFACE)
             // Match the legacy projection pass: the display is an opaque
-            // image that writes depth before foreground controllers render.
+            // image, but it must not write depth. Otherwise a screen in front
+            // of the hands can occlude controllers regardless of the
+            // controller View's own depth clear behavior.
             .blending(filament::BlendingMode::OPAQUE)
             .culling(filament::backend::CullingMode::NONE)
-            .depthWrite(true)
+            .depthWrite(false)
             .depthCulling(true)
             .targetApi(filamat::MaterialBuilder::TargetApi::ALL)
             .platform(filamat::MaterialBuilder::Platform::ALL);

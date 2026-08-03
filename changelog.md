@@ -3,6 +3,8 @@
 本文件只记录用户可感知的功能、行为变化、重要修复和架构里程碑，不记录逐次调试过程。新记录按日期倒序追加，并将同一目标的连续修改归纳为一条有效结果。
 
 ## 2026-08-03
+- 修复虚拟屏幕深度遮挡手柄：屏幕材质仍保持 Opaque 合成，但不再写入深度；
+  控制器/激光 View 不受屏幕深度裁剪，保持手柄在最前，且不改变 View 架构。
 - 修复 CUDA/Vulkan external semaphore 在静态源帧复用时的 binary semaphore 重复
   signal/wait：同一 frame/eye 复用只等待一次 producer-ready semaphore，但每个 XR tick
   重新 signal Filament 消费的 visible semaphore；同时恢复

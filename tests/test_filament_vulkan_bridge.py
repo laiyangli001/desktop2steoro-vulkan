@@ -595,7 +595,7 @@ def test_native_screen_glow_and_controllers_use_explicit_view_order() -> None:
     assert ".priority(2).culling(false)" in screen_source
     assert "surround shell is the background effect" in screen_source
     assert ".blending(filament::BlendingMode::OPAQUE)" in screen_source
-    assert ".depthWrite(true)" in screen_source
+    assert ".depthWrite(false)" in screen_source
     assert ".depthCulling(true)" in screen_source
     assert ".blending(filament::BlendingMode::TRANSPARENT)" in glow_source
     assert "renderables.setPriority(instance, 6);" in controller_source
