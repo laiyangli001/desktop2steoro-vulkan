@@ -295,16 +295,10 @@ int bridge_eye_set_stereo_camera(
             filament::math::mat4::frustum(
                     eye_frustums8[4], eye_frustums8[5], eye_frustums8[6],
                     eye_frustums8[7], near_plane, far_plane)};
-    bridge->camera->setModelMatrix(filament::math::mat4{});
     bridge->camera->setEyeModelMatrix(0, eye_models[0]);
     bridge->camera->setEyeModelMatrix(1, eye_models[1]);
     bridge->camera->setCustomEyeProjection(
             projections, 2, projections[0], near_plane, far_plane);
-    bridge_material_update_controller_lights(
-            bridge,
-            0.5f * (eye_model_matrices32[12] + eye_model_matrices32[28]),
-            0.5f * (eye_model_matrices32[13] + eye_model_matrices32[29]),
-            0.5f * (eye_model_matrices32[14] + eye_model_matrices32[30]));
     return 1;
 }
 
@@ -363,7 +357,7 @@ int bridge_eye_end_frame_impl(FilamentBridge* bridge, bool wait_for_idle) {
         std::fprintf(stderr, "[FilamentBridge] end eye=%u deferred=%d\n",
                 bridge->active_eye, wait_for_idle ? 0 : 1);
         std::fflush(stderr);
-        if (bridge->active_eye == 1) {
+        if (bridge->multiview_active || bridge->active_eye == 1) {
             ++bridge->diagnostic_frame_count;
         }
     }

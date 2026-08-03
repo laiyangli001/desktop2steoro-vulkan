@@ -3,6 +3,9 @@
 本文件只记录用户可感知的功能、行为变化、重要修复和架构里程碑，不记录逐次调试过程。新记录按日期倒序追加，并将同一目标的连续修改归纳为一条有效结果。
 
 ## 2026-08-03
+- 修复 OpenXR Filament multiview 将虚拟屏幕、房间和手柄渲染成单眼 2D 画面的问题：相机现在按
+  Filament 契约使用中心头部绝对姿态和左右眼相对姿态，保留真实 IPD 视差；Bridge ABI 升级后，
+  旧二进制会自动回退逐眼渲染。同时限制 multiview 原生帧诊断仅输出前 8 帧，不再持续刷屏。
 - OpenXR Projection 新增稳定的双眼一次提交路径：优先创建一个 `array_size=2` SwapChain，
   由单个 Filament multiview frame 同时写入左右 array layer，并在一次完成信号消费后提交
   两个 Projection View。仅在 Bridge ABI、GPU multiview 能力和双眼尺寸均满足时启用；

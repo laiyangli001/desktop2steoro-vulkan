@@ -2743,7 +2743,7 @@ def test_filament_camera_receives_openxr_pose_and_fov() -> None:
     assert calls[1][1][2]["far_plane"] == 1000.0
 
 
-def test_filament_stereo_camera_receives_two_column_major_eyes() -> None:
+def test_filament_stereo_camera_receives_head_and_relative_eyes() -> None:
     calls = []
     views = [
         SimpleNamespace(
@@ -2761,17 +2761,24 @@ def test_filament_stereo_camera_receives_two_column_major_eyes() -> None:
         for x in (-0.03, 0.03)
     ]
     bridge = SimpleNamespace(
+        set_camera_look_at=lambda eye, center, up: calls.append(
+            ("head", eye, center, up)
+        ),
         set_stereo_camera=lambda matrices, frustums, **kwargs: calls.append(
-            (matrices, frustums, kwargs)
+            ("eyes", matrices, frustums, kwargs)
         )
     )
 
     _update_filament_stereo_camera(bridge, views, near_plane=0.1, far_plane=50.0)
 
-    matrices, frustums, options = calls[0]
+    assert calls[0][0] == "head"
+    assert calls[0][1] == pytest.approx((0.0, 2.0, 3.0))
+    assert calls[0][2] == pytest.approx((0.0, 2.0, 2.0))
+    _, matrices, frustums, options = calls[1]
     assert len(matrices) == 32
     assert matrices[12] == pytest.approx(-0.03)
     assert matrices[28] == pytest.approx(0.03)
+    assert matrices[:16] != matrices[16:]
     assert len(frustums) == 8
     assert options == {"near_plane": 0.1, "far_plane": 50.0}
 

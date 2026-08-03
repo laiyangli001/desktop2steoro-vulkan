@@ -69,7 +69,7 @@ class FilamentVulkanBridge:
         self._async_submit_abi_available = False
         self._stereo_batch_submit_abi_available = False
         self._screen_eye_renderables_abi_available = False
-        self._multiview_abi_available = False
+        self._multiview_abi_version = 0
         self._configure_abi()
         self._handle: ctypes.c_void_p | None = None
         self._owner_thread_id: int | None = None
@@ -132,11 +132,11 @@ class FilamentVulkanBridge:
 
     @property
     def multiview_abi_available(self) -> bool:
-        return self._multiview_abi_available
+        return self._multiview_abi_version >= 2
 
     @property
     def multiview_supported(self) -> bool:
-        if not self._multiview_abi_available or not self.loaded:
+        if not self.multiview_abi_available or not self.loaded:
             return False
         return bool(
             self._library.filament_bridge_multiview_supported(self._handle)
@@ -331,7 +331,7 @@ class FilamentVulkanBridge:
         far_plane: float = 1000.0,
     ) -> None:
         self._ensure_loaded()
-        if not self._multiview_abi_available:
+        if not self.multiview_abi_available:
             raise FilamentBridgeError("Filament Vulkan multiview ABI is unavailable")
         matrices = tuple(float(value) for value in eye_model_matrices)
         frustums = tuple(float(value) for value in eye_frustums)
@@ -1023,7 +1023,7 @@ class FilamentVulkanBridge:
                 ctypes.c_double,
             ]
             set_stereo_camera.restype = ctypes.c_int
-            self._multiview_abi_available = bool(multiview_abi())
+            self._multiview_abi_version = int(multiview_abi())
         library.filament_bridge_set_active_eye.argtypes = [
             ctypes.c_void_p, ctypes.c_uint32
         ]

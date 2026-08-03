@@ -232,6 +232,8 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     ).read_text(encoding="utf-8")
     assert "bridge_eye_finish_frame_batch" in source
     assert "diagnostic_frame_count < 8" in source
+    assert "bridge->multiview_active || bridge->active_eye == 1" in source
+    assert "filament_bridge_multiview_abi_available() { return 2; }" in facade
     assert "[FilamentBridge] acquired eye=" in source
     assert "filament_bridge_set_controller_visible" in facade
     assert "renderables.setLayerMask" in source

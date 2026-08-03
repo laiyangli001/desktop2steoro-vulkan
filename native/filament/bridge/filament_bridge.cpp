@@ -40,7 +40,7 @@ int filament_bridge_create_eye_swapchain(
             bridge, eye_index, image_handles, image_count, format, width, height);
 }
 
-int filament_bridge_multiview_abi_available() { return 1; }
+int filament_bridge_multiview_abi_available() { return 2; }
 int filament_bridge_multiview_supported(const FilamentBridge* bridge) {
     return bridge_eye_multiview_supported(bridge); }
 int filament_bridge_create_stereo_swapchain(

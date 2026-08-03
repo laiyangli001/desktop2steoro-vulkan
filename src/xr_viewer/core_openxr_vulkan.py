@@ -6466,12 +6466,28 @@ def _update_filament_stereo_camera(
     near_plane: float = 0.05,
     far_plane: float = 1000.0,
 ) -> None:
+    eye_models = [
+        _xr_view_pose_to_model_mat4(view.pose) for view in views[:2]
+    ]
+    head_model = eye_models[0].copy()
+    head_model[:3, 3] = 0.5 * (
+        eye_models[0][:3, 3] + eye_models[1][:3, 3]
+    )
+    head_inverse = np.linalg.inv(head_model).astype(np.float32)
+    position = tuple(float(value) for value in head_model[:3, 3])
+    forward = head_model[:3, :3] @ (0.0, 0.0, -1.0)
+    up = head_model[:3, :3] @ (0.0, 1.0, 0.0)
+    center = tuple(position[index] + float(forward[index]) for index in range(3))
+    bridge.set_camera_look_at(
+        position, center, tuple(float(value) for value in up)
+    )
+
     matrices: list[float] = []
     frustums: list[float] = []
-    for view in views[:2]:
+    for view, eye_model in zip(views[:2], eye_models):
         matrices.extend(
             float(value)
-            for value in _xr_view_pose_to_model_mat4(view.pose).reshape(-1, order="F")
+            for value in (head_inverse @ eye_model).reshape(-1, order="F")
         )
         fov = view.fov
         frustums.extend(
