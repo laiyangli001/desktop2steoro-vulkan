@@ -29,6 +29,27 @@ void bridge_eye_activate(FilamentBridge* bridge, uint32_t eye_index) {
     bridge->swapchain = eye.swapchain;
     bridge->external_swapchain = eye.external_swapchain;
     bridge->frame_active = eye.frame_active;
+    bridge->screen_material_instance =
+            bridge->screen_material_instances[eye_index];
+    bridge->screen_mip_copy_material_instance =
+            bridge->screen_mip_copy_material_instances[eye_index];
+    auto& renderables = bridge->engine->getRenderableManager();
+    if (!bridge->screen_entity.isNull() && bridge->screen_material_instance) {
+        const auto instance = renderables.getInstance(bridge->screen_entity);
+        if (instance.isValid()) {
+            renderables.setMaterialInstanceAt(
+                    instance, 0, bridge->screen_material_instance);
+        }
+    }
+    if (!bridge->screen_mip_copy_entity.isNull() &&
+            bridge->screen_mip_copy_material_instance) {
+        const auto instance = renderables.getInstance(
+                bridge->screen_mip_copy_entity);
+        if (instance.isValid()) {
+            renderables.setMaterialInstanceAt(
+                    instance, 0, bridge->screen_mip_copy_material_instance);
+        }
+    }
     const bool use_mip = bridge->screen_mip_experiment_enabled &&
             bridge->screen_mip_ready[eye_index] &&
             bridge->screen_mip_textures[eye_index];

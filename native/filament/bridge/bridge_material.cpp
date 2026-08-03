@@ -165,11 +165,12 @@ int preview_material_set_skybox_brightness(FilamentPreview* preview, float brigh
 int bridge_material_set_scene_exposure(FilamentBridge* bridge, float exposure_ev) {
     if (!bridge || !std::isfinite(exposure_ev)) return 0;
     bridge->brightness.scene_exposure_ev = std::clamp(exposure_ev, -8.0f, 8.0f);
-    if (bridge->screen_material_instance) {
+    for (auto* material_instance : bridge->screen_material_instances) {
+        if (!material_instance) continue;
         // The final screen draw shares the Filament View with the HDR scene.
         // Apply the inverse EV before the view-wide exposure operation; the
         // intermediate MIP/filter view intentionally remains at 1.0.
-        bridge->screen_material_instance->setParameter(
+        material_instance->setParameter(
                 "screenExposureCompensation",
                 std::exp2(-bridge->brightness.scene_exposure_ev));
     }

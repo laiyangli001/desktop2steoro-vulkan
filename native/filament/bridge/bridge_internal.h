@@ -311,6 +311,7 @@ struct FilamentBridge {
     filament::VertexBuffer* screen_vertex_buffer = nullptr;
     filament::IndexBuffer* screen_index_buffer = nullptr;
     filament::Material* screen_material = nullptr;
+    std::array<filament::MaterialInstance*, 2> screen_material_instances{};
     filament::MaterialInstance* screen_material_instance = nullptr;
     bool screen_in_scene = false;
     bool passthrough_backdrop = false;
@@ -332,6 +333,8 @@ struct FilamentBridge {
     std::array<uint64_t, 2> screen_source_versions{};
     std::array<uint64_t, 2> screen_last_mip_versions{};
     filament::Texture* screen_fixed_source_texture = nullptr;
+    std::array<filament::MaterialInstance*, 2>
+            screen_mip_copy_material_instances{};
     filament::MaterialInstance* screen_mip_copy_material_instance = nullptr;
     utils::Entity screen_mip_copy_entity;
     filament::VertexBuffer* screen_mip_copy_vertex_buffer = nullptr;

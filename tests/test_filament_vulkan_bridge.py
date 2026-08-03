@@ -206,6 +206,10 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "bridge->engine->flush();" in source
     assert "filament_bridge_end_frame_deferred" in facade
     assert "filament_bridge_finish_frame_batch" in facade
+    assert "filament_bridge_screen_eye_materials_abi_available" in facade
+    assert "screen_material_instances" in source
+    assert "screen_mip_copy_material_instances" in source
+    assert "renderables.setMaterialInstanceAt" in source
     assert "bridge_eye_finish_frame_batch" in source
     assert "diagnostic_frame_count < 8" in source
     assert "[FilamentBridge] acquired eye=" in source

@@ -139,6 +139,8 @@ class CudaVulkanImageImporter:
 
     _CUDA_OPAQUE_FD = 1
     _CUDA_OPAQUE_WIN32 = 2
+    _CUDA_TIMELINE_SEMAPHORE_FD = 9
+    _CUDA_TIMELINE_SEMAPHORE_WIN32 = 10
     _CUDA_ARRAY_COLOR_ATTACHMENT = 0x20
     _CUDA_MEMCPY_DEVICE_TO_DEVICE = 3
 
@@ -427,8 +429,18 @@ class CudaVulkanImageImporter:
         if key in self._semaphores:
             return
         handle = target.export_handle
+        if bool(getattr(target, "timeline", False)):
+            handle_type = (
+                self._CUDA_TIMELINE_SEMAPHORE_WIN32
+                if os.name == "nt"
+                else self._CUDA_TIMELINE_SEMAPHORE_FD
+            )
+        else:
+            handle_type = (
+                self._CUDA_OPAQUE_WIN32 if os.name == "nt" else self._CUDA_OPAQUE_FD
+            )
         desc = _ExternalSemaphoreHandleDesc(
-            type=(self._CUDA_OPAQUE_WIN32 if os.name == "nt" else self._CUDA_OPAQUE_FD),
+            type=handle_type,
             flags=0,
         )
         if os.name == "nt":
@@ -445,8 +457,26 @@ class CudaVulkanImageImporter:
         target.close_export_handle()
         self._semaphores[key] = _CudaSemaphore(target, external)
 
+    @staticmethod
+    def _semaphore_value(target: VulkanExportableSemaphore, value: int) -> int:
+        result = int(value)
+        if bool(getattr(target, "timeline", False)):
+            if result < 1:
+                raise CudaVulkanInteropError(
+                    "CUDA timeline semaphore value must be positive"
+                )
+        elif result != 0:
+            raise CudaVulkanInteropError(
+                "CUDA binary semaphore value must be zero"
+            )
+        return result
+
     def signal_semaphore(
-        self, target: VulkanExportableSemaphore, *, stream: int | None = None
+        self,
+        target: VulkanExportableSemaphore,
+        *,
+        value: int = 0,
+        stream: int | None = None,
     ) -> None:
         if stream is None:
             import torch
@@ -457,7 +487,7 @@ class CudaVulkanImageImporter:
             raise CudaVulkanInteropError("CUDA external semaphore is not registered")
         params = _ExternalSemaphoreSignalParams(
             params=_SemaphoreSignalParams(
-                fence_value=0,
+                fence_value=self._semaphore_value(target, value),
                 keyed_mutex_key=0,
             ),
             flags=0,
@@ -474,7 +504,11 @@ class CudaVulkanImageImporter:
         )
 
     def wait_semaphore(
-        self, target: VulkanExportableSemaphore, *, stream: int | None = None
+        self,
+        target: VulkanExportableSemaphore,
+        *,
+        value: int = 0,
+        stream: int | None = None,
     ) -> None:
         if stream is None:
             import torch
@@ -489,7 +523,10 @@ class CudaVulkanImageImporter:
         if semaphore is None:
             raise CudaVulkanInteropError("CUDA external semaphore is not registered")
         params = _ExternalSemaphoreWaitParams(
-            params=_SemaphoreSignalParams(fence_value=0, keyed_mutex_key=0),
+            params=_SemaphoreSignalParams(
+                fence_value=self._semaphore_value(target, value),
+                keyed_mutex_key=0,
+            ),
             flags=0,
         )
         semaphore_array = (ctypes.c_void_p * 1)(semaphore.external)

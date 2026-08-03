@@ -60,6 +60,35 @@ def test_glow_poll_short_circuits_after_device_loss() -> None:
     backend.poll()
 
 
+def test_glow_queue_submit_uses_vulkan_context_lock() -> None:
+    class TrackingLock:
+        held = False
+
+        def __enter__(self):
+            self.held = True
+
+        def __exit__(self, *_args):
+            self.held = False
+
+    lock = TrackingLock()
+    submissions = []
+
+    class Vk:
+        @staticmethod
+        def vkQueueSubmit(*args):
+            assert lock.held
+            submissions.append(args)
+
+    backend = object.__new__(VulkanGlowSourceComputeBackend)
+    backend.context = SimpleNamespace(_lock=lock)
+    backend.vk = Vk()
+
+    backend._submit_queue("queue", 1, ["submit"], "fence")
+
+    assert submissions == [("queue", 1, ["submit"], "fence")]
+    assert not lock.held
+
+
 def test_glow_frame_lease_is_counted_once_and_released() -> None:
     slot = SimpleNamespace(
         image=SimpleNamespace(

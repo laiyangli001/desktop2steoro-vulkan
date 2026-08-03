@@ -17,13 +17,14 @@ from app_runtime.runtime_output import (
     RocmVulkanOutputAdapter,
 )
 from viewer.cuda_vulkan_interop import (
+    CudaVulkanImageImporter,
     _ExternalMemoryBufferDesc,
     _ExternalSemaphoreWaitParams,
     _ExternalSemaphoreSignalParams,
     _SemaphoreSignalParams,
 )
 from viewer.vulkan_context import VulkanContext, VulkanContextConfig
-from viewer.vulkan_resources import VulkanExportableImage
+from viewer.vulkan_resources import VulkanExportableImage, VulkanExportableSemaphore
 from viewer.vulkan_resources import VulkanImageResource
 
 
@@ -72,6 +73,8 @@ def test_cuda_source_prepare_is_idempotent_for_reused_frame() -> None:
     }
     adapter.left_ready_semaphores = [SimpleNamespace(semaphore="left-ready")]
     adapter.right_ready_semaphores = [SimpleNamespace(semaphore="right-ready")]
+    adapter.left_ready_values = [3]
+    adapter.right_ready_values = [4]
     adapter.left_visible_semaphores = [SimpleNamespace(semaphore="left-visible")]
     adapter.right_visible_semaphores = [SimpleNamespace(semaphore="right-visible")]
     calls: list[object] = []
@@ -88,7 +91,21 @@ def test_cuda_source_prepare_is_idempotent_for_reused_frame() -> None:
     assert adapter.prepare_source_for_sampling(7, 0) == "left-visible"
     assert adapter.prepare_source_for_sampling(7, 0) is None
     assert len(calls) == 1
+    assert calls[0][1]["wait_semaphore_value"] == 3
     assert re_signals == []
+
+
+def test_cuda_timeline_semaphore_handle_types_match_runtime_enum() -> None:
+    assert CudaVulkanImageImporter._CUDA_TIMELINE_SEMAPHORE_FD == 9
+    assert CudaVulkanImageImporter._CUDA_TIMELINE_SEMAPHORE_WIN32 == 10
+    timeline = SimpleNamespace(timeline=True)
+    binary = SimpleNamespace(timeline=False)
+    assert CudaVulkanImageImporter._semaphore_value(timeline, 7) == 7
+    assert CudaVulkanImageImporter._semaphore_value(binary, 0) == 0
+    with pytest.raises(RuntimeError, match="positive"):
+        CudaVulkanImageImporter._semaphore_value(timeline, 0)
+    with pytest.raises(RuntimeError, match="must be zero"):
+        CudaVulkanImageImporter._semaphore_value(binary, 1)
 
 
 def test_rocm_external_semaphore_is_capability_gated_by_default(monkeypatch) -> None:
@@ -175,30 +192,57 @@ def test_output_contract_publishes_actual_source_layout_and_queue_family() -> No
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA GPU is unavailable")
 def test_cuda_tensor_reaches_vulkan_output_slot_without_cpu_roundtrip() -> None:
+    required_extensions = tuple(
+        dict.fromkeys(
+            VulkanExportableImage.required_device_extensions()
+            + VulkanExportableSemaphore.required_device_extensions()
+        )
+    )
     context = VulkanContext.create(
         VulkanContextConfig(
-            required_device_extensions=VulkanExportableImage.required_device_extensions()
+            required_device_extensions=required_extensions
         )
     )
     destination = None
     adapter = None
     try:
-        presenter = SimpleNamespace(initialized=True, vulkan=context)
+        presenter = SimpleNamespace(
+            initialized=True,
+            vulkan=context,
+            screen_ready_semaphore_available=True,
+        )
         adapter = CudaVulkanOutputAdapter(presenter)
         result = SimpleNamespace(
             left_eye=torch.full((32, 48, 4), 7, dtype=torch.uint8, device="cuda"),
             right_eye=torch.full((32, 48, 4), 11, dtype=torch.uint8, device="cuda"),
             debug_info={"output_format": "openxr_full_synthesis_eyes"},
         )
-        frame = adapter.convert(result, frame_id=3, timestamp=1.0)
+        for frame_id in range(300):
+            frame = adapter.convert(result, frame_id=frame_id, timestamp=1.0)
+            visible = (
+                adapter.prepare_source_for_sampling(frame_id, 0),
+                adapter.prepare_source_for_sampling(frame_id, 1),
+            )
+            context.submit_on(
+                "graphics",
+                lambda _command_buffer: None,
+                wait_semaphore=visible,
+            )
+            adapter.release_consumer_frame(frame_id)
 
         assert frame.left_eye.width == 48
         assert frame.left_eye.height == 32
         assert frame.left_eye.format == context.vk.VK_FORMAT_R8G8B8A8_SRGB
         assert len(adapter.left_slots) == 3
         assert len(adapter.right_slots) == 3
-        assert frame.metadata["vulkan_output_ring_slot"] == 0
+        assert frame.metadata["vulkan_output_ring_slot"] == 2
         assert frame.metadata["vulkan_output_ring_size"] == 3
+        assert frame.metadata["vulkan_output_sync"] == "gpu_external_semaphore"
+        assert frame.metadata["vulkan_external_semaphore_type"] == "timeline"
+        assert adapter.left_ready_values == [100, 100, 100]
+        assert adapter.right_ready_values == [100, 100, 100]
+        assert adapter.left_release_values == [100, 100, 100]
+        assert adapter.right_release_values == [100, 100, 100]
         assert context.image_state(frame.left_eye.image).layout == context.vk.VK_IMAGE_LAYOUT_GENERAL
 
         destination = VulkanExportableImage(

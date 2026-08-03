@@ -52,6 +52,8 @@ def test_cuda_consumer_release_uses_filament_completion_timeline_once():
     adapter._released_source_frames = set()
     adapter._prepared_source_eyes = {(7, 0), (7, 1)}
     adapter._release_signaled = set()
+    adapter.left_release_values = [2]
+    adapter.right_release_values = [4]
     adapter._source_frames = {
         7: (
             SimpleNamespace(resource="left"),
@@ -72,6 +74,7 @@ def test_cuda_consumer_release_uses_filament_completion_timeline_once():
                 "wait_for_timeline": 39,
                 "wait_semaphore": None,
                 "signal_semaphore": "left-release",
+                "signal_semaphore_value": 3,
             },
         ),
         (
@@ -80,9 +83,12 @@ def test_cuda_consumer_release_uses_filament_completion_timeline_once():
                 "wait_for_timeline": 39,
                 "wait_semaphore": None,
                 "signal_semaphore": "right-release",
+                "signal_semaphore_value": 5,
             },
         ),
     ]
+    assert adapter.left_release_values == [3]
+    assert adapter.right_release_values == [5]
 
 
 def test_screen_light_sample_completion_is_non_blocking_and_clamped():

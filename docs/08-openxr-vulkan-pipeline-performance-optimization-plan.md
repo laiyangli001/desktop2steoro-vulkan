@@ -65,9 +65,10 @@ xrWaitFrame
 |---|---|---|---|
 | P0 | 双眼先 acquire、再分别 wait | 已实现 | 保留实机计时 |
 | P0 | 控制器状态和 GLB 动画每帧只更新一次 | 已实现 | 视觉回归确认双眼一致 |
-| P0 | 双眼 deferred submit + frame-wide completion | 已实现，双眼共享一个 Filament Renderer | 长时间实机验收无 VK_ERROR_DEVICE_LOST |
-| P0 | 每帧消费两个 Filament 完成信号并转为 timeline | 已实现，含异常回收 | 验证无卡死、无 device lost |
+| P0 | 双眼 deferred submit + frame-wide completion | 新 Bridge 已用每眼独立 material/descriptor 恢复屏幕 batch；旧 Bridge 逐眼回退 | 长时间实机验收输入 FPS 与稳定性 |
+| P0 | CUDA/Vulkan ready/release 跨 API timeline 同步 | 已实现；Filament visible 信号仍为 Vulkan binary | 连续实机验收无卡死、无 device lost |
 | P0 | Vulkan Compute RGB/Depth 输入环形槽 | 已实现 | CUDA 路径确认无 host wait；host fallback 只允许槽位复用时等待 |
+| P0 | Glow/Filament 共享 graphics queue 外部同步 | 已实现；复用 VulkanContext 设备锁覆盖完整 Filament batch 和 Glow 直接提交 | 实机确认无 device lost |
 | P0 | graphics/compute/transfer 分离提交锁和帧索引 | 未实现 | 先确认实际 queue handle 拓扑 |
 | P1 | Compute 移出 Presenter，交给 Output Worker | 未实现 | 必须在队列锁与资源所有权改造后进行 |
 | P1 | 左右眼 transition 合并为一个命令缓冲和一次提交 | 未实现 | 与 Output Worker 一起实施 |
@@ -94,12 +95,13 @@ xrWaitFrame
 
 1. 每 15 秒输出一次 `FPSBreakdown`，共 5 次，用于固定性能窗口。
 2. 连续运行至少 10 分钟，用于稳定性验收。
-3. 日志应满足：
+3. 无外部屏幕纹理时，日志应满足：
    - `eye0_deferred > 0`、`eye1_deferred > 0`
    - `eye0_finish_wait=0`、`eye1_finish_wait=0`
    - `stereo_finish_wait` 只出现一次帧级等待
    - `filament_drain` 持续存在且不随运行时间增长
-4. 不得出现 `VK_ERROR_DEVICE_LOST`、access violation、30 Hz 锁定或 XR 输入帧率随 SBS 降低。
+4. 使用左右眼外部屏幕纹理时，新 Bridge 必须进入 deferred batch；旧 Bridge 必须逐眼回退。
+5. 不得出现 `VK_ERROR_DEVICE_LOST`、access violation、30 Hz 锁定或 XR 输入帧率随 SBS 降低。
 
 失败时自动使用旧 Bridge 的逐眼完成等待兼容路径；不得在运行中无日志地切换。
 
@@ -120,6 +122,18 @@ Filament 的 `VulkanCommands`/semaphore pool 仍是全局共享的，两个 Swap
 不再读取或消费 Filament render-finished semaphore：`finish_frame_batch()` 已执行
 `flushAndWait()`，源图释放直接走无 semaphore 依赖的 barrier，避免共享 command stream
 的 semaphore 误用再次触发 device-lost。
+
+外部屏幕纹理原先共用同一个 `screen_material_instance`。eye0 只 deferred submit 后，eye1
+立即把同一 descriptor 改成右眼纹理，会在 eye0 render pass 尚未结束时更新绑定并触发
+validation 错误与 GPU watchdog。Bridge 现为最终屏幕和 MIP copy 分别保存每眼独立
+material instance，切眼时只选择对应实例；新 ABI 允许屏幕路径恢复 deferred batch，
+旧二进制仍自动逐眼 `flushAndWait()`，避免兼容路径重新暴露 device-lost。
+
+CUDA 与 Vulkan 之间不再交替复用 binary ready/release semaphore。每个输出 slot/eye
+改用独立 exportable timeline semaphore，并以单调递增 generation 表示 producer-ready
+和 consumer-release；CUDA wait、图像拷贝及下一次 ready signal 保持在同一 stream 顺序中，
+不增加 CPU `cudaStreamSynchronize()`。Vulkan barrier 后交给 Filament 的 visible semaphore
+仍为 Vulkan-only binary，且每个新源帧只 signal/wait 一次。
 
 ### 阶段 1：VulkanContext 真正分队列
 
@@ -212,7 +226,7 @@ CPU 提交耗时不能替代 GPU timestamp；`xrWaitFrame` 也不能计入应用
 | 性能 | 相同配置下比较 5 个固定窗口的中位数；目标恢复已观察到的 50-55 SBS FPS 区间 |
 | 稳定性 | 至少连续运行 10 分钟，无卡死、device lost、access violation 或持续降至 30 Hz |
 | 延迟 | `rt_pending_age`、source latency 和 Presenter queue age 不持续增长 |
-| 同步 | 每个 Filament binary completion semaphore 恰好被消费一次；源图释放只等待对应 timeline |
+| 同步 | 跨 API ready/release timeline generation 单调递增；每个新源帧的 Filament visible binary 只 signal/wait 一次 |
 | 画质 | 固定输入视觉回归通过；左右眼顺序、颜色空间、屏幕清晰度和 Glow 不变 |
 | 兼容 | 新 Bridge 走批提交，旧 Bridge 明确回退逐眼等待；三平台远程构建通过 |
 
@@ -220,7 +234,8 @@ CPU 提交耗时不能替代 GPU timestamp；`xrWaitFrame` 也不能计入应用
 
 - **Filament 线程归属**：所有 Filament API 继续由 Presenter 线程调用。
 - **VkQueue 外部同步**：同一实际 queue handle 的主机访问必须串行，即使调用方使用不同角色或线程。
-- **二进制信号复用**：完成信号必须先进入一次 Vulkan wait submission，再允许 Filament 重用。
+- **Timeline generation**：每个 slot/eye 的 ready/release 值必须单调递增，wait 必须使用对应帧发布的值。
+- **Filament visible binary**：只允许每个新源帧 signal/wait 一次，静态复用帧不得重复等待旧信号。
 - **源图生命周期**：显示帧、渲染帧和 pending 帧只能由现有幂等 lease/release 契约回收。
 - **设备丢失**：锁存 device-lost 后只释放 CPU 租约，不再提交 Vulkan 命令或查询 fence。
 - **运行时兼容**：任何新路径都必须有启动期 capability probe 和明确日志，不能静默切换。

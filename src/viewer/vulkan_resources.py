@@ -632,12 +632,33 @@ class VulkanExportableImage:
 
 
 class VulkanExportableSemaphore:
-    """Own a binary Vulkan semaphore exported to an external GPU producer."""
+    """Own a Vulkan semaphore exported to an external GPU producer."""
 
-    def __init__(self, context: Any, *, label: str = "external-semaphore") -> None:
+    @staticmethod
+    def required_device_extensions() -> tuple[str, ...]:
+        if os.name == "nt":
+            return (
+                "VK_KHR_external_semaphore",
+                "VK_KHR_external_semaphore_win32",
+            )
+        if os.name == "posix":
+            return (
+                "VK_KHR_external_semaphore",
+                "VK_KHR_external_semaphore_fd",
+            )
+        raise RuntimeError(f"unsupported external-semaphore platform: {os.name}")
+
+    def __init__(
+        self,
+        context: Any,
+        *,
+        label: str = "external-semaphore",
+        timeline: bool = False,
+    ) -> None:
         self.context = context
         self.vk = context.vk
         self.label = str(label)
+        self.timeline = bool(timeline)
         self._handle_type = self._resolve_handle_type()
         self.semaphore = None
         self._export_handle = None
@@ -645,11 +666,19 @@ class VulkanExportableSemaphore:
             sType=self.vk.VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO,
             handleTypes=self._handle_type,
         )
+        create_next = export_info
+        if self.timeline:
+            create_next = self.vk.VkSemaphoreTypeCreateInfo(
+                sType=self.vk.VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
+                pNext=export_info,
+                semaphoreType=self.vk.VK_SEMAPHORE_TYPE_TIMELINE,
+                initialValue=0,
+            )
         self.semaphore = self.vk.vkCreateSemaphore(
             context.device,
             self.vk.VkSemaphoreCreateInfo(
                 sType=self.vk.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-                pNext=export_info,
+                pNext=create_next,
             ),
             None,
         )

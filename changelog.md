@@ -3,9 +3,17 @@
 本文件只记录用户可感知的功能、行为变化、重要修复和架构里程碑，不记录逐次调试过程。新记录按日期倒序追加，并将同一目标的连续修改归纳为一条有效结果。
 
 ## 2026-08-03
-- 修复 CUDA/Vulkan binary release semaphore 跨 API 异步交替导致的 device-lost：
-  producer 在复用 slot 前等待 CUDA 真正消费上一次 release signal，再允许 Vulkan
-  下一帧 signal 同一 binary semaphore，避免驱动触发 `VK_ERROR_DEVICE_LOST`。
+- 修复 Filament 屏幕材质在双眼 deferred batch 中被第二眼提前改写 descriptor，导致
+  validation 报告 render pass 内更新绑定并最终触发 `VK_ERROR_DEVICE_LOST`：最终屏幕与
+  MIP copy material instance 现按眼独立，新 Bridge 恢复屏幕 batch，解除逐眼
+  `flushAndWait()` 将 XR 输入压到约 16 FPS 的阻塞；旧 Bridge 自动保留逐眼安全回退。
+- 修复 CUDA/Vulkan binary external semaphore 在环形输出 slot 多代复用时仍会触发
+  `VK_ERROR_DEVICE_LOST`：跨 API ready/release 改为每 slot/eye 独立的 exportable
+  timeline semaphore 和单调递增 generation；Filament visible 信号继续使用 Vulkan-only
+  binary semaphore。CUDA wait、图像拷贝与下一次 ready signal 保持同 stream 异步顺序，
+  不再用 `cudaStreamSynchronize()` 阻塞 Presenter；真实 RTX CUDA/Vulkan 300 帧循环通过。
+- 修复 Output Worker 的 Glow 直接提交与 Presenter/Filament batch 并发访问同一 graphics
+  `VkQueue` 导致的 device-lost；两条路径现在复用 VulkanContext 设备锁完成主机侧外部同步。
 - 修复 `finish_frame_batch()` 永久卡死：复用源帧时不再重新 signal binary visible
   semaphore，Filament 直接采样已经就绪的外部图像，避免等待一个排在卡住队列后的
   signal 提交而触发 GPU/设备级死锁。
@@ -18,9 +26,6 @@
   signal/wait：同一 frame/eye 复用只等待一次 producer-ready semaphore，但每个 XR tick
   重新 signal Filament 消费的 visible semaphore；同时恢复
   `D2S_ENABLE_CUDA_EXTERNAL_SEMAPHORE` 默认开启。
-- 默认关闭 CUDA/Vulkan binary external semaphore 路径，用于隔离 Virtual Desktop 下
-  producer 等待 release、Vulkan 等待 ready 的 GPU 队列死锁；`D2S_ENABLE_CUDA_EXTERNAL_SEMAPHORE=1`
-  仍可显式开启，待 external semaphore 状态机修复后再恢复默认。
 - 修复 OpenXR batch 路径读取 Filament 全局 finished semaphore 造成的 device-lost：
   `finish_frame_batch()` 已经执行帧级 `flushAndWait()`，Python 不再消费左右眼的
   render-finished binary semaphore，也不再提交 completion drain；源图释放改为在 batch

@@ -36,8 +36,8 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
 
     @staticmethod
     def _external_semaphore_requested() -> bool:
-        # The CUDA/Vulkan external semaphore loop is enabled again after making
-        # prepare_source_for_sampling idempotent for reused source frames.
+        # Cross-API synchronization uses exportable timeline semaphores. The
+        # Vulkan-only semaphore handed to Filament remains binary.
         value = os.environ.get("D2S_ENABLE_CUDA_EXTERNAL_SEMAPHORE", "1")
         return value.strip().lower() in {"1", "true", "yes", "on"}
 
@@ -53,6 +53,10 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
         self.right_release_semaphores = []
         self.left_visible_semaphores = []
         self.right_visible_semaphores = []
+        self.left_ready_values = []
+        self.right_ready_values = []
+        self.left_release_values = []
+        self.right_release_values = []
         self.external_semaphore_enabled = False
         self._external_semaphore_error: str | None = None
         self._external_semaphore_request_reason: str | None = None
@@ -446,6 +450,11 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
         self.presenter.vulkan.prepare_external_image_for_sampling(
             resource.resource,
             wait_semaphore=ready.semaphore,
+            wait_semaphore_value=(
+                self.left_ready_values[slot_index]
+                if eye == 0
+                else self.right_ready_values[slot_index]
+            ),
             signal_semaphore=visible.semaphore,
         )
         self._prepared_source_eyes.add((frame_key, eye))
@@ -474,12 +483,23 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
             self._discard_source_frame_after_device_loss(frame_key)
             return
         try:
-            for eye_index, resource, release_semaphore in (
-                (0, left.resource, self.left_release_semaphores[slot_index]),
-                (1, right.resource, self.right_release_semaphores[slot_index]),
+            for eye_index, resource, release_semaphore, release_values in (
+                (
+                    0,
+                    left.resource,
+                    self.left_release_semaphores[slot_index],
+                    self.left_release_values,
+                ),
+                (
+                    1,
+                    right.resource,
+                    self.right_release_semaphores[slot_index],
+                    self.right_release_values,
+                ),
             ):
                 if (frame_key, eye_index) not in self._prepared_source_eyes:
                     continue
+                release_value = release_values[slot_index] + 1
                 context.release_external_image_from_sampling(
                     resource,
                     wait_for_timeline=wait_for_timeline,
@@ -487,7 +507,9 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
                         waits[eye_index] if eye_index < len(waits) else None
                     ),
                     signal_semaphore=release_semaphore.semaphore,
+                    signal_semaphore_value=release_value,
                 )
+                release_values[slot_index] = release_value
                 self._release_signaled.add((eye_index, slot_index))
                 self._prepared_source_eyes.discard((frame_key, eye_index))
         except Exception:
@@ -550,22 +572,34 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
                 return
             self.left_ready_semaphores = [
                 VulkanExportableSemaphore(
-                    context, label=f"runtime-left-ready-{index}"
+                    context,
+                    label=f"runtime-left-ready-{index}",
+                    timeline=True,
                 )
                 for index in range(self.ring_size)
             ]
             self.right_ready_semaphores = [
                 VulkanExportableSemaphore(
-                    context, label=f"runtime-right-ready-{index}"
+                    context,
+                    label=f"runtime-right-ready-{index}",
+                    timeline=True,
                 )
                 for index in range(self.ring_size)
             ]
             self.left_release_semaphores = [
-                VulkanExportableSemaphore(context, label=f"runtime-left-release-{index}")
+                VulkanExportableSemaphore(
+                    context,
+                    label=f"runtime-left-release-{index}",
+                    timeline=True,
+                )
                 for index in range(self.ring_size)
             ]
             self.right_release_semaphores = [
-                VulkanExportableSemaphore(context, label=f"runtime-right-release-{index}")
+                VulkanExportableSemaphore(
+                    context,
+                    label=f"runtime-right-release-{index}",
+                    timeline=True,
+                )
                 for index in range(self.ring_size)
             ]
             self.left_visible_semaphores = [
@@ -588,6 +622,10 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
             )
             if not self.external_semaphore_enabled:
                 self._external_semaphore_error = "producer_external_semaphore_api_unavailable"
+            self.left_ready_values = [0] * self.ring_size
+            self.right_ready_values = [0] * self.ring_size
+            self.left_release_values = [0] * self.ring_size
+            self.right_release_values = [0] * self.ring_size
         except Exception as exc:
             self._external_semaphore_error = (
                 f"{type(exc).__name__}: {exc}"
@@ -612,6 +650,10 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
             self.right_release_semaphores = []
             self.left_visible_semaphores = []
             self.right_visible_semaphores = []
+            self.left_ready_values = []
+            self.right_ready_values = []
+            self.left_release_values = []
+            self.right_release_values = []
             self.external_semaphore_enabled = False
         self._extent = (width, height)
 
@@ -657,7 +699,7 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
             )
             if not self._logged_external_sync_mode:
                 external_sync_message = (
-                    "[VulkanOutput] CUDA external semaphore sync: "
+                    "[VulkanOutput] CUDA external timeline semaphore sync: "
                     f"requested={external_semaphore_requested} "
                     f"available={self.external_semaphore_enabled} "
                     f"active={use_external_semaphore} "
@@ -668,30 +710,42 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
                 print(external_sync_message, flush=True)
                 self._logged_external_sync_mode = True
             if use_external_semaphore:
-                waited_releases: list[tuple[int, int]] = []
-                for eye_index, release_semaphore in (
-                    (0, self.left_release_semaphores[slot_index]),
-                    (1, self.right_release_semaphores[slot_index]),
+                for eye_index, release_semaphore, release_values in (
+                    (
+                        0,
+                        self.left_release_semaphores[slot_index],
+                        self.left_release_values,
+                    ),
+                    (
+                        1,
+                        self.right_release_semaphores[slot_index],
+                        self.right_release_values,
+                    ),
                 ):
                     if (eye_index, slot_index) not in self._release_signaled:
                         continue
-                    self.importer.wait_semaphore(release_semaphore)
-                    waited_releases.append((eye_index, slot_index))
-                if waited_releases:
-                    # The release semaphore is binary. Python may submit the
-                    # next Vulkan release signal before CUDA has consumed the
-                    # previous one, which makes the driver reset the device.
-                    # Wait only for the consume step, then copy/signal below.
-                    self.importer.synchronize()
-                    for waited in waited_releases:
-                        self._release_signaled.discard(waited)
+                    self.importer.wait_semaphore(
+                        release_semaphore,
+                        value=release_values[slot_index],
+                    )
+                    self._release_signaled.discard((eye_index, slot_index))
                 self.importer.copy_tensor(left, self.left_slot)
                 self.importer.copy_tensor(right, self.right_slot)
                 left_ready = self.left_ready_semaphores[slot_index]
                 right_ready = self.right_ready_semaphores[slot_index]
+                self.left_ready_values[slot_index] += 1
+                self.right_ready_values[slot_index] += 1
                 stream = None
-                self.importer.signal_semaphore(left_ready, stream=stream)
-                self.importer.signal_semaphore(right_ready, stream=stream)
+                self.importer.signal_semaphore(
+                    left_ready,
+                    value=self.left_ready_values[slot_index],
+                    stream=stream,
+                )
+                self.importer.signal_semaphore(
+                    right_ready,
+                    value=self.right_ready_values[slot_index],
+                    stream=stream,
+                )
             if not use_external_semaphore:
                 self.importer.copy_tensor(left, self.left_slot)
                 self.importer.copy_tensor(right, self.right_slot)
@@ -733,6 +787,9 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
                 ),
                 "vulkan_external_semaphore_available": bool(
                     use_external_semaphore
+                ),
+                "vulkan_external_semaphore_type": (
+                    "timeline" if use_external_semaphore else None
                 ),
                 "vulkan_external_semaphore_requested": bool(
                     external_semaphore_requested
@@ -795,6 +852,10 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
         self.right_release_semaphores = []
         self.left_visible_semaphores = []
         self.right_visible_semaphores = []
+        self.left_ready_values = []
+        self.right_ready_values = []
+        self.left_release_values = []
+        self.right_release_values = []
         self.external_semaphore_enabled = False
         self._external_semaphore_request_enabled = False
         self.left_slot = None

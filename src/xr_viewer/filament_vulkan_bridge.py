@@ -68,6 +68,7 @@ class FilamentVulkanBridge:
         self._screen_sampling_stats_abi_available = False
         self._async_submit_abi_available = False
         self._stereo_batch_submit_abi_available = False
+        self._screen_eye_materials_abi_available = False
         self._configure_abi()
         self._handle: ctypes.c_void_p | None = None
         self._owner_thread_id: int | None = None
@@ -123,6 +124,10 @@ class FilamentVulkanBridge:
     @property
     def stereo_batch_submit_abi_available(self) -> bool:
         return self._stereo_batch_submit_abi_available
+
+    @property
+    def screen_eye_materials_abi_available(self) -> bool:
+        return self._screen_eye_materials_abi_available
 
     @property
     def loaded(self) -> bool:
@@ -953,6 +958,13 @@ class FilamentVulkanBridge:
             finish_frame_batch.argtypes = [ctypes.c_void_p]
             finish_frame_batch.restype = ctypes.c_int
             self._stereo_batch_submit_abi_available = True
+        screen_eye_materials = getattr(
+            library, "filament_bridge_screen_eye_materials_abi_available", None
+        )
+        if screen_eye_materials is not None:
+            screen_eye_materials.argtypes = []
+            screen_eye_materials.restype = ctypes.c_int
+            self._screen_eye_materials_abi_available = bool(screen_eye_materials())
         wait_for_idle = getattr(library, "filament_bridge_wait_for_idle", None)
         if wait_for_idle is not None:
             wait_for_idle.argtypes = [ctypes.c_void_p]

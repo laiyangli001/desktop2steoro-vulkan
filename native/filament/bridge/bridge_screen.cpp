@@ -219,10 +219,14 @@ void bridge_screen_destroy(FilamentBridge* bridge) {
         bridge->engine->destroy(bridge->screen_mip_copy_index_buffer);
         bridge->screen_mip_copy_index_buffer = nullptr;
     }
-    if (bridge->screen_mip_copy_material_instance) {
-        bridge->engine->destroy(bridge->screen_mip_copy_material_instance);
-        bridge->screen_mip_copy_material_instance = nullptr;
+    for (auto*& material_instance :
+            bridge->screen_mip_copy_material_instances) {
+        if (material_instance) {
+            bridge->engine->destroy(material_instance);
+            material_instance = nullptr;
+        }
     }
+    bridge->screen_mip_copy_material_instance = nullptr;
     if (bridge->screen_fixed_source_texture) {
         bridge->engine->destroy(bridge->screen_fixed_source_texture);
         bridge->screen_fixed_source_texture = nullptr;
@@ -247,10 +251,13 @@ void bridge_screen_destroy(FilamentBridge* bridge) {
         bridge->engine->destroy(bridge->screen_index_buffer);
         bridge->screen_index_buffer = nullptr;
     }
-    if (bridge->screen_material_instance) {
-        bridge->engine->destroy(bridge->screen_material_instance);
-        bridge->screen_material_instance = nullptr;
+    for (auto*& material_instance : bridge->screen_material_instances) {
+        if (material_instance) {
+            bridge->engine->destroy(material_instance);
+            material_instance = nullptr;
+        }
     }
+    bridge->screen_material_instance = nullptr;
     for (auto& cache : bridge->screen_texture_cache) {
         for (auto& slot : cache) {
             if (slot.texture) {
@@ -417,11 +424,15 @@ int bridge_screen_set_sampling(FilamentBridge* bridge, float filter_scale) {
         return 0;
     }
     bridge->screen_filter_scale = filter_scale;
-    bridge->screen_material_instance->setParameter(
-            "screenFilterScale", filter_scale);
-    if (bridge->screen_mip_copy_material_instance) {
-        bridge->screen_mip_copy_material_instance->setParameter(
-                "screenFilterScale", filter_scale);
+    for (auto* material_instance : bridge->screen_material_instances) {
+        if (material_instance) {
+            material_instance->setParameter("screenFilterScale", filter_scale);
+        }
+    }
+    for (auto* material_instance : bridge->screen_mip_copy_material_instances) {
+        if (material_instance) {
+            material_instance->setParameter("screenFilterScale", filter_scale);
+        }
     }
     return 1;
 }
@@ -601,16 +612,23 @@ int bridge_screen_create(FilamentBridge* bridge) {
         bridge_set_error(bridge, "Filament could not create OpenXR screen material");
         return 0;
     }
-    bridge->screen_material_instance = bridge->screen_material->createInstance();
-    bridge->screen_material_instance->setParameter(
-            "screenFilterScale", bridge->screen_filter_scale);
-    bridge->screen_material_instance->setParameter(
-            "screenSharpness", bridge->screen_filter_sharpness);
-    bridge->screen_material_instance->setParameter(
-            "screenLodBias", kLegacyScreenLodBias);
-    bridge->screen_material_instance->setParameter(
-            "screenExposureCompensation", 1.0f);
-    bridge->screen_material_instance->setParameter("screenQualityPass", 0.0f);
+    for (auto*& material_instance : bridge->screen_material_instances) {
+        material_instance = bridge->screen_material->createInstance();
+        if (!material_instance) {
+            bridge_set_error(bridge,
+                    "Filament could not create per-eye screen material");
+            return 0;
+        }
+        material_instance->setParameter(
+                "screenFilterScale", bridge->screen_filter_scale);
+        material_instance->setParameter(
+                "screenSharpness", bridge->screen_filter_sharpness);
+        material_instance->setParameter("screenLodBias", kLegacyScreenLodBias);
+        material_instance->setParameter("screenExposureCompensation", 1.0f);
+        material_instance->setParameter("screenQualityPass", 0.0f);
+    }
+    bridge->screen_material_instance =
+            bridge->screen_material_instances[bridge->active_eye];
     bridge->screen_vertices.resize((kScreenSegments + 1) * 2);
     bridge->screen_indices.clear();
     bridge->screen_indices.reserve(kScreenSegments * 6);
@@ -663,20 +681,26 @@ int bridge_screen_create(FilamentBridge* bridge) {
     }
     // Display-referred screen content bypasses the HDR scene view.
     bridge_set_renderable_layer(bridge, bridge->screen_entity, 1, false);
+    for (auto*& material_instance :
+            bridge->screen_mip_copy_material_instances) {
+        material_instance = bridge->screen_material->createInstance();
+        if (!material_instance) {
+            bridge_set_error(bridge,
+                    "Filament could not create per-eye screen copy material");
+            return 0;
+        }
+        material_instance->setParameter(
+                "screenFilterScale", bridge->screen_filter_scale);
+        material_instance->setParameter(
+                "screenSharpness", bridge->screen_filter_sharpness);
+        material_instance->setParameter("screenLodBias", kLegacyScreenLodBias);
+        // The copy view is only a linear/sRGB-preserving filter pass. It must
+        // not inherit the scene exposure compensation used by the final draw.
+        material_instance->setParameter("screenExposureCompensation", 1.0f);
+        material_instance->setParameter("screenQualityPass", 0.0f);
+    }
     bridge->screen_mip_copy_material_instance =
-            bridge->screen_material->createInstance();
-    bridge->screen_mip_copy_material_instance->setParameter(
-            "screenFilterScale", bridge->screen_filter_scale);
-    bridge->screen_mip_copy_material_instance->setParameter(
-            "screenSharpness", bridge->screen_filter_sharpness);
-    bridge->screen_mip_copy_material_instance->setParameter(
-            "screenLodBias", kLegacyScreenLodBias);
-    // The copy view is only a linear/sRGB-preserving filter pass. It must not
-    // inherit the scene exposure compensation used by the final screen draw.
-    bridge->screen_mip_copy_material_instance->setParameter(
-            "screenExposureCompensation", 1.0f);
-    bridge->screen_mip_copy_material_instance->setParameter(
-            "screenQualityPass", 0.0f);
+            bridge->screen_mip_copy_material_instances[bridge->active_eye];
     // Match the legacy screen mesh orientation: v=0 is the bottom edge and
     // v=1 is the top edge. Reversing this pair mirrors the copied image.
     bridge->screen_mip_copy_vertices = {

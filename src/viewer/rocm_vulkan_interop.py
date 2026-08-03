@@ -341,6 +341,10 @@ class RocmVulkanImageImporter:
     def register_semaphore(self, target: VulkanExportableSemaphore) -> None:
         if not self.capabilities.external_semaphore:
             raise RocmVulkanInteropError("HIP external semaphore API is unavailable")
+        if bool(getattr(target, "timeline", False)):
+            raise RocmVulkanInteropError(
+                "HIP timeline external semaphore is not implemented"
+            )
         key = id(target)
         if key in self._semaphores:
             return

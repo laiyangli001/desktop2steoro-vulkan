@@ -2862,11 +2862,30 @@ def test_projection_updates_shared_filament_state_once_per_stereo_pair(
 
 
 @pytest.mark.parametrize("fail_second_eye", [False, True])
-def test_projection_batches_eyes_without_filament_finished_drain(
-    monkeypatch, fail_second_eye,
+@pytest.mark.parametrize(
+    ("screen_image_projection", "screen_eye_materials_available", "batch_submit"),
+    [(False, False, True), (True, False, False), (True, True, True)],
+)
+def test_projection_selects_safe_filament_submit_mode(
+    monkeypatch,
+    fail_second_eye,
+    screen_image_projection,
+    screen_eye_materials_available,
+    batch_submit,
 ) -> None:
     calls: list[str] = []
     timing_names: list[str] = []
+
+    class TrackingLock:
+        held = False
+
+        def acquire(self):
+            self.held = True
+
+        def release(self):
+            self.held = False
+
+    queue_lock = TrackingLock()
 
     class FakeXr:
         INFINITE_DURATION = 1
@@ -2890,6 +2909,7 @@ def test_projection_batches_eyes_without_filament_finished_drain(
     class FakeBridge:
         stereo_batch_submit_abi_available = True
         finished_drawing_semaphore_abi_available = True
+        screen_eye_materials_abi_available = screen_eye_materials_available
 
         def __init__(self):
             self.active_eye = 0
@@ -2905,20 +2925,27 @@ def test_projection_batches_eyes_without_filament_finished_drain(
             calls.append(f"image:{image_index}")
 
         def begin_frame(self):
+            assert queue_lock.held
             calls.append("begin")
 
         def end_frame(self):
-            raise AssertionError("batch-capable bridge must not flush each eye")
+            assert not batch_submit
+            calls.append("end")
 
         def end_frame_deferred(self):
+            assert queue_lock.held
+            assert batch_submit
             calls.append("deferred")
             if fail_second_eye and self.active_eye == 1:
                 raise RuntimeError("second eye submit failed")
 
         def finish_frame_batch(self):
+            assert queue_lock.held
+            assert batch_submit
             calls.append("finish")
 
         def wait_for_idle(self):
+            assert queue_lock.held
             calls.append("wait-idle")
 
         def get_finished_drawing_semaphore(self):
@@ -2935,6 +2962,7 @@ def test_projection_batches_eyes_without_filament_finished_drain(
     presenter.filament_bridge = FakeBridge()
     presenter.vulkan = SimpleNamespace(
         _timeline_semaphore=object(),
+        _lock=queue_lock,
         submit_on=lambda role, record, **kwargs: (
             record("command-buffer"),
             calls.append(("drain", role, kwargs)),
@@ -2952,7 +2980,7 @@ def test_projection_batches_eyes_without_filament_finished_drain(
     presenter._report_screen_resolution = lambda *_args: None
     presenter._apply_screen_sampling_policy = lambda *_args: None
     presenter._report_filament_screen_image_status = lambda *_args: None
-    presenter._can_use_filament_screen_image = lambda *_args: False
+    presenter._can_use_filament_screen_image = lambda *_args: screen_image_projection
     presenter._update_filament_screen_light = lambda *_args: None
     presenter._update_filament_glow = lambda *_args: None
     presenter._update_filament_controllers = lambda *_args: None
@@ -2966,18 +2994,28 @@ def test_projection_batches_eyes_without_filament_finished_drain(
         lambda *_args: "projection",
     )
 
-    if fail_second_eye:
+    if fail_second_eye and batch_submit:
         with pytest.raises(RuntimeError, match="second eye submit failed"):
             presenter._render_projection_layer([object(), object()], None)
     else:
         assert presenter._render_projection_layer([object(), object()], None) == "projection"
     assert calls.count("begin") == 2
-    assert calls.count("deferred") == 2
-    assert calls.count("finish") == (0 if fail_second_eye else 1)
-    assert calls.count("wait-idle") == (1 if fail_second_eye else 0)
-    assert [call for call in calls if isinstance(call, tuple)] == []
-    assert ("openxr_filament_stereo_finish_wait" in timing_names) is not fail_second_eye
-    assert "openxr_filament_completion_drain" not in timing_names
+    assert calls.count("end") == (0 if batch_submit else 2)
+    assert calls.count("deferred") == (2 if batch_submit else 0)
+    assert calls.count("finish") == (1 if batch_submit and not fail_second_eye else 0)
+    assert calls.count("wait-idle") == (
+        1 if fail_second_eye and batch_submit else 0
+    )
+    assert len([call for call in calls if isinstance(call, tuple)]) == (
+        0 if batch_submit else 1
+    )
+    assert ("openxr_filament_stereo_finish_wait" in timing_names) is (
+        batch_submit and not fail_second_eye
+    )
+    assert ("openxr_filament_completion_drain" in timing_names) is (
+        not batch_submit
+    )
+    assert not queue_lock.held
 
 
 def test_projection_layer_builder_owns_only_layer_assembly() -> None:

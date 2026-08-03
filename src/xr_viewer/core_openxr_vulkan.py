@@ -4551,6 +4551,8 @@ class OpenXrVulkanPresenter(
         deferred_capture_jobs: list[tuple[int, Any, Any]] = []
         render_succeeded = False
         screen_image_projection = False
+        filament_queue_lock = getattr(self.vulkan, "_lock", None)
+        filament_queue_locked = False
         projection_started = time.perf_counter()
 
         def record_time(name: str, started: float) -> None:
@@ -4579,6 +4581,10 @@ class OpenXrVulkanPresenter(
                     f"openxr_projection_wait_eye{eye_index}", wait_started
                 )
             record_time("openxr_swapchain_wait", wait_pair_started)
+
+            if self.filament_bridge is not None and filament_queue_lock is not None:
+                filament_queue_lock.acquire()
+                filament_queue_locked = True
 
             shared_prepare_started = time.perf_counter()
             screen_image_projection = self._can_use_filament_screen_image(output_frame)
@@ -4626,6 +4632,14 @@ class OpenXrVulkanPresenter(
             )
             batch_filament_submit = bool(
                 finished_semaphore_available
+                and (
+                    not screen_image_projection
+                    or getattr(
+                        self.filament_bridge,
+                        "screen_eye_materials_abi_available",
+                        False,
+                    )
+                )
                 and getattr(
                     self.filament_bridge,
                     "stereo_batch_submit_abi_available",
@@ -4875,6 +4889,9 @@ class OpenXrVulkanPresenter(
                         )
                 except Exception:
                     pass
+            if filament_queue_locked and filament_queue_lock is not None:
+                filament_queue_lock.release()
+                filament_queue_locked = False
             release_started = time.perf_counter()
             for eye, _image_index in acquired_images:
                 xr.release_swapchain_image(eye.handle)

@@ -180,6 +180,11 @@ class VulkanGlowSourceComputeBackend:
             ),
         )
 
+    def _submit_queue(self, *args) -> None:
+        # ponytail: device-wide lock; split by VkQueue handle if contention matters.
+        with self.context._lock:
+            self.vk.vkQueueSubmit(*args)
+
     def _ensure_inputs(self, required_size: int) -> None:
         required = int(required_size)
         if required <= self._input_capacity and all(
@@ -290,7 +295,7 @@ class VulkanGlowSourceComputeBackend:
             slot.compute_command, slot.screen_light_buffer
         )
         self.vk.vkEndCommandBuffer(slot.compute_command)
-        self.vk.vkQueueSubmit(
+        self._submit_queue(
             self.compute_queue,
             1,
             [
@@ -402,7 +407,7 @@ class VulkanGlowSourceComputeBackend:
         self._begin_command(slot.graphics_command)
         self._record_image_barrier(slot.graphics_command, slot, to_sampling=True)
         self.vk.vkEndCommandBuffer(slot.graphics_command)
-        self.vk.vkQueueSubmit(
+        self._submit_queue(
             self.graphics_queue,
             1,
             [
@@ -441,7 +446,7 @@ class VulkanGlowSourceComputeBackend:
         self._begin_command(slot.graphics_command)
         self._record_image_barrier(slot.graphics_command, slot, to_sampling=False)
         self.vk.vkEndCommandBuffer(slot.graphics_command)
-        self.vk.vkQueueSubmit(
+        self._submit_queue(
             self.graphics_queue,
             1,
             [

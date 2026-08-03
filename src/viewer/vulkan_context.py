@@ -637,7 +637,9 @@ class VulkanContext:
         *,
         wait_for_timeline: int | None = None,
         wait_semaphore: Any | None = None,
+        wait_semaphore_value: int | None = None,
         signal_semaphore: Any | None = None,
+        signal_semaphore_value: int | None = None,
     ) -> int:
         """Transition a producer image to shader-read layout on graphics queue.
 
@@ -689,7 +691,9 @@ class VulkanContext:
             record,
             wait_for_timeline=wait_for_timeline,
             wait_semaphore=wait_semaphore,
+            wait_semaphore_value=wait_semaphore_value,
             signal_semaphore=signal_semaphore,
+            signal_semaphore_value=signal_semaphore_value,
         )
         self._image_states.update(
             image_key,
@@ -711,7 +715,9 @@ class VulkanContext:
         *,
         wait_for_timeline: int | None = None,
         wait_semaphore: Any | None = None,
+        wait_semaphore_value: int | None = None,
         signal_semaphore: Any | None = None,
+        signal_semaphore_value: int | None = None,
     ) -> int:
         """Return a Filament source image to producer-writable GENERAL layout."""
         # Device loss is terminal.  Cleanup must only release CPU-side leases;
@@ -764,7 +770,9 @@ class VulkanContext:
             record,
             wait_for_timeline=wait_for_timeline,
             wait_semaphore=wait_semaphore,
+            wait_semaphore_value=wait_semaphore_value,
             signal_semaphore=signal_semaphore,
+            signal_semaphore_value=signal_semaphore_value,
         )
         self._image_states.update(
             image_key,
@@ -991,7 +999,9 @@ class VulkanContext:
         *,
         wait_for_timeline: int | None = None,
         wait_semaphore: Any | None = None,
+        wait_semaphore_value: int | None = None,
         signal_semaphore: Any | None = None,
+        signal_semaphore_value: int | None = None,
     ) -> int:
         try:
             return self._submit_on_unchecked(
@@ -999,7 +1009,9 @@ class VulkanContext:
                 record,
                 wait_for_timeline=wait_for_timeline,
                 wait_semaphore=wait_semaphore,
+                wait_semaphore_value=wait_semaphore_value,
                 signal_semaphore=signal_semaphore,
+                signal_semaphore_value=signal_semaphore_value,
             )
         except Exception as exc:
             # Device loss may surface from any command-buffer or queue call,
@@ -1014,7 +1026,9 @@ class VulkanContext:
         *,
         wait_for_timeline: int | None = None,
         wait_semaphore: Any | None = None,
+        wait_semaphore_value: int | None = None,
         signal_semaphore: Any | None = None,
+        signal_semaphore_value: int | None = None,
     ) -> int:
         with self._lock:
             self._ensure_open()
@@ -1063,7 +1077,9 @@ class VulkanContext:
                     timeline_value=queue_resources.timeline_value,
                     wait_timeline_value=wait_for_timeline,
                     wait_semaphore=wait_semaphore,
+                    wait_semaphore_value=wait_semaphore_value,
                     signal_semaphore=signal_semaphore,
+                    signal_semaphore_value=signal_semaphore_value,
                 )
             except Exception as exc:
                 self.mark_device_lost(exc)
@@ -1218,7 +1234,9 @@ class VulkanContext:
         timeline_value: int,
         wait_timeline_value: int | None = None,
         wait_semaphore: Any | None = None,
+        wait_semaphore_value: int | None = None,
         signal_semaphore: Any | None = None,
+        signal_semaphore_value: int | None = None,
     ) -> None:
         vk = self.vk
         wait_binary = (
@@ -1231,6 +1249,20 @@ class VulkanContext:
             if isinstance(signal_semaphore, (tuple, list))
             else ([] if signal_semaphore is None else [signal_semaphore])
         )
+        if wait_semaphore_value is not None and len(wait_binary) != 1:
+            raise VulkanCapabilityError(
+                "timeline semaphore value requires exactly one wait semaphore"
+            )
+        if signal_semaphore_value is not None and len(signal_binary) != 1:
+            raise VulkanCapabilityError(
+                "timeline semaphore value requires exactly one signal semaphore"
+            )
+        wait_external_values = [0] * len(wait_binary)
+        signal_external_values = [0] * len(signal_binary)
+        if wait_semaphore_value is not None:
+            wait_external_values[0] = int(wait_semaphore_value)
+        if signal_semaphore_value is not None:
+            signal_external_values[0] = int(signal_semaphore_value)
         if wait_timeline_value is not None and self._timeline_semaphore is None:
             raise VulkanCapabilityError(
                 "timeline wait requested but the Vulkan context has no timeline semaphore"
@@ -1253,12 +1285,14 @@ class VulkanContext:
                 deviceIndex=0,
             )
             wait_infos = []
-            for semaphore in wait_binary:
+            for semaphore, semaphore_value in zip(
+                wait_binary, wait_external_values, strict=True
+            ):
                 wait_infos.append(
                     vk.VkSemaphoreSubmitInfo(
                         sType=vk.VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
                         semaphore=semaphore,
-                        value=0,
+                        value=semaphore_value,
                         stageMask=_pipeline_stage_2_all_commands(vk),
                         deviceIndex=0,
                     )
@@ -1274,12 +1308,14 @@ class VulkanContext:
                     )
                 )
             signal_infos = [signal_info]
-            for semaphore in signal_binary:
+            for semaphore, semaphore_value in zip(
+                signal_binary, signal_external_values, strict=True
+            ):
                 signal_infos.append(
                     vk.VkSemaphoreSubmitInfo(
                         sType=vk.VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
                         semaphore=semaphore,
-                        value=0,
+                        value=semaphore_value,
                         stageMask=_pipeline_stage_2_all_commands(vk),
                         deviceIndex=0,
                     )
@@ -1297,22 +1333,23 @@ class VulkanContext:
             return
 
         wait_semaphores = list(wait_binary)
-        wait_stage_masks = []
-        for _semaphore in wait_binary:
-            wait_stage_masks.append(vk.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT)
+        wait_stage_masks = [
+            vk.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT for _semaphore in wait_binary
+        ]
+        wait_values = list(wait_external_values)
         if wait_timeline_value is not None:
             wait_semaphores.append(self._timeline_semaphore)
             wait_stage_masks.append(vk.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT)
+            wait_values.append(int(wait_timeline_value))
         signal_semaphores = []
+        signal_values = []
         if self._timeline_semaphore is not None:
             signal_semaphores.append(self._timeline_semaphore)
+            signal_values.append(timeline_value)
         signal_semaphores.extend(signal_binary)
+        signal_values.extend(signal_external_values)
         timeline_info = None
-        if self._timeline_semaphore is not None:
-            wait_values = [0] * len(wait_binary)
-            if wait_timeline_value is not None:
-                wait_values.append(int(wait_timeline_value))
-            signal_values = [timeline_value] + [0] * len(signal_binary)
+        if any(wait_values) or any(signal_values):
             timeline_info = vk.VkTimelineSemaphoreSubmitInfo(
                 sType=vk.VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
                 waitSemaphoreValueCount=len(wait_values),

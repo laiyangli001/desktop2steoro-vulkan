@@ -106,6 +106,23 @@ def _load_common_filament_defaults(src_root: Path) -> dict[str, object]:
     return filament if isinstance(filament, dict) else {}
 
 
+def _resolve_openxr_render_scale(settings: dict) -> float:
+    """Return the explicitly selected OpenXR projection scale."""
+    env_value = os.environ.get("D2S_OPENXR_RENDER_SCALE")
+    if env_value:
+        try:
+            return max(0.25, min(1.5, float(env_value)))
+        except ValueError:
+            pass
+    tiers = {
+        "4K / 100%": 1.0,
+        "3K / 85%": 0.85,
+        "2K / 75%": 0.75,
+        "1K / 50%": 0.5,
+    }
+    return float(tiers.get(str(settings.get("Render Scale", "4K / 100%")), 1.0))
+
+
 def _openxr_filament_config(settings: dict) -> dict[str, object]:
     """Resolve the selected packaged Filament scene for direct OpenXR runs."""
     src_root = Path(__file__).resolve().parents[1]
@@ -129,6 +146,7 @@ def _openxr_filament_config(settings: dict) -> dict[str, object]:
     configured_glb = os.environ.get("D2S_FILAMENT_GLB")
     configured_profile = os.environ.get("D2S_FILAMENT_PROFILE")
     return {
+        "render_scale": _resolve_openxr_render_scale(settings),
         "swapchain_color_mode": str(
             settings.get("OpenXR Color Mode", "sRGB")
         ).strip().lower(),
