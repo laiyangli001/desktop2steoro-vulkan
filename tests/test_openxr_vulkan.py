@@ -83,6 +83,35 @@ def test_timeline_feature_chain_returns_feature_node_and_sync_flag():
     assert synchronization2_enabled is True
 
 
+def test_openxr_feature_chain_enables_multiview():
+    class FeatureNode:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class FakeVulkan:
+        VK_TRUE = 1
+        VK_FALSE = 0
+        VkPhysicalDeviceTimelineSemaphoreFeatures = FeatureNode
+        VkPhysicalDeviceSynchronization2Features = FeatureNode
+        VkPhysicalDeviceMultiviewFeatures = FeatureNode
+        VkPhysicalDeviceFeatures2 = FeatureNode
+
+        @staticmethod
+        def vkGetPhysicalDeviceFeatures2(_physical_device, features2):
+            features2.pNext.timelineSemaphore = 1
+            features2.pNext.pNext.synchronization2 = 1
+            features2.pNext.pNext.pNext.multiview = 1
+
+    feature_chain, synchronization2_enabled = _require_timeline_semaphore_features(
+        FakeVulkan(), object(), require_multiview=True
+    )
+
+    assert feature_chain.synchronization2 == 1
+    assert feature_chain.pNext.multiview == 1
+    assert feature_chain.pNext.pNext.timelineSemaphore == 1
+    assert synchronization2_enabled is True
+
+
 def test_queue_family_selection_prefers_dedicated_compute_and_transfer() -> None:
     vk = SimpleNamespace(
         VK_QUEUE_GRAPHICS_BIT=0x1,

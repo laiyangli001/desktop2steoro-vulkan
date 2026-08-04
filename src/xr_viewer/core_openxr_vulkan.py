@@ -3335,7 +3335,7 @@ class OpenXrVulkanPresenter(
         queue_family_index = find_graphics_queue_family(vk, vk_physical_device)
         try:
             timeline_features, synchronization2_enabled = _require_timeline_semaphore_features(
-                vk, vk_physical_device
+                vk, vk_physical_device, require_multiview=True
             )
         except VulkanCapabilityError as exc:
             raise OpenXrVulkanUnavailableError(str(exc)) from exc

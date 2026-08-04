@@ -1588,7 +1588,7 @@ def _loader_api_version(vk: Any) -> int:
 
 
 def _require_timeline_semaphore_features(
-    vk: Any, physical_device: Any
+    vk: Any, physical_device: Any, *, require_multiview: bool = False
 ) -> tuple[Any, bool]:
     feature_type = getattr(vk, "VkPhysicalDeviceTimelineSemaphoreFeatures", None)
     features2_type = getattr(vk, "VkPhysicalDeviceFeatures2", None)
@@ -1598,8 +1598,16 @@ def _require_timeline_semaphore_features(
             "Vulkan binding does not expose physical-device feature2 queries"
         )
 
+    multiview_type = getattr(vk, "VkPhysicalDeviceMultiviewFeatures", None)
+    if require_multiview and multiview_type is None:
+        raise VulkanCapabilityError("Vulkan binding does not expose multiview features")
+    multiview_supported = multiview_type() if require_multiview else None
     synchronization_type = getattr(vk, "VkPhysicalDeviceSynchronization2Features", None)
-    synchronization_supported = synchronization_type() if synchronization_type else None
+    synchronization_supported = (
+        synchronization_type(pNext=multiview_supported)
+        if synchronization_type
+        else multiview_supported
+    )
     supported = feature_type(pNext=synchronization_supported)
     features2 = features2_type(pNext=supported)
     get_features2(physical_device, features2)
@@ -1607,19 +1615,27 @@ def _require_timeline_semaphore_features(
         raise VulkanCapabilityError(
             "Vulkan device does not support timelineSemaphore"
         )
+    if require_multiview and not bool(multiview_supported.multiview):
+        raise VulkanCapabilityError("Vulkan device does not support multiview")
 
     synchronization2_enabled = bool(
         synchronization_supported is not None
         and getattr(synchronization_supported, "synchronization2", vk.VK_FALSE)
     )
     enabled_timeline = feature_type(timelineSemaphore=vk.VK_TRUE)
+    enabled_features = enabled_timeline
+    if require_multiview:
+        enabled_features = multiview_type(
+            multiview=vk.VK_TRUE,
+            pNext=enabled_features,
+        )
     if synchronization2_enabled:
         enabled_sync = synchronization_type(
             synchronization2=vk.VK_TRUE,
-            pNext=enabled_timeline,
+            pNext=enabled_features,
         )
         return enabled_sync, True
-    return enabled_timeline, False
+    return enabled_features, False
 
 
 def _create_device(
