@@ -2,7 +2,7 @@
 setlocal
 pushd "%~dp0"
 set ROOT=%~dp0..\..\..
-set SDK=%ROOT%\native\filament\sdk\windows\v1.74.0
+set SDK=%ROOT%\native\filament\sdk\windows\v1.75.0
 set OUT=%ROOT%\src\xr_viewer\native
 if not exist "%OUT%" mkdir "%OUT%"
 set LIB=%SDK%\lib\x86_64\md

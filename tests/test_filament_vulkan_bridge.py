@@ -37,7 +37,17 @@ def test_remote_filament_build_enables_multiview_without_stale_sdk_cache() -> No
     patch = (
         root / "native/filament/patches/apply_d2s_vulkan_external_image.py"
     ).read_text(encoding="utf-8")
+    manifest = json.loads(
+        (root / "native/filament/version.json").read_text(encoding="utf-8")
+    )
+    cmake = (root / "native/filament/bridge/CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
 
+    assert manifest["version"] == "1.75.0"
+    assert manifest["source"]["ref"] == "v1.75.0"
+    assert all("v1.75.0" in entry["asset"] for entry in manifest["platforms"].values())
+    assert "google/filament/v1.75.0/libs/bluevk" in cmake
     assert workflow.count("-DFILAMENT_ENABLE_MULTIVIEW=ON") == 2
     assert workflow.count(
         "hashFiles('native/filament/version.json', "
@@ -418,9 +428,9 @@ def test_legacy_glow_material_shaders_compile_with_pinned_filament(
 ) -> None:
     root = Path(__file__).resolve().parents[1]
     candidates = (
-        root / "native/filament/sdk/windows/v1.74.0/matc.exe",
-        root / "native/filament/sdk/linux/v1.74.0/filament/bin/matc",
-        root / "native/filament/sdk/macos/v1.74.0/filament/bin/matc",
+        root / "native/filament/sdk/windows/v1.75.0/matc.exe",
+        root / "native/filament/sdk/linux/v1.75.0/filament/bin/matc",
+        root / "native/filament/sdk/macos/v1.75.0/filament/bin/matc",
     )
     matc = next((path for path in candidates if path.is_file()), None)
     if matc is None:

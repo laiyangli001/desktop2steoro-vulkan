@@ -3,6 +3,7 @@
 本文件只记录用户可感知的功能、行为变化、重要修复和架构里程碑，不记录逐次调试过程。新记录按日期倒序追加，并将同一目标的连续修改归纳为一条有效结果。
 
 ## 2026-08-04
+- 将 patched Filament Vulkan backend 从 v1.74.0 升级到 v1.75.0：同步更新三平台 release 资产校验、源码构建 ref、本地 SDK 路径与 BlueVK 固定哈希；现有外部 `VkImage`、多 SwapChain 状态和 layered array image-view 补丁已通过 v1.75.0 源码契约验证。
 - 修复低分辨率 EASU 路径首帧黑屏：MIP 目标创建完成后不再错误标记为已生成，首次采样会先执行实际源图重建；同时为 EASU 无有效权重的边界像素回退到中心源样本，避免异常输入产生黑色输出。
 - 修复采样策略在源图导入后才切换到 EASU 时的目标尺寸失配：切换 `upscale_scale` 或 `filter_scale` 会使旧中间纹理失效，下一帧按新策略重新创建并生成内容，避免 1K 输入出现黑屏或使用错误尺寸。
 - 将屏幕采样矩阵改为按输入/头显档位选择主路径：低分辨率输入使用独立 `upscale_scale` 生成 2 倍目标纹理，GPU 执行 EASU → RCAS → MIP；同档位使用源图 → MIP，高分辨率输入继续使用 Lanczos2 → RCAS → MIP。新增 `filament_bridge_set_screen_upscale` ABI，旧 Bridge 缺少该符号时保留原兼容路径。

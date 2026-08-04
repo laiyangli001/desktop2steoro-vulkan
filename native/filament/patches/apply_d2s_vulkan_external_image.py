@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Apply the pinned Filament 1.74 D2S Vulkan external-image extension."""
+"""Apply the pinned Filament 1.75 D2S Vulkan external-image extension."""
 
 from __future__ import annotations
 
@@ -32,8 +32,8 @@ def main() -> int:
 
     replace_once(
         renderer_cpp,
-        "#include <cmath>\n#include <limits>\n",
-        "#include <cmath>\n#include <cstdio>\n#include <cstdlib>\n#include <limits>\n",
+        "#include <chrono>\n#include <limits>\n",
+        "#include <chrono>\n#include <cstdio>\n#include <cstdlib>\n#include <limits>\n",
     )
     replace_once(
         renderer_cpp,
