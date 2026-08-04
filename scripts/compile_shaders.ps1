@@ -9,9 +9,10 @@ if (-not $compilerCommand) {
     throw "Shader compiler '$Compiler' was not found. Install the Vulkan SDK or pass -Compiler."
 }
 
-$sourceFiles = Get-ChildItem -LiteralPath $ShaderRoot -Filter *.comp -File
+$sourceFiles = Get-ChildItem -LiteralPath $ShaderRoot -File |
+    Where-Object { $_.Extension -in '.comp', '.vert', '.frag' }
 if (-not $sourceFiles) {
-    throw "No GLSL compute shaders found in $ShaderRoot."
+    throw "No GLSL shaders found in $ShaderRoot."
 }
 
 foreach ($source in $sourceFiles) {

@@ -2,7 +2,33 @@
 
 本文件只记录用户可感知的功能、行为变化、重要修复和架构里程碑，不记录逐次调试过程。新记录按日期倒序追加，并将同一目标的连续修改归纳为一条有效结果。
 
+## 2026-08-05
+- Vulkan Projection Composer 改为直接通过 Vulkan 图形管线将平面或曲面屏幕三角带绘制到每眼 Projection layer；移除 Homography 中间图与矩形复制，使近裁剪由 GPU 完成，避免透明矩形、转头丢屏和绕头旋转，OPAQUE 运行时也不再回退 Filament。
+- 修复 FPS 面板 XR 速率被视图循环计数覆盖的问题：优先使用成功 `xr.end_frame` 的真实提交时间戳；仅在尚未完成两次 XR 提交时使用启动阶段回退计数，避免面板错误显示约 36 FPS。
+- 修复 Vulkan Projection Composer 在转头离开屏幕时出现透明矩形、闪烁和残留画面：每个 XR tick 都清理左右眼已获取的 Projection 目标；屏幕四角穿过眼睛近平面时停止投影，避免异常放大矩形和错误填充。
+
 ## 2026-08-04
+- 修正 XR FPS 面板的统计边界：改为在 `xr.end_frame` 成功后记录时间戳，并按旧工程的时间戳环计算实际 OpenXR 提交速率；Vulkan Projection Composer 在屏幕双眼可见且使用 Homography 时跳过重复清屏，避免额外 GPU 提交拖低 72Hz 帧循环。
+- 优化 Vulkan Projection Composer 的 Homography 中间资源：按双眼与三帧槽分离输出/源副本，避免正常帧等待另一只眼或上一帧；Compute 仅派发屏幕投影矩形，减少 Projection 目标中屏幕外无效像素的计算。
+- 修复 Projection Composer 矩形派发引入的旧帧残影：每帧恢复清理 Projection 目标，并只将当前 Warp 输出的屏幕矩形复制到目标，避免中间纹理矩形外的旧内容覆盖 XR 画面。
+- 修复头部左右转动时屏幕在上一帧与黑屏之间闪烁：Projection Composer 按旧工程复用策略，仅清理当前有可见屏幕投影的眼睛；暂时不可见的眼睛保留交换链上一帧，不再被另一只眼的短暂无效投影带入清屏。
+- 修复 XR FPS 被旧帧复用锁到约 36 FPS：Projection Composer 的三槽中间纹理改按 XR 提交帧轮换，而不是按不变的源帧 ID 复用；静态 SBS 画面继续复用源帧，但连续 XR tick 不再等待同一 GPU 槽完成。
+- 调整 Projection Composer 的屏幕离视野行为：当左右眼都看不到世界锁定屏幕时不再清空 Projection swapchain，也不提交黑色清屏结果，保留该交换链图像的上一帧内容；屏幕重新进入任一眼视野后恢复正常清理与 Homography 绘制。
+- 修复转头使世界锁定屏幕同时离开左右眼视野时 Projection Composer 因空拷贝队列调用 `max()` 异常退出；现在不提交拷贝或清屏命令，并正常等待下一帧屏幕重新进入视野。
+- 限制 Vulkan Projection Composer 的 `screen bounds` 诊断为每次会话只输出一次；头显移动、视角变化和每帧投影边界更新不再刷屏。
+- 修复 Projection Composer 屏幕上下镜像：按 `top_left` 源图契约重新对应屏幕底部/顶部四角；同时当用户转头使世界锁定屏幕完全离开当前眼睛视野时只保留清屏结果，不再因 Homography 不可用回退为全屏 blit。
+- 修复 FPS 面板将 XR 消费帧率误当作 SBS 生产帧率的问题：XR FPS 继续统计实际 OpenXR tick，SBS FPS 改为读取运行时生产速率；当 OpenXR 只有约 40Hz 而 SBS 生产约 59Hz 时，面板不再显示两个相同数值。
+- 修复 Vulkan Projection Composer 屏幕垂直方向随头显移动的问题：Projection 目标采用 Vulkan 的左上角像素坐标，将 OpenXR 投影 NDC 的 Y 轴转换为目标图像坐标，保持屏幕上下位置与世界空间一致。
+- 修复 Vulkan Projection Composer 在 CUDA zero-copy 的 `R8G8B8A8_SRGB` 源纹理上回退到矩形 blit 的问题：现在先通过 Vulkan GPU copy 转换到临时 `R8G8B8A8_UNORM` 图像，再执行屏幕四角 Homography warp，保持屏幕固定在虚拟空间且不发生 CPU 回读。
+- 限制 Projection Composer 的屏幕边界日志只在屏幕几何、曲面状态或目标尺寸变化时输出，并为未进入 Homography warp 的曲面/无效投影四边形增加一次性回退原因，避免头部姿态抖动造成日志刷屏和无法判断实际路径。
+- 修复 Vulkan Projection Composer 屏幕随头显转动的问题：不再把源图仅缩放到轴对齐矩形，改为按每眼虚拟屏幕四角计算透视单应矩阵，并用 Vulkan Compute 双线性采样写入 Projection target；曲面或不支持的输入自动保留线性 blit 回退。
+- 启动 Filament/Vulkan Projection 迁移阶段 0：新增 `D2S_VULKAN_PROJECTION_COMPOSER=1` 实验开关但默认保持现有 Projection 回退路径；固定 Projection→Quad 提交顺序，并以状态变化方式记录双眼 swapchain、array layer 和 image release 契约，避免运行日志刷屏。
+- 实现阶段 1 最小 Vulkan Projection Composer 实验路径：开关启用时等待源图可见信号，并用 Vulkan 缩放 blit 分别写入左右眼 Projection target（支持 `array_size=2` 的 layer 0/1）；默认路径、Filament 环境和 Quad Layer 行为保持不变，源图租约通过完成 timeline 延迟释放。
+- 阶段 1 缩放实验使用 Vulkan 线性过滤，避免新路径在输入/Projection 尺寸不一致时引入最近邻锯齿；默认 Filament 路径不受影响。
+- 为阶段 1 增加一次性运行标记 `Vulkan projection composer active`，记录实际 source/target 尺寸和 layered 状态，便于实机确认没有只设置开关却仍走旧路径。
+- 新增 `run_windows_vulkan_projection_composer.ps1`，一键开启 Vulkan Projection Composer 实验路径和 OpenXR 调试日志。
+- 新增 `run_windows_vulkan_projection_eye_diagnostic.ps1`，以 Vulkan 清屏方式输出左眼红色、右眼绿色，用于独立确认 Projection array layer 与左右眼顺序。
+- 阶段 1 Composer 不再把源图拉伸填满整个 Projection target：根据每眼 OpenXR pose/FOV 投影虚拟屏幕边界，清空目标后仅在线性 blit 矩形内绘制，屏幕大小变化会同步反映到实验画面。
 - 将 patched Filament Vulkan backend 从 v1.74.0 升级到 v1.75.0：同步更新三平台 release 资产校验、源码构建 ref、本地 SDK 路径与 BlueVK 固定哈希；现有外部 `VkImage`、多 SwapChain 状态和 layered array image-view 补丁已通过 v1.75.0 源码契约验证。
 - 修复低分辨率 EASU 路径首帧黑屏：MIP 目标创建完成后不再错误标记为已生成，首次采样会先执行实际源图重建；同时为 EASU 无有效权重的边界像素回退到中心源样本，避免异常输入产生黑色输出。
 - 修复采样策略在源图导入后才切换到 EASU 时的目标尺寸失配：切换 `upscale_scale` 或 `filter_scale` 会使旧中间纹理失效，下一帧按新策略重新创建并生成内容，避免 1K 输入出现黑屏或使用错误尺寸。

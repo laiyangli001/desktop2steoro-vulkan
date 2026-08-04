@@ -487,9 +487,16 @@ class VulkanContext:
         self,
         image: Any,
         color: tuple[float, float, float, float],
-    ) -> None:
+        *,
+        base_array_layer: int = 0,
+        layer_count: int = 1,
+        wait_semaphore: Any | None = None,
+        wait_semaphore_value: int | None = None,
+    ) -> int:
         if len(color) != 4:
             raise ValueError("clear color must contain four components")
+        if int(base_array_layer) < 0 or int(layer_count) < 1:
+            raise ValueError("clear image array range is invalid")
         vk = self.vk
         image_key = _cffi_handle_address(vk, image)
         old_state = self._image_states.get(
@@ -511,7 +518,11 @@ class VulkanContext:
                 srcQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
                 dstQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
                 image=image,
-                subresourceRange=_color_subresource_range(vk),
+                subresourceRange=_color_subresource_range(
+                    vk,
+                    base_array_layer=base_array_layer,
+                    layer_count=layer_count,
+                ),
             )
             vk.vkCmdPipelineBarrier(
                 command_buffer,
@@ -531,7 +542,13 @@ class VulkanContext:
                 vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 vk.VkClearColorValue(float32=list(float(component) for component in color)),
                 1,
-                [_color_subresource_range(vk)],
+                [
+                    _color_subresource_range(
+                        vk,
+                        base_array_layer=base_array_layer,
+                        layer_count=layer_count,
+                    )
+                ],
             )
             to_runtime = vk.VkImageMemoryBarrier(
                 sType=vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
@@ -542,7 +559,11 @@ class VulkanContext:
                 srcQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
                 dstQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
                 image=image,
-                subresourceRange=_color_subresource_range(vk),
+                subresourceRange=_color_subresource_range(
+                    vk,
+                    base_array_layer=base_array_layer,
+                    layer_count=layer_count,
+                ),
             )
             vk.vkCmdPipelineBarrier(
                 command_buffer,
@@ -557,7 +578,12 @@ class VulkanContext:
                 [to_runtime],
             )
 
-        self.submit(record)
+        timeline_value = self.submit_on(
+            "graphics",
+            record,
+            wait_semaphore=wait_semaphore,
+            wait_semaphore_value=wait_semaphore_value,
+        )
         self._image_states.update(
             image_key,
             ImageState(
@@ -567,6 +593,8 @@ class VulkanContext:
                 queue_family_index=self.queue_family_index,
             ),
         )
+
+        return timeline_value
 
     def prepare_external_image_for_cuda(self, resource: Any) -> int:
         """Establish a persistent GENERAL layout before CUDA writes external memory."""
@@ -791,11 +819,18 @@ class VulkanContext:
         destination: Any,
         *,
         wait_for_timeline: int | None = None,
+        wait_semaphore: Any | None = None,
+        wait_semaphore_value: int | None = None,
         flip_x: bool = False,
         flip_y: bool = False,
+        filter_mode: int | None = None,
+        resize: bool = False,
         source_array_layer: int = 0,
+        destination_array_layer: int = 0,
+        source_rect: tuple[int, int, int, int] | None = None,
+        destination_rect: tuple[int, int, int, int] | None = None,
     ) -> int:
-        """Copy one registered Vulkan image layer, optionally flipping it."""
+        """Copy one registered Vulkan image layer with optional scaling."""
 
         self._ensure_open()
         for resource in (source, destination):
@@ -803,10 +838,42 @@ class VulkanContext:
                 raise VulkanCapabilityError("Vulkan image belongs to a different context")
         if source.image is destination.image:
             raise VulkanCapabilityError("source and destination Vulkan images must differ")
-        if int(source.width) != int(destination.width) or int(source.height) != int(destination.height):
+        dimensions_match = (
+            int(source.width) == int(destination.width)
+            and int(source.height) == int(destination.height)
+        )
+        if not dimensions_match and not resize:
             raise ValueError("Vulkan image copy dimensions must match")
-        if int(source_array_layer) < 0:
-            raise ValueError("source_array_layer must not be negative")
+        if int(source_array_layer) < 0 or int(destination_array_layer) < 0:
+            raise ValueError("image array layers must not be negative")
+        if destination_rect is None:
+            destination_x0, destination_y0 = 0, 0
+            destination_x1, destination_y1 = int(destination.width), int(destination.height)
+        else:
+            if len(destination_rect) != 4:
+                raise ValueError("destination_rect must contain four values")
+            destination_x0, destination_y0, destination_x1, destination_y1 = (
+                int(value) for value in destination_rect
+            )
+            if not (
+                0 <= destination_x0 < destination_x1 <= int(destination.width)
+                and 0 <= destination_y0 < destination_y1 <= int(destination.height)
+            ):
+                raise ValueError("destination_rect must be inside the destination image")
+        if source_rect is None:
+            source_x0, source_y0 = 0, 0
+            source_x1, source_y1 = int(source.width), int(source.height)
+        else:
+            if len(source_rect) != 4:
+                raise ValueError("source_rect must contain four values")
+            source_x0, source_y0, source_x1, source_y1 = (
+                int(value) for value in source_rect
+            )
+            if not (
+                0 <= source_x0 < source_x1 <= int(source.width)
+                and 0 <= source_y0 < source_y1 <= int(source.height)
+            ):
+                raise ValueError("source_rect must be inside the source image")
 
         vk = self.vk
         source_format = int(source.format)
@@ -868,7 +935,9 @@ class VulkanContext:
                     srcQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
                     dstQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
                     image=destination.image,
-                    subresourceRange=_color_subresource_range(vk),
+                    subresourceRange=_color_subresource_range(
+                        vk, base_array_layer=destination_array_layer
+                    ),
                 ),
             ]
             vk.vkCmdPipelineBarrier(
@@ -892,16 +961,18 @@ class VulkanContext:
             destination_subresource = vk.VkImageSubresourceLayers(
                 aspectMask=vk.VK_IMAGE_ASPECT_COLOR_BIT,
                 mipLevel=0,
-                baseArrayLayer=0,
+                baseArrayLayer=int(destination_array_layer),
                 layerCount=1,
             )
             # vkCmdCopyImage requires identical formats. Use a blit for the
             # validated UNORM <-> sRGB pair as well as for coordinate flips.
-            if flip_x or flip_y or not formats_match:
-                src_x0 = int(source.width) if flip_x else 0
-                src_x1 = 0 if flip_x else int(source.width)
-                src_y0 = int(source.height) if flip_y else 0
-                src_y1 = 0 if flip_y else int(source.height)
+            if resize or flip_x or flip_y or not formats_match or source_rect is not None or destination_rect is not None:
+                src_x0, src_x1 = (
+                    (source_x1, source_x0) if flip_x else (source_x0, source_x1)
+                )
+                src_y0, src_y1 = (
+                    (source_y1, source_y0) if flip_y else (source_y0, source_y1)
+                )
                 vk.vkCmdBlitImage(
                     command_buffer,
                     source.image,
@@ -918,12 +989,12 @@ class VulkanContext:
                             ],
                             dstSubresource=destination_subresource,
                             dstOffsets=[
-                                vk.VkOffset3D(x=0, y=0, z=0),
-                                vk.VkOffset3D(x=int(destination.width), y=int(destination.height), z=1),
+                                vk.VkOffset3D(x=destination_x0, y=destination_y0, z=0),
+                                vk.VkOffset3D(x=destination_x1, y=destination_y1, z=1),
                             ],
                         )
                     ],
-                    vk.VK_FILTER_NEAREST,
+                    int(filter_mode or vk.VK_FILTER_NEAREST),
                 )
             else:
                 vk.vkCmdCopyImage(
@@ -968,7 +1039,9 @@ class VulkanContext:
                 srcQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
                 dstQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
                 image=destination.image,
-                subresourceRange=_color_subresource_range(vk),
+                subresourceRange=_color_subresource_range(
+                    vk, base_array_layer=destination_array_layer
+                ),
                 ),
             ]
             vk.vkCmdPipelineBarrier(
@@ -985,7 +1058,11 @@ class VulkanContext:
             )
 
         timeline_value = self.submit_on(
-            "graphics", record, wait_for_timeline=wait_for_timeline
+            "graphics",
+            record,
+            wait_for_timeline=wait_for_timeline,
+            wait_semaphore=wait_semaphore,
+            wait_semaphore_value=wait_semaphore_value,
         )
         self._image_states.update(
             destination_key,
@@ -1679,13 +1756,15 @@ def _create_device(
     )
 
 
-def _color_subresource_range(vk: Any, *, base_array_layer: int = 0) -> Any:
+def _color_subresource_range(
+    vk: Any, *, base_array_layer: int = 0, layer_count: int = 1
+) -> Any:
     return vk.VkImageSubresourceRange(
         aspectMask=vk.VK_IMAGE_ASPECT_COLOR_BIT,
         baseMipLevel=0,
         levelCount=1,
         baseArrayLayer=int(base_array_layer),
-        layerCount=1,
+        layerCount=int(layer_count),
     )
 
 

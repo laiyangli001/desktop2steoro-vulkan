@@ -22,6 +22,8 @@ _BINDING_RE = re.compile(
 def _binding_kind(body: str) -> str:
     if "buffer" in body:
         return "storage_buffer"
+    if "sampler" in body:
+        return "combined_image_sampler"
     if "image" in body:
         return "storage_image"
     raise ValueError(f"unsupported descriptor declaration: {body.strip()}")
@@ -29,6 +31,8 @@ def _binding_kind(body: str) -> str:
 
 def _binding_access(qualifiers: str, body: str) -> str:
     declaration = f"{qualifiers} {body}"
+    if "sampler" in body:
+        return "read_only"
     if "readonly" in declaration:
         return "read_only"
     if "writeonly" in declaration:
@@ -83,15 +87,19 @@ def validate_manifest(root: Path) -> list[str]:
             errors.append(f"{name}: missing SPIR-V {entry['spirv']}")
 
         source = source_path.read_text(encoding="utf-8")
+        stage = entry.get("stage")
+        if stage not in {"compute", "vertex", "fragment"}:
+            errors.append(f"{name}: unsupported shader stage {stage!r}")
         workgroup_match = _WORKGROUP_RE.search(source)
-        if not workgroup_match:
-            errors.append(f"{name}: missing local workgroup declaration")
-        else:
-            actual_workgroup = [int(value) for value in workgroup_match.groups()]
-            if actual_workgroup != entry.get("workgroup"):
-                errors.append(
-                    f"{name}: workgroup {actual_workgroup} != {entry.get('workgroup')}"
-                )
+        if stage == "compute":
+            if not workgroup_match:
+                errors.append(f"{name}: missing local workgroup declaration")
+            else:
+                actual_workgroup = [int(value) for value in workgroup_match.groups()]
+                if actual_workgroup != entry.get("workgroup"):
+                    errors.append(
+                        f"{name}: workgroup {actual_workgroup} != {entry.get('workgroup')}"
+                    )
         if not _ENTRY_RE.search(source):
             errors.append(f"{name}: missing main entry")
         if entry.get("entry") != "main":

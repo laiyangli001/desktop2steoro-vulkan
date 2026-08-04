@@ -1,5 +1,5 @@
 Capture Mode: Monitor
-Monitor Index: 2
+Monitor Index: 1
 Window Title: ''
 Show FPS: false
 Model List:
@@ -517,7 +517,7 @@ Run Mode: OpenXR Link
 XR Headset Model: Pico 4 / 4 Ultra
 XR Preview Window: false
 VSync: false
-Target FPS: 0
+Target FPS: 120
 Processing Resolution: Auto
 Render Size Policy: scaled
 Render Scale: 4K / 100%
@@ -541,7 +541,7 @@ Lossless Scaling Support: false
 Capture Tool: WindowsCaptureCUDA
 Fill 16:9: true
 Fix Viewer Aspect: false
-Stereo Output: 1
+Stereo Output: 2
 Show Log Panel: true
 OpenXR Color Mode: sRGB
 OpenVINO: null

@@ -326,6 +326,7 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
                 on_controller_shortcut=callbacks.on_openxr_controller_shortcut,
                 on_breakdown_inc=callbacks.breakdown_inc,
                 on_breakdown_add_time=callbacks.breakdown_add_time,
+                on_runtime_fps=callbacks.runtime_fps,
             )
             presenter_thread = threading.Thread(
                 target=presenter.run_until,

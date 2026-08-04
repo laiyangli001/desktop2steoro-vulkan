@@ -3,6 +3,7 @@ from __future__ import annotations
 import ctypes
 import ctypes.util
 from concurrent.futures import Future, ThreadPoolExecutor
+from collections import deque
 import importlib
 import json
 import math
@@ -29,6 +30,7 @@ from viewer.vulkan_context import (
 )
 from viewer.vulkan_resources import VulkanExportableImage, VulkanHostImage, VulkanImageResource
 from viewer.vulkan_msdf_quad import VulkanMsdfQuadRenderer, VulkanMsdfQuadRequest
+from viewer.vulkan_projection_screen import VulkanProjectionScreenPass
 from app_runtime.output_contract import VulkanStereoOutputFrame
 
 
@@ -49,7 +51,9 @@ from .controller_models import (
 from viewer.controller_help import get_controller_help_rows
 from .filters import OneEuroFilter3D
 from .xr_math import (
+    _fov_to_proj_mat4_d3d,
     _mat3_to_quat_xyzw,
+    _pose_to_view_mat4,
     _xr_quat_to_mat4,
     euler_to_mat4,
     mat4_to_xr_posef,
@@ -93,6 +97,15 @@ _MSDF_OSD_PADDING_X = 20.0
 _MSDF_OSD_PADDING_Y = 14.0
 _MSDF_OSD_REFERENCE_HEIGHT = 78.0
 _TOOL_OVERLAY_UPDATE_INTERVAL = 1.0
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    return str(os.environ.get(name, "1" if default else "0")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def _layout_msdf_osd_runs(
@@ -536,6 +549,7 @@ class OpenXrVulkanPresenter(
         on_controller_shortcut: Callable[..., bool | None] | None = None,
         on_breakdown_inc: Callable[[str, int | float], None] | None = None,
         on_breakdown_add_time: Callable[[str, float], None] | None = None,
+        on_runtime_fps: Callable[[], float] | None = None,
     ) -> None:
         self.config = config or OpenXrVulkanConfig()
         self._headset_preset = resolve_xr_headset_preset(self.config.headset_model)
@@ -543,6 +557,7 @@ class OpenXrVulkanPresenter(
         self._on_controller_shortcut = on_controller_shortcut
         self._on_breakdown_inc = on_breakdown_inc
         self._on_breakdown_add_time = on_breakdown_add_time
+        self._on_runtime_fps = on_runtime_fps
         if self.config.render_scale <= 0:
             raise ValueError("render_scale must be greater than zero")
         if len(self.config.clear_color) != 4:
@@ -560,6 +575,13 @@ class OpenXrVulkanPresenter(
         self.swapchain_format: int | None = None
         self.swapchains: list[_EyeSwapchain] = []
         self._multiview_active = False
+        self._vulkan_projection_composer_requested = _env_flag(
+            "D2S_VULKAN_PROJECTION_COMPOSER"
+        )
+        self._vulkan_projection_composer_active = False
+        self._vulkan_projection_composer_frame_id: int | None = None
+        self._last_vulkan_projection_composer_status: tuple[Any, ...] | None = None
+        self._last_projection_composition_contract: tuple[Any, ...] | None = None
         self._quad_swapchains: list[_EyeSwapchain] = []
         self._quad_swapchain_format: int | None = None
         self._quad_swapchain_extent: tuple[int, int] | None = None
@@ -748,6 +770,7 @@ class OpenXrVulkanPresenter(
         self._tool_overlay_pending_latency_ms = 0.0
         self._tool_overlay_xr_window_started = 0.0
         self._tool_overlay_xr_window_frames = 0
+        self._tool_overlay_xr_frame_ts = deque(maxlen=60)
         self._tool_overlay_sbs_window_started = 0.0
         self._tool_overlay_sbs_window_frames = 0
         self._tool_overlay_last_output_id: int | None = None
@@ -755,6 +778,7 @@ class OpenXrVulkanPresenter(
         self._controller_callout_rgba: np.ndarray | None = None
         self._msdf_font_atlas: MsdfFontAtlas | None = None
         self._vulkan_msdf_quad_renderer: VulkanMsdfQuadRenderer | None = None
+        self._vulkan_projection_screen_pass: VulkanProjectionScreenPass | None = None
         # Legacy screen OSD state. These are rendered as Quad layers above
         # the virtual screen, never inside the projection scene.
         self._preset_name_overlay: str | None = None
@@ -920,6 +944,7 @@ class OpenXrVulkanPresenter(
             )
             self._create_vulkan_objects(api_version)
             self._create_session_and_swapchains()
+            self._report_projection_composer_boundary()
             self._xr_instance = self.instance
             self._xr_session = self.session
             self._xr_space = self.reference_space
@@ -1147,6 +1172,9 @@ class OpenXrVulkanPresenter(
                         layer_pointers.extend(
                             ctypes.pointer(item) for item in self._last_quad_layers
                         )
+                        self._report_projection_composition_contract(
+                            len(self._last_quad_layers)
+                        )
         finally:
             if not bool(getattr(self.vulkan, "device_lost", False)):
                 end_info = xr.FrameEndInfo(
@@ -1157,6 +1185,7 @@ class OpenXrVulkanPresenter(
                 )
                 end_started = time.perf_counter()
                 xr.end_frame(self.session, end_info)
+                self._record_xr_presented_frame()
                 if self._on_breakdown_add_time is not None:
                     self._on_breakdown_add_time(
                         "openxr_end_frame", time.perf_counter() - end_started
@@ -2358,71 +2387,68 @@ class OpenXrVulkanPresenter(
             flush=True,
         )
 
-    def _screen_footprint_pixels(
+    def _screen_projection_world_points(self) -> np.ndarray | None:
+        if self._filament_screen is None:
+            return None
+        position, width, height, rotation = self._filament_screen
+        if width <= 0.0 or height <= 0.0:
+            return None
+        screen_pose = euler_to_mat4(
+            *(math.radians(float(value)) for value in rotation[:3])
+        ).astype(np.float64)
+        center = np.asarray(position, dtype=np.float64)
+        right = screen_pose[:3, 0].astype(np.float64)
+        up = screen_pose[:3, 1].astype(np.float64)
+        forward = np.cross(right, up)
+        half_width = float(width) * 0.5
+        half_height = float(height) * 0.5
+        if self._screen_curved:
+            segments = 48
+            half_angle = 0.72
+            radius = half_width / half_angle
+            points = []
+            for segment in range(segments + 1):
+                angle = -half_angle + 2.0 * half_angle * segment / segments
+                local_x = radius * math.sin(angle)
+                local_z = radius * (1.0 - math.cos(angle))
+                column_center = center + right * local_x + forward * local_z
+                points.extend((
+                    column_center - up * half_height,
+                    column_center + up * half_height,
+                ))
+            return np.asarray(points, dtype=np.float64)
+        return np.asarray(
+            (
+                center - right * half_width - up * half_height,
+                center + right * half_width - up * half_height,
+                center + right * half_width + up * half_height,
+                center - right * half_width + up * half_height,
+            ),
+            dtype=np.float64,
+        )
+
+    def _screen_projection_points(
         self,
         view: Any,
         swapchain_size: tuple[int, int],
-    ) -> tuple[float, float] | None:
-        """Project the Filament screen geometry into one eye's swapchain pixels."""
-
-        if self._filament_screen is None:
-            return None
+    ) -> np.ndarray | None:
         try:
             sc_w, sc_h = int(swapchain_size[0]), int(swapchain_size[1])
-            if sc_w <= 0 or sc_h <= 0:
+            world_points = self._screen_projection_world_points()
+            if sc_w <= 0 or sc_h <= 0 or world_points is None:
                 return None
-            position, width, height, rotation = self._filament_screen
-            if width <= 0.0 or height <= 0.0:
-                return None
-
-            screen_pose = euler_to_mat4(
-                *(math.radians(float(value)) for value in rotation[:3])
-            ).astype(np.float64)
-            center = np.asarray(position, dtype=np.float64)
-            right = screen_pose[:3, 0].astype(np.float64)
-            up = screen_pose[:3, 1].astype(np.float64)
-            forward = np.cross(right, up)
-            half_width = float(width) * 0.5
-            half_height = float(height) * 0.5
-            if self._screen_curved:
-                segments = 48
-                half_angle = 0.72
-                radius = half_width / half_angle
-                points = []
-                for segment in range(segments + 1):
-                    t = segment / float(segments)
-                    angle = -half_angle + 2.0 * half_angle * t
-                    local_x = radius * math.sin(angle)
-                    local_z = radius * (1.0 - math.cos(angle))
-                    column_center = center + right * local_x + forward * local_z
-                    points.extend((
-                        column_center - up * half_height,
-                        column_center + up * half_height,
-                    ))
-                world_points = np.asarray(points, dtype=np.float64)
-            else:
-                world_points = np.asarray(
-                    (
-                        center - right * half_width - up * half_height,
-                        center + right * half_width - up * half_height,
-                        center + right * half_width + up * half_height,
-                        center - right * half_width + up * half_height,
-                    ),
-                    dtype=np.float64,
-                )
-
             eye_pose = _xr_view_pose_to_model_mat4(view.pose).astype(np.float64)
-            view_matrix = np.linalg.inv(eye_pose)
-            homogeneous = np.concatenate(
-                (world_points, np.ones((len(world_points), 1), dtype=np.float64)),
-                axis=1,
-            )
-            camera_points = (view_matrix @ homogeneous.T).T[:, :3]
+            camera_points = (
+                np.linalg.inv(eye_pose)
+                @ np.concatenate(
+                    (world_points, np.ones((len(world_points), 1), dtype=np.float64)),
+                    axis=1,
+                ).T
+            ).T[:, :3]
             depth = -camera_points[:, 2]
             valid = np.isfinite(depth) & (depth > 1e-6)
-            if not np.any(valid):
+            if not np.all(valid):
                 return None
-
             fov = view.fov
             tan_left = math.tan(float(fov.angle_left))
             tan_right = math.tan(float(fov.angle_right))
@@ -2442,23 +2468,51 @@ class OpenXrVulkanPresenter(
             ndc_y = 2.0 * (
                 camera_points[valid, 1] / depth[valid] - tan_down
             ) / (tan_up - tan_down) - 1.0
-            px = (ndc_x * 0.5 + 0.5) * sc_w
-            py = (ndc_y * 0.5 + 0.5) * sc_h
-            if len(px) == 0 or not np.all(np.isfinite((px, py))):
+            points = np.column_stack((
+                (ndc_x * 0.5 + 0.5) * sc_w,
+                (1.0 - (ndc_y * 0.5 + 0.5)) * sc_h,
+            ))
+            if len(points) != len(world_points) or not np.all(np.isfinite(points)):
                 return None
-            footprint_w = max(
-                0.0,
-                min(float(np.max(px)), float(sc_w))
-                - max(float(np.min(px)), 0.0),
-            )
-            footprint_h = max(
-                0.0,
-                min(float(np.max(py)), float(sc_h))
-                - max(float(np.min(py)), 0.0),
-            )
-            return footprint_w, footprint_h
+            return points
         except (AttributeError, IndexError, TypeError, ValueError, np.linalg.LinAlgError):
             return None
+
+    def _screen_projection_quad(
+        self,
+        view: Any,
+        swapchain_size: tuple[int, int],
+    ) -> np.ndarray | None:
+        if self._screen_curved:
+            return None
+        points = self._screen_projection_points(view, swapchain_size)
+        return points if points is not None and points.shape == (4, 2) else None
+
+    def _screen_projection_bounds(
+        self,
+        view: Any,
+        swapchain_size: tuple[int, int],
+    ) -> tuple[float, float, float, float] | None:
+        points = self._screen_projection_points(view, swapchain_size)
+        if points is None:
+            return None
+        sc_w, sc_h = int(swapchain_size[0]), int(swapchain_size[1])
+        return (
+            max(float(np.min(points[:, 0])), 0.0),
+            max(float(np.min(points[:, 1])), 0.0),
+            min(float(np.max(points[:, 0])), float(sc_w)),
+            min(float(np.max(points[:, 1])), float(sc_h)),
+        )
+
+    def _screen_footprint_pixels(
+        self,
+        view: Any,
+        swapchain_size: tuple[int, int],
+    ) -> tuple[float, float] | None:
+        bounds = self._screen_projection_bounds(view, swapchain_size)
+        if bounds is None:
+            return None
+        return max(0.0, bounds[2] - bounds[0]), max(0.0, bounds[3] - bounds[1])
 
     def _report_screen_resolution(
         self,
@@ -3184,6 +3238,13 @@ class OpenXrVulkanPresenter(
             except Exception:
                 pass
             self._vulkan_msdf_quad_renderer = None
+
+        if self._vulkan_projection_screen_pass is not None:
+            try:
+                self._vulkan_projection_screen_pass.close()
+            except Exception:
+                pass
+            self._vulkan_projection_screen_pass = None
 
         if xr is not None:
             self._destroy_tool_quad_layers()
@@ -3971,6 +4032,163 @@ class OpenXrVulkanPresenter(
         finally:
             file_reader.shutdown(wait=True)
 
+    def _report_projection_composer_boundary(self) -> None:
+        print(
+            "[OpenXRViewer] Vulkan projection composer boundary: "
+            f"requested={self._vulkan_projection_composer_requested} "
+            "active=False fallback=existing_projection_path",
+            flush=True,
+        )
+
+    def _report_projection_composition_contract(
+        self, quad_layer_count: int
+    ) -> None:
+        layered = bool(self._multiview_active and len(self.swapchains) == 1)
+        contract = (
+            True,
+            2,
+            "array_size=2" if layered else "per_eye_array_size=1",
+            len(self.swapchains),
+            int(quad_layer_count),
+            "projection_then_quad",
+            len(self.swapchains),
+        )
+        if contract == self._last_projection_composition_contract:
+            return
+        self._last_projection_composition_contract = contract
+        print(
+            "[OpenXRViewer] composition contract: "
+            f"projection=1 views={contract[1]} "
+            f"swapchain={contract[2]} handles={contract[3]} "
+            f"quad_layers={contract[4]} order={contract[5]} "
+            f"projection_release_handles={contract[6]}",
+            flush=True,
+        )
+
+    def _projection_screen_push_constants(self, view: Any) -> bytes:
+        if self._filament_screen is None:
+            raise RuntimeError("Vulkan Projection Composer screen is unavailable")
+        position, width, height, rotation = self._filament_screen
+        screen_rotation = euler_to_mat4(
+            *(math.radians(float(value)) for value in rotation[:3])
+        ).astype(np.float32)
+        view_projection = (
+            _fov_to_proj_mat4_d3d(
+                view.fov,
+                near=self._profile_near_plane,
+                far=self._profile_far_plane,
+            )
+            @ _pose_to_view_mat4(view.pose)
+        ).astype(np.float32)
+        # Vulkan's positive-height viewport maps positive NDC Y downward.
+        view_projection[1, :] *= -1.0
+        values = np.concatenate((
+            view_projection.reshape(-1, order="F"),
+            np.asarray((*position, 0.0), dtype=np.float32),
+            np.asarray((*screen_rotation[:3, 0], 0.0), dtype=np.float32),
+            np.asarray((*screen_rotation[:3, 1], 0.0), dtype=np.float32),
+            np.asarray((
+                float(width) * 0.5,
+                float(height) * 0.5,
+                0.72 if self._screen_curved else 0.0,
+                0.0,
+            ), dtype=np.float32),
+        )).astype("<f4", copy=False)
+        if values.size != 32 or not np.all(np.isfinite(values)):
+            raise ValueError("Vulkan Projection Composer screen transform is invalid")
+        return values.tobytes()
+
+    def _render_vulkan_projection_composer(
+        self,
+        frame: VulkanStereoOutputFrame,
+        acquired_images: list[tuple[_EyeSwapchain, int]],
+        views: list[Any],
+    ) -> int:
+        if self.vulkan is None or len(acquired_images) not in {1, 2}:
+            raise RuntimeError("Vulkan Projection Composer has no valid targets")
+        diagnostic = _env_flag("D2S_VULKAN_PROJECTION_COMPOSER_EYE_DIAGNOSTIC")
+        layered = len(acquired_images) == 1 and acquired_images[0][0].array_size >= 2
+        if diagnostic:
+            target_eye, image_index = acquired_images[0]
+            colors = ((1.0, 0.0, 0.0, 1.0), (0.0, 1.0, 0.0, 1.0))
+            timelines = []
+            for eye_index, color in enumerate(colors):
+                eye_target, target_index = (
+                    (target_eye, image_index)
+                    if layered
+                    else acquired_images[eye_index]
+                )
+                timelines.append(
+                    self.vulkan.clear_color_image(
+                        eye_target.resources[target_index].image,
+                        color,
+                        base_array_layer=eye_index if layered else 0,
+                    )
+                )
+            print(
+                "[OpenXRViewer] Vulkan projection composer eye diagnostic: "
+                f"left=red layer={0 if layered else 'eye0'} "
+                f"right=green layer={1 if layered else 'eye1'}",
+                flush=True,
+            )
+            self._vulkan_projection_composer_frame_id = int(frame.frame_id)
+            self._vulkan_projection_composer_active = True
+            return max(timelines)
+        if len(views) < 2:
+            raise RuntimeError("Vulkan Projection Composer requires two views")
+        prepare_source = (frame.metadata or {}).get(
+            "_vulkan_source_prepare_for_sampling"
+        )
+        if not callable(prepare_source):
+            raise RuntimeError(
+                "Vulkan Projection Composer source preparation is unavailable"
+            )
+        sources = (frame.left_eye, frame.right_eye)
+        status = (
+            layered,
+            int(sources[0].width),
+            int(sources[0].height),
+            int(acquired_images[0][0].width),
+            int(acquired_images[0][0].height),
+            bool(self._screen_curved),
+        )
+        if status != self._last_vulkan_projection_composer_status:
+            self._last_vulkan_projection_composer_status = status
+            print(
+                "[OpenXRViewer] Vulkan projection composer active: "
+                f"mode=graphics_triangle_strip layered={layered} "
+                f"source={status[1]}x{status[2]} "
+                f"target={status[3]}x{status[4]} curved={status[5]}",
+                flush=True,
+            )
+        target_format = int(acquired_images[0][0].resources[0].format)
+        if self._vulkan_projection_screen_pass is None:
+            self._vulkan_projection_screen_pass = VulkanProjectionScreenPass(
+                self.vulkan, target_format
+            )
+        timelines: list[int] = []
+        for eye_index, source in enumerate(sources):
+            target_eye, image_index = (
+                acquired_images[0] if layered else acquired_images[eye_index]
+            )
+            timelines.append(
+                self._vulkan_projection_screen_pass.submit(
+                    source,
+                    target_eye.resources[image_index],
+                    array_layer=eye_index if layered else 0,
+                    eye_index=eye_index,
+                    frame_slot=int(self.frame_count) % 3,
+                    push_constants=self._projection_screen_push_constants(
+                        views[eye_index]
+                    ),
+                    clear_color=self.config.clear_color,
+                    wait_semaphore=prepare_source(frame.frame_id, eye_index),
+                )
+            )
+        self._vulkan_projection_composer_frame_id = int(frame.frame_id)
+        self._vulkan_projection_composer_active = True
+        return max(timelines)
+
     def _try_enable_filament_multiview(self, bridge: Any) -> bool:
         if not (
             getattr(bridge, "multiview_abi_available", False)
@@ -4711,6 +4929,17 @@ class OpenXrVulkanPresenter(
         finished_semaphore_available = False
         render_succeeded = False
         screen_image_projection = False
+        self._vulkan_projection_composer_active = False
+        composer_frame = (
+            output_frame
+            if isinstance(output_frame, VulkanStereoOutputFrame)
+            else sampling_frame
+        )
+        use_vulkan_projection_composer = bool(
+            self._vulkan_projection_composer_requested
+            and isinstance(composer_frame, VulkanStereoOutputFrame)
+            and self._filament_screen is not None
+        )
         filament_queue_lock = getattr(self.vulkan, "_lock", None)
         filament_queue_locked = False
         projection_started = time.perf_counter()
@@ -4742,12 +4971,16 @@ class OpenXrVulkanPresenter(
                 )
             record_time("openxr_swapchain_wait", wait_pair_started)
 
-            if self.filament_bridge is not None and filament_queue_lock is not None:
+            if (
+                self.filament_bridge is not None
+                and filament_queue_lock is not None
+                and not use_vulkan_projection_composer
+            ):
                 filament_queue_lock.acquire()
                 filament_queue_locked = True
 
             shared_prepare_started = time.perf_counter()
-            screen_image_projection = self._can_use_filament_screen_image(output_frame)
+            screen_image_projection = use_vulkan_projection_composer or self._can_use_filament_screen_image(output_frame)
             if screen_image_projection and isinstance(
                 output_frame, VulkanStereoOutputFrame
             ):
@@ -4761,7 +4994,7 @@ class OpenXrVulkanPresenter(
                 screen_image_projection,
                 self._filament_screen_image_gate_reason(output_frame),
             )
-            if self.filament_bridge is not None:
+            if self.filament_bridge is not None and not use_vulkan_projection_composer:
                 self._update_filament_screen_light(
                     self.filament_bridge,
                     output_frame
@@ -4784,13 +5017,29 @@ class OpenXrVulkanPresenter(
 
             finished_semaphore_available = bool(
                 self.filament_bridge is not None
+                and not use_vulkan_projection_composer
                 and getattr(
                     self.filament_bridge,
                     "finished_drawing_semaphore_abi_available",
                     False,
                 )
             )
-            if self._multiview_active and self.filament_bridge is not None:
+            if use_vulkan_projection_composer:
+                composer_timeline = self._render_vulkan_projection_composer(
+                    composer_frame,
+                    acquired_images,
+                    composition_views,
+                )
+                composer_frame.metadata["_vulkan_consumer_release_timeline"] = max(
+                    int(
+                        composer_frame.metadata.get(
+                            "_vulkan_consumer_release_timeline", 0
+                        )
+                    ),
+                    int(composer_timeline),
+                )
+                render_succeeded = True
+            elif self._multiview_active and self.filament_bridge is not None:
                 consumer_release_semaphores[0] = self._render_filament_multiview(
                     render_views,
                     output_frame,
@@ -4914,6 +5163,8 @@ class OpenXrVulkanPresenter(
                 if semaphore is not None
             )
             expected_semaphores = 1 if self._multiview_active else 2
+            if use_vulkan_projection_composer:
+                expected_semaphores = 0
             if finished_semaphore_available and len(published_semaphores) != expected_semaphores:
                 raise RuntimeError(
                     "Filament did not publish the expected render-finished semaphores"
@@ -5283,6 +5534,7 @@ class OpenXrVulkanPresenter(
         self._tool_overlay_pending_latency_ms = 0.0
         self._tool_overlay_xr_window_started = 0.0
         self._tool_overlay_xr_window_frames = 0
+        self._tool_overlay_xr_frame_ts.clear()
         self._tool_overlay_sbs_window_started = 0.0
         self._tool_overlay_sbs_window_frames = 0
         self._tool_overlay_last_output_id = None
@@ -5317,9 +5569,10 @@ class OpenXrVulkanPresenter(
         self._tool_overlay_xr_window_frames += 1
         xr_elapsed = now - self._tool_overlay_xr_window_started
         if xr_elapsed >= _TOOL_OVERLAY_UPDATE_INTERVAL:
-            self._tool_overlay_xr_fps = (
-                self._tool_overlay_xr_window_frames / xr_elapsed
-            )
+            if len(self._tool_overlay_xr_frame_ts) < 2:
+                self._tool_overlay_xr_fps = (
+                    self._tool_overlay_xr_window_frames / xr_elapsed
+                )
             # Keep all displayed performance values on the same low-rate
             # snapshot. Rebuilding the PIL texture from per-frame latency
             # defeats the legacy overlay cache and stalls the presenter.
@@ -5345,6 +5598,23 @@ class OpenXrVulkanPresenter(
             )
             self._tool_overlay_sbs_window_started = now
             self._tool_overlay_sbs_window_frames = 0
+        if callable(self._on_runtime_fps):
+            try:
+                runtime_fps = float(self._on_runtime_fps())
+            except (TypeError, ValueError):
+                runtime_fps = 0.0
+            if math.isfinite(runtime_fps) and runtime_fps > 0.0:
+                self._tool_overlay_sbs_fps = runtime_fps
+
+    def _record_xr_presented_frame(self) -> None:
+        timestamp = time.perf_counter()
+        self._tool_overlay_xr_frame_ts.append(timestamp)
+        count = len(self._tool_overlay_xr_frame_ts)
+        if count < 2:
+            return
+        span = timestamp - self._tool_overlay_xr_frame_ts[0]
+        if span > 0.0:
+            self._tool_overlay_xr_fps = (count - 1) / span
 
     def _overlay_resolution_sizes(
         self, output_frame: VulkanStereoOutputFrame | None
@@ -5391,7 +5661,10 @@ class OpenXrVulkanPresenter(
         if self._filament_screen is None:
             self._last_screen_quad_layers = []
             return layers
-        screen_in_projection = self._can_use_filament_screen_image(output_frame)
+        screen_in_projection = (
+            self._vulkan_projection_composer_active
+            or self._can_use_filament_screen_image(output_frame)
+        )
         if screen_in_projection:
             self._last_screen_quad_layers = []
             return layers

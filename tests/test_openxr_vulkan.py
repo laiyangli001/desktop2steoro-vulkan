@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import inspect
 import json
 import math
 import threading
@@ -656,6 +657,29 @@ def test_tool_overlay_sbs_fps_counts_unique_producer_frames() -> None:
     assert presenter._tool_overlay_sbs_fps == 0.0
 
 
+def test_tool_overlay_keeps_real_xr_present_rate() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._tool_overlay_xr_frame_ts.extend((10.0, 10.5))
+    presenter._tool_overlay_xr_fps = 2.0
+    presenter._tool_overlay_xr_window_started = 10.0
+    presenter._tool_overlay_xr_window_frames = 36
+    presenter._frame_now = 11.1
+
+    presenter._update_tool_overlay_metrics(None)
+
+    assert presenter._tool_overlay_xr_fps == pytest.approx(2.0)
+
+
+def test_tool_overlay_uses_runtime_producer_fps_for_sbs() -> None:
+    presenter = OpenXrVulkanPresenter(on_runtime_fps=lambda: 59.3)
+    presenter._frame_now = 2.0
+
+    presenter._update_tool_overlay_metrics(None)
+
+    assert presenter._tool_overlay_xr_fps == 0.0
+    assert presenter._tool_overlay_sbs_fps == pytest.approx(59.3)
+
+
 def test_depth_shortcut_triggers_quad_osd_with_runtime_value() -> None:
     presenter = OpenXrVulkanPresenter(
         on_controller_shortcut=lambda _action, **_values: True
@@ -792,6 +816,49 @@ def test_presenter_defaults_to_capability_gated_zero_copy_path(monkeypatch) -> N
     monkeypatch.delenv("D2S_ENABLE_FILAMENT_SCREEN_IMAGE", raising=False)
     presenter = OpenXrVulkanPresenter()
     assert presenter._filament_screen_image_enabled is True
+
+
+def test_projection_composer_is_opt_in_and_keeps_existing_fallback(monkeypatch) -> None:
+    monkeypatch.delenv("D2S_VULKAN_PROJECTION_COMPOSER", raising=False)
+    presenter = OpenXrVulkanPresenter()
+    assert presenter._vulkan_projection_composer_requested is False
+    assert presenter._vulkan_projection_composer_active is False
+
+    monkeypatch.setenv("D2S_VULKAN_PROJECTION_COMPOSER", "1")
+    presenter = OpenXrVulkanPresenter()
+    assert presenter._vulkan_projection_composer_requested is True
+    assert presenter._vulkan_projection_composer_active is False
+
+
+def test_projection_composition_contract_log_is_state_change_only(capsys) -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter.swapchains = [
+        _EyeSwapchain("stereo", [], 10, 10, array_size=2),
+    ]
+    presenter._multiview_active = True
+
+    presenter._report_projection_composition_contract(2)
+    presenter._report_projection_composition_contract(2)
+
+    assert capsys.readouterr().out.count("composition contract:") == 1
+
+
+def test_projection_composer_uses_direct_vulkan_rasterization_in_opaque_runtime() -> None:
+    source = (Path(__file__).resolve().parents[1] /
+              "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
+    render_source = inspect.getsource(
+        OpenXrVulkanPresenter._render_vulkan_projection_composer
+    )
+
+    assert "use_vulkan_projection_composer = bool(" in source
+    assert "self._environment_blend_mode != xr.EnvironmentBlendMode.OPAQUE" not in source
+    assert "opaque_runtime_requires_full_projection_background" not in source
+    assert "VulkanProjectionScreenPass" in render_source
+    assert ".copy_image(" not in render_source
+    assert "_screen_projection_bounds" not in render_source
+    assert "Vulkan projection composer active:" in source
+    assert "Vulkan projection composer eye diagnostic:" in source
+    assert "self._vulkan_projection_composer_active" in source
 
 
 def test_filament_screen_image_requires_per_eye_external_ready_semaphores() -> None:
@@ -2278,6 +2345,71 @@ def test_filament_screen_footprint_matches_projected_swapchain_pixels() -> None:
     footprint = presenter._screen_footprint_pixels(view, (1000, 1000))
 
     assert footprint == pytest.approx((500.0, 250.0))
+
+
+def test_projection_points_use_vulkan_top_left_y_coordinates() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_screen = ((0.0, 0.0, -2.0), 2.0, 1.0, (0.0, 0.0, 0.0))
+    view = SimpleNamespace(
+        pose=SimpleNamespace(
+            position=SimpleNamespace(x=0.0, y=0.0, z=0.0),
+            orientation=SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0),
+        ),
+        fov=SimpleNamespace(
+            angle_left=-math.pi / 4.0,
+            angle_right=math.pi / 4.0,
+            angle_down=-math.pi / 4.0,
+            angle_up=math.pi / 4.0,
+        ),
+    )
+
+    points = presenter._screen_projection_points(view, (1000, 1000))
+
+    assert points is not None
+    assert points[0, 1] > points[2, 1]
+
+
+def test_projection_points_reject_screen_crossing_eye_plane() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_screen = ((0.0, 0.0, 0.0), 2.0, 1.0, (0.0, 0.0, 0.0))
+    view = SimpleNamespace(
+        pose=SimpleNamespace(
+            position=SimpleNamespace(x=0.0, y=0.0, z=0.0),
+            orientation=SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0),
+        ),
+        fov=SimpleNamespace(
+            angle_left=-math.pi / 4.0,
+            angle_right=math.pi / 4.0,
+            angle_down=-math.pi / 4.0,
+            angle_up=math.pi / 4.0,
+        ),
+    )
+
+    assert presenter._screen_projection_points(view, (1000, 1000)) is None
+
+
+def test_projection_screen_keeps_eye_plane_crossing_for_gpu_clipping() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_screen = ((0.0, 0.0, 0.0), 2.0, 1.0, (0.0, 0.0, 0.0))
+    view = SimpleNamespace(
+        pose=SimpleNamespace(
+            position=SimpleNamespace(x=0.0, y=0.0, z=0.0),
+            orientation=SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0),
+        ),
+        fov=SimpleNamespace(
+            angle_left=-math.pi / 4.0,
+            angle_right=math.pi / 4.0,
+            angle_down=-math.pi / 4.0,
+            angle_up=math.pi / 4.0,
+        ),
+    )
+
+    payload = presenter._projection_screen_push_constants(view)
+
+    assert len(payload) == 128
+    assert np.frombuffer(payload, dtype="<f4")[-4:] == pytest.approx(
+        (1.0, 0.5, 0.0, 0.0)
+    )
 
 
 def test_screen_resolution_log_reports_source_and_projected_pixels(capsys) -> None:

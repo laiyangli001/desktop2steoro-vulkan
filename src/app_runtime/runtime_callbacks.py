@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from utils.queue_utils import clear_nonblocking, drain_latest, put_latest
 
 
@@ -12,6 +14,9 @@ class RuntimeCallbacks:
             0.0,
             float(getattr(context.stereo_runtime.stereo_config, "depth_strength", 1.0)),
         )
+        self._runtime_fps_started = time.perf_counter()
+        self._runtime_fps_frames = 0.0
+        self._runtime_fps = 0.0
 
     def stereo_warmup_key(self, rgb_frame):
         return self.context.stereo_warmup_tracker.key_for_frame(rgb_frame)
@@ -21,6 +26,17 @@ class RuntimeCallbacks:
 
     def breakdown_inc(self, name, amount=1):
         self.context.fps_breakdown.inc(name, amount)
+        if name == "runtime":
+            now = time.perf_counter()
+            self._runtime_fps_frames += float(amount)
+            elapsed = now - self._runtime_fps_started
+            if elapsed >= 1.0:
+                self._runtime_fps = self._runtime_fps_frames / elapsed
+                self._runtime_fps_started = now
+                self._runtime_fps_frames = 0.0
+
+    def runtime_fps(self):
+        return self._runtime_fps
 
     def breakdown_add_time(self, name, seconds):
         self.context.fps_breakdown.add_time(name, seconds)
