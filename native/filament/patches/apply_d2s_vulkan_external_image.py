@@ -23,6 +23,7 @@ def main() -> int:
     vulkan_platform_h = root / "filament/backend/include/backend/platforms/VulkanPlatform.h"
     vulkan_platform_cpp = root / "filament/backend/src/vulkan/platform/VulkanPlatform.cpp"
     vulkan_driver_cpp = root / "filament/backend/src/vulkan/VulkanDriver.cpp"
+    vulkan_texture_cpp = root / "filament/backend/src/vulkan/VulkanTexture.cpp"
     vulkan_handles_h = root / "filament/backend/src/vulkan/VulkanHandles.h"
     vulkan_handles_cpp = root / "filament/backend/src/vulkan/VulkanHandles.cpp"
     vulkan_async_handles_cpp = root / "filament/backend/src/vulkan/VulkanAsyncHandles.cpp"
@@ -175,6 +176,13 @@ def main() -> int:
     }
 
     VulkanPipelineCache::RasterState const vulkanRasterState{
+""",
+    )
+    replace_once(
+        vulkan_texture_cpp,
+        """              format, fvkutils::getViewType(SamplerType::SAMPLER_2D),
+""",
+        """              format, fvkutils::getViewType(getSamplerTypeFromDepth(depth)),
 """,
     )
 
