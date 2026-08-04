@@ -30,8 +30,12 @@ def test_default_bridge_path_matches_platform() -> None:
 
 
 def test_remote_filament_build_enables_multiview_without_stale_sdk_cache() -> None:
+    root = Path(__file__).resolve().parents[1]
     workflow = (
-        Path(__file__).resolve().parents[1] / ".github/workflows/filament-bridge.yml"
+        root / ".github/workflows/filament-bridge.yml"
+    ).read_text(encoding="utf-8")
+    patch = (
+        root / "native/filament/patches/apply_d2s_vulkan_external_image.py"
     ).read_text(encoding="utf-8")
 
     assert workflow.count("-DFILAMENT_ENABLE_MULTIVIEW=ON") == 2
@@ -39,6 +43,10 @@ def test_remote_filament_build_enables_multiview_without_stale_sdk_cache() -> No
         "hashFiles('native/filament/version.json', "
         "'native/filament/patches/**', '.github/workflows/filament-bridge.yml')"
     ) == 2
+    assert "[D2S stereo trace] renderer" in patch
+    assert "variant.hasStereo()" in patch
+    assert "[D2S stereo trace] renderPass" in patch
+    assert "config.viewCount, subpassViewMask" in patch
 
 
 def test_pointer_value_accepts_integer_and_c_void_p() -> None:

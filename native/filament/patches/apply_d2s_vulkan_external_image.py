@@ -25,6 +25,56 @@ def main() -> int:
     vulkan_driver_cpp = root / "filament/backend/src/vulkan/VulkanDriver.cpp"
     vulkan_handles_h = root / "filament/backend/src/vulkan/VulkanHandles.h"
     vulkan_handles_cpp = root / "filament/backend/src/vulkan/VulkanHandles.cpp"
+    renderer_cpp = root / "filament/src/details/Renderer.cpp"
+    vulkan_fbo_cache_cpp = root / "filament/backend/src/vulkan/VulkanFboCache.cpp"
+
+    replace_once(
+        renderer_cpp,
+        "#include <cmath>\n#include <limits>\n",
+        "#include <cmath>\n#include <cstdio>\n#include <cstdlib>\n#include <limits>\n",
+    )
+    replace_once(
+        renderer_cpp,
+        """    variant.setShadowSampler2D(view.hasShadowing() && view.getShadowType() != ShadowType::PCF);
+    variant.setStereo(view.hasStereo());
+""",
+        """    variant.setShadowSampler2D(view.hasShadowing() && view.getShadowType() != ShadowType::PCF);
+    variant.setStereo(view.hasStereo());
+    static bool d2sStereoTraceLogged = false;
+    if (!d2sStereoTraceLogged && std::getenv("D2S_FILAMENT_EYE_DIAGNOSTIC")) {
+        d2sStereoTraceLogged = true;
+        std::fprintf(stderr,
+                "[D2S stereo trace] renderer viewStereo=%u variantStereo=%u "
+                "multiview=%u engineType=%u eyeCount=%u\\n",
+                static_cast<unsigned>(view.hasStereo()),
+                static_cast<unsigned>(variant.hasStereo()),
+                static_cast<unsigned>(isRenderingMultiview),
+                static_cast<unsigned>(engine.getConfig().stereoscopicType),
+                static_cast<unsigned>(engine.getConfig().stereoscopicEyeCount));
+    }
+""",
+    )
+    replace_once(
+        vulkan_fbo_cache_cpp,
+        "#include <utils/Panic.h>\n",
+        "#include <utils/Panic.h>\n\n#include <cstdio>\n#include <cstdlib>\n",
+    )
+    replace_once(
+        vulkan_fbo_cache_cpp,
+        """    if (config.viewCount > 1) {
+        // Fill the multiview create info.
+""",
+        """    if (config.viewCount > 1) {
+        static bool d2sStereoTraceLogged = false;
+        if (!d2sStereoTraceLogged && std::getenv("D2S_FILAMENT_EYE_DIAGNOSTIC")) {
+            d2sStereoTraceLogged = true;
+            std::fprintf(stderr,
+                    "[D2S stereo trace] renderPass viewCount=%u viewMask=0x%x\\n",
+                    config.viewCount, subpassViewMask);
+        }
+        // Fill the multiview create info.
+""",
+    )
 
     replace_once(
         platform,
