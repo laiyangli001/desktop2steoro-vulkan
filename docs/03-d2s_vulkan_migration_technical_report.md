@@ -25,6 +25,10 @@ D2S（Desktop to Stereo）项目是一个基于 OpenXR 的虚拟桌面应用，�
 
 ## 2. 目标架构总览
 
+### 2.0 当前架构修订
+
+Filament 仅负责环境与手柄 GLB 的加载、材质/动画和每眼颜色/深度渲染。Vulkan 统一负责虚拟屏幕采样、激光、Glow 以及 Projection Layer 最终合成；FPS 面板、操作指南、固定在虚拟屏幕和虚拟键盘上的两处 2D 光圈、虚拟键盘使用 Quad Layer。OpenXR Session、swapchain acquire/release、Projection/Quad layer 构建和 `xrEndFrame` 只能由 Presenter 线程执行；屏幕与 UI 生产线程通过有界 latest-frame 资源和 timeline 同步交付。
+
 ### 2.1 全 Vulkan 流程图
 
 ```

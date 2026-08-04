@@ -17,7 +17,7 @@
 ### 1.1 建设目标
 
 1. 使用 Vulkan 统一屏幕纹理、立体合成、后处理、三维场景渲染和 OpenXR 交换链。
-2. 使用 Filament Vulkan 后端渲染房间、虚拟屏幕、手柄和其他 glTF 2.0 场景资产。
+2. 使用 Filament Vulkan 后端加载并渲染房间、手柄和其他 glTF 2.0 场景资产；Filament 不负责虚拟屏幕、激光或 Glow 的最终合成。
 3. 使用 Vulkan Compute 完成 RGB 缩放、深度后处理、视差生成、双目变形、空洞修补、时域稳定和环境光效。
 4. 保留各 GPU 平台性能最优的 AI 推理后端，通过外部内存或一次 GPU 内拷贝接入 Vulkan。
 5. 采用 latest-frame 调度和有界帧上下文，保证负载升高时延迟不持续累积。
@@ -67,7 +67,7 @@ Desktop / Window / Video / API Frame
                   |
                   v
          Vulkan Scene Composition
-  Filament scene + virtual screen + asynchronous effects
+  Filament environment/controller output + Vulkan Projection composition
                   |
                   v
         OpenXR Vulkan Swapchain / Vulkan Output
@@ -98,8 +98,8 @@ Desktop / Window / Video / API Frame
 │  ┌─────────────────────────────────────────────────────────┐   │
 │  │  Filament (Vulkan 后端)                                  │   │
 │  │  - 加载房间.glb / 手柄.glb                               │   │
-│  │  - 渲染 3D 场景 + 虚拟屏幕四边形                         │   │
-│  │  - 直接输出到 OpenXR Vulkan 交换链                       │   │
+│  │  - 渲染环境 GLB 与手柄 GLB                               │   │
+│  │  - 输出每眼颜色/深度给 Vulkan Projection Composer         │   │
 │  └─────────────────────────────────────────────────────────┘   │
 │                                                                 │
 │  ┌─────────────────────────────────────────────────────────┐   │
@@ -111,8 +111,8 @@ Desktop / Window / Video / API Frame
 │                                                                 │
 │  ┌─────────────────────────────────────────────────────────┐   │
 │  │  OpenXR 提交                                             │   │
-│  │  - Projection Layer: 3D 场景 + 虚拟屏幕                 │   │
-│  │  - Quad Layer: Glow 特效 / 文字面板 / 虚拟键盘          │   │
+│  │  - Projection Layer: 场景 + 屏幕/激光/Glow              │   │
+│  │  - Quad Layer: FPS/指南/屏幕与键盘光圈/虚拟键盘         │   │
 │  │  - xrEndFrame 直接提交 VkImage                          │   │
 │  └─────────────────────────────────────────────────────────┘   │
 └────────────────────────────────────────────────────────────────┘
@@ -151,10 +151,17 @@ OpenGL Fallback 不承诺 Vulkan Compute、异步 Compute Queue、Timeline Semap
 | Vulkan Device Context | Instance、Device、队列、内存、Pipeline Cache | 全进程唯一设备上下文 |
 | Inference Adapter | 运行深度模型并写入 Vulkan 可消费资源 | Python Provider；允许内部使用 GPU tensor，但不得把 CPU 像素往返带入实时主路径 |
 | Stereo Compute Graph | 深度后处理到双目时域输出 | Vulkan Compute Pipeline |
-| Scene Renderer | glTF 场景、虚拟屏幕、手柄和灯光 | Python 调用 Filament DLL Bridge；这是唯一允许的自有原生代码边界 |
+| Filament Scene Renderer | 环境 GLB、手柄 GLB、材质、动画、每眼颜色/深度 | Python 调用 Filament DLL Bridge；不得管理 OpenXR Layer 或屏幕采样 |
+| Vulkan Projection Composer | 虚拟屏幕采样、激光、Glow、深度合成与 Projection VkImage | Presenter/Output Worker 通过 Vulkan 命令与 timeline 同步 |
 | Effects Compute Graph | Glow、平均色、墙面反射与色彩处理 | 异步 Compute，允许滞后 1 至 3 帧 |
 | OpenXR Presenter | 帧预测、视图、交换链和 Layer 提交 | 延续Python OpenXR实现/API；Vulkan Session为主，兼容模式可创建OpenGL Graphics Binding |
 | Control Plane | GUI/API、配置快照、日志和遥测 | Python；不读取逐帧像素 |
+
+### 3.2 当前 Projection/Quad 分层修订
+
+Filament 只输出环境 GLB 与手柄 GLB 的每眼颜色/深度。Vulkan Projection Composer 负责虚拟屏幕采样、激光、Glow 和最终 Projection Layer 合成；FPS 面板、操作指南、固定在虚拟屏幕和虚拟键盘上的两处 2D 光圈、虚拟键盘使用 Quad Layer。OpenXR layer 生命周期由单一 Presenter 线程拥有，屏幕与 UI 线程只生产有界 latest-frame Vulkan 资源。
+
+本修订覆盖本文件早期“Filament 屏幕材质/直接写入 OpenXR 图像”的历史描述；屏幕源图像只进入 Vulkan Projection Composer，不再创建 Filament 外部屏幕纹理。
 
 ### 3.4 进程与语言边界
 
@@ -455,10 +462,16 @@ Stereo Compute Graph 的标准输出是完整分辨率 Left Eye 和 Right Eye。
 Filament Scene Renderer 必须：
 
 1. 加载 glTF/GLB 房间、手柄和场景资产。
-2. 使用 Left/Right Eye 或 SBS 对应区域更新虚拟屏幕材质。
-3. 按 OpenXR 每眼 pose 和 FOV 渲染 Projection Layer。
-4. 将 Glow、墙面反射和 UI Layer 作为 Vulkan 资源采样。
-5. 直接写入 acquire 的 OpenXR `VkImage`，不经过中间 D3D11/GL 交换链。
+2. 按 OpenXR 每眼 pose 和 FOV 输出环境/手柄颜色与深度资源。
+3. 不创建或采样虚拟屏幕、激光、Glow、FPS、指南和键盘材质。
+4. 不直接拥有 OpenXR Layer；由 Vulkan Projection Composer 合成并写入 acquire 的 OpenXR `VkImage`。
+
+Vulkan Projection Composer 必须：
+
+1. 优先使用 `array_size=2` Projection swapchain，失败时回退为两个 per-eye swapchain。
+2. 将 Filament 环境/手柄颜色与深度、虚拟屏幕、激光和 Glow 合成到 Projection Layer。
+3. 将固定在虚拟屏幕和虚拟键盘上的光圈作为 2D 效果处理，不把它们提交为独立空间实体。
+4. 由单一 OpenXR Presenter 线程完成 acquire/release、Projection/Quad layer 构建和 `xrEndFrame`。
 
 ---
 

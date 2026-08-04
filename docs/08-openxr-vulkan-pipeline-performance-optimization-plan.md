@@ -25,6 +25,10 @@
 
 ## 2. 根因与正确提交模型
 
+### 2.0 当前架构修订
+
+Filament worker 只渲染环境/手柄 GLB；Vulkan Projection Composer 负责虚拟屏幕、激光、Glow 和 Projection Layer 合成；FPS、指南、屏幕/键盘固定 2D 光圈和虚拟键盘使用 Quad Layer。Presenter 线程独占 OpenXR layer 生命周期，屏幕与 UI worker 通过 latest-frame/timeline 交付，不直接调用 OpenXR 或 Filament ABI。
+
 旧串行路径每只眼 `endFrame()` 后分别调用 `engine->flushAndWait()`：
 
 ```text
@@ -64,15 +68,15 @@ xrWaitFrame
 |---|---|---|---|
 | P0 | 双眼先 acquire、再分别 wait | 已实现 | 保留实机计时 |
 | P0 | 控制器状态、共享灯光和 GLB 动画每帧只更新一次 | 已实现；右眼 Camera 更新不再改共享灯光 | 视觉回归确认双眼一致 |
-| P0 | 双眼一次提交 + frame-wide completion | `array_size=2` + Filament multiview 已实现；双 SwapChain deferred 保持禁用 | 远程原生构建与长时间实机验收 |
-| P0 | CUDA/Vulkan ready/release 跨 API timeline 同步 | 已实现；Filament visible 信号仍为 Vulkan binary | 连续实机验收无卡死、无 device lost |
+| P0 | 双眼一次提交 + frame-wide completion | Vulkan Projection Composer 目标为 `array_size=2`；Filament 环境/手柄可先逐眼渲染 | 远程原生构建与长时间实机验收 |
+| P0 | CUDA/Vulkan ready/release 跨 API timeline 同步 | 已实现；Projection Composer visible 信号与 source-ready/release timeline 分离 | 连续实机验收无卡死、无 device lost |
 | P0 | Vulkan Compute RGB/Depth 输入环形槽 | 已实现 | CUDA 路径确认无 host wait；host fallback 只允许槽位复用时等待 |
-| P0 | Glow/Filament 共享 graphics queue 外部同步 | 已实现；复用 VulkanContext 设备锁覆盖 Projection 和 Glow 直接提交 | 实机确认无 device lost |
+| P0 | Vulkan Projection/Glow 共享 graphics queue 外部同步 | 规划中；屏幕/Glow 不再通过 Filament ABI 合成 | 实机确认无 device lost |
 | P0 | graphics/compute/transfer 分离提交锁和帧索引 | 未实现 | 先确认实际 queue handle 拓扑 |
 | P1 | Compute 移出 Presenter，交给 Output Worker | 未实现 | 必须在队列锁与资源所有权改造后进行 |
 | P1 | 左右眼 transition 合并为一个命令缓冲和一次提交 | 未实现 | 与 Output Worker 一起实施 |
 | P1 | Glow 合并到立体 Compute 后处理命令链 | 未实现 | 先测量独立 Glow 提交成本 |
-| P2 | `array_size=2` projection swapchain + multiview | 已实现；能力或初始化失败时保留双 swapchain 逐眼回退 | 三平台远程构建、画质与稳定性验收 |
+| P2 | `array_size=2` projection swapchain | 规划中；创建或合成失败时回退双 swapchain 逐眼 | Runtime 能力、画质与稳定性验收 |
 | P2 | layered MIP/SPD 一次处理双眼 | 未实现 | 先完成视觉回归和 GPU timestamp 基线 |
 | P3 | Quad/MSDF 双缓冲或三缓冲异步更新 | 未实现 | 仅在 timeline wait 被测为瓶颈后实施 |
 
@@ -164,7 +168,7 @@ Capture
   -> Inference / stereo scheduling
   -> Output Worker: queue1 Compute + Glow + external-image prepare
   -> ready semaphore/timeline + latest completed frame
-  -> OpenXR Presenter: queue0 Filament + swapchain + xrEndFrame
+  -> OpenXR Presenter: queue0 Vulkan Projection Composer + swapchain + xrEndFrame
 ```
 
 约束：
@@ -188,17 +192,19 @@ Capture
 
 ### 阶段 4：Array Swapchain 与 Multiview
 
-当前实现优先创建一个 `array_size=2` 的 Projection SwapChain，layer 0/1 分别对应左右眼。
-Filament Engine 使用双眼 Vulkan multiview，一个 `beginFrame()` / `endFrame()` 同时渲染两层；
+目标实现优先创建一个 `array_size=2` 的 Projection SwapChain，layer 0/1 分别对应左右眼。
+Vulkan Projection Composer 使用 layered draw/dispatch 合成两层；Filament 环境/手柄输出可先逐眼，稳定后再启用 multiview；
 OpenXR 仍提交两个 Projection View，但两者共享同一个 SwapChain handle，并分别引用 array
 layer 0/1。左右眼源图 ready semaphore 在进入 Filament 前由同一 graphics queue submit
 消费，Filament 完成后只读取并消费一个 render-finished semaphore。
 
-以下情况不启用 multiview，并保留原双 SwapChain 逐眼稳定路径：
+以下情况不启用 array Projection，并保留原双 SwapChain 逐眼稳定路径：
 
 - Runtime 不支持目标 Vulkan/OpenXR 特性。
 - 两眼推荐尺寸或采样要求不同。
-- Filament Bridge ABI 或 GPU 不支持 multiview。
+- Filament Bridge ABI 或 GPU 不支持所需的颜色/深度输出。
+
+Quad Layer 的 `array_size=2` 单独实验，不作为 Projection Layer 成功的前置条件；Runtime 创建或提交失败时回退为 per-eye Quad swapchain。
 - layered OpenXR 或 Filament 目标创建失败。
 
 初始化失败只销毁临时 layered SwapChain，不销毁原左右眼 SwapChain；运行路径不调用
@@ -240,7 +246,7 @@ CPU 提交耗时不能替代 GPU timestamp；`xrWaitFrame` 也不能计入应用
 | 性能 | 相同配置下比较 5 个固定窗口的中位数；目标恢复已观察到的 50-55 SBS FPS 区间 |
 | 稳定性 | 至少连续运行 10 分钟，无卡死、device lost、access violation 或持续降至 30 Hz |
 | 延迟 | `rt_pending_age`、source latency 和 Presenter queue age 不持续增长 |
-| 同步 | 跨 API ready/release timeline generation 单调递增；每个新源帧的 Filament visible binary 只 signal/wait 一次 |
+| 同步 | 跨 API ready/release timeline generation 单调递增；每个新源帧的 Projection visible signal 只 signal/wait 一次 |
 | 画质 | 固定输入视觉回归通过；左右眼顺序、颜色空间、屏幕清晰度和 Glow 不变 |
 | 兼容 | 新 Bridge 在能力满足时走 array multiview，旧 Bridge 或初始化失败走逐眼回退；三平台远程构建通过 |
 
@@ -249,7 +255,7 @@ CPU 提交耗时不能替代 GPU timestamp；`xrWaitFrame` 也不能计入应用
 - **Filament 线程归属**：所有 Filament API 继续由 Presenter 线程调用。
 - **VkQueue 外部同步**：同一实际 queue handle 的主机访问必须串行，即使调用方使用不同角色或线程。
 - **Timeline generation**：每个 slot/eye 的 ready/release 值必须单调递增，wait 必须使用对应帧发布的值。
-- **Filament visible binary**：只允许每个新源帧 signal/wait 一次，静态复用帧不得重复等待旧信号。
+- **Projection visible signal**：只允许每个新源帧 signal/wait 一次，静态复用帧不得重复等待旧信号。
 - **源图生命周期**：显示帧、渲染帧和 pending 帧只能由现有幂等 lease/release 契约回收。
 - **设备丢失**：锁存 device-lost 后只释放 CPU 租约，不再提交 Vulkan 命令或查询 fence。
 - **运行时兼容**：任何新路径都必须有启动期 capability probe 和明确日志，不能静默切换。

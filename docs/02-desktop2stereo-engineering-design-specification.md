@@ -812,9 +812,20 @@ OpenGL Fallback 直接渲染到 OpenGL OpenXR swapchain 或 OpenGL window frameb
 
 ### 11.2.1 Filament 颜色管线
 
+本节旧版“前景 View 合成屏幕/UI/激光”的描述由 11.2.2 当前架构修订覆盖；Filament 只输出环境与手柄 GLB 的颜色/深度，屏幕采样、激光、Glow 和 2D 光圈由 Vulkan 合成。
+
 Filament Bridge 必须将 GLB 放入房间 Scene，将原始 PBR 手柄、显示参考屏幕/UI 和激光放入前景 Scene。房间 View 先渲染，前景 View 随后在同一帧合成；两个 View 使用同一 Camera、Renderer、交换链目标和深度附件，前景 View 不清理已有颜色/深度。手柄使用原始 PBR 材质并写前景深度；激光使用不透明、`depthWrite=true`、`depthCulling=true` 的材质和控制器相同的 layer，因此外壳在几何上遮挡激光。房间 Scene 的 IndirectLight 不得挂到前景 Scene；HDR 模式的 controller IBL 必须只挂到前景 Scene。左右眼共享的 Renderer 必须在创建时显式设置 `ClearOptions.clear=true`、黑色 clear color 和 `discard=true`。由于 Filament 1.75 Vulkan backend 的默认 RenderTarget 是单例，Bridge 必须通过 D2S backend patch 让默认 RenderTarget 记录当前绑定的 SwapChain/image，切换左右眼时先释放旧绑定再绑定当前眼，避免两个 OpenXR SwapChain 互相污染并触发 `VK_ERROR_DEVICE_LOST`。两个 View 使用 ColorGrading `LINEAR` tone mapping，不应用 ACES/其他场景曲线；保留后处理仅用于最终目标的单次 sRGB 编码。AssetLoader 只加载一个 controller asset，不得为遮挡创建副本、修改同一 Renderable 的材质绑定或创建第二个 Engine。屏幕源格式必须与其采样语义匹配：sRGB 源使用 `VK_FORMAT_R8G8B8A8_SRGB`/`SRGB8_A8`，Compute 输出的 `VK_FORMAT_R8G8B8A8_UNORM` 必须在 shader 中先完成 sRGB→线性转换并以 Filament `RGBA8` 采样；禁止把 sRGB 数值直接写入 UNORM 后再当线性纹理使用。
 
-### 11.2.2 Bridge 接口边界与完整性清单
+### 11.2.3 Bridge 接口边界与完整性清单
+
+### 11.2.2 当前架构修订（覆盖旧的屏幕/前景 Filament 描述）
+
+Filament Bridge 仅负责环境/手柄 GLB 的加载、材质、动画和每眼颜色/深度输出。虚拟屏幕采样、激光、Glow、屏幕光圈和键盘光圈全部由 Vulkan Projection/Quad 路径负责；不得新增屏幕纹理、激光或 Glow 的 Filament 材质 ABI。Projection Layer 由 Vulkan Composer 统一合成，FPS、操作指南、两处固定 2D 光圈和虚拟键盘使用 Quad Layer。
+
+本修订覆盖第 5.4、8.3、11.2.1、11.4、11.5、13.1 和 13.5 节中将屏幕、激光或 Glow 绑定到 Filament 的旧实现描述；旧接口名仅保留为迁移历史，不构成新架构要求。
+
+OpenXR Presenter 线程独占 session、swapchain acquire/release、layer 构建和 `xrEndFrame`。Filament 渲染、虚拟屏幕生产和 UI 纹理生产可以由不同 worker 执行，但只能通过有界 latest-frame 资源、timeline semaphore 和命令队列交付，后台线程不得直接调用 Presenter 的 OpenXR API。
+
 
 补充约束：前景 View 必须关闭后处理；房间主 View 是唯一执行 LINEAR tone mapping 和最终颜色编码的 View，避免前景合成再次处理已完成的房间颜色。
 
@@ -881,6 +892,8 @@ native/filament/bridge/
 - 资产路径必须位于允许的资源根目录，禁止从配置执行任意脚本。
 
 ### 11.4 虚拟屏幕
+
+屏幕采样和 EASU/Lanczos2/RCAS/MIP 均属于 Vulkan Projection Composer；以下历史 Bridge 参数名仅作为迁移记录，不得作为新实现边界。
 
 虚拟屏幕材质采样 Left/Right Eye 或 SBS 对应区域。每眼 View 必须选择正确 eye texture/UV，不通过 cross-eyed 旧兼容参数猜测顺序。
 
@@ -955,6 +968,10 @@ Downsample -> Horizontal Blur -> Vertical Blur -> Glow
 
 Presenter 线程同时拥有 Vulkan context、Filament Engine/Scene/资源和输出图像环。Capture、Inference 与文件读取线程不得直接调用 Filament C ABI，也不得操作 Presenter 的 Vulkan 资源。运行时结果通过有界命令队列交给 Presenter；Presenter 在 OpenXR 帧边界消费命令，完成 CUDA/Vulkan 图像导入、外部同步、屏幕材质绑定和 Projection Layer 提交。队列只保留有限的新帧，覆盖或关闭时释放对应输出槽位，避免跨线程释放仍被 Filament 采样的图像。
 
+### 13.1.1 Worker 与 Presenter 边界
+
+Presenter 线程独占 OpenXR session、Projection/Quad swapchain acquire/release、CompositionBuilder 和 `xrEndFrame`。虚拟屏幕 worker 只生产最新 Vulkan 源图像；效果/UI worker 只生产 Glow、FPS、指南、两处 2D 光圈和键盘纹理。Filament worker 只渲染环境/手柄 GLB。所有 worker 通过有界 ring、timeline semaphore 和命令队列交付，禁止后台线程直接调用 OpenXR API、Filament C ABI 或修改 Presenter-owned Vulkan 资源。
+
 ### 13.2 Vulkan Session 创建
 
 必须通过 `xrGetVulkanGraphicsRequirements2KHR`、`xrCreateVulkanInstanceKHR`/等效规范路径和 `XrGraphicsBindingVulkan2KHR` 建立 Session。Physical Device 选择服从 OpenXR Runtime 要求。
@@ -987,7 +1004,7 @@ xrPollEvent
 
 ### 13.5 Layers
 
-主房间、虚拟屏幕、手柄和默认 Glow 使用 Projection Layer。文字面板、虚拟键盘等独立 UI 可使用 Quad Layer。Layer 数量和顺序由单一 `CompositionBuilder` 生成，模块不能各自调用 `xrEndFrame`。
+主房间、手柄、虚拟屏幕、激光和默认 Glow 使用 Vulkan 合成后的 Projection Layer。FPS 面板、操作指南、固定在虚拟屏幕上的光圈、固定在虚拟键盘上的光圈、虚拟键盘和其它独立 2D UI 使用 Quad Layer。Layer 数量和顺序由单一 `CompositionBuilder` 生成，模块不能各自调用 `xrEndFrame`。
 
 FPS 面板、操作指南和其它工具 Quad Layer 必须区分“内容更新”和“姿态提交”：纹理内容由 Python 策略层按旧工程的 content key 缓存，静态指南只生成/上传一次，FPS/延迟等统计按约 1 秒快照更新；没有内容变化时，Presenter 每帧只更新 layer pose 和 composition 结构，不得重新栅格化字体、map staging 或 acquire/wait/release 图像。工具纹理的更新仍由 Presenter 命令队列线程执行，不能由后台线程直接操作 Vulkan 或 Filament 资源。
 
