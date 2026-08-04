@@ -507,6 +507,11 @@ int bridge_screen_create(FilamentBridge* bridge) {
     // Keep anisotropy on the real multi-level sampler. The source sampler is
     // intentionally left at ordinary linear filtering for external images.
     bridge->screen_texture_sampler.setAnisotropy(16.0f);
+    const char* vertex_shader = R"FILAMENT(
+        void materialVertex(inout MaterialVertexInputs material) {
+            material.screenEyeIndex = vec4(float(getEyeIndex()), 0.0, 0.0, 0.0);
+        }
+    )FILAMENT";
     const char* shader = R"FILAMENT(
         float screen_sinc(float x) {
             x = abs(x);
@@ -526,7 +531,7 @@ int bridge_screen_create(FilamentBridge* bridge) {
         }
 
         vec3 screen_sample(vec2 uv, float lod) {
-            if (getEyeIndex() == 0) {
+            if (variable_screenEyeIndex.x < 0.5) {
                 return texture(materialParams_screenTextureLeft, uv, lod).rgb;
             }
             return texture(materialParams_screenTextureRight, uv, lod).rgb;
@@ -682,7 +687,7 @@ int bridge_screen_create(FilamentBridge* bridge) {
         void material(inout MaterialInputs material) {
             prepareMaterial(material);
             if (materialParams.screenEyeDiagnostic > 0.5) {
-                material.baseColor = getEyeIndex() == 0
+                material.baseColor = variable_screenEyeIndex.x < 0.5
                         ? vec4(1.0, 0.0, 0.0, 1.0)
                         : vec4(0.0, 1.0, 0.0, 1.0);
                 return;
@@ -782,6 +787,8 @@ int bridge_screen_create(FilamentBridge* bridge) {
     filamat::MaterialBuilder builder;
     builder.name("D2S OpenXR Screen")
             .material(shader)
+            .materialVertex(vertex_shader)
+            .variable(filamat::MaterialBuilder::Variable::CUSTOM0, "screenEyeIndex")
             .require(filament::VertexAttribute::UV0)
             .parameter("screenTextureLeft", filamat::MaterialBuilder::SamplerType::SAMPLER_2D)
             .parameter("screenTextureRight", filamat::MaterialBuilder::SamplerType::SAMPLER_2D)

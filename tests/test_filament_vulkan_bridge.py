@@ -655,5 +655,12 @@ def test_native_screen_has_opt_in_multiview_eye_diagnostic() -> None:
 
     assert "D2S_FILAMENT_EYE_DIAGNOSTIC" in source
     assert 'parameter("screenEyeDiagnostic"' in source
-    assert "getEyeIndex() == 0" in source
+    assert "material.screenEyeIndex = vec4(float(getEyeIndex())" in source
+    assert (
+        '.variable(filamat::MaterialBuilder::Variable::CUSTOM0, "screenEyeIndex")'
+        in source
+    )
+    assert ".materialVertex(vertex_shader)" in source
+    assert "variable_screenEyeIndex.x < 0.5" in source
+    assert source.count("getEyeIndex()") == 1
     assert "left=red right=green" in source
