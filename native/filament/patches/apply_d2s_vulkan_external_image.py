@@ -40,9 +40,11 @@ def main() -> int:
 """,
         """    variant.setShadowSampler2D(view.hasShadowing() && view.getShadowType() != ShadowType::PCF);
     variant.setStereo(view.hasStereo());
-    static bool d2sStereoTraceLogged = false;
-    if (!d2sStereoTraceLogged && std::getenv("D2S_FILAMENT_EYE_DIAGNOSTIC")) {
-        d2sStereoTraceLogged = true;
+    static bool d2sStereoTraceLogged[2] = {};
+    const unsigned d2sStereoTraceIndex = view.hasStereo() ? 1u : 0u;
+    if (!d2sStereoTraceLogged[d2sStereoTraceIndex] &&
+            std::getenv("D2S_FILAMENT_EYE_DIAGNOSTIC")) {
+        d2sStereoTraceLogged[d2sStereoTraceIndex] = true;
         std::fprintf(stderr,
                 "[D2S stereo trace] renderer viewStereo=%u variantStereo=%u "
                 "multiview=%u engineType=%u eyeCount=%u\\n",
@@ -51,6 +53,7 @@ def main() -> int:
                 static_cast<unsigned>(isRenderingMultiview),
                 static_cast<unsigned>(engine.getConfig().stereoscopicType),
                 static_cast<unsigned>(engine.getConfig().stereoscopicEyeCount));
+        std::fflush(stderr);
     }
 """,
     )
@@ -71,6 +74,7 @@ def main() -> int:
             std::fprintf(stderr,
                     "[D2S stereo trace] renderPass viewCount=%u viewMask=0x%x\\n",
                     config.viewCount, subpassViewMask);
+            std::fflush(stderr);
         }
         // Fill the multiview create info.
 """,

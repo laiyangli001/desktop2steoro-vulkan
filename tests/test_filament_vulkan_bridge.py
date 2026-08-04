@@ -44,6 +44,7 @@ def test_remote_filament_build_enables_multiview_without_stale_sdk_cache() -> No
         "'native/filament/patches/**', '.github/workflows/filament-bridge.yml')"
     ) == 2
     assert "[D2S stereo trace] renderer" in patch
+    assert "d2sStereoTraceLogged[2]" in patch
     assert "variant.hasStereo()" in patch
     assert "[D2S stereo trace] renderPass" in patch
     assert "config.viewCount, subpassViewMask" in patch
