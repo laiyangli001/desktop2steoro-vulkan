@@ -198,6 +198,9 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "fwidth(uv)" not in source
     assert "RenderTarget::Builder" in source
     assert "generateMipmaps(*bridge->engine)" in source
+    assert "Allocation does not mean LOD 0 contains the current source" in source
+    assert "if (weight_sum <= 0.000001) return f;" in source
+    assert "Recreate targets lazily with the new output extent" in source
     assert "screen_mip_copy_view" in source
     assert "bridge_screen_prepare_frame(bridge);" in (bridge_dir / "bridge_eye.cpp").read_text(encoding="utf-8")
     assert "screen_mip_generation_count[eye_index]" in source

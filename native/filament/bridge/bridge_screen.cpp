@@ -148,7 +148,9 @@ bool ensure_screen_mip_target(
     }
     bridge->screen_mip_textures[eye_index] = texture;
     bridge->screen_mip_render_targets[eye_index] = target;
-    bridge->screen_mip_ready[eye_index] = true;
+    // Allocation does not mean LOD 0 contains the current source. The first
+    // prepare pass must still render before the display binds this texture.
+    bridge->screen_mip_ready[eye_index] = false;
     return true;
 }
 
@@ -457,6 +459,11 @@ int bridge_screen_set_sampling(FilamentBridge* bridge, float filter_scale) {
         return 0;
     }
     bridge->screen_filter_scale = filter_scale;
+    for (uint32_t eye_index = 0;
+            eye_index < bridge->screen_mip_textures.size(); ++eye_index) {
+        destroy_screen_mip_target(bridge, eye_index);
+        destroy_screen_lanczos_target(bridge, eye_index);
+    }
     for (auto* material_instance : bridge->screen_material_instances) {
         if (material_instance) {
             material_instance->setParameter("screenFilterScale", filter_scale);
@@ -668,7 +675,8 @@ int bridge_screen_create(FilamentBridge* bridge) {
                     direction, length_squared, lobe, clip_value, o);
             screen_easu_tap(color, weight_sum, vec2(0.0, 2.0) - pp,
                     direction, length_squared, lobe, clip_value, n);
-            return min(max4, max(min4, color / max(weight_sum, 0.000001)));
+            if (weight_sum <= 0.000001) return f;
+            return min(max4, max(min4, color / weight_sum));
         }
 
         void material(inout MaterialInputs material) {
@@ -1202,6 +1210,14 @@ int bridge_screen_set_upscale(FilamentBridge* bridge, float upscale_scale) {
         return 0;
     }
     bridge->screen_upscale_scale = upscale_scale;
+    // The source image may already be imported when the Python policy is
+    // applied. Recreate targets lazily with the new output extent on the next
+    // frame instead of sampling a target allocated for the old scale.
+    for (uint32_t eye_index = 0;
+            eye_index < bridge->screen_mip_textures.size(); ++eye_index) {
+        destroy_screen_mip_target(bridge, eye_index);
+        destroy_screen_lanczos_target(bridge, eye_index);
+    }
     return 1;
 }
 
