@@ -48,6 +48,9 @@ def test_remote_filament_build_enables_multiview_without_stale_sdk_cache() -> No
     assert "variant.hasStereo()" in patch
     assert "[D2S stereo trace] renderPass" in patch
     assert "config.viewCount, subpassViewMask" in patch
+    assert "[D2S stereo trace] program" in patch
+    assert "builder.isMultiview()" in patch
+    assert "words[word] == 4440u" in patch
 
 
 def test_pointer_value_accepts_integer_and_c_void_p() -> None:

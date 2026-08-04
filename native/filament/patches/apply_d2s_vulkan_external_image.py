@@ -25,6 +25,7 @@ def main() -> int:
     vulkan_driver_cpp = root / "filament/backend/src/vulkan/VulkanDriver.cpp"
     vulkan_handles_h = root / "filament/backend/src/vulkan/VulkanHandles.h"
     vulkan_handles_cpp = root / "filament/backend/src/vulkan/VulkanHandles.cpp"
+    vulkan_async_handles_cpp = root / "filament/backend/src/vulkan/VulkanAsyncHandles.cpp"
     renderer_cpp = root / "filament/src/details/Renderer.cpp"
     vulkan_fbo_cache_cpp = root / "filament/backend/src/vulkan/VulkanFboCache.cpp"
 
@@ -77,6 +78,70 @@ def main() -> int:
             std::fflush(stderr);
         }
         // Fill the multiview create info.
+""",
+    )
+    replace_once(
+        vulkan_async_handles_cpp,
+        "#include <chrono>\n#include <cstdint>\n",
+        """#include <chrono>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+""",
+    )
+    replace_once(
+        vulkan_async_handles_cpp,
+        """    static_assert(static_cast<ShaderStage>(0) == ShaderStage::VERTEX &&
+            static_cast<ShaderStage>(1) == ShaderStage::FRAGMENT &&
+            MAX_SHADER_MODULES == 2);
+
+    for (size_t i = 0; i < MAX_SHADER_MODULES; i++) {
+""",
+        """    static_assert(static_cast<ShaderStage>(0) == ShaderStage::VERTEX &&
+            static_cast<ShaderStage>(1) == ShaderStage::FRAGMENT &&
+            MAX_SHADER_MODULES == 2);
+
+    const char* const d2sProgramName = builder.getName().c_str_safe();
+    const bool d2sTraceProgram = std::getenv("D2S_FILAMENT_EYE_DIAGNOSTIC") &&
+            (std::strstr(d2sProgramName, "D2S") ||
+                    std::strcmp(d2sProgramName, "clearDepth") == 0);
+    bool d2sVertexHasViewIndex = false;
+    for (size_t i = 0; i < MAX_SHADER_MODULES; i++) {
+""",
+    )
+    replace_once(
+        vulkan_async_handles_cpp,
+        """        Program::ShaderBlob const& blob = blobs[i];
+
+        uint32_t* data = (uint32_t*) blob.data();
+""",
+        """        Program::ShaderBlob const& blob = blobs[i];
+        if (i == 0 && d2sTraceProgram) {
+            const auto* words = reinterpret_cast<const uint32_t*>(blob.data());
+            for (size_t word = 0; word < blob.size() / sizeof(uint32_t); ++word) {
+                d2sVertexHasViewIndex |= words[word] == 4440u;
+            }
+        }
+
+        uint32_t* data = (uint32_t*) blob.data();
+""",
+    )
+    replace_once(
+        vulkan_async_handles_cpp,
+        """#if FVK_ENABLED(FVK_DEBUG_SHADER_MODULE)
+    FVK_LOGD << "Created VulkanProgram " << builder << ", shaders = (" << modules[0]
+""",
+        """    if (d2sTraceProgram) {
+        std::fprintf(stderr,
+                "[D2S stereo trace] program name=%s multiview=%u vertexViewIndex=%u\\n",
+                d2sProgramName, static_cast<unsigned>(builder.isMultiview()),
+                static_cast<unsigned>(d2sVertexHasViewIndex));
+        std::fflush(stderr);
+    }
+
+#if FVK_ENABLED(FVK_DEBUG_SHADER_MODULE)
+    FVK_LOGD << "Created VulkanProgram " << builder << ", shaders = (" << modules[0]
 """,
     )
 
