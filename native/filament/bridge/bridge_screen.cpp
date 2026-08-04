@@ -4,6 +4,7 @@
 
 #include <backend/PixelBufferDescriptor.h>
 
+#include <cstdlib>
 #include <cstring>
 
 namespace {
@@ -467,6 +468,10 @@ int bridge_screen_set_sampling_mode(FilamentBridge* bridge, int use_mip) {
 int bridge_screen_create(FilamentBridge* bridge) {
     if (!bridge || !bridge->engine || !bridge->foreground_scene) return 0;
     bridge_screen_destroy(bridge);
+    const char* eye_diagnostic_env = std::getenv("D2S_FILAMENT_EYE_DIAGNOSTIC");
+    const bool eye_diagnostic = eye_diagnostic_env &&
+            eye_diagnostic_env[0] != '\0' &&
+            std::strcmp(eye_diagnostic_env, "0") != 0;
     // The screen sampler is used only for the internal MIP experiment texture.
     // External producer images use screen_source_texture_sampler below because
     // Filament external textures are restricted to LOD 0.
@@ -508,6 +513,12 @@ int bridge_screen_create(FilamentBridge* bridge) {
 
         void material(inout MaterialInputs material) {
             prepareMaterial(material);
+            if (materialParams.screenEyeDiagnostic > 0.5) {
+                material.baseColor = getEyeIndex() == 0
+                        ? vec4(1.0, 0.0, 0.0, 1.0)
+                        : vec4(0.0, 1.0, 0.0, 1.0);
+                return;
+            }
             vec2 uv = getUV0();
             vec2 texel = materialParams.screenTexelSize;
             vec3 center = screen_sample(uv, materialParams.screenLodBias);
@@ -609,6 +620,7 @@ int bridge_screen_create(FilamentBridge* bridge) {
             .parameter("screenLodBias", filamat::MaterialBuilder::UniformType::FLOAT)
             .parameter("screenExposureCompensation", filamat::MaterialBuilder::UniformType::FLOAT)
             .parameter("screenQualityPass", filamat::MaterialBuilder::UniformType::FLOAT)
+            .parameter("screenEyeDiagnostic", filamat::MaterialBuilder::UniformType::FLOAT)
             .shading(filament::Shading::UNLIT)
             .materialDomain(filament::MaterialDomain::SURFACE)
             // Match the legacy projection pass: the display is an opaque
@@ -649,6 +661,13 @@ int bridge_screen_create(FilamentBridge* bridge) {
         material_instance->setParameter("screenLodBias", kLegacyScreenLodBias);
         material_instance->setParameter("screenExposureCompensation", 1.0f);
         material_instance->setParameter("screenQualityPass", 0.0f);
+        material_instance->setParameter(
+                "screenEyeDiagnostic", eye_diagnostic ? 1.0f : 0.0f);
+    }
+    if (eye_diagnostic) {
+        std::fprintf(stderr,
+                "[FilamentBridge] eye diagnostic enabled: left=red right=green\n");
+        std::fflush(stderr);
     }
     bridge->screen_material_instance =
             bridge->screen_material_instances[bridge->active_eye];

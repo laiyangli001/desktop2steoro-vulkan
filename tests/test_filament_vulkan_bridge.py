@@ -637,3 +637,15 @@ def test_native_foreground_uses_one_view_for_multiview_stereo() -> None:
     assert room < glow < controllers < guide
     assert "0x01u | 0x02u | 0x04u | (1u << kScreenLayerBase)" in eye_source
     assert "if (!bridge->multiview_active) {" in eye_source
+
+
+def test_native_screen_has_opt_in_multiview_eye_diagnostic() -> None:
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "native/filament/bridge/bridge_screen.cpp").read_text(
+        encoding="utf-8"
+    )
+
+    assert "D2S_FILAMENT_EYE_DIAGNOSTIC" in source
+    assert 'parameter("screenEyeDiagnostic"' in source
+    assert "getEyeIndex() == 0" in source
+    assert "left=red right=green" in source
