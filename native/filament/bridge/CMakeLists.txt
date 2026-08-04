@@ -44,6 +44,14 @@ if(NOT EXISTS "${_bluevk_header}")
     endif()
 endif()
 
+file(READ "${_bluevk_header}" _bluevk_contents)
+string(REPLACE
+    "#if defined(VK_EXT_depth_clamp_control) || defined(VK_EXT_shader_object)"
+    "#if defined(VK_EXT_depth_clamp_control)"
+    _bluevk_contents
+    "${_bluevk_contents}")
+file(WRITE "${_bluevk_header}" "${_bluevk_contents}")
+
 find_path(D2S_VULKAN_INCLUDE_DIR vulkan/vulkan.h)
 if(NOT D2S_VULKAN_INCLUDE_DIR)
     set(_vulkan_headers_root "${CMAKE_CURRENT_BINARY_DIR}/vulkan-headers")

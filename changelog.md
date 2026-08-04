@@ -803,3 +803,7 @@
 - Fixed controller surfaces being clipped by the room depth buffer after the
   room/controller lighting split. The foreground pass now clears only depth,
   preserving the room color while keeping opaque controller geometry intact.
+
+### Filament v1.75.0 bridge compatibility
+
+- Narrowed the downloaded BlueVK depth-clamp declaration guard for older Vulkan headers.
