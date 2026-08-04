@@ -4092,6 +4092,7 @@ class OpenXrVulkanPresenter(
             plan.recommended_headset_tier_k,
             plan.effective_tier_k,
             round(plan.filter_scale, 4),
+            round(plan.upscale_scale, 4),
             plan.mode,
         )
         status_changed = status != self._last_screen_sampling_status
@@ -4106,6 +4107,7 @@ class OpenXrVulkanPresenter(
                 f"recommended={plan.recommended_headset_tier_k}K "
                 f"effective={plan.effective_tier_k}K "
                 f"filter_scale={plan.filter_scale:.2f} mode={plan.mode} "
+                f"upscale_scale={plan.upscale_scale:.2f} "
                 "bridge_sampling="
                 + (
                     "active"
@@ -4124,6 +4126,8 @@ class OpenXrVulkanPresenter(
             self.filament_bridge, "set_screen_sampling"
         ):
             self.filament_bridge.set_screen_sampling(plan.filter_scale)
+            if hasattr(self.filament_bridge, "set_screen_upscale"):
+                self.filament_bridge.set_screen_upscale(plan.upscale_scale)
         return plan
 
     def _initialize_msdf_quad_renderer(self) -> None:

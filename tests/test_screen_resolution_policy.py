@@ -21,20 +21,25 @@ def test_input_resolution_uses_nearest_standard_tier(width, height, tier):
 
 
 @pytest.mark.parametrize(
-    ("source", "headset", "recommended", "effective", "filter_scale"),
+    ("source", "headset", "recommended", "effective", "filter_scale", "upscale_scale", "mode"),
     (
-        ((1920, 1080), 2, 2, 2, 1.0),
-        ((2560, 1440), 4, 4, 4, 1.0),
-        ((3840, 2160), 8, 8, 8, 1.0),
-        ((3840, 2160), 2, 8, 2, 2.0),
-        ((1920, 1080), 8, 2, 2, 1.0),
+        ((1920, 1080), 2, 2, 2, 1.0, 2.0, "upscale_easu"),
+        ((2560, 1440), 4, 4, 4, 1.0, 2.0, "upscale_easu"),
+        ((3840, 2160), 8, 8, 8, 1.0, 2.0, "upscale_easu"),
+        ((3840, 2160), 2, 8, 2, 2.0, 1.0, "downsample_lanczos_rcas"),
+        ((1920, 1080), 8, 2, 2, 1.0, 2.0, "upscale_easu"),
+        ((2560, 1440), 2, 4, 2, 1.0, 1.0, "native_mip"),
     ),
 )
-def test_input_headset_matrix(source, headset, recommended, effective, filter_scale):
+def test_input_headset_matrix(
+    source, headset, recommended, effective, filter_scale, upscale_scale, mode
+):
     plan = build_screen_sampling_plan(*source, headset)
     assert plan.recommended_headset_tier_k == recommended
     assert plan.effective_tier_k == effective
     assert plan.filter_scale == pytest.approx(filter_scale)
+    assert plan.upscale_scale == pytest.approx(upscale_scale)
+    assert plan.mode == mode
 
 
 def test_invalid_resolution_is_rejected():

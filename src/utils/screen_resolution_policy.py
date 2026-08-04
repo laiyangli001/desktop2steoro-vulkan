@@ -23,6 +23,7 @@ class ScreenSamplingPlan:
     recommended_headset_tier_k: int
     effective_tier_k: int
     filter_scale: float
+    upscale_scale: float
     mode: str
 
     @property
@@ -72,7 +73,13 @@ def build_screen_sampling_plan(
     recommended = INPUT_TO_HEADSET_TIER[input_tier]
     effective = min(headset_tier, recommended)
     filter_scale = max(1.0, input_tier / float(effective))
-    mode = "native_or_upscale" if filter_scale == 1.0 else "downsample_prefilter"
+    upscale_scale = max(1.0, effective / float(input_tier))
+    if upscale_scale > 1.0:
+        mode = "upscale_easu"
+    elif filter_scale > 1.0:
+        mode = "downsample_lanczos_rcas"
+    else:
+        mode = "native_mip"
     return ScreenSamplingPlan(
         source_width=width,
         source_height=height,
@@ -81,5 +88,6 @@ def build_screen_sampling_plan(
         recommended_headset_tier_k=recommended,
         effective_tier_k=effective,
         filter_scale=filter_scale,
+        upscale_scale=upscale_scale,
         mode=mode,
     )

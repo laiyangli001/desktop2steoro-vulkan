@@ -111,7 +111,7 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
         for name in module_names
     )
     assert "filament::" not in facade
-    assert len(facade.splitlines()) < 420
+    assert len(facade.splitlines()) < 430
     assert "filament_bridge_set_screen_source_version" in facade
     assert all(name in cmake for name in module_names if name.endswith(".cpp"))
     assert "filament::Renderer* renderer = nullptr;" in source
@@ -166,6 +166,8 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "screen_texture_sampler.setAnisotropy(16.0f)" in source
     assert "screen_mip_experiment_enabled = true" in source
     assert 'parameter("screenTexelSize"' in source
+    assert 'parameter("screenSourceSize"' in source
+    assert 'parameter("screenOutputSize"' in source
     assert 'parameter("screenFilterScale"' in source
     assert 'parameter("screenSharpness"' in source
     assert 'parameter("screenExposureCompensation"' in source
@@ -175,6 +177,8 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "materialParams.screenExposureCompensation" in source
     assert "materialParams_screenTexelSize" not in source
     assert "screen_lanczos2" in source
+    assert "screen_easu" in source
+    assert "quality_pass > 2.5 && quality_pass < 3.5" in source
     assert "screenQualityPass" in source
     assert "quality_pass > 0.5 && quality_pass < 1.5" in source
     assert "quality_pass > 1.5" in source
@@ -377,6 +381,7 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "eye.controller_guide_view->setPostProcessingEnabled(true);" in source
     assert "filament_bridge_set_screen_light" in facade
     assert "filament_bridge_set_screen_sampling" in facade
+    assert "filament_bridge_set_screen_upscale" in facade
     assert "filament_bridge_set_screen_sampling_mode" in facade
     assert "filament_bridge_get_screen_sampling_stats" in facade
     assert "filament_bridge_set_fixed_screen_image" in facade

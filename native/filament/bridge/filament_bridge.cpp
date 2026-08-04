@@ -263,6 +263,11 @@ int filament_bridge_set_screen_sampling(
     return bridge_screen_set_sampling(bridge, filter_scale);
 }
 
+int filament_bridge_set_screen_upscale(
+        FilamentBridge* bridge, float upscale_scale) {
+    return bridge_screen_set_upscale(bridge, upscale_scale);
+}
+
 int filament_bridge_set_screen_sampling_mode(
         FilamentBridge* bridge, int use_mip) {
     return bridge_screen_set_sampling_mode(bridge, use_mip);

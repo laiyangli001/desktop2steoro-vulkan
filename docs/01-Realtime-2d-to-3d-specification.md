@@ -578,7 +578,7 @@ LDR display View: virtual screen + UI/laser -> no post-processing/tone mapping -
 
 四个尺寸的职责必须分开：`XR Headset Model` 决定头显采样策略档位；`capture_size` 决定输入屏幕档位；处理后眼图尺寸用于实际纹理绑定；OpenXR recommended extent 只决定交换链是否允许该输出尺寸。输入档位只能决定过滤预算，不能通过插值制造输入中不存在的细节，也不能把非 16:9 源图像强制变成 16:9。
 
-预滤比例定义为 `filter_scale = max(1, input_tier / effective_tier)`。因此 1K→2K、2K→4K、4K→8K 的匹配路径均为 `1.0`，不会因矩阵额外变糊；例如 4K 输入选择 2K 头显时为 `2.0`，只执行一次有界面积预滤以降低缩小混叠。该预滤不改变颜色空间、不执行 tone mapping、不改变 UV 和原始源图像。
+采样比例同时定义为 `filter_scale = max(1, input_tier / effective_tier)` 和 `upscale_scale = max(1, effective_tier / input_tier)`。低分辨率输入（`upscale_scale>1`）必须执行 GPU EASU → RCAS → MIP 主路径；同档位只执行源图 → MIP；高分辨率输入（`filter_scale>1`）执行一次有界 Lanczos2 → RCAS → MIP 缩小路径。所有路径不改变颜色空间、不执行 tone mapping、不改变 UV 和原始源图像。
 
 ### 8.3 Composition Layer
 

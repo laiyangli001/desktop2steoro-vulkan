@@ -360,6 +360,7 @@ struct FilamentBridge {
     // Matrix-selected prefilter scale for lower-tier headsets. A value of
     // one preserves the source texel footprint exactly.
     float screen_filter_scale = 1.0f;
+    float screen_upscale_scale = 1.0f;
     std::vector<PreviewScreenVertex> screen_vertices;
     std::vector<uint16_t> screen_indices;
     bool screen_curved = false;

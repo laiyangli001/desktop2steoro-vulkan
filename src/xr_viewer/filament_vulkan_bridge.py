@@ -64,6 +64,7 @@ class FilamentVulkanBridge:
         self._screen_ready_semaphore_abi_available = False
         self._finished_drawing_semaphore_abi_available = False
         self._screen_sampling_abi_available = False
+        self._screen_upscale_abi_available = False
         self._screen_sampling_mode_abi_available = False
         self._screen_sampling_stats_abi_available = False
         self._async_submit_abi_available = False
@@ -806,6 +807,22 @@ class FilamentVulkanBridge:
             "set_screen_sampling",
         )
 
+    def set_screen_upscale(self, upscale_scale: float) -> None:
+        self._ensure_loaded()
+        set_upscale = getattr(
+            self._library, "filament_bridge_set_screen_upscale", None
+        )
+        if set_upscale is None:
+            return
+        self._check_result(
+            set_upscale(self._handle, float(upscale_scale)),
+            "set_screen_upscale",
+        )
+
+    @property
+    def screen_upscale_abi_available(self) -> bool:
+        return self._screen_upscale_abi_available
+
     def set_screen_sampling_mode(self, mode: str) -> None:
         """Select the legacy external sampler or the internal MIP path."""
         self._ensure_loaded()
@@ -1268,6 +1285,13 @@ class FilamentVulkanBridge:
             set_screen_sampling.argtypes = [ctypes.c_void_p, ctypes.c_float]
             set_screen_sampling.restype = ctypes.c_int
             self._screen_sampling_abi_available = True
+        set_screen_upscale = getattr(
+            library, "filament_bridge_set_screen_upscale", None
+        )
+        if set_screen_upscale is not None:
+            set_screen_upscale.argtypes = [ctypes.c_void_p, ctypes.c_float]
+            set_screen_upscale.restype = ctypes.c_int
+            self._screen_upscale_abi_available = True
         set_screen_sampling_mode = getattr(
             library, "filament_bridge_set_screen_sampling_mode", None
         )

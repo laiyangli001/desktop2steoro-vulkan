@@ -166,6 +166,8 @@ FILAMENT_BRIDGE_API int filament_bridge_set_glow_state(
 // prefiltering beyond the projected source footprint.
 FILAMENT_BRIDGE_API int filament_bridge_set_screen_sampling(
         FilamentBridge* bridge, float filter_scale);
+FILAMENT_BRIDGE_API int filament_bridge_set_screen_upscale(
+        FilamentBridge* bridge, float upscale_scale);
 // Select the legacy external-image sampler (0) or the internal MIP path (1).
 FILAMENT_BRIDGE_API int filament_bridge_set_screen_sampling_mode(
         FilamentBridge* bridge, int use_mip);

@@ -66,6 +66,12 @@ void bind_screen_display_texture(FilamentBridge* bridge, uint32_t eye_index) {
                 "screenTexelSize", filament::math::float2{
                         1.0f / static_cast<float>(texture->getWidth()),
                         1.0f / static_cast<float>(texture->getHeight())});
+        material->setParameter("screenSourceSize", filament::math::float2{
+                static_cast<float>(texture->getWidth()),
+                static_cast<float>(texture->getHeight())});
+        material->setParameter("screenOutputSize", filament::math::float2{
+                static_cast<float>(texture->getWidth()),
+                static_cast<float>(texture->getHeight())});
     }
 }
 
@@ -81,6 +87,12 @@ void bind_screen_copy_source(
             "screenTexelSize", filament::math::float2{
                     1.0f / static_cast<float>(width),
                     1.0f / static_cast<float>(height)});
+    bridge->screen_mip_copy_material_instance->setParameter(
+            "screenSourceSize", filament::math::float2{
+                    static_cast<float>(width), static_cast<float>(height)});
+    bridge->screen_mip_copy_material_instance->setParameter(
+            "screenOutputSize", filament::math::float2{
+                    static_cast<float>(width), static_cast<float>(height)});
 }
 
 bool ensure_screen_mip_target(
@@ -188,11 +200,13 @@ bool ensure_screen_quality_targets(
         FilamentBridge* bridge, uint32_t eye_index,
         uint32_t source_width, uint32_t source_height, int32_t format) {
     if (!bridge || source_width == 0 || source_height == 0) return false;
-    const float scale = std::max(1.0f, bridge->screen_filter_scale);
+    const float upscale = std::max(1.0f, bridge->screen_upscale_scale);
+    const float downscale = std::max(1.0f, bridge->screen_filter_scale);
+    const float scale = upscale > 1.0f ? upscale : 1.0f / downscale;
     const uint32_t width = std::max(
-            16u, static_cast<uint32_t>(std::lround(source_width / scale)) & ~1u);
+            16u, static_cast<uint32_t>(std::lround(source_width * scale)) & ~1u);
     const uint32_t height = std::max(
-            16u, static_cast<uint32_t>(std::lround(source_height / scale)) & ~1u);
+            16u, static_cast<uint32_t>(std::lround(source_height * scale)) & ~1u);
     return ensure_screen_lanczos_target(bridge, eye_index, width, height, format) &&
             ensure_screen_mip_target(bridge, eye_index, width, height, format);
 }
@@ -511,6 +525,152 @@ int bridge_screen_create(FilamentBridge* bridge) {
             return texture(materialParams_screenTextureRight, uv, lod).rgb;
         }
 
+        // Adapted from AMD FidelityFX FSR1 EASU (MIT). The scalar form keeps
+        // the same edge direction, anisotropic lobe, deringing and 12 taps
+        // while using Filament's material texture interface.
+        vec3 screen_easu_source_sample(
+                vec2 pixel, vec2 source_texel) {
+            return screen_sample(
+                    clamp((pixel + vec2(0.5)) * source_texel,
+                            vec2(0.0), vec2(1.0)),
+                    materialParams.screenLodBias);
+        }
+
+        void screen_easu_set(
+                inout vec2 direction, inout float length_value,
+                vec2 pp, float weight,
+                float l_a, float l_b, float l_c, float l_d, float l_e) {
+            float direction_x = l_d - l_b;
+            float length_x = max(abs(l_d - l_c), abs(l_c - l_b));
+            length_x = 1.0 / max(length_x, 0.000001);
+            direction.x += direction_x * weight;
+            length_x = clamp(abs(direction_x) * length_x, 0.0, 1.0);
+            length_value += length_x * length_x * weight;
+
+            float direction_y = l_e - l_a;
+            float length_y = max(abs(l_e - l_c), abs(l_c - l_a));
+            length_y = 1.0 / max(length_y, 0.000001);
+            direction.y += direction_y * weight;
+            length_y = clamp(abs(direction_y) * length_y, 0.0, 1.0);
+            length_value += length_y * length_y * weight;
+        }
+
+        void screen_easu_tap(
+                inout vec3 color, inout float weight_sum,
+                vec2 offset, vec2 direction, vec2 length_value,
+                float lobe, float clip_value, vec3 sample_color) {
+            vec2 rotated = vec2(
+                    offset.x * direction.x + offset.y * direction.y,
+                    offset.x * -direction.y + offset.y * direction.x);
+            rotated *= length_value;
+            float distance_squared = min(dot(rotated, rotated), clip_value);
+            float weight_b = 0.4 * distance_squared - 1.0;
+            float weight_a = lobe * distance_squared - 1.0;
+            weight_b *= weight_b;
+            weight_a *= weight_a;
+            weight_b = 1.5625 * weight_b - 0.5625;
+            float weight = weight_b * weight_a;
+            color += sample_color * weight;
+            weight_sum += weight;
+        }
+
+        vec3 screen_easu(vec2 uv) {
+            vec2 source_size = materialParams.screenSourceSize;
+            vec2 source_texel = 1.0 / max(source_size, vec2(1.0));
+            vec2 output_size = max(materialParams.screenOutputSize, vec2(1.0));
+            vec2 output_uv = (floor(uv * output_size) + vec2(0.5)) / output_size;
+            vec2 source_position = output_uv * source_size - vec2(0.5);
+            vec2 source_base = floor(source_position);
+            vec2 pp = source_position - source_base;
+
+            vec3 b = screen_easu_source_sample(source_base + vec2(0.0, -1.0), source_texel);
+            vec3 c = screen_easu_source_sample(source_base + vec2(1.0, -1.0), source_texel);
+            vec3 e = screen_easu_source_sample(source_base + vec2(-1.0, 0.0), source_texel);
+            vec3 f = screen_easu_source_sample(source_base + vec2(0.0, 0.0), source_texel);
+            vec3 g = screen_easu_source_sample(source_base + vec2(1.0, 0.0), source_texel);
+            vec3 h = screen_easu_source_sample(source_base + vec2(2.0, 0.0), source_texel);
+            vec3 i = screen_easu_source_sample(source_base + vec2(-1.0, 1.0), source_texel);
+            vec3 j = screen_easu_source_sample(source_base + vec2(0.0, 1.0), source_texel);
+            vec3 k = screen_easu_source_sample(source_base + vec2(1.0, 1.0), source_texel);
+            vec3 l = screen_easu_source_sample(source_base + vec2(2.0, 1.0), source_texel);
+            vec3 n = screen_easu_source_sample(source_base + vec2(0.0, 2.0), source_texel);
+            vec3 o = screen_easu_source_sample(source_base + vec2(1.0, 2.0), source_texel);
+
+            float b_luma = screen_luma(b);
+            float c_luma = screen_luma(c);
+            float e_luma = screen_luma(e);
+            float f_luma = screen_luma(f);
+            float g_luma = screen_luma(g);
+            float h_luma = screen_luma(h);
+            float i_luma = screen_luma(i);
+            float j_luma = screen_luma(j);
+            float k_luma = screen_luma(k);
+            float l_luma = screen_luma(l);
+            float n_luma = screen_luma(n);
+            float o_luma = screen_luma(o);
+
+            vec2 direction = vec2(0.0);
+            float length_value = 0.0;
+            screen_easu_set(direction, length_value, pp,
+                    (1.0 - pp.x) * (1.0 - pp.y),
+                    b_luma, e_luma, f_luma, g_luma, j_luma);
+            screen_easu_set(direction, length_value, pp,
+                    pp.x * (1.0 - pp.y),
+                    c_luma, f_luma, g_luma, h_luma, k_luma);
+            screen_easu_set(direction, length_value, pp,
+                    (1.0 - pp.x) * pp.y,
+                    f_luma, i_luma, j_luma, k_luma, n_luma);
+            screen_easu_set(direction, length_value, pp,
+                    pp.x * pp.y,
+                    g_luma, j_luma, k_luma, l_luma, o_luma);
+
+            float direction_length = dot(direction, direction);
+            bool zero_direction = direction_length < 0.000030517578125;
+            direction_length = zero_direction
+                    ? 1.0 : 1.0 / sqrt(direction_length);
+            direction = zero_direction
+                    ? vec2(1.0, 0.0) : direction * direction_length;
+            length_value = length_value * 0.5;
+            length_value *= length_value;
+            float stretch = dot(direction, direction) /
+                    max(max(abs(direction.x), abs(direction.y)), 0.000001);
+            vec2 length_squared = vec2(
+                    1.0 + (stretch - 1.0) * length_value,
+                    1.0 - 0.5 * length_value);
+            float lobe = 0.5 + (0.21 - 0.5) * length_value;
+            float clip_value = 1.0 / max(lobe, 0.000001);
+
+            vec3 min4 = min(min(f, g), min(j, k));
+            vec3 max4 = max(max(f, g), max(j, k));
+            vec3 color = vec3(0.0);
+            float weight_sum = 0.0;
+            screen_easu_tap(color, weight_sum, vec2(0.0, -1.0) - pp,
+                    direction, length_squared, lobe, clip_value, b);
+            screen_easu_tap(color, weight_sum, vec2(1.0, -1.0) - pp,
+                    direction, length_squared, lobe, clip_value, c);
+            screen_easu_tap(color, weight_sum, vec2(-1.0, 1.0) - pp,
+                    direction, length_squared, lobe, clip_value, i);
+            screen_easu_tap(color, weight_sum, vec2(0.0, 1.0) - pp,
+                    direction, length_squared, lobe, clip_value, j);
+            screen_easu_tap(color, weight_sum, vec2(0.0, 0.0) - pp,
+                    direction, length_squared, lobe, clip_value, f);
+            screen_easu_tap(color, weight_sum, vec2(-1.0, 0.0) - pp,
+                    direction, length_squared, lobe, clip_value, e);
+            screen_easu_tap(color, weight_sum, vec2(1.0, 1.0) - pp,
+                    direction, length_squared, lobe, clip_value, k);
+            screen_easu_tap(color, weight_sum, vec2(2.0, 1.0) - pp,
+                    direction, length_squared, lobe, clip_value, l);
+            screen_easu_tap(color, weight_sum, vec2(2.0, 0.0) - pp,
+                    direction, length_squared, lobe, clip_value, h);
+            screen_easu_tap(color, weight_sum, vec2(1.0, 0.0) - pp,
+                    direction, length_squared, lobe, clip_value, g);
+            screen_easu_tap(color, weight_sum, vec2(1.0, 2.0) - pp,
+                    direction, length_squared, lobe, clip_value, o);
+            screen_easu_tap(color, weight_sum, vec2(0.0, 2.0) - pp,
+                    direction, length_squared, lobe, clip_value, n);
+            return min(max4, max(min4, color / max(weight_sum, 0.000001)));
+        }
+
         void material(inout MaterialInputs material) {
             prepareMaterial(material);
             if (materialParams.screenEyeDiagnostic > 0.5) {
@@ -546,7 +706,10 @@ int bridge_screen_create(FilamentBridge* bridge) {
                     }
                 }
                 output_color = accum / max(weight_sum, 0.000001);
-            } else if (quality_pass > 1.5) {
+            } else if (quality_pass > 2.5 && quality_pass < 3.5) {
+                output_color = screen_easu(uv);
+            } else if ((quality_pass > 1.5 && quality_pass < 2.5) ||
+                    quality_pass > 3.5) {
                 // Legacy screen-quality pass 2: full FSR RCAS. This is the
                 // same cross-shaped luma adaptation and RGB limiter used by
                 // the legacy renderer, evaluated in the GPU pass before MIP.
@@ -615,6 +778,8 @@ int bridge_screen_create(FilamentBridge* bridge) {
             .parameter("screenTextureLeft", filamat::MaterialBuilder::SamplerType::SAMPLER_2D)
             .parameter("screenTextureRight", filamat::MaterialBuilder::SamplerType::SAMPLER_2D)
             .parameter("screenTexelSize", filamat::MaterialBuilder::UniformType::FLOAT2)
+            .parameter("screenSourceSize", filamat::MaterialBuilder::UniformType::FLOAT2)
+            .parameter("screenOutputSize", filamat::MaterialBuilder::UniformType::FLOAT2)
             .parameter("screenFilterScale", filamat::MaterialBuilder::UniformType::FLOAT)
             .parameter("screenSharpness", filamat::MaterialBuilder::UniformType::FLOAT)
             .parameter("screenLodBias", filamat::MaterialBuilder::UniformType::FLOAT)
@@ -656,6 +821,10 @@ int bridge_screen_create(FilamentBridge* bridge) {
         }
         material_instance->setParameter(
                 "screenFilterScale", bridge->screen_filter_scale);
+        material_instance->setParameter(
+                "screenSourceSize", filament::math::float2{1.0f, 1.0f});
+        material_instance->setParameter(
+                "screenOutputSize", filament::math::float2{1.0f, 1.0f});
         material_instance->setParameter(
                 "screenSharpness", bridge->screen_filter_sharpness);
         material_instance->setParameter("screenLodBias", kLegacyScreenLodBias);
@@ -738,6 +907,10 @@ int bridge_screen_create(FilamentBridge* bridge) {
         }
         material_instance->setParameter(
                 "screenFilterScale", bridge->screen_filter_scale);
+        material_instance->setParameter(
+                "screenSourceSize", filament::math::float2{1.0f, 1.0f});
+        material_instance->setParameter(
+                "screenOutputSize", filament::math::float2{1.0f, 1.0f});
         material_instance->setParameter(
                 "screenSharpness", bridge->screen_filter_sharpness);
         material_instance->setParameter("screenLodBias", kLegacyScreenLodBias);
@@ -962,14 +1135,24 @@ int bridge_screen_prepare_eye(FilamentBridge* bridge, uint32_t eye_index) {
         material->setParameter("screenTexelSize", filament::math::float2{
                 1.0f / static_cast<float>(texture->getWidth()),
                 1.0f / static_cast<float>(texture->getHeight())});
+        material->setParameter("screenSourceSize", filament::math::float2{
+                static_cast<float>(texture->getWidth()),
+                static_cast<float>(texture->getHeight())});
+    };
+    const auto set_output_size = [&](filament::Texture* texture) {
+        material->setParameter("screenOutputSize", filament::math::float2{
+                static_cast<float>(texture->getWidth()),
+                static_cast<float>(texture->getHeight())});
     };
 
     // Match the legacy OpenGL default: a matched input/headset tier must not
     // pass through an additional Lanczos2 + RCAS filter. Keep the dynamic MIP
     // chain, but copy the source directly into LOD 0 first.
-    if (bridge->screen_filter_scale <= 1.0001f) {
+    if (bridge->screen_filter_scale <= 1.0001f &&
+            bridge->screen_upscale_scale <= 1.0001f) {
         bind_source(source, bridge->screen_source_texture_sampler);
         material->setParameter("screenQualityPass", 0.0f);
+        set_output_size(mip_texture);
         view->setRenderTarget(mip_target);
         view->setViewport(filament::Viewport{
                 0, 0, static_cast<uint32_t>(mip_texture->getWidth()),
@@ -983,9 +1166,11 @@ int bridge_screen_prepare_eye(FilamentBridge* bridge, uint32_t eye_index) {
         return 1;
     }
 
-    // Pass 1: reconstruct the external source into the bounded quality target.
+    const bool use_easu = bridge->screen_upscale_scale > 1.0001f;
+    // Pass 1: reconstruct the external source into the selected quality target.
     bind_source(source, bridge->screen_source_texture_sampler);
-    material->setParameter("screenQualityPass", 1.0f);
+    material->setParameter("screenQualityPass", use_easu ? 3.0f : 1.0f);
+    set_output_size(lanczos_texture);
     view->setRenderTarget(lanczos_target);
     view->setViewport(filament::Viewport{
             0, 0, static_cast<uint32_t>(lanczos_texture->getWidth()),
@@ -995,7 +1180,8 @@ int bridge_screen_prepare_eye(FilamentBridge* bridge, uint32_t eye_index) {
     // Pass 2: sharpen the reconstructed image, then generate the stable MIP
     // chain from the final quality result for video minification.
     bind_source(lanczos_texture, bridge->screen_source_texture_sampler);
-    material->setParameter("screenQualityPass", 2.0f);
+    material->setParameter("screenQualityPass", use_easu ? 4.0f : 2.0f);
+    set_output_size(mip_texture);
     view->setRenderTarget(mip_target);
     view->setViewport(filament::Viewport{
             0, 0, static_cast<uint32_t>(mip_texture->getWidth()),
@@ -1006,6 +1192,16 @@ int bridge_screen_prepare_eye(FilamentBridge* bridge, uint32_t eye_index) {
     bridge->screen_last_mip_versions[eye_index] =
             bridge->screen_source_versions[eye_index];
     bridge->screen_mip_ready[eye_index] = true;
+    return 1;
+}
+
+int bridge_screen_set_upscale(FilamentBridge* bridge, float upscale_scale) {
+    if (!bridge || !bridge->screen_material_instance ||
+            !std::isfinite(upscale_scale) || upscale_scale < 1.0f ||
+            upscale_scale > 4.0f) {
+        return 0;
+    }
+    bridge->screen_upscale_scale = upscale_scale;
     return 1;
 }
 

@@ -17,6 +17,7 @@ int bridge_screen_set_light(
         FilamentBridge* bridge,
         float red, float green, float blue, float intensity);
 int bridge_screen_set_sampling(FilamentBridge* bridge, float filter_scale);
+int bridge_screen_set_upscale(FilamentBridge* bridge, float upscale_scale);
 int bridge_screen_set_sampling_mode(FilamentBridge* bridge, int use_mip);
 int bridge_screen_set_image(
         FilamentBridge* bridge, const void* image,
