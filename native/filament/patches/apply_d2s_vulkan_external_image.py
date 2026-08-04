@@ -134,14 +134,47 @@ def main() -> int:
 """,
         """    if (d2sTraceProgram) {
         std::fprintf(stderr,
-                "[D2S stereo trace] program name=%s multiview=%u vertexViewIndex=%u\\n",
+                "[D2S stereo trace] program name=%s multiview=%u vertexViewIndex=%u %s\\n",
                 d2sProgramName, static_cast<unsigned>(builder.isMultiview()),
-                static_cast<unsigned>(d2sVertexHasViewIndex));
+                static_cast<unsigned>(d2sVertexHasViewIndex), programString.c_str_safe());
         std::fflush(stderr);
     }
 
 #if FVK_ENABLED(FVK_DEBUG_SHADER_MODULE)
     FVK_LOGD << "Created VulkanProgram " << builder << ", shaders = (" << modules[0]
+""",
+    )
+    replace_once(
+        vulkan_driver_cpp,
+        "#include <chrono>\n#include <mutex>\n",
+        """#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <mutex>
+""",
+    )
+    replace_once(
+        vulkan_driver_cpp,
+        """    // Update the VK raster state.
+    auto rt = mCurrentRenderPass.renderTarget;
+
+    VulkanPipelineCache::RasterState const vulkanRasterState{
+""",
+        """    // Update the VK raster state.
+    auto rt = mCurrentRenderPass.renderTarget;
+    static unsigned d2sScreenDrawTraceCount = 0;
+    if (d2sScreenDrawTraceCount < 8 &&
+            std::getenv("D2S_FILAMENT_EYE_DIAGNOSTIC") &&
+            std::strstr(program->name.c_str(), "D2S OpenXR Screen")) {
+        ++d2sScreenDrawTraceCount;
+        std::fprintf(stderr,
+                "[D2S stereo trace] draw viewCount=%u %s\\n",
+                rt->getRenderPassKey().viewCount, program->programString.c_str_safe());
+        std::fflush(stderr);
+    }
+
+    VulkanPipelineCache::RasterState const vulkanRasterState{
 """,
     )
 
