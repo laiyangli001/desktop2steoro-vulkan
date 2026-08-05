@@ -281,6 +281,13 @@ class GUIBuilderMixin:
             on_select=self.on_model_size_change,
             width=S(110))
         self.fp16_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="FP16")
+        self.parallel_inference_label = ft.Text("Parallel Inference:", size=FONT_SIZE)
+        self.parallel_inference_dd = CompactDropdown(
+            options=["Off", "2", "3"],
+            value="2",
+            width=S(70),
+            on_select=self.on_stereo_hot_param_change,
+        )
         row0 = ft.Row([
             self.depth_model_label, self.depth_model_dd,
             ft.Container(width=S(8)), self.model_size_dd,
@@ -318,21 +325,26 @@ class GUIBuilderMixin:
             self.convergence_label, self.convergence_dd,
             ft.Container(width=S(40)), self.dynamic_convergence_label, self.dynamic_convergence_strength_dd,
         ], spacing=1)
-        depth_strength_row = ft.Row([self.depth_strength_label, self.depth_strength_dd], spacing=1)
-
-        # Row 3b: Depth Pop + anti-aliasing
+        # Row 3b: Depth Pop
         self.depth_pop_label = ft.Text("Depth Pop:", size=FONT_SIZE, width=S(130))
         depth_pop_options = [f"{i / 10:.1f}" for i in range(-9, 0)] + [f"{i / 2:.1f}" for i in range(0, 11)]
         self.depth_pop_dd = CompactDropdown(width=S(130),
             options=[v for v in depth_pop_options], value="0.0",
             on_select=self.on_stereo_hot_param_change)
+        depth_strength_row = ft.Row([
+            self.depth_strength_label, self.depth_strength_dd,
+            ft.Container(width=S(40)), self.depth_pop_label, self.depth_pop_dd,
+        ], spacing=1)
+        self.anaglyph_label = ft.Text("Anaglyph:", size=FONT_SIZE, width=S(130))
+        self.anaglyph_dd = CompactDropdown(options=["red_cyan", "green_magenta", "amber_blue"],
+            value="red_cyan", width=S(130), on_select=self.on_stereo_hot_param_change)
         self.antialiasing_label = ft.Text("Anti-aliasing:", size=FONT_SIZE, width=S(130))
         aa_options = [str(i) for i in range(11)]
         self.antialiasing_dd = CompactDropdown(width=S(130),
             options=[v for v in aa_options], value="2",
             on_select=self.on_stereo_hot_param_change)
         row2b = ft.Row([
-            self.depth_pop_label, self.depth_pop_dd,
+            self.anaglyph_label, self.anaglyph_dd,
             ft.Container(width=S(40)), self.antialiasing_label, self.antialiasing_dd,
         ], spacing=1)
 
@@ -403,11 +415,11 @@ class GUIBuilderMixin:
 
         self.cross_eyed_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT,
             label="Cross Eyed", value=False, on_change=self.on_stereo_hot_param_change)
-        self.anaglyph_label = ft.Text("Anaglyph:", size=FONT_SIZE, width=S(130))
-        self.anaglyph_dd = CompactDropdown(options=["red_cyan", "green_magenta", "amber_blue"],
-            value="red_cyan", width=S(130), on_select=self.on_stereo_hot_param_change)
-        stereo_row4 = ft.Row([self.anaglyph_label, self.anaglyph_dd,
-            ft.Container(width=S(40)), self.cross_eyed_cb, ft.Container(width=S(20)), self.fp16_cb], spacing=1)
+        stereo_row4 = ft.Row([
+            self.cross_eyed_cb,
+            ft.Container(width=S(20)), self.fp16_cb,
+            ft.Container(width=S(20)), self.parallel_inference_label, self.parallel_inference_dd,
+        ], spacing=1)
 
         self.color_brightness_label = ft.Text("Color Brightness:", size=FONT_SIZE, width=S(130))
         self.color_brightness_dd = CompactDropdown(
@@ -453,8 +465,6 @@ class GUIBuilderMixin:
         self.torch_compile_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="torch.compile")
         self.tensorrt_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT,
             label="TensorRT", on_change=self._on_trt_toggle)
-        self.parallel_inference_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT,
-            label="Parallel Inference", value=True, on_change=self.on_stereo_hot_param_change)
         self.coreml_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT,
             label="CoreML", on_change=self._on_coreml_toggle)
         self.openvino_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT,
@@ -475,9 +485,6 @@ class GUIBuilderMixin:
         self._advanced_stereo_rows.extend([self.row4a, self.row4b, self.row4c])
         for row in self._advanced_stereo_rows:
             row.visible = self.advanced_stereo_cb.value
-        self.parallel_inference_row = ft.Row(
-            [ft.Container(width=S(130)), self.parallel_inference_cb], spacing=1
-        )
 
         # Row 6: Computing device
         self.computing_device_label = ft.Text("Computing Device:", size=FONT_SIZE, width=S(130))
@@ -644,9 +651,8 @@ class GUIBuilderMixin:
         # Assembly
         depth_group = ft.Container(
             ft.Column([row0, row1, stereo_row0, hole_fill_row, advanced_stereo_row,
-                       convergence_depth_row, depth_strength_row, row2b, stereo_row1, stereo_row3, stereo_row3b,
-                       stereo_row3c, stereo_row4, self.row4a, self.row4b, self.row4c,
-                       self.parallel_inference_row], spacing=S(8)),
+                       convergence_depth_row, depth_strength_row, row2b, stereo_row1, stereo_row3,
+                       stereo_row3b, stereo_row3c, stereo_row4, self.row4a, self.row4b, self.row4c], spacing=S(8)),
             margin=ft.Margin(0, 0, 0, S(8)),
             border=ft.Border(ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE),
                              ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE)),

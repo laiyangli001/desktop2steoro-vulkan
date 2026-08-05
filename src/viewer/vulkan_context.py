@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from threading import RLock
+from time import perf_counter
 from typing import Any, Callable, Iterable
 
 
@@ -757,11 +758,16 @@ class VulkanContext:
         if getattr(resource, "context", self) is not self:
             raise VulkanCapabilityError("external image belongs to a different context")
         vk = self.vk
+        release_role = (
+            "transfer"
+            if self.queue_family("transfer") == self.queue_family_index
+            else "graphics"
+        )
         image_key = _cffi_handle_address(vk, resource.image)
         state = self._image_states.get(
             image_key, undefined_layout=vk.VK_IMAGE_LAYOUT_UNDEFINED
         )
-        self._image_states.require_owner(image_key, self.queue_family_index)
+        self._image_states.require_owner(image_key, self.queue_family(release_role))
         if state.layout != vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
             raise VulkanCapabilityError(
                 "Filament source image must be shader-read before consumer release"
@@ -794,7 +800,7 @@ class VulkanContext:
             )
 
         timeline_value = self.submit_on(
-            "graphics",
+            release_role,
             record,
             wait_for_timeline=wait_for_timeline,
             wait_semaphore=wait_semaphore,
@@ -808,7 +814,7 @@ class VulkanContext:
                 layout=vk.VK_IMAGE_LAYOUT_GENERAL,
                 access_mask=vk.VK_ACCESS_MEMORY_WRITE_BIT,
                 stage_mask=vk.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                queue_family_index=self.queue_family_index,
+                queue_family_index=self.queue_family(release_role),
             ),
         )
         return timeline_value
@@ -1092,6 +1098,7 @@ class VulkanContext:
         wait_semaphore_value: int | None = None,
         signal_semaphore: Any | None = None,
         signal_semaphore_value: int | None = None,
+        on_submit_profile: Callable[[dict[str, float]], None] | None = None,
     ) -> int:
         try:
             return self._submit_on_unchecked(
@@ -1102,6 +1109,7 @@ class VulkanContext:
                 wait_semaphore_value=wait_semaphore_value,
                 signal_semaphore=signal_semaphore,
                 signal_semaphore_value=signal_semaphore_value,
+                on_submit_profile=on_submit_profile,
             )
         except Exception as exc:
             # Device loss may surface from any command-buffer or queue call,
@@ -1119,6 +1127,7 @@ class VulkanContext:
         wait_semaphore_value: int | None = None,
         signal_semaphore: Any | None = None,
         signal_semaphore_value: int | None = None,
+        on_submit_profile: Callable[[dict[str, float]], None] | None = None,
     ) -> int:
         with self._lock:
             self._ensure_open()
@@ -1131,9 +1140,11 @@ class VulkanContext:
             queue_resources = frame.queue_resources[queue_role]
             # Reuse is bounded by the frame fence instead of allocating per submit.
             try:
+                fence_wait_started = perf_counter()
                 wait_result = vk.vkWaitForFences(
                     self.device, 1, [queue_resources.fence], vk.VK_TRUE, 10_000_000_000
                 )
+                fence_wait_seconds = perf_counter() - fence_wait_started
             except Exception as exc:
                 self.mark_device_lost(exc)
                 raise
@@ -1149,6 +1160,7 @@ class VulkanContext:
                 flags=vk.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
             )
             vk.vkBeginCommandBuffer(queue_resources.command_buffer, begin_info)
+            record_started = perf_counter()
             try:
                 record(queue_resources.command_buffer)
                 vk.vkEndCommandBuffer(queue_resources.command_buffer)
@@ -1158,9 +1170,11 @@ class VulkanContext:
                 except Exception:
                     pass
                 raise
+            record_seconds = perf_counter() - record_started
             self._timeline_value += 1
             queue_resources.timeline_value = self._timeline_value
             try:
+                queue_submit_started = perf_counter()
                 self._submit_frame(
                     queue=self.get_queue(role),
                     command_buffer=queue_resources.command_buffer,
@@ -1172,12 +1186,24 @@ class VulkanContext:
                     signal_semaphore=signal_semaphore,
                     signal_semaphore_value=signal_semaphore_value,
                 )
+                queue_submit_seconds = perf_counter() - queue_submit_started
             except Exception as exc:
                 self.mark_device_lost(exc)
                 raise
             self._frame_indices[queue_role] = (
                 frame_index + 1
             ) % self.frame_context_count
+            if on_submit_profile is not None:
+                try:
+                    on_submit_profile(
+                        {
+                            "fence_wait": max(0.0, fence_wait_seconds),
+                            "record": max(0.0, record_seconds),
+                            "queue_submit": max(0.0, queue_submit_seconds),
+                        }
+                    )
+                except Exception:
+                    pass
             return queue_resources.timeline_value
 
     def wait_idle(self) -> None:

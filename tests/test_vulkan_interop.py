@@ -93,6 +93,9 @@ def test_sampling_transition_is_explicitly_separate_from_cuda_prepare() -> None:
     assert "VK_IMAGE_LAYOUT_GENERAL" in source
     assert "VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL" in source
     assert "def release_external_image_from_sampling" in source
+    assert 'release_role = (' in source
+    assert '"transfer"' in source
+    assert 'self.queue_family("transfer") == self.queue_family_index' in source
     assert "wait_semaphore: Any | None = None" in source
     assert "signal_semaphore: Any | None = None" in source
     assert "pWaitSemaphores=wait_semaphores or None" in source

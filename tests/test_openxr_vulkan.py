@@ -661,6 +661,7 @@ def test_tool_overlay_keeps_real_xr_present_rate() -> None:
     presenter = OpenXrVulkanPresenter()
     presenter._tool_overlay_xr_frame_ts.extend((10.0, 10.5))
     presenter._tool_overlay_xr_fps = 2.0
+    presenter._tool_overlay_pending_xr_fps = 2.0
     presenter._tool_overlay_xr_window_started = 10.0
     presenter._tool_overlay_xr_window_frames = 36
     presenter._frame_now = 11.1
@@ -668,6 +669,20 @@ def test_tool_overlay_keeps_real_xr_present_rate() -> None:
     presenter._update_tool_overlay_metrics(None)
 
     assert presenter._tool_overlay_xr_fps == pytest.approx(2.0)
+
+
+def test_tool_overlay_snapshots_present_fps_before_invalidating_quad_texture(
+    monkeypatch,
+) -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._tool_overlay_xr_fps = 60.0
+    presenter._tool_overlay_xr_frame_ts.extend((10.0, 10.1))
+    monkeypatch.setattr("xr_viewer.core_openxr_vulkan.time.perf_counter", lambda: 10.2)
+
+    presenter._record_xr_presented_frame()
+
+    assert presenter._tool_overlay_xr_fps == 60.0
+    assert presenter._tool_overlay_pending_xr_fps == pytest.approx(10.0)
 
 
 def test_tool_overlay_uses_runtime_producer_fps_for_sbs() -> None:
@@ -828,6 +843,93 @@ def test_projection_composer_is_opt_in_and_keeps_existing_fallback(monkeypatch) 
     presenter = OpenXrVulkanPresenter()
     assert presenter._vulkan_projection_composer_requested is True
     assert presenter._vulkan_projection_composer_active is False
+
+
+def test_screen_quad_reprojection_is_opt_in(monkeypatch) -> None:
+    monkeypatch.delenv("D2S_OPENXR_SCREEN_QUAD_REPROJECTION", raising=False)
+    presenter = OpenXrVulkanPresenter()
+    assert presenter._screen_quad_reprojection_requested is False
+    assert presenter._screen_quad_reprojection_active is False
+
+    monkeypatch.setenv("D2S_OPENXR_SCREEN_QUAD_REPROJECTION", "1")
+    presenter = OpenXrVulkanPresenter()
+    assert presenter._screen_quad_reprojection_requested is True
+    assert presenter._screen_quad_reprojection_active is False
+
+
+def test_screen_quad_reprojection_uploads_stereo_layers_and_releases_source(monkeypatch) -> None:
+    calls = []
+
+    class FakeXr:
+        LEFT = "left"
+        RIGHT = "right"
+        INFINITE_DURATION = 1
+
+        @staticmethod
+        def acquire_swapchain_image(_handle):
+            return 0
+
+        @staticmethod
+        def wait_swapchain_image(_handle, _wait_info):
+            return None
+
+        @staticmethod
+        def release_swapchain_image(_handle):
+            return None
+
+        @staticmethod
+        def SwapchainImageWaitInfo(*, timeout):
+            return timeout
+
+    presenter = OpenXrVulkanPresenter()
+    presenter.xr = FakeXr
+    presenter.session = object()
+    presenter.reference_space = object()
+    presenter._filament_screen = ((0.0, 1.0, -2.0), 2.0, 1.0, (0.0, 0.0, 0.0))
+    presenter._ensure_quad_swapchains = lambda width, height: presenter._quad_swapchains.extend(
+        [] if presenter._quad_swapchains else [
+            _EyeSwapchain("left-quad", [], width, height, ["left-target"]),
+            _EyeSwapchain("right-quad", [], width, height, ["right-target"]),
+        ]
+    )
+    presenter.vulkan = SimpleNamespace(
+        copy_image=lambda source, target, **kwargs: calls.append(
+            (source.image, target, kwargs["wait_semaphore"])
+        ) or 19,
+    )
+    monkeypatch.setattr(
+        OpenXrCompositionBuilder,
+        "quad_layer",
+        lambda _self, _swapchain, _position, _width, _height, _rotation, eye: (
+            SimpleNamespace(eye_visibility=("left", "right")[eye])
+        ),
+    )
+    frame = VulkanStereoOutputFrame(
+        frame_id=33,
+        timestamp=0.0,
+        left_eye=SimpleNamespace(image="left-source", width=4, height=2),
+        right_eye=SimpleNamespace(image="right-source", width=4, height=2),
+        metadata={
+            "_vulkan_source_prepare_for_sampling": lambda _frame, eye: (
+                "left-ready", "right-ready"
+            )[eye],
+            "_vulkan_source_consumer_release": lambda frame_id, **kwargs: calls.append(
+                ("release", frame_id, kwargs["wait_for_timeline"])
+            ),
+        },
+    )
+
+    presenter._render_screen_quad_reprojection(frame)
+
+    assert calls == [
+        ("left-source", "left-target", "left-ready"),
+        ("right-source", "right-target", "right-ready"),
+        ("release", 33, 19),
+    ]
+    assert presenter._screen_quad_reprojection_active is True
+    assert [layer.eye_visibility for layer in presenter._last_screen_quad_layers] == [
+        "left", "right"
+    ]
 
 
 def test_projection_composer_uses_direct_vulkan_rasterization_in_opaque_runtime() -> None:
@@ -3475,6 +3577,149 @@ def test_multiview_source_failure_restores_active_eye(monkeypatch) -> None:
         )
 
     assert active_eyes[-1] == 0
+
+
+def test_projection_reuses_displayed_output_without_releasing_it(monkeypatch) -> None:
+    calls: list[tuple[str, object]] = []
+    from utils.breakdown import FPSBreakdown
+
+    breakdown = FPSBreakdown(enabled=True, target_fps=60)
+
+    class FakeXr:
+        INFINITE_DURATION = 1
+
+        @staticmethod
+        def acquire_swapchain_image(_handle):
+            return 0
+
+        @staticmethod
+        def wait_swapchain_image(_handle, _wait_info):
+            return None
+
+        @staticmethod
+        def release_swapchain_image(_handle):
+            return None
+
+        @staticmethod
+        def SwapchainImageWaitInfo(*, timeout):
+            return timeout
+
+    class FakeBridge:
+        def set_active_eye(self, _eye_index):
+            pass
+
+        def set_screen_image(self, image, **_kwargs):
+            calls.append(("screen", image))
+
+        def set_screen_source_version(self, version):
+            calls.append(("version", version))
+
+        def set_screen_ready_semaphore(self, semaphore):
+            calls.append(("ready", semaphore))
+
+        def set_acquired_image(self, _image_index):
+            pass
+
+        def begin_frame(self):
+            pass
+
+        def end_frame(self):
+            pass
+
+        def apply_animations(self, _seconds):
+            pass
+
+    displayed = VulkanStereoOutputFrame(
+        frame_id=17,
+        timestamp=0.0,
+        left_eye=SimpleNamespace(image="left", width=10, height=20, format=43),
+        right_eye=SimpleNamespace(image="right", width=10, height=20, format=43),
+        metadata={
+            "_vulkan_source_prepare_for_sampling": (
+                lambda _frame_id, eye_index: ("left-ready", "right-ready")[eye_index]
+            )
+        },
+    )
+    presenter = OpenXrVulkanPresenter(
+        on_breakdown_inc=breakdown.inc,
+        on_breakdown_set_latest=breakdown.set_latest,
+    )
+    presenter.xr = FakeXr
+    presenter.vulkan = SimpleNamespace()
+    presenter.swapchains = [
+        _EyeSwapchain("left", [SimpleNamespace(image=None)], 1, 1),
+        _EyeSwapchain("right", [SimpleNamespace(image=None)], 1, 1),
+    ]
+    presenter.filament_bridge = FakeBridge()
+    presenter._filament_screen = ((0.0, 0.0, -2.0), 2.0, 1.0, (0.0, 0.0, 0.0))
+    presenter._displayed_output = displayed
+    presenter._apply_filament_profile = lambda views: views
+    presenter._report_screen_resolution = lambda *_args: None
+    presenter._apply_screen_sampling_policy = lambda *_args: None
+    presenter._report_filament_screen_image_status = lambda *_args: None
+    presenter._can_use_filament_screen_image = lambda frame: frame is displayed
+    presenter._update_filament_screen_light = lambda *_args: None
+    presenter._update_filament_glow = lambda *_args: None
+    presenter._update_filament_controllers = lambda *_args: None
+    monkeypatch.setattr(
+        "xr_viewer.core_openxr_vulkan._update_filament_camera",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        OpenXrCompositionBuilder,
+        "projection_layer",
+        lambda *_args: "projection",
+    )
+
+    assert presenter._render_projection_layer([object(), object()], None) == "projection"
+    assert presenter._displayed_output is displayed
+    assert ("screen", "left") in calls
+    assert ("screen", "right") in calls
+    assert breakdown.stats["openxr_reused_screen_frame"] == 1
+    assert breakdown.validate_openxr_async().passed
+
+
+def test_quad_fallback_counts_cached_screen_reuse() -> None:
+    from utils.breakdown import FPSBreakdown
+
+    breakdown = FPSBreakdown(enabled=True, target_fps=60)
+    presenter = OpenXrVulkanPresenter(
+        on_breakdown_inc=breakdown.inc,
+        on_breakdown_set_latest=breakdown.set_latest,
+    )
+    presenter._last_screen_quad_layers = ["cached-screen"]
+    presenter._render_tool_quad_layers = lambda _frame: ["tools"]
+
+    assert presenter._render_quad_layers(None) == ["cached-screen", "tools"]
+    assert breakdown.stats["openxr_reused_screen_frame"] == 1
+    assert breakdown.validate_openxr_async().passed
+
+
+def test_tool_quad_format_is_enumerated_once_per_session() -> None:
+    calls = 0
+
+    class FakeXr:
+        @staticmethod
+        def enumerate_swapchain_formats(_session):
+            nonlocal calls
+            calls += 1
+            return [43]
+
+    presenter = OpenXrVulkanPresenter()
+    presenter.xr = FakeXr
+    presenter.session = object()
+    presenter.vulkan = SimpleNamespace(
+        vk=SimpleNamespace(
+            VK_FORMAT_R8G8B8A8_SRGB=43,
+            VK_FORMAT_B8G8R8A8_SRGB=50,
+            VK_FORMAT_R8G8B8A8_UNORM=37,
+            VK_FORMAT_B8G8R8A8_UNORM=44,
+        )
+    )
+
+    assert presenter._tool_quad_format() == 43
+    assert presenter._tool_quad_format() == 43
+    assert calls == 1
 
 
 def test_projection_layer_builder_owns_only_layer_assembly() -> None:

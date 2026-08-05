@@ -1,5 +1,5 @@
 Capture Mode: Monitor
-Monitor Index: 1
+Monitor Index: 3
 Window Title: ''
 Show FPS: false
 Model List:
@@ -466,7 +466,7 @@ Model List:
     resolutions:
     - 1536
 Depth Model: Distill-Any-Depth-Base
-Depth Strength: 0.3
+Depth Strength: 0.25
 Depth Quick: Standard
 Depth Resolution: 518
 Anti-aliasing: 1
@@ -493,7 +493,7 @@ Hole Fill Mode: quality
 Hole Fill Radius: 1
 Hole Fill Strength: 0.6
 Edge Threshold: 0.04
-Cross Eyed: true
+Cross Eyed: false
 Anaglyph Method: red_cyan
 Color Brightness: 1.0
 Color Contrast: 1.0
@@ -505,6 +505,8 @@ Display Mode: Half-SBS
 FP16: true
 torch.compile: true
 TensorRT: true
+Parallel Inference: true
+Parallel Inference Workers: 3
 Recompile TensorRT: false
 CoreML: null
 Recompile CoreML: false
@@ -517,7 +519,7 @@ Run Mode: OpenXR Link
 XR Headset Model: Pico 4 / 4 Ultra
 XR Preview Window: false
 VSync: false
-Target FPS: 120
+Target FPS: 0
 Processing Resolution: Auto
 Render Size Policy: scaled
 Render Scale: 4K / 100%
@@ -541,8 +543,8 @@ Lossless Scaling Support: false
 Capture Tool: WindowsCaptureCUDA
 Fill 16:9: true
 Fix Viewer Aspect: false
-Stereo Output: 2
+Stereo Output: 1
 Show Log Panel: true
-OpenXR Color Mode: sRGB
 OpenVINO: null
+OpenXR Color Mode: sRGB
 Synthetic View: quality_4k

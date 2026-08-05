@@ -430,7 +430,7 @@ def test_native_tensorrt_load_prints_compact_engine_path(monkeypatch, tmp_path, 
     class FakeEngine:
         input_image_size = (294, 518)
 
-        def __init__(self, engine_path, *, device, dtype):
+        def __init__(self, engine_path, *, device, dtype, execution_slot_count):
             self.engine_path = engine_path
 
     engine_path = tmp_path / "model.trt"

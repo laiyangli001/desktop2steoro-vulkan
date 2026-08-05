@@ -26,6 +26,7 @@ class VulkanProjectionScreenPass:
         self.descriptor_pool = None
         self.descriptor_sets: list[Any] = []
         self.descriptor_timelines = [0] * self._DESCRIPTOR_COUNT
+        self.last_submit_profile: dict[str, float] = {}
         self.sampler = None
         self.render_pass = None
         self.pipeline_layout = None
@@ -333,13 +334,16 @@ class VulkanProjectionScreenPass:
         ]
         wait_semaphores = [item["wait_semaphore"] for item in draws]
         wait_semaphores = [item for item in wait_semaphores if item is not None]
+        submit_profile: dict[str, float] = {}
         timeline = self.context.submit_on(
             "graphics",
             lambda command_buffer: [
                 self._record_draw(command_buffer, draw) for draw in prepared
             ],
             wait_semaphore=wait_semaphores,
+            on_submit_profile=submit_profile.update,
         )
+        self.last_submit_profile = submit_profile
         for draw in prepared:
             self._complete_draw(draw, timeline)
         return int(timeline)

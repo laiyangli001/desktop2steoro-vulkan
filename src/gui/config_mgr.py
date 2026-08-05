@@ -138,7 +138,14 @@ class GUIConfigMixin:
         trt_val = cfg.get("TensorRT")
         if trt_val is not None:
             self.tensorrt_cb.value = trt_val
-        self.parallel_inference_cb.value = bool(cfg.get("Parallel Inference", DEFAULTS["Parallel Inference"]))
+        parallel_workers = cfg.get("Parallel Inference Workers")
+        if parallel_workers is None:
+            parallel_workers = 2 if bool(cfg.get("Parallel Inference", DEFAULTS["Parallel Inference"])) else 1
+        try:
+            parallel_workers = int(parallel_workers)
+        except (TypeError, ValueError):
+            parallel_workers = 2
+        self.parallel_inference_dd.value = str(parallel_workers) if parallel_workers in {2, 3} else "Off"
         self.recompile_trt_cb.value = cfg.get("Recompile TensorRT", DEFAULTS["Recompile TensorRT"])
         mgx_val = cfg.get("MIGraphX")
         if mgx_val is not None:
@@ -287,7 +294,8 @@ class GUIConfigMixin:
             "Stream Quality": self._parse_int(self.stream_quality_dd.value, DEFAULTS["Stream Quality"]),
             "torch.compile": self.torch_compile_cb.value,
             **accelerator_values,
-            "Parallel Inference": bool(self.parallel_inference_cb.value),
+            "Parallel Inference": self.parallel_inference_dd.value != "Off",
+            "Parallel Inference Workers": self._parse_int(self.parallel_inference_dd.value, 1),
             **recompile_values,
             "Capture Tool": self.capture_tool_dd.value,
             "Fill 16:9": self.fill_16_9_cb.value,

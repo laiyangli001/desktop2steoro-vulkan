@@ -67,7 +67,14 @@ class _NativeTensorRtExecutionSlot:
 
 
 class NativeTensorRtEngine:
-    def __init__(self, engine_path: str | Path, *, device: str | torch.device = "cuda", dtype: torch.dtype = torch.float16) -> None:
+    def __init__(
+        self,
+        engine_path: str | Path,
+        *,
+        device: str | torch.device = "cuda",
+        dtype: torch.dtype = torch.float16,
+        execution_slot_count: int = 1,
+    ) -> None:
         self.engine_path = Path(engine_path)
         self.device = torch.device(device)
         self.dtype = dtype
@@ -97,19 +104,22 @@ class NativeTensorRtEngine:
                 stream=torch.cuda.Stream(device=self.device),
             )
         )
-        second_context = self.engine.create_execution_context()
-        if second_context is not None:
+        requested_slots = min(3, max(1, int(execution_slot_count)))
+        for slot_index in range(1, requested_slots):
+            context = self.engine.create_execution_context()
+            if context is None:
+                print(
+                    f"[TensorRT] execution context {slot_index + 1}/{requested_slots} unavailable; "
+                    f"using {len(self._slots)} slot(s)",
+                    flush=True,
+                )
+                break
             self._slots.append(
                 _NativeTensorRtExecutionSlot(
-                    1,
-                    second_context,
+                    slot_index,
+                    context,
                     stream=torch.cuda.Stream(device=self.device),
                 )
-            )
-        else:
-            print(
-                "[TensorRT] second execution context unavailable; using single-slot inference",
-                flush=True,
             )
         # Preserve the legacy attribute for diagnostics and integrations that
         # inspect the primary context. Runtime execution uses slot.context.
@@ -532,6 +542,7 @@ class DistillAnyDepthBaseNativeTensorRt:
         force_rebuild: bool = False,
         use_cuda_graph: bool = False,
         profile_sync: bool = False,
+        execution_slot_count: int = 1,
         depth_upsample: DepthUpsampleMode = "bilinear",
         depth_upsample_edge_strength: float = 0.35,
     ) -> None:
@@ -556,6 +567,7 @@ class DistillAnyDepthBaseNativeTensorRt:
         self.force_rebuild = bool(force_rebuild)
         self.use_cuda_graph = bool(use_cuda_graph)
         self.profile_sync = bool(profile_sync)
+        self.execution_slot_count = min(3, max(1, int(execution_slot_count)))
         self.depth_upsample = depth_upsample
         self.depth_upsample_edge_strength = float(depth_upsample_edge_strength)
         self.dtype = _dtype_from_onnx_name(self.onnx_path, torch.float16)
@@ -639,7 +651,12 @@ class DistillAnyDepthBaseNativeTensorRt:
         if self.build_engine or self.force_rebuild or not self.engine_path.exists():
             build_native_tensorrt_engine(self.onnx_path, self.engine_path, fp16=self.dtype == torch.float16, force=self.force_rebuild)
         trt_lib_dirs = ensure_tensorrt_dll_path()
-        self._engine = NativeTensorRtEngine(self.engine_path, device=self.device, dtype=self.dtype)
+        self._engine = NativeTensorRtEngine(
+            self.engine_path,
+            device=self.device,
+            dtype=self.dtype,
+            execution_slot_count=self.execution_slot_count,
+        )
         self._preprocessor.fixed_input_size = self._engine.input_image_size
         print(
             "[TensorRT] native provider loaded:"

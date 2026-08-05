@@ -97,7 +97,7 @@ def test_pending_cuda_retains_latest_raw_frame(monkeypatch):
     assert sleeps == [0.001]
 
 
-def _dual_pending_context(*, backend="cuda_triton", slots=2, temporal=False):
+def _dual_pending_context(*, backend="cuda_triton", slots=2, temporal=False, workers=2):
     runtime = SimpleNamespace(
         depth_provider=SimpleNamespace(pipeline_slot_count=slots),
         config=SimpleNamespace(profile_sync=False),
@@ -109,6 +109,7 @@ def _dual_pending_context(*, backend="cuda_triton", slots=2, temporal=False):
         openxr_runtime_direct=False,
         stereo_active_preset="cinema",
         stereo_runtime=runtime,
+        runtime_config=SimpleNamespace(parallel_inference=True, parallel_inference_workers=workers),
     )
 
 
@@ -116,6 +117,12 @@ def test_openxr_safe_dual_slot_defaults_to_two_pending(monkeypatch):
     monkeypatch.delenv("D2S_RUNTIME_PENDING_CUDA_DEPTH", raising=False)
 
     assert _runtime_pending_depth_limit(_dual_pending_context()) == 2
+
+
+def test_openxr_three_slot_defaults_to_three_pending(monkeypatch):
+    monkeypatch.delenv("D2S_RUNTIME_PENDING_CUDA_DEPTH", raising=False)
+
+    assert _runtime_pending_depth_limit(_dual_pending_context(slots=3, workers=3)) == 3
 
 
 def test_openxr_dual_pending_can_be_forced_back_to_one(monkeypatch):

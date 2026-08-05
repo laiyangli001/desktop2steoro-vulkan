@@ -50,6 +50,7 @@ class StereoRuntimeConfig:
     use_cuda_graph: bool = False
     profile_sync: bool = False
     parallel_inference: bool = False
+    parallel_inference_workers: int = 1
     # Optional program-controlled OpenXR visual regression output directory.
     openxr_visual_regression_dir: str | Path | None = None
     depth_upsample: DepthUpsampleMode = "bilinear"
@@ -220,6 +221,7 @@ def runtime_config_from_d2s_settings(
         hole_fill_radius = int(settings.get("Hole Fill Radius", hole_fill_radius))
         hole_fill_strength = float(settings.get("Hole Fill Strength", hole_fill_strength))
     export_height, export_width = _depth_export_size_from_settings(settings)
+    parallel_workers = _parallel_inference_workers(settings)
 
     return StereoRuntimeConfig(
         model_id=str(model_name),
@@ -277,7 +279,8 @@ def runtime_config_from_d2s_settings(
         color_tint=float(settings.get("Color Tint", 0.0)),
         debug_output=_to_bool(settings.get("Debug Stereo Output", False)),
         profile_sync=_to_bool(settings.get("Depth Profile Sync", settings.get("Profile Sync", False))),
-        parallel_inference=_to_bool(settings.get("Parallel Inference", False)),
+        parallel_inference=parallel_workers > 1,
+        parallel_inference_workers=parallel_workers,
         stereo_compute_backend=_normalize_stereo_compute_backend(
             settings.get("Stereo Compute Backend", "auto")
         ),
@@ -513,6 +516,7 @@ def depth_provider_config_from_runtime(config: StereoRuntimeConfig) -> "DepthPro
         force_rebuild=force_rebuild,
         use_cuda_graph=config.use_cuda_graph,
         profile_sync=config.profile_sync,
+        execution_slot_count=config.parallel_inference_workers,
         depth_upsample=config.depth_upsample,
         depth_upsample_edge_strength=config.depth_upsample_edge_strength,
     )
@@ -629,6 +633,16 @@ def _to_bool(value: Any) -> bool:
     if value is None:
         return False
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _parallel_inference_workers(settings: dict[str, Any]) -> int:
+    raw = settings.get("Parallel Inference Workers")
+    if raw is None:
+        return 2 if _to_bool(settings.get("Parallel Inference", False)) else 1
+    try:
+        return min(3, max(1, int(raw)))
+    except (TypeError, ValueError):
+        return 2 if _to_bool(settings.get("Parallel Inference", False)) else 1
 
 
 def _normalize_optional_bool(value: Any) -> bool | None:

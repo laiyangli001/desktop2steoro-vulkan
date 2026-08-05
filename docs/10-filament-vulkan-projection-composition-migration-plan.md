@@ -51,6 +51,22 @@ OpenXR Presenter (唯一 layer owner)
        3. draw laser
        4. draw Glow
   -> release Projection swapchain
+
+### Screen Quad Reprojection 实验
+
+为隔离全分辨率 Vulkan Projection Composer 的 raster/fence 成本，提供默认关闭的
+`D2S_OPENXR_SCREEN_QUAD_REPROJECTION=1` 实验路径。它将左右 SBS 眼图复制到两个独立
+OpenXR Quad swapchain，以 `LEFT` / `RIGHT` eye visibility 提交；运行时可在复用已上传
+Quad 时按最新头姿进行其自身的合成重投影。
+
+- 每只眼在复制前都调用 producer ready semaphore；复制 timeline 会回传给 source
+  consumer-release 回调，然后立即归还推理输出 slot。
+- 屏幕 Quad 位于控制器、激光和说明等工具 Quad 之后的后方；原投影路径仍是关闭开关或
+  Quad 资源/上传失败时的完整回退。
+- 该路径不降低 SBS 分辨率，不修改深度、补洞或推理策略；日志记录
+  `screen_quad_requested/active/new/reuse/fallback/upload` 和
+  `xr_path=screen_quad_reprojection`。
+- Quad layer 是平面屏幕实验，不覆盖曲面屏幕、Filament 环境或工具遮挡的完整迁移验收。
   -> submit FPS/Guide/Aperture/Keyboard Quad Layers
   -> xrEndFrame
 ```

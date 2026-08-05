@@ -34,7 +34,8 @@ class _ParallelDepthScheduler:
 
     def __init__(self, runtime, max_workers: int = 2):
         self.runtime = runtime
-        self.executor = ThreadPoolExecutor(max_workers=max(1, min(int(max_workers), 2)),
+        self.worker_count = max(1, min(int(max_workers), 3))
+        self.executor = ThreadPoolExecutor(max_workers=self.worker_count,
                                             thread_name_prefix="d2s-depth")
         self.next_frame_id = 0
         self.pending: list[_ParallelDepthJob] = []
@@ -446,7 +447,7 @@ def _cuda_event_ready(event) -> bool:
         return True
 
 
-def _runtime_supports_dual_cuda_pending(ctx: RuntimePipelineContext) -> bool:
+def _runtime_supports_parallel_cuda_pending(ctx: RuntimePipelineContext) -> bool:
     runtime_config = getattr(ctx, "runtime_config", None)
     if runtime_config is not None and not bool(
         getattr(runtime_config, "parallel_inference", False)
@@ -485,12 +486,16 @@ def _runtime_pending_depth_limit(ctx: RuntimePipelineContext | None = None) -> i
         requested = max(1, int(raw))
     except ValueError:
         requested = None
-    if requested is None:
-        requested = 2
-    if ctx is None or not _runtime_supports_dual_cuda_pending(ctx):
+    if ctx is None or not _runtime_supports_parallel_cuda_pending(ctx):
         return 1
     provider = getattr(ctx.stereo_runtime, "depth_provider", None)
     slot_count = max(1, int(getattr(provider, "pipeline_slot_count", 1)))
+    if requested is None:
+        runtime_config = getattr(ctx, "runtime_config", None)
+        requested = max(1, min(
+            slot_count,
+            int(getattr(runtime_config, "parallel_inference_workers", 2) or 2),
+        ))
     return min(slot_count, requested)
 
 
@@ -720,17 +725,26 @@ class RuntimePipelineLoop:
         ctx = self.context
         runtime_config = getattr(ctx, "runtime_config", None)
         provider = getattr(ctx.stereo_runtime, "depth_provider", None)
+        requested_workers = max(1, min(
+            3,
+            int(getattr(runtime_config, "parallel_inference_workers", 2) or 2),
+        ))
         if (
             ctx.run_mode != "OpenXR"
             or not bool(getattr(runtime_config, "parallel_inference", False))
-            or int(getattr(provider, "pipeline_slot_count", 1)) < 2
+            or min(int(getattr(provider, "pipeline_slot_count", 1)), requested_workers) < 2
             or bool(getattr(getattr(ctx.stereo_runtime, "config", None), "profile_sync", False))
         ):
             return
         try:
-            self._parallel_depth_scheduler = _ParallelDepthScheduler(ctx.stereo_runtime, 2)
-            ctx.source_stat_inc("runtime_parallel_workers", active_workers=2)
-            print("[RuntimePipeline] Parallel depth scheduler enabled: workers=2 slots=2", flush=True)
+            workers = min(int(getattr(provider, "pipeline_slot_count", 1)), requested_workers)
+            self._parallel_depth_scheduler = _ParallelDepthScheduler(ctx.stereo_runtime, workers)
+            ctx.source_stat_inc("runtime_parallel_workers", active_workers=workers)
+            print(
+                f"[RuntimePipeline] Parallel depth scheduler enabled: workers={workers} slots="
+                f"{int(getattr(provider, 'pipeline_slot_count', 1))}",
+                flush=True,
+            )
         except Exception as exc:
             self._parallel_depth_scheduler = None
             ctx.source_stat_inc("runtime_parallel_backend_fallback", last_error=str(exc))
@@ -1079,7 +1093,7 @@ class RuntimePipelineLoop:
                         self._pending_depth_limit()
                     )
                     debug_info["parallel_inference_workers"] = int(
-                        2 if self._parallel_depth_scheduler is not None else 0
+                        getattr(self._parallel_depth_scheduler, "worker_count", 0)
                     )
                     if self._parallel_depth_scheduler is not None:
                         debug_info["parallel_inference_frame_id"] = parallel_frame_id

@@ -141,6 +141,7 @@ DEFAULTS = {
     "torch.compile": False,
     "TensorRT": False,
     "Parallel Inference": True,
+    "Parallel Inference Workers": 2,
     "Recompile TensorRT": False,
     "CoreML": False,
     "Recompile CoreML": False,

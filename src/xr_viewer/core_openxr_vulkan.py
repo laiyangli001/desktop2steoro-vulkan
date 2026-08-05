@@ -549,6 +549,7 @@ class OpenXrVulkanPresenter(
         on_controller_shortcut: Callable[..., bool | None] | None = None,
         on_breakdown_inc: Callable[[str, int | float], None] | None = None,
         on_breakdown_add_time: Callable[[str, float], None] | None = None,
+        on_breakdown_set_latest: Callable[[str, Any], None] | None = None,
         on_runtime_fps: Callable[[], float] | None = None,
     ) -> None:
         self.config = config or OpenXrVulkanConfig()
@@ -557,7 +558,13 @@ class OpenXrVulkanPresenter(
         self._on_controller_shortcut = on_controller_shortcut
         self._on_breakdown_inc = on_breakdown_inc
         self._on_breakdown_add_time = on_breakdown_add_time
+        self._on_breakdown_set_latest = on_breakdown_set_latest
         self._on_runtime_fps = on_runtime_fps
+        # The projection presenter does not submit an asynchronous effect
+        # source. Mark that validation branch inactive instead of reporting a
+        # missing effect path for every otherwise-valid projection frame.
+        if self._on_breakdown_set_latest is not None:
+            self._on_breakdown_set_latest("openxr_async_effects_enabled", False)
         if self.config.render_scale <= 0:
             raise ValueError("render_scale must be greater than zero")
         if len(self.config.clear_color) != 4:
@@ -581,8 +588,33 @@ class OpenXrVulkanPresenter(
         self._vulkan_projection_composer_active = False
         self._vulkan_projection_composer_frame_id: int | None = None
         self._last_vulkan_projection_composer_status: tuple[Any, ...] | None = None
+        self._screen_quad_reprojection_requested = _env_flag(
+            "D2S_OPENXR_SCREEN_QUAD_REPROJECTION"
+        )
+        self._screen_quad_reprojection_active = False
+        self._screen_quad_reprojection_frame_id: int | None = None
+        self._last_screen_quad_reprojection_status: tuple[Any, ...] | None = None
+        if self._on_breakdown_set_latest is not None:
+            self._on_breakdown_set_latest(
+                "openxr_vulkan_projection_composer_requested",
+                self._vulkan_projection_composer_requested,
+            )
+            self._on_breakdown_set_latest(
+                "openxr_vulkan_projection_composer_active", False
+            )
+            self._on_breakdown_set_latest(
+                "openxr_vulkan_projection_composer_frame_id", -1
+            )
+            self._on_breakdown_set_latest(
+                "openxr_screen_quad_reprojection_requested",
+                self._screen_quad_reprojection_requested,
+            )
+            self._on_breakdown_set_latest(
+                "openxr_screen_quad_reprojection_active", False
+            )
         self._quad_swapchains: list[_EyeSwapchain] = []
         self._quad_swapchain_format: int | None = None
+        self._tool_quad_swapchain_format: int | None = None
         self._quad_swapchain_extent: tuple[int, int] | None = None
         self.filament_bridge: Any | None = None
         self.session_state: Any = None
@@ -760,6 +792,7 @@ class OpenXrVulkanPresenter(
         self._tool_quad_texture_cache: dict[str, np.ndarray] = {}
         self._tool_quad_texture_keys: dict[str, tuple[Any, ...]] = {}
         self._tool_overlay_xr_fps = 0.0
+        self._tool_overlay_pending_xr_fps = 0.0
         self._tool_overlay_sbs_fps = 0.0
         self._tool_overlay_latency_ms = 0.0
         self._tool_overlay_depth_strength = 0.0
@@ -1038,9 +1071,14 @@ class OpenXrVulkanPresenter(
                 pass
 
     def run_frame(self) -> bool:
+        frame_started = time.perf_counter()
         self._ensure_initialized()
-        self._drain_presenter_commands()
+        events_started = time.perf_counter()
         self.poll_events()
+        if self._on_breakdown_add_time is not None:
+            self._on_breakdown_add_time(
+                "openxr_events", time.perf_counter() - events_started
+            )
         if self.exit_requested:
             return False
         if not self.session_running:
@@ -1054,6 +1092,14 @@ class OpenXrVulkanPresenter(
         if self._on_breakdown_add_time is not None:
             self._on_breakdown_add_time(
                 "openxr_wait_frame", time.perf_counter() - wait_started
+            )
+        # Keep xrWaitFrame at the frame boundary. Runtime-output conversion can
+        # enqueue Vulkan work and must not delay the runtime's pacing decision.
+        commands_started = time.perf_counter()
+        self._drain_presenter_commands()
+        if self._on_breakdown_add_time is not None:
+            self._on_breakdown_add_time(
+                "openxr_presenter_commands", time.perf_counter() - commands_started
             )
         if self._on_breakdown_inc is not None:
             self._on_breakdown_inc("openxr_loop", 1)
@@ -1071,6 +1117,7 @@ class OpenXrVulkanPresenter(
             self._notify_headset_active()
         else:
             self._notify_headset_waiting()
+        controls_started = time.perf_counter()
         try:
             if self._on_breakdown_inc is not None:
                 self._on_breakdown_inc("openxr_input_sample", 1)
@@ -1103,6 +1150,11 @@ class OpenXrVulkanPresenter(
                     message,
                     flush=True,
                 )
+        finally:
+            if self._on_breakdown_add_time is not None:
+                self._on_breakdown_add_time(
+                    "openxr_controls", time.perf_counter() - controls_started
+                )
         begin_started = time.perf_counter()
         xr.begin_frame(self.session)
         if self._on_breakdown_add_time is not None:
@@ -1113,6 +1165,8 @@ class OpenXrVulkanPresenter(
         layer_pointers: list[Any] = []
         try:
             if frame_state.should_render:
+                locate_started = time.perf_counter()
+                locate_call_started = time.perf_counter()
                 view_state, views = xr.locate_views(
                     self.session,
                     xr.ViewLocateInfo(
@@ -1121,12 +1175,17 @@ class OpenXrVulkanPresenter(
                         space=self.reference_space,
                     ),
                 )
+                if self._on_breakdown_add_time is not None:
+                    self._on_breakdown_add_time(
+                        "openxr_locate_call", time.perf_counter() - locate_call_started
+                    )
                 valid_flags = (
                     xr.ViewStateFlags.POSITION_VALID_BIT
                     | xr.ViewStateFlags.ORIENTATION_VALID_BIT
                 )
                 if view_state.view_state_flags & valid_flags == valid_flags:
                     if self._apply_profile_reference_space(views):
+                        locate_call_started = time.perf_counter()
                         view_state, views = xr.locate_views(
                             self.session,
                             xr.ViewLocateInfo(
@@ -1135,12 +1194,35 @@ class OpenXrVulkanPresenter(
                                 space=self.reference_space,
                             ),
                         )
+                        if self._on_breakdown_add_time is not None:
+                            self._on_breakdown_add_time(
+                                "openxr_locate_call",
+                                time.perf_counter() - locate_call_started,
+                            )
+                    view_prepare_started = time.perf_counter()
                     self._cache_head_position(views)
                     self._report_profile_alignment()
                     self._initialize_filament_screen_from_head()
+                    if self._on_breakdown_add_time is not None:
+                        self._on_breakdown_add_time(
+                            "openxr_view_prepare",
+                            time.perf_counter() - view_prepare_started,
+                        )
+                    output_lock_started = time.perf_counter()
                     with self._output_lock:
                         output_frame = self._pending_output
+                    if self._on_breakdown_add_time is not None:
+                        self._on_breakdown_add_time(
+                            "openxr_output_lock",
+                            time.perf_counter() - output_lock_started,
+                        )
+                    metrics_started = time.perf_counter()
                     self._update_tool_overlay_metrics(output_frame)
+                    if self._on_breakdown_add_time is not None:
+                        self._on_breakdown_add_time(
+                            "openxr_overlay_metrics",
+                            time.perf_counter() - metrics_started,
+                        )
                     # Match the legacy frame gate: runtime rendering readiness
                     # is separate from the availability of a fresh stereo frame.
                     if self._pending_output is None and not self._has_presented_frame:
@@ -1156,23 +1238,60 @@ class OpenXrVulkanPresenter(
                         self._source_frame_wait_logged = False
                         # Render the world at the current headset pose on
                         # every XR tick; only inference input may be reused.
+                        projection_started = time.perf_counter()
                         layer = self._render_projection_layer(views, output_frame)
+                        if self._on_breakdown_add_time is not None:
+                            self._on_breakdown_add_time(
+                                "openxr_projection_layer",
+                                time.perf_counter() - projection_started,
+                            )
                     if layer is not None:
+                        layer_assembly_started = time.perf_counter()
                         layer_structures.append(layer)
                         layer_pointers.append(ctypes.pointer(layer))
                         try:
+                            quad_started = time.perf_counter()
                             self._last_quad_layers = self._render_quad_layers(output_frame)
-                            if output_frame is not None:
+                            if self._on_breakdown_add_time is not None:
+                                self._on_breakdown_add_time(
+                                    "openxr_quad_total",
+                                    time.perf_counter() - quad_started,
+                                )
+                            if (
+                                output_frame is not None
+                                and not self._screen_quad_reprojection_active
+                            ):
+                                commit_started = time.perf_counter()
                                 self._commit_output_frame(output_frame)
+                                if self._on_breakdown_add_time is not None:
+                                    self._on_breakdown_add_time(
+                                        "openxr_output_commit",
+                                        time.perf_counter() - commit_started,
+                                    )
                         except Exception:
                             if output_frame is not None:
                                 self._abort_output_frame(output_frame)
                             raise
                         self._has_presented_frame = True
+                        layer_pointers_started = time.perf_counter()
                         layer_structures.extend(self._last_quad_layers)
                         layer_pointers.extend(
                             ctypes.pointer(item) for item in self._last_quad_layers
                         )
+                        if self._on_breakdown_add_time is not None:
+                            self._on_breakdown_add_time(
+                                "openxr_layer_pointers",
+                                time.perf_counter() - layer_pointers_started,
+                            )
+                        if self._on_breakdown_add_time is not None:
+                            self._on_breakdown_add_time(
+                                "openxr_layer_assembly",
+                                time.perf_counter() - layer_assembly_started,
+                            )
+                if self._on_breakdown_add_time is not None:
+                    self._on_breakdown_add_time(
+                        "openxr_locate_total", time.perf_counter() - locate_started
+                    )
         finally:
             if not bool(getattr(self.vulkan, "device_lost", False)):
                 end_info = xr.FrameEndInfo(
@@ -1189,6 +1308,10 @@ class OpenXrVulkanPresenter(
                         "openxr_end_frame", time.perf_counter() - end_started
                     )
         self.frame_count += 1
+        if self._on_breakdown_add_time is not None:
+            self._on_breakdown_add_time(
+                "openxr_frame_total", time.perf_counter() - frame_started
+            )
         return not self.exit_requested
 
     def _set_shortcut_panel(self, name: str | None) -> None:
@@ -3309,6 +3432,7 @@ class OpenXrVulkanPresenter(
 
         self.system_id = None
         self.swapchain_format = None
+        self._tool_quad_swapchain_format = None
         self._graphics_binding = None
         self._initialized = False
         self._screen_ready_semaphore_abi_available = False
@@ -3903,7 +4027,13 @@ class OpenXrVulkanPresenter(
                 self._rendering_output = None
             self._displayed_output = frame
         if previous is not None and previous is not frame:
+            release_started = time.perf_counter()
             self._release_output_frame(previous)
+            if self._on_breakdown_add_time is not None:
+                self._on_breakdown_add_time(
+                    "openxr_output_release",
+                    time.perf_counter() - release_started,
+                )
 
     def _abort_output_frame(self, frame: VulkanStereoOutputFrame) -> None:
         with self._output_lock:
@@ -4141,6 +4271,14 @@ class OpenXrVulkanPresenter(
             )
         projection_draws = []
         for eye_index, source in enumerate(sources):
+            source_prepare_started = time.perf_counter()
+            wait_semaphore = prepare_source(frame.frame_id, eye_index)
+            if self._on_breakdown_add_time is not None:
+                self._on_breakdown_add_time(
+                    "openxr_vulkan_composer_source_prepare",
+                    time.perf_counter() - source_prepare_started,
+                )
+            draw_prepare_started = time.perf_counter()
             target_eye, image_index = (
                 acquired_images[0] if layered else acquired_images[eye_index]
             )
@@ -4155,10 +4293,29 @@ class OpenXrVulkanPresenter(
                         views[eye_index]
                     ),
                     "clear_color": self.config.clear_color,
-                    "wait_semaphore": prepare_source(frame.frame_id, eye_index),
+                    "wait_semaphore": wait_semaphore,
                 }
             )
+            if self._on_breakdown_add_time is not None:
+                self._on_breakdown_add_time(
+                    "openxr_vulkan_composer_draw_prepare",
+                    time.perf_counter() - draw_prepare_started,
+                )
+        submit_started = time.perf_counter()
         timeline = self._vulkan_projection_screen_pass.submit_stereo(projection_draws)
+        if self._on_breakdown_add_time is not None:
+            self._on_breakdown_add_time(
+                "openxr_vulkan_composer_submit",
+                time.perf_counter() - submit_started,
+            )
+            submit_profile = self._vulkan_projection_screen_pass.last_submit_profile
+            for stage, metric in (
+                ("fence_wait", "openxr_vulkan_composer_fence_wait"),
+                ("record", "openxr_vulkan_composer_record"),
+                ("queue_submit", "openxr_vulkan_composer_queue_submit"),
+            ):
+                if stage in submit_profile:
+                    self._on_breakdown_add_time(metric, submit_profile[stage])
         self._vulkan_projection_composer_frame_id = int(frame.frame_id)
         self._vulkan_projection_composer_active = True
         return int(timeline)
@@ -4773,7 +4930,7 @@ class OpenXrVulkanPresenter(
     def _render_filament_multiview(
         self,
         render_views: list[Any],
-        output_frame: VulkanStereoOutputFrame | None,
+        presentation_frame: VulkanStereoOutputFrame | None,
         screen_image_projection: bool,
         acquired_image: tuple[_EyeSwapchain, int],
         finished_semaphore_available: bool,
@@ -4781,6 +4938,7 @@ class OpenXrVulkanPresenter(
     ) -> int | None:
         bridge = self.filament_bridge
         eye, image_index = acquired_image
+        state_started = time.perf_counter()
         bridge.set_active_eye(0)
         _update_filament_stereo_camera(
             bridge,
@@ -4789,20 +4947,21 @@ class OpenXrVulkanPresenter(
             far_plane=self._profile_far_plane,
         )
         if (
-            output_frame is not None
+            presentation_frame is not None
             and screen_image_projection
             and self._filament_screen is not None
         ):
-            prepare_source = (output_frame.metadata or {}).get(
+            prepare_source = (presentation_frame.metadata or {}).get(
                 "_vulkan_source_prepare_for_sampling"
             )
             visible_semaphores = []
             try:
+                source_prepare_started = time.perf_counter()
                 for eye_index, source in enumerate(
-                    (output_frame.left_eye, output_frame.right_eye)
+                    (presentation_frame.left_eye, presentation_frame.right_eye)
                 ):
                     bridge.set_active_eye(eye_index)
-                    visible = prepare_source(output_frame.frame_id, eye_index)
+                    visible = prepare_source(presentation_frame.frame_id, eye_index)
                     bridge.set_screen_image(
                         source.image,
                         width=source.width,
@@ -4810,9 +4969,13 @@ class OpenXrVulkanPresenter(
                         format=source.format,
                     )
                     if hasattr(bridge, "set_screen_source_version"):
-                        bridge.set_screen_source_version(int(output_frame.frame_id))
+                        bridge.set_screen_source_version(int(presentation_frame.frame_id))
                     if visible is not None:
                         visible_semaphores.append(visible)
+                record_time(
+                    "openxr_filament_multiview_source_prepare",
+                    source_prepare_started,
+                )
             finally:
                 bridge.set_active_eye(0)
             if visible_semaphores:
@@ -4825,6 +4988,7 @@ class OpenXrVulkanPresenter(
                 record_time(
                     "openxr_filament_multiview_source_wait", source_wait_started
                 )
+        record_time("openxr_filament_multiview_state", state_started)
         bridge.set_active_eye(0)
         bridge.set_acquired_image(image_index)
         queue_started = time.perf_counter()
@@ -4834,16 +4998,16 @@ class OpenXrVulkanPresenter(
         bridge.end_frame()
         record_time("openxr_filament_multiview_finish_wait", finish_started)
         if (
-            isinstance(output_frame, VulkanStereoOutputFrame)
+            isinstance(presentation_frame, VulkanStereoOutputFrame)
             and str(
-                (output_frame.metadata or {}).get("visual_regression_dir", "")
+                (presentation_frame.metadata or {}).get("visual_regression_dir", "")
             ).strip()
         ):
             for eye_index, source in enumerate(
-                (output_frame.left_eye, output_frame.right_eye)
+                (presentation_frame.left_eye, presentation_frame.right_eye)
             ):
                 self._maybe_capture_visual_regression_frame(
-                    output_frame,
+                    presentation_frame,
                     eye_index=eye_index,
                     source_resource=(
                         source
@@ -4904,16 +5068,31 @@ class OpenXrVulkanPresenter(
         render_succeeded = False
         screen_image_projection = False
         self._vulkan_projection_composer_active = False
+        self._screen_quad_reprojection_active = False
         composer_frame = (
             output_frame
             if isinstance(output_frame, VulkanStereoOutputFrame)
             else sampling_frame
+        )
+        presentation_frame = (
+            composer_frame
+            if isinstance(composer_frame, VulkanStereoOutputFrame)
+            else None
         )
         use_vulkan_projection_composer = bool(
             self._vulkan_projection_composer_requested
             and isinstance(composer_frame, VulkanStereoOutputFrame)
             and self._filament_screen is not None
         )
+        use_screen_quad_reprojection = bool(
+            self._screen_quad_reprojection_requested
+            and (
+                self._can_use_screen_quad_reprojection(composer_frame)
+                or bool(self._last_screen_quad_layers)
+            )
+        )
+        if use_screen_quad_reprojection:
+            use_vulkan_projection_composer = False
         filament_queue_lock = getattr(self.vulkan, "_lock", None)
         filament_queue_locked = False
         projection_started = time.perf_counter()
@@ -4949,37 +5128,42 @@ class OpenXrVulkanPresenter(
                 self.filament_bridge is not None
                 and filament_queue_lock is not None
                 and not use_vulkan_projection_composer
+                and not use_screen_quad_reprojection
             ):
+                filament_lock_started = time.perf_counter()
                 filament_queue_lock.acquire()
                 filament_queue_locked = True
+                record_time("openxr_filament_lock_wait", filament_lock_started)
 
             shared_prepare_started = time.perf_counter()
-            screen_image_projection = use_vulkan_projection_composer or self._can_use_filament_screen_image(output_frame)
-            if screen_image_projection and isinstance(
-                output_frame, VulkanStereoOutputFrame
-            ):
-                sampling_frame = output_frame
-            self._report_screen_resolution(views, output_frame)
+            screen_image_projection = (
+                use_vulkan_projection_composer
+                or use_screen_quad_reprojection
+                or self._can_use_filament_screen_image(presentation_frame)
+            )
+            if screen_image_projection and presentation_frame is not None:
+                sampling_frame = presentation_frame
+            self._report_screen_resolution(views, presentation_frame)
             self._apply_screen_sampling_policy(
-                output_frame if isinstance(output_frame, VulkanStereoOutputFrame) else None
+                presentation_frame
             )
             self._report_filament_screen_image_status(
-                output_frame,
+                presentation_frame,
                 screen_image_projection,
-                self._filament_screen_image_gate_reason(output_frame),
+                self._filament_screen_image_gate_reason(presentation_frame),
             )
-            if self.filament_bridge is not None and not use_vulkan_projection_composer:
+            if (
+                self.filament_bridge is not None
+                and not use_vulkan_projection_composer
+                and not use_screen_quad_reprojection
+            ):
                 self._update_filament_screen_light(
                     self.filament_bridge,
-                    output_frame
-                    if isinstance(output_frame, VulkanStereoOutputFrame)
-                    else None,
+                    presentation_frame,
                 )
                 self._update_filament_glow(
                     self.filament_bridge,
-                    output_frame
-                    if isinstance(output_frame, VulkanStereoOutputFrame)
-                    else None,
+                    presentation_frame,
                 )
                 # Controller transforms and GLB animation state are shared by
                 # both eye Views. Updating them twice adds owner-thread work
@@ -4992,13 +5176,37 @@ class OpenXrVulkanPresenter(
             finished_semaphore_available = bool(
                 self.filament_bridge is not None
                 and not use_vulkan_projection_composer
+                and not use_screen_quad_reprojection
                 and getattr(
                     self.filament_bridge,
                     "finished_drawing_semaphore_abi_available",
                     False,
                 )
             )
-            if use_vulkan_projection_composer:
+            if use_screen_quad_reprojection:
+                try:
+                    if isinstance(composer_frame, VulkanStereoOutputFrame):
+                        self._render_screen_quad_reprojection(composer_frame)
+                    elif not self._last_screen_quad_layers:
+                        raise RuntimeError("screen Quad cache is empty")
+                    else:
+                        self._screen_quad_reprojection_active = True
+                    self._clear_projection_targets(acquired_images)
+                    render_succeeded = True
+                except Exception as exc:
+                    use_screen_quad_reprojection = False
+                    self._screen_quad_reprojection_active = False
+                    if self._on_breakdown_inc is not None:
+                        self._on_breakdown_inc("openxr_screen_quad_fallback", 1)
+                    self._report_screen_quad_reprojection_status(
+                        "fallback", type(exc).__name__
+                    )
+                    use_vulkan_projection_composer = bool(
+                        self._vulkan_projection_composer_requested
+                        and isinstance(composer_frame, VulkanStereoOutputFrame)
+                        and self._filament_screen is not None
+                    )
+            if not render_succeeded and use_vulkan_projection_composer:
                 composer_timeline = self._render_vulkan_projection_composer(
                     composer_frame,
                     acquired_images,
@@ -5013,21 +5221,26 @@ class OpenXrVulkanPresenter(
                     int(composer_timeline),
                 )
                 render_succeeded = True
-            elif self._multiview_active and self.filament_bridge is not None:
+            elif (
+                not render_succeeded
+                and self._multiview_active
+                and self.filament_bridge is not None
+            ):
                 consumer_release_semaphores[0] = self._render_filament_multiview(
                     render_views,
-                    output_frame,
+                    presentation_frame,
                     screen_image_projection,
                     acquired_images[0],
                     finished_semaphore_available,
                     record_time,
                 )
                 submitted_filament_eyes.append(0)
-            else:
+            elif not render_succeeded:
                 for eye_index, (eye, image_index) in enumerate(acquired_images):
                     screen_source = None
                     if self.filament_bridge is not None:
                         bridge = self.filament_bridge
+                        state_started = time.perf_counter()
                         bridge.set_active_eye(eye_index)
                         _update_filament_camera(
                             bridge,
@@ -5036,20 +5249,25 @@ class OpenXrVulkanPresenter(
                             far_plane=self._profile_far_plane,
                         )
                         if (
-                            output_frame is not None
+                            presentation_frame is not None
                             and screen_image_projection
                             and self._filament_screen is not None
                         ):
                             screen_source = (
-                                output_frame.left_eye
+                                presentation_frame.left_eye
                                 if eye_index == 0
-                                else output_frame.right_eye
+                                else presentation_frame.right_eye
                             )
-                            prepare_source = (output_frame.metadata or {}).get(
+                            prepare_source = (presentation_frame.metadata or {}).get(
                                 "_vulkan_source_prepare_for_sampling"
                             )
+                            source_prepare_started = time.perf_counter()
                             visible_semaphore = prepare_source(
-                                output_frame.frame_id, eye_index
+                                presentation_frame.frame_id, eye_index
+                            )
+                            record_time(
+                                f"openxr_filament_eye{eye_index}_source_prepare",
+                                source_prepare_started,
                             )
                             bridge.set_screen_image(
                                 screen_source.image,
@@ -5059,10 +5277,13 @@ class OpenXrVulkanPresenter(
                             )
                             if hasattr(bridge, "set_screen_source_version"):
                                 bridge.set_screen_source_version(
-                                    int(output_frame.frame_id)
+                                    int(presentation_frame.frame_id)
                                 )
                             if visible_semaphore is not None:
                                 bridge.set_screen_ready_semaphore(visible_semaphore)
+                        record_time(
+                            f"openxr_filament_eye{eye_index}_state", state_started
+                        )
                         bridge.set_acquired_image(image_index)
                         queue_started = time.perf_counter()
                         bridge.begin_frame()
@@ -5083,7 +5304,7 @@ class OpenXrVulkanPresenter(
                                 else getattr(screen_source, "resource", None)
                             )
                             self._maybe_capture_visual_regression_frame(
-                                output_frame,
+                                presentation_frame,
                                 eye_index=eye_index,
                                 source_resource=source_resource,
                                 projection_resource=eye.resources[image_index],
@@ -5099,23 +5320,23 @@ class OpenXrVulkanPresenter(
                                 bridge.get_finished_drawing_semaphore()
                             )
                     else:
-                        if output_frame is not None:
+                        if presentation_frame is not None:
                             source = (
-                                output_frame.left_eye
+                                presentation_frame.left_eye
                                 if eye_index == 0
-                                else output_frame.right_eye
+                                else presentation_frame.right_eye
                             )
                             copy_timeline = self.vulkan.copy_image(
                                 source,
                                 eye.resources[image_index],
-                                wait_for_timeline=output_frame.ready_timeline,
+                                wait_for_timeline=presentation_frame.ready_timeline,
                             )
-                            output_frame.metadata["_vulkan_fallback_copy_timeline"] = max(
-                                int(output_frame.metadata.get("_vulkan_fallback_copy_timeline", 0)),
+                            presentation_frame.metadata["_vulkan_fallback_copy_timeline"] = max(
+                                int(presentation_frame.metadata.get("_vulkan_fallback_copy_timeline", 0)),
                                 int(copy_timeline),
                             )
                             self._maybe_capture_visual_regression_frame(
-                                output_frame,
+                                presentation_frame,
                                 eye_index=eye_index,
                                 source_resource=(
                                     source
@@ -5162,6 +5383,60 @@ class OpenXrVulkanPresenter(
                         int(consumer_completion_timeline),
                     )
             render_succeeded = True
+            if presentation_frame is not None and (
+                use_vulkan_projection_composer
+                or use_screen_quad_reprojection
+                or screen_image_projection
+                or self.filament_bridge is None
+            ):
+                if self._on_breakdown_inc is not None:
+                    self._on_breakdown_inc(
+                        "openxr_new_screen_frame"
+                        if isinstance(output_frame, VulkanStereoOutputFrame)
+                        else "openxr_reused_screen_frame",
+                        1,
+                    )
+            if self._on_breakdown_set_latest is not None:
+                self._on_breakdown_set_latest(
+                    "openxr_vulkan_projection_composer_requested",
+                    self._vulkan_projection_composer_requested,
+                )
+                self._on_breakdown_set_latest(
+                    "openxr_vulkan_projection_composer_active",
+                    self._vulkan_projection_composer_active,
+                )
+                self._on_breakdown_set_latest(
+                    "openxr_vulkan_projection_composer_frame_id",
+                    (
+                        self._vulkan_projection_composer_frame_id
+                        if self._vulkan_projection_composer_active
+                        else -1
+                    ),
+                )
+                self._on_breakdown_set_latest(
+                    "openxr_screen_quad_reprojection_requested",
+                    self._screen_quad_reprojection_requested,
+                )
+                self._on_breakdown_set_latest(
+                    "openxr_screen_quad_reprojection_active",
+                    self._screen_quad_reprojection_active,
+                )
+                self._on_breakdown_set_latest(
+                    "openxr_projection_path",
+                    (
+                        "screen_quad_reprojection"
+                        if self._screen_quad_reprojection_active
+                        else (
+                            "vulkan_composer"
+                            if self._vulkan_projection_composer_active
+                            else (
+                                "filament_multiview"
+                                if self._multiview_active
+                                else "filament_per_eye"
+                            )
+                        )
+                    ),
+                )
         finally:
             if (
                 not render_succeeded
@@ -5498,6 +5773,7 @@ class OpenXrVulkanPresenter(
         self._tool_quad_texture_cache.clear()
         self._tool_quad_texture_keys.clear()
         self._tool_overlay_xr_fps = 0.0
+        self._tool_overlay_pending_xr_fps = 0.0
         self._tool_overlay_sbs_fps = 0.0
         self._tool_overlay_latency_ms = 0.0
         self._tool_overlay_depth_strength = 0.0
@@ -5543,7 +5819,9 @@ class OpenXrVulkanPresenter(
         self._tool_overlay_xr_window_frames += 1
         xr_elapsed = now - self._tool_overlay_xr_window_started
         if xr_elapsed >= _TOOL_OVERLAY_UPDATE_INTERVAL:
-            if len(self._tool_overlay_xr_frame_ts) < 2:
+            if self._tool_overlay_pending_xr_fps > 0.0:
+                self._tool_overlay_xr_fps = self._tool_overlay_pending_xr_fps
+            else:
                 self._tool_overlay_xr_fps = (
                     self._tool_overlay_xr_window_frames / xr_elapsed
                 )
@@ -5590,7 +5868,7 @@ class OpenXrVulkanPresenter(
             return
         span = timestamp - self._tool_overlay_xr_frame_ts[0]
         if span > 0.0:
-            self._tool_overlay_xr_fps = (count - 1) / span
+            self._tool_overlay_pending_xr_fps = (count - 1) / span
 
     def _overlay_resolution_sizes(
         self, output_frame: VulkanStereoOutputFrame | None
@@ -5629,10 +5907,20 @@ class OpenXrVulkanPresenter(
         # the per-eye Filament image path is enabled. Keep this function for
         # controller tools and other 2D overlays only.
         layers = self._render_tool_quad_layers(output_frame)
+        if self._screen_quad_reprojection_active:
+            if (
+                output_frame is None
+                and self._last_screen_quad_layers
+                and self._on_breakdown_inc is not None
+            ):
+                self._on_breakdown_inc("openxr_screen_quad_reuse", 1)
+            return list(self._last_screen_quad_layers) + layers
         if output_frame is None:
             # OpenXR composition layers are ordered back to front. The virtual
             # screen must be submitted before controller tools so the latter
             # remain visible in front of it.
+            if self._last_screen_quad_layers and self._on_breakdown_inc is not None:
+                self._on_breakdown_inc("openxr_reused_screen_frame", 1)
             return list(self._last_screen_quad_layers) + layers
         if self._filament_screen is None:
             self._last_screen_quad_layers = []
@@ -5668,8 +5956,127 @@ class OpenXrVulkanPresenter(
                 eye, position, screen_width, screen_height, rotation, eye_index
             ))
         self._last_screen_quad_layers = screen_layers
+        if screen_layers and self._on_breakdown_inc is not None:
+            self._on_breakdown_inc("openxr_new_screen_frame", 1)
         # Submit the virtual screen behind controller/laser tool layers.
         return screen_layers + layers
+
+    def _can_use_screen_quad_reprojection(
+        self, frame: VulkanStereoOutputFrame | None
+    ) -> bool:
+        if (
+            not isinstance(frame, VulkanStereoOutputFrame)
+            or self._filament_screen is None
+            or self.vulkan is None
+            or self.xr is None
+            or self.session is None
+        ):
+            return False
+        metadata = frame.metadata or {}
+        if not callable(metadata.get("_vulkan_source_prepare_for_sampling")):
+            return False
+        return all(
+            int(getattr(source, "width", 0)) > 0
+            and int(getattr(source, "height", 0)) > 0
+            and getattr(source, "image", None) is not None
+            for source in (frame.left_eye, frame.right_eye)
+        )
+
+    def _report_screen_quad_reprojection_status(self, *status: Any) -> None:
+        current = tuple(status)
+        if current == self._last_screen_quad_reprojection_status:
+            return
+        self._last_screen_quad_reprojection_status = current
+        print(
+            "[OpenXRViewer] Screen Quad Reprojection "
+            + " ".join(str(value) for value in current),
+            flush=True,
+        )
+
+    def _clear_projection_targets(
+        self, acquired_images: list[tuple[_EyeSwapchain, int]]
+    ) -> None:
+        for eye_index, (eye, image_index) in enumerate(acquired_images):
+            array_layers = range(eye.array_size) if len(acquired_images) == 1 else (0,)
+            for array_layer in array_layers:
+                self.vulkan.clear_color_image(
+                    eye.resources[image_index].image,
+                    self.config.clear_color,
+                    base_array_layer=array_layer,
+                )
+
+    def _render_screen_quad_reprojection(
+        self, frame: VulkanStereoOutputFrame
+    ) -> None:
+        if not self._can_use_screen_quad_reprojection(frame):
+            raise RuntimeError("screen Quad prerequisites are unavailable")
+        if self._screen_quad_reprojection_frame_id == int(frame.frame_id):
+            self._screen_quad_reprojection_active = bool(self._last_screen_quad_layers)
+            if self._screen_quad_reprojection_active and self._on_breakdown_inc is not None:
+                self._on_breakdown_inc("openxr_screen_quad_reuse", 1)
+            return
+        width = int(frame.left_eye.width)
+        height = int(frame.left_eye.height)
+        if (int(frame.right_eye.width), int(frame.right_eye.height)) != (width, height):
+            raise RuntimeError("stereo screen Quad source extents differ")
+        upload_started = time.perf_counter()
+        self._ensure_quad_swapchains(width, height)
+        if len(self._quad_swapchains) != 2:
+            raise RuntimeError("stereo screen Quad swapchains are unavailable")
+        prepare_source = frame.metadata["_vulkan_source_prepare_for_sampling"]
+        position, screen_width, screen_height, rotation = self._filament_screen
+        screen_layers = []
+        copy_timeline = 0
+        for eye_index, (eye, source) in enumerate(
+            zip(self._quad_swapchains, (frame.left_eye, frame.right_eye))
+        ):
+            visible_semaphore = prepare_source(frame.frame_id, eye_index)
+            with _acquired_swapchain_image(self.xr, eye) as image_index:
+                copy_timeline = max(
+                    copy_timeline,
+                    int(
+                        self.vulkan.copy_image(
+                            source,
+                            eye.resources[image_index],
+                            wait_semaphore=visible_semaphore,
+                            flip_y=False,
+                        )
+                    ),
+                )
+            screen_layers.append(
+                OpenXrCompositionBuilder(self.xr, self.reference_space).quad_layer(
+                    eye, position, screen_width, screen_height, rotation, eye_index
+                )
+            )
+        frame.metadata["_vulkan_consumer_release_timeline"] = max(
+            int(frame.metadata.get("_vulkan_consumer_release_timeline", 0)),
+            copy_timeline,
+        )
+        # Quad swapchain images now own the submitted content. Return the
+        # producer-owned source immediately instead of holding a runtime slot
+        # until a later head-pose-only Quad reuse.
+        self._release_output_frame(frame)
+        with self._output_lock:
+            previous = self._displayed_output
+            if self._rendering_output is frame:
+                self._rendering_output = None
+            self._displayed_output = None
+            if self._pending_output is frame:
+                self._pending_output = None
+        if previous is not None and previous is not frame:
+            self._release_output_frame(previous)
+        self._last_screen_quad_layers = screen_layers
+        self._screen_quad_reprojection_frame_id = int(frame.frame_id)
+        self._screen_quad_reprojection_active = True
+        self._report_screen_quad_reprojection_status(
+            "active", f"source={width}x{height}"
+        )
+        if self._on_breakdown_inc is not None:
+            self._on_breakdown_inc("openxr_screen_quad_new", 1)
+        if self._on_breakdown_add_time is not None:
+            self._on_breakdown_add_time(
+                "openxr_screen_quad_upload", time.perf_counter() - upload_started
+            )
 
     def _overlay_language(self) -> str:
         value = str(LANG or "EN").strip().upper()
@@ -6336,7 +6743,13 @@ class OpenXrVulkanPresenter(
             self._tool_quad_texture_keys["laser_cursor"] = ("legacy_cursor_ring", 64)
         specs.extend(self._cursor_overlay_specs(cursor_rgba, screen_pose, head))
 
-        return [self._upload_tool_quad(*spec) for spec in specs]
+        specs_ready = time.perf_counter()
+        layers = [self._upload_tool_quad(*spec) for spec in specs]
+        if self._on_breakdown_add_time is not None:
+            self._on_breakdown_add_time(
+                "openxr_quad_upload", time.perf_counter() - specs_ready
+            )
+        return layers
 
     def _cache_head_position(self, views: list[Any]) -> None:
         if len(views) < 2:
@@ -6487,8 +6900,7 @@ class OpenXrVulkanPresenter(
         if renderer is None:
             raise RuntimeError("Vulkan MSDF Quad renderer is unavailable")
         height, width = int(request.height), int(request.width)
-        formats = self.xr.enumerate_swapchain_formats(self.session)
-        format_value = _select_swapchain_format(self.vulkan.vk, list(formats), "srgb")
+        format_value = self._tool_quad_format()
         if not renderer.supports_destination_format(format_value):
             from .overlay_textures import build_msdf_text_osd_rgba
 
@@ -6601,8 +7013,7 @@ class OpenXrVulkanPresenter(
             return self._upload_msdf_tool_quad(key, rgba, position, size, rotation)
         height, width = int(rgba.shape[0]), int(rgba.shape[1])
         entry = self._overlay_quad_entries.get(key)
-        formats = self.xr.enumerate_swapchain_formats(self.session)
-        format_value = _select_swapchain_format(self.vulkan.vk, list(formats), "srgb")
+        format_value = self._tool_quad_format()
         if (
             entry is None
             or entry["size"] != (width, height)
@@ -6663,6 +7074,14 @@ class OpenXrVulkanPresenter(
             ),
             size=self.xr.Extent2Df(width=float(size[0]), height=float(size[1])),
         )
+
+    def _tool_quad_format(self) -> int:
+        if self._tool_quad_swapchain_format is None:
+            formats = self.xr.enumerate_swapchain_formats(self.session)
+            self._tool_quad_swapchain_format = _select_swapchain_format(
+                self.vulkan.vk, list(formats), "srgb"
+            )
+        return int(self._tool_quad_swapchain_format)
 
 
 @contextmanager
