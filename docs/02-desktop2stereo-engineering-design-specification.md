@@ -694,6 +694,26 @@ NVIDIA 后端使用 TensorRT + CUDA。优先由 CUDA 直接访问 Vulkan 导出�
 
 验收要求：主路径无 host memcpy、无 `.cpu()`/NumPy 往返、无每帧 external-memory import。TensorRT enqueue 时间和 GPU 完成时间分别记录。
 
+#### 9.3.1 双 TensorRT context 并发实现
+
+Native TensorRT provider 在 engine 创建后必须尝试创建两个 execution context。每个 slot 独占以下资源：
+
+- CUDA stream；
+- TensorRT execution context；
+- 输入 tensor 引用和输出 buffer；
+- CUDA Graph（启用时）；
+- slot 可复用 completion event。
+
+`RuntimePipelineLoop` 使用最多两个 Python depth worker 仅调用 `StereoRuntime.predict_openxr_depth()`。worker 完成后返回 `DepthProfileResult`；主 runtime 按 `frame_id` 取最早完成且顺序正确的结果，并把该 profile 传给 `process_openxr_frame()` 执行既有立体合成、补洞和输出准备。不得让 worker 调用 Vulkan submit、Filament C ABI、OpenXR swapchain 或 `xrEndFrame`。
+
+TensorRT engine 可能在首帧输入尺寸确定后才完成创建，因此 pipeline 初始化和首帧 RGB 准备后都必须检查 `pipeline_slot_count`。当开关开启、slot 数至少为 2 且 `profile_sync=false` 时，延迟创建 worker；避免启动期因 provider 尚未实例化 engine 而永久误降级为单 worker。关闭开关、slot 数不足或 profile-sync 启用时保持原单路路径。
+
+worker 队列上限为 2。任务对象必须携带 `frame_id`、capture timestamp、RGB tensor、depth future 和 render/capture metadata；超过上限时仅取消尚未运行的任务。运行循环退出时必须关闭 executor；后续扩展的暂停、重建或 source/尺寸切换不得遗留 worker 对已释放 GPU 资源的访问。
+
+诊断必须同时包含：`parallel_inference_enabled`、`parallel_inference_workers`、`parallel_inference_pending`、`parallel_inference_dropped`、`runtime_depth_execution_slot` 和 `runtime_depth_execution_slot_count`。`FPSBreakdown` 只在 `rt_parallel_workers=2`、`rt_pending_limit=2` 且 slot 日志交替为 `0/2`、`1/2` 时报告真实双路状态；只看到 GUI 开关或 slot_count=2 不足以证明调度器已运行。
+
+RTX 2060 动态内容实机对比中，该实现较单路增加约 6~10 FPS 的处理/SBS 吞吐。该数值仅为当前模型、分辨率和补洞配置下的验证记录，不构成所有 GPU 或所有质量档位的性能承诺；`rt_gpu_synth_fill`、立体合成、Vulkan/Presenter 同步仍可能限制最终帧率。
+
 ### 9.4 AMD
 
 Windows/Linux 优先 ROCm/HIP + MIOpen。可靠 external memory 可用时使用零拷贝；否则允许一次明确的 GPU 内拷贝。

@@ -357,6 +357,18 @@ submit(frame_id, input_resource, output_resource, wait_value, signal_value)
 - 实时模式禁止 GPU 到 CPU 回读后再上传 Vulkan。
 - 推理失败不得复用无标记的陈旧深度；可在限定帧数内复用上一张深度，但必须设置 `depth_stale=true`。
 
+#### 6.4.1 可选双路推理
+
+支持并发的推理后端可以在 OpenXR 实时路径中启用最多两个深度 in-flight 任务。此模式只并行“RGB -> Relative Depth”阶段；深度后处理、视差、补洞、temporal、Vulkan/OpenXR 图像所有权和 `xrEndFrame` 仍由有序输出路径处理。实现必须遵守：
+
+1. 每个任务分配单调递增的 `frame_id`，完成结果必须按 `frame_id` 有序消费；不得因后端完成顺序改变左右眼或 temporal 状态顺序。
+2. pending 深度任务上限为 2。队列满时只允许丢弃尚未提交或尚未启动的最新中间任务；不得强行取消已经提交给 GPU 的工作，也不得无限积压输入帧。
+3. 后端必须提供互不共享的 execution context、stream 和输入/输出缓冲。TensorRT/CUDA 使用两个 execution context 和两个 CUDA stream；ROCm/MIGraphX/ONNX Runtime 必须独立验证多 session 或 HIP stream 的安全性后才能声明相同能力。
+4. 后端无法创建第二个 slot、启用 profile-sync、显存不足或发生连续同步错误时，必须回退到单路，不得伪报双路性能。
+5. OpenXR swapchain acquire/wait/release、Projection/Quad Layer 构建和 `xrEndFrame` 始终由单一 Presenter 线程执行；推理 worker 不得直接访问 OpenXR 或 Presenter-owned Vulkan 资源。
+
+`Parallel Inference` 是用户可关闭的 GUI 配置，默认开启。运行时必须分别报告 `input_fps`、`processed_fps` 和 `present_fps`；重复显示或 OpenXR 刷新不得计为处理帧率。有效双路运行至少应记录 `rt_parallel=1`、`rt_parallel_workers=2`、`rt_pending_limit=2` 以及每个任务实际使用的 execution slot。
+
 ### 6.5 阶段 5：深度后处理
 
 深度后处理由 Vulkan Compute 完成，至少包括：
@@ -803,6 +815,8 @@ GUI显示启动、模型准备、运行、重配置、Session恢复和失败状�
 | Frame Context | 数量固定，无运行时持续增长 |
 | Capture queue | 始终有界，丢帧发生在 latest-frame 覆盖点 |
 | Effects | 不阻塞 Graphics Queue，平均滞后 <= 3 帧 |
+| 双路推理 | 启用时最多 2 个深度任务在途；`frame_id` 有序输出、无无界队列增长，且 OpenXR Presenter 保持单提交者 |
+| 双路诊断 | `rt_parallel_workers=2`、`rt_pending_limit=2` 与交替的 `rt_depth_slot=0/2`、`1/2` 同时出现，才可判定为真实并发 |
 | Pipeline creation | 稳态帧循环中为 0 次 |
 
 OpenGL Fallback 必须单独验收，证明会话内没有 Vulkan/D3D11/WGL 混合调用、没有 CPU 实时像素回读，并正确标记受限功能。
