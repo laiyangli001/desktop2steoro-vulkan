@@ -263,6 +263,7 @@ def build_runtime_pipeline_context(
         use_cudart=app_context.use_cudart,
         thread_latencies=app_context.thread_latencies,
         stereo_runtime=app_context.stereo_runtime,
+        runtime_config=app_context.runtime_config,
         capture_frame_to_rgb=capture_frame_to_rgb,
         prepare_rgb_for_stereo_runtime=prepare_rgb_for_stereo_runtime,
         current_openxr_render_config=current_openxr_render_config,

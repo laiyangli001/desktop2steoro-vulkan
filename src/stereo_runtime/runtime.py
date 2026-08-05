@@ -1315,6 +1315,8 @@ class StereoRuntime:
         self,
         rgb_frame: torch.Tensor,
         openxr_config: OpenXRRenderConfig | None = None,
+        *,
+        depth_profile: DepthProfileResult | None = None,
     ) -> OpenXRRuntimeResult:
         if not self._active:
             raise RuntimeError("StereoRuntime inference is paused")
@@ -1326,8 +1328,13 @@ class StereoRuntime:
         _record_cuda_event(cuda_events, "start", rgb_frame)
         total_start = time.perf_counter()
         depth_start = time.perf_counter()
-        profile = self._predict_depth_profile(rgb_frame)
-        depth_total_ms = (time.perf_counter() - depth_start) * 1000.0
+        profile = depth_profile or self._predict_depth_profile(rgb_frame)
+        depth_total_ms = (
+            float(profile.total_ms)
+            if depth_profile is not None
+            else (time.perf_counter() - depth_start) * 1000.0
+        )
+        cuda_events.update(getattr(profile, "cuda_timing_events", None) or {})
         depth = profile.depth
         output_rgb = _apply_color_adjustment(rgb_frame, self.config)
         output_mode = str(getattr(openxr_config, "output_mode", "auto") or "auto")
@@ -1420,12 +1427,10 @@ class StereoRuntime:
                     skip_sbs_output=True,
                 )
                 if vulkan_stereo is not None:
-                    # The generic Vulkan SBS pass uses the synthesis eye
-                    # convention. OpenXR's legacy projection path uses the
-                    # opposite resource order, so normalize it here before
-                    # handing the eyes to the OpenXR presenter.
-                    left_eye = vulkan_stereo.right_eye
-                    right_eye = vulkan_stereo.left_eye
+                    left_eye = vulkan_stereo.left_eye
+                    right_eye = vulkan_stereo.right_eye
+                    if bool(getattr(stereo_config, "cross_eyed", False)):
+                        left_eye, right_eye = right_eye, left_eye
                     output_format = "openxr_eye_views"
                     render_backend = dict(vulkan_stereo.debug_info)
                     render_backend["vulkan_openxr_prewarp"] = 1
@@ -1441,10 +1446,10 @@ class StereoRuntime:
                     )
                     if no_fill_fused is not None:
                         synthesis_left, synthesis_right, fused_debug = no_fill_fused
-                        # Normalize synthesis eye order to the legacy OpenXR
-                        # projection resource convention.
-                        left_eye = synthesis_right
-                        right_eye = synthesis_left
+                        left_eye = synthesis_left
+                        right_eye = synthesis_right
+                        if bool(getattr(stereo_config, "cross_eyed", False)):
+                            left_eye, right_eye = right_eye, left_eye
                         output_format = "openxr_eye_views"
                         render_backend = dict(fused_debug)
                         render_backend["sbs_backend"] = "openxr_triton_no_fill_fused_rgba_u8"
@@ -1467,8 +1472,8 @@ class StereoRuntime:
                         )
                         cuda_events.update(getattr(triton_stereo, "cuda_timing_events", None) or {})
 
-                        left_eye = triton_stereo.right_eye
-                        right_eye = triton_stereo.left_eye
+                        left_eye = triton_stereo.left_eye
+                        right_eye = triton_stereo.right_eye
                         output_format = "openxr_eye_views"
                         render_backend = dict(triton_stereo.debug_info)
                         render_backend["sbs_backend"] = "openxr_triton_eyes_only"
@@ -1791,6 +1796,13 @@ class StereoRuntime:
         depth = self.depth_provider.predict(rgb_frame)
         elapsed = (time.perf_counter() - start) * 1000.0
         return DepthProfileResult(depth=depth, preprocess_ms=0.0, model_ms=float(elapsed), postprocess_ms=0.0)
+
+    def predict_openxr_depth(self, rgb_frame: torch.Tensor) -> DepthProfileResult:
+        """Run only depth inference for the bounded parallel scheduler."""
+        if not self._active:
+            raise RuntimeError("StereoRuntime inference is paused")
+        self.load()
+        return self._predict_depth_profile(_validate_runtime_rgb_frame(rgb_frame))
 
 
     def _try_fast_plus_fused_sbs(self, rgb_frame: torch.Tensor, depth: torch.Tensor, stereo_config: Any) -> tuple[torch.Tensor | None, str]:

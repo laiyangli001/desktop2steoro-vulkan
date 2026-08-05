@@ -140,6 +140,7 @@ DEFAULTS = {
     "FP16": True,
     "torch.compile": False,
     "TensorRT": False,
+    "Parallel Inference": True,
     "Recompile TensorRT": False,
     "CoreML": False,
     "Recompile CoreML": False,

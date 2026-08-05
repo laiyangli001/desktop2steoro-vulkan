@@ -63,6 +63,7 @@ class _NativeTensorRtExecutionSlot:
     graph_output_name: str | None = None
     graph: torch.cuda.CUDAGraph | None = None
     available_event: object | None = None
+    stream: object | None = None
 
 
 class NativeTensorRtEngine:
@@ -89,10 +90,22 @@ class NativeTensorRtEngine:
         first_context = self.engine.create_execution_context()
         if first_context is None:
             raise RuntimeError("failed to create TensorRT execution context")
-        self._slots.append(_NativeTensorRtExecutionSlot(0, first_context))
+        self._slots.append(
+            _NativeTensorRtExecutionSlot(
+                0,
+                first_context,
+                stream=torch.cuda.Stream(device=self.device),
+            )
+        )
         second_context = self.engine.create_execution_context()
         if second_context is not None:
-            self._slots.append(_NativeTensorRtExecutionSlot(1, second_context))
+            self._slots.append(
+                _NativeTensorRtExecutionSlot(
+                    1,
+                    second_context,
+                    stream=torch.cuda.Stream(device=self.device),
+                )
+            )
         else:
             print(
                 "[TensorRT] second execution context unavailable; using single-slot inference",
@@ -207,7 +220,7 @@ class NativeTensorRtEngine:
         return outputs
 
     def _execute(self, slot: _NativeTensorRtExecutionSlot) -> None:
-        stream = torch.cuda.current_stream(self.device)
+        stream = slot.stream or torch.cuda.current_stream(self.device)
         ok = slot.context.execute_async_v3(stream_handle=stream.cuda_stream)
         if ok is False:
             raise RuntimeError("TensorRT execute_async_v3 failed")
@@ -223,11 +236,21 @@ class NativeTensorRtEngine:
         synchronize: bool = True,
     ) -> tuple[torch.Tensor, int]:
         slot = self._acquire_slot()
-        outputs = self._bind_input_output(tensor, slot)
-        self._execute(slot)
+        stream = slot.stream or torch.cuda.current_stream(self.device)
+        caller_stream = torch.cuda.current_stream(self.device)
+        input_ready = torch.cuda.Event(blocking=False)
+        input_ready.record(caller_stream)
+        with torch.cuda.stream(stream):
+            stream.wait_event(input_ready)
+            outputs = self._bind_input_output(tensor, slot)
+            self._execute(slot)
+            completion = torch.cuda.Event(blocking=False)
+            completion.record(stream)
+        # Make the result visible to the caller's stream without a host-side
+        # synchronize. Post-processing can proceed after this dependency.
+        caller_stream.wait_event(completion)
         if synchronize:
-            stream = torch.cuda.current_stream(self.device)
-            stream.synchronize()
+            caller_stream.synchronize()
 
         if "predicted_depth" in outputs:
             return outputs["predicted_depth"], slot.index
@@ -246,13 +269,15 @@ class NativeTensorRtEngine:
         outputs = self._bind_input_output(static_input, slot)
         output_name = "predicted_depth" if "predicted_depth" in outputs else self.output_names[0]
 
-        for _ in range(3):
-            self._execute(slot)
+        with torch.cuda.stream(slot.stream):
+            for _ in range(3):
+                self._execute(slot)
         torch.cuda.synchronize(self.device)
 
         graph = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(graph):
-            self._execute(slot)
+        with torch.cuda.stream(slot.stream):
+            with torch.cuda.graph(graph):
+                self._execute(slot)
         torch.cuda.synchronize(self.device)
 
         slot.graph_input = static_input
@@ -283,8 +308,17 @@ class NativeTensorRtEngine:
         tensor = tensor.contiguous().to(device=self.device, dtype=self.dtype)
         if tuple(tensor.shape) != tuple(slot.graph_input.shape):
             raise RuntimeError(f"CUDA graph input shape mismatch: expected {tuple(slot.graph_input.shape)}, got {tuple(tensor.shape)}")
-        slot.graph_input.copy_(tensor)
-        slot.graph.replay()
+        stream = slot.stream or torch.cuda.current_stream(self.device)
+        caller_stream = torch.cuda.current_stream(self.device)
+        input_ready = torch.cuda.Event(blocking=False)
+        input_ready.record(caller_stream)
+        with torch.cuda.stream(stream):
+            stream.wait_event(input_ready)
+            slot.graph_input.copy_(tensor)
+            slot.graph.replay()
+            completion = torch.cuda.Event(blocking=False)
+            completion.record(stream)
+        caller_stream.wait_event(completion)
         return slot.output_buffers[slot.graph_output_name], slot.index
 
     def mark_slot_available_after_current_stream(self, slot_index: int | None) -> None:
@@ -308,6 +342,7 @@ class NativeTensorRtEngine:
             slot.input_tensor = None
             slot.output_buffers.clear()
             slot.available_event = None
+            slot.stream = None
             slot.context = None
         self._slots.clear()
         for attr in ("context", "engine", "runtime"):

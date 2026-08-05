@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import queue
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, is_dataclass, replace
 from typing import Callable
 
@@ -10,6 +11,71 @@ from capture.types import CapturedFrame
 
 from .render_size import RenderSizeConfig, resolve_render_size, runtime_output_size_text
 from .settings_snapshot import RuntimeSettingsPipelineRebuildRequired, RuntimeSettingsRestartRequired, RuntimeSettingsSnapshot
+
+
+@dataclass
+class _ParallelDepthJob:
+    frame_id: int
+    future: object
+    frame_rgb: object
+    runtime_rgb: object
+    frame_raw: object
+    size: object
+    capture_start_time: float
+    captured_frame: object
+    render_size: object
+    process_latency: float
+    source_target_changed: bool = False
+    render_size_changed: bool = False
+
+
+class _ParallelDepthScheduler:
+    """Bounded depth-only workers; presentation remains on the caller thread."""
+
+    def __init__(self, runtime, max_workers: int = 2):
+        self.runtime = runtime
+        self.executor = ThreadPoolExecutor(max_workers=max(1, min(int(max_workers), 2)),
+                                            thread_name_prefix="d2s-depth")
+        self.next_frame_id = 0
+        self.pending: list[_ParallelDepthJob] = []
+        self.dropped = 0
+
+    def submit(self, runtime_rgb, **metadata) -> _ParallelDepthJob:
+        frame_id = self.next_frame_id
+        self.next_frame_id += 1
+        future = self.executor.submit(self.runtime.predict_openxr_depth, runtime_rgb)
+        job = _ParallelDepthJob(frame_id=frame_id, future=future, runtime_rgb=runtime_rgb, **metadata)
+        self.pending.append(job)
+        return job
+
+    def pop_ready(self, *, block: bool = False) -> _ParallelDepthJob | None:
+        if not self.pending:
+            return None
+        job = self.pending[0]
+        if not job.future.done() and not block:
+            return None
+        try:
+            job.depth_profile = job.future.result()
+        except Exception:
+            self.pending.pop(0)
+            raise
+        self.pending.pop(0)
+        return job
+
+    def trim(self, limit: int) -> None:
+        limit = max(1, int(limit))
+        while len(self.pending) > limit:
+            # Drop only work that has not started; cancelling a running CUDA
+            # launch is unsafe and the bounded queue prevents accumulation.
+            index = next((i for i, item in enumerate(self.pending) if not item.future.running()), None)
+            if index is None:
+                break
+            job = self.pending.pop(index)
+            if job.future.cancel():
+                self.dropped += 1
+
+    def close(self) -> None:
+        self.executor.shutdown(wait=False, cancel_futures=True)
 
 _OPENXR_FULL_SYNTHESIS_PRESETS = {"cinema", "game_low_latency", "still_image_hq", "debug_export"}
 
@@ -65,6 +131,7 @@ class RuntimePipelineContext:
     output_transport: str | None = None
     settings_update_q: object | None = None
     render_size_config: RenderSizeConfig | None = None
+    runtime_config: object | None = None
 
 
 def _drain_latest_nowait(q: object | None):
@@ -380,7 +447,12 @@ def _cuda_event_ready(event) -> bool:
 
 
 def _runtime_supports_dual_cuda_pending(ctx: RuntimePipelineContext) -> bool:
-    if ctx.run_mode != "OpenXR" or not _openxr_full_synthesis_enabled(ctx):
+    runtime_config = getattr(ctx, "runtime_config", None)
+    if runtime_config is not None and not bool(
+        getattr(runtime_config, "parallel_inference", False)
+    ):
+        return False
+    if ctx.run_mode != "OpenXR":
         return False
     runtime = ctx.stereo_runtime
     provider = getattr(runtime, "depth_provider", None)
@@ -392,8 +464,8 @@ def _runtime_supports_dual_cuda_pending(ctx: RuntimePipelineContext) -> bool:
         getattr(runtime, "_resolved_stereo_compute_backend", "") or ""
     ).strip().lower()
     if resolved_backend not in {"triton", "cuda", "cuda_triton"}:
-        # The Presenter-delayed Vulkan request has a separate consumer lease.
-        # Keep that path single-pending until the lease reaches the depth slot.
+        # Vulkan deferred stereo has a separate presenter-side consumer lease;
+        # keep its depth queue single-pending until that path is made safe.
         return False
     realtime_config = _openxr_realtime_synthesis_config(
         getattr(runtime, "stereo_config", None)
@@ -595,9 +667,14 @@ class RuntimePipelineLoop:
         self._prepared = False
         self._consecutive_runtime_errors = 0
         self._dual_pending_cooldown_until = 0.0
+        self._parallel_depth_scheduler = None
 
     def _pending_depth_limit(self) -> int:
         limit = _runtime_pending_depth_limit(self.context)
+        # The GUI experimental switch explicitly requests the dual-slot A/B
+        # path; do not let the normal latest-frame queue backoff hide it.
+        if limit > 1 and getattr(self, "_parallel_depth_scheduler", None) is not None:
+            return limit
         if limit > 1 and time.perf_counter() < self._dual_pending_cooldown_until:
             return 1
         return limit
@@ -637,12 +714,35 @@ class RuntimePipelineLoop:
         finally:
             self._consecutive_runtime_errors = 0
 
+    def _ensure_parallel_depth_scheduler(self) -> None:
+        if getattr(self, "_parallel_depth_scheduler", None) is not None:
+            return
+        ctx = self.context
+        runtime_config = getattr(ctx, "runtime_config", None)
+        provider = getattr(ctx.stereo_runtime, "depth_provider", None)
+        if (
+            ctx.run_mode != "OpenXR"
+            or not bool(getattr(runtime_config, "parallel_inference", False))
+            or int(getattr(provider, "pipeline_slot_count", 1)) < 2
+            or bool(getattr(getattr(ctx.stereo_runtime, "config", None), "profile_sync", False))
+        ):
+            return
+        try:
+            self._parallel_depth_scheduler = _ParallelDepthScheduler(ctx.stereo_runtime, 2)
+            ctx.source_stat_inc("runtime_parallel_workers", active_workers=2)
+            print("[RuntimePipeline] Parallel depth scheduler enabled: workers=2 slots=2", flush=True)
+        except Exception as exc:
+            self._parallel_depth_scheduler = None
+            ctx.source_stat_inc("runtime_parallel_backend_fallback", last_error=str(exc))
+            print(f"[RuntimePipeline] Parallel depth scheduler unavailable: {type(exc).__name__}: {exc}", flush=True)
+
     def prepare(self) -> None:
         if self._prepared:
             return
         load = getattr(self.context.stereo_runtime, "load", None)
         if callable(load):
             load()
+        self._ensure_parallel_depth_scheduler()
         self._prepared = True
 
     def _publish_runtime_item(self, item) -> None:
@@ -852,6 +952,10 @@ class RuntimePipelineLoop:
                 prepare_start_time = time.perf_counter()
                 runtime_rgb = ctx.prepare_rgb_for_stereo_runtime(frame_rgb, device=ctx.device)
                 ctx.breakdown_add_time("rt_prepare", time.perf_counter() - prepare_start_time)
+                # Native TensorRT may create its engine lazily after the first
+                # input shape is known. Re-check here so slot_count=2 can
+                # activate the worker pool after that lazy load.
+                self._ensure_parallel_depth_scheduler()
                 if ctx.run_mode == "OpenXR" and _runtime_motion_gate_enabled(ctx):
                     motion_sample = _motion_sample(runtime_rgb)
                     motion = _motion_score(self._last_runtime_motion_sample, motion_sample)
@@ -879,6 +983,47 @@ class RuntimePipelineLoop:
                     ctx.source_stat_inc("runtime_diag_depth")
                     ctx.breakdown_inc("runtime_diag_depth")
                     continue
+
+                # Submit only the depth stage to the bounded worker pool. The
+                # caller then consumes the oldest completed job in order and
+                # performs synthesis/OpenXR submission serially below.
+                depth_profile = None
+                if ctx.run_mode == "OpenXR" and self._parallel_depth_scheduler is not None:
+                    scheduler = self._parallel_depth_scheduler
+                    scheduler.submit(
+                        runtime_rgb,
+                        frame_rgb=frame_rgb,
+                        frame_raw=frame_raw,
+                        size=size,
+                        capture_start_time=capture_start_time,
+                        captured_frame=captured_frame,
+                        render_size=render_size,
+                        process_latency=process_latency,
+                        source_target_changed=source_target_changed,
+                        render_size_changed=render_size_changed,
+                    )
+                    scheduler.trim(self._pending_depth_limit())
+                    job = scheduler.pop_ready(block=False)
+                    if job is None:
+                        ctx.source_stat_inc("runtime_parallel_pending", pending_depth=len(scheduler.pending))
+                        ctx.breakdown_inc("runtime_parallel_pending")
+                        continue
+                    frame_rgb = job.frame_rgb
+                    frame_raw = job.frame_raw
+                    size = job.size
+                    capture_start_time = job.capture_start_time
+                    captured_frame = job.captured_frame
+                    render_size = job.render_size
+                    process_latency = job.process_latency
+                    source_target_changed = job.source_target_changed
+                    render_size_changed = job.render_size_changed
+                    runtime_rgb = job.runtime_rgb
+                    depth_profile = job.depth_profile
+                    ctx.source_stat_inc("runtime_parallel_processed")
+                    ctx.source_stat_inc("runtime_parallel_reorder_wait", frame_reorder_wait=0)
+                    parallel_frame_id = job.frame_id
+                else:
+                    parallel_frame_id = None
                 ctx.log_stereo_runtime_mode_once()
                 ctx.apply_stereo_hot_reload_if_needed()
                 _apply_latest_settings_snapshot(ctx)
@@ -905,6 +1050,7 @@ class RuntimePipelineLoop:
                         runtime_result = ctx.stereo_runtime.process_openxr_frame(
                             runtime_rgb,
                             openxr_config,
+                            depth_profile=depth_profile,
                         )
                     finally:
                         if original_stereo_config is not None:
@@ -926,6 +1072,23 @@ class RuntimePipelineLoop:
                 )
                 debug_info = getattr(runtime_result, "debug_info", None)
                 if isinstance(debug_info, dict):
+                    debug_info["parallel_inference_enabled"] = int(
+                        _runtime_pending_depth_limit(ctx) > 1
+                    )
+                    debug_info["parallel_inference_pending_limit"] = int(
+                        self._pending_depth_limit()
+                    )
+                    debug_info["parallel_inference_workers"] = int(
+                        2 if self._parallel_depth_scheduler is not None else 0
+                    )
+                    if self._parallel_depth_scheduler is not None:
+                        debug_info["parallel_inference_frame_id"] = parallel_frame_id
+                        debug_info["parallel_inference_pending"] = int(
+                            len(self._parallel_depth_scheduler.pending)
+                        )
+                        debug_info["parallel_inference_dropped"] = int(
+                            self._parallel_depth_scheduler.dropped
+                        )
                     if render_size_changed:
                         _append_temporal_reset_reason(debug_info, "render_size_changed")
                     if source_target_changed:
@@ -1001,3 +1164,6 @@ class RuntimePipelineLoop:
                 print(f"[process_runtime_loop] Error: {type(exc).__name__}: {exc}", flush=True)
                 time.sleep(0.05)
                 continue
+        if self._parallel_depth_scheduler is not None:
+            self._parallel_depth_scheduler.close()
+            self._parallel_depth_scheduler = None

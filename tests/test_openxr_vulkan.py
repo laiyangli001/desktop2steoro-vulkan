@@ -830,19 +830,6 @@ def test_projection_composer_is_opt_in_and_keeps_existing_fallback(monkeypatch) 
     assert presenter._vulkan_projection_composer_active is False
 
 
-def test_projection_composition_contract_log_is_state_change_only(capsys) -> None:
-    presenter = OpenXrVulkanPresenter()
-    presenter.swapchains = [
-        _EyeSwapchain("stereo", [], 10, 10, array_size=2),
-    ]
-    presenter._multiview_active = True
-
-    presenter._report_projection_composition_contract(2)
-    presenter._report_projection_composition_contract(2)
-
-    assert capsys.readouterr().out.count("composition contract:") == 1
-
-
 def test_projection_composer_uses_direct_vulkan_rasterization_in_opaque_runtime() -> None:
     source = (Path(__file__).resolve().parents[1] /
               "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")

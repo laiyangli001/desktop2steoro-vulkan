@@ -108,8 +108,8 @@ def test_openxr_triton_prewarp_reuses_full_synthesis_with_configured_hole_fill(m
     assert synthesis_config.hole_fill_radius == 3
     assert synthesis_config.hole_fill_strength == 1.0
     assert temporal_state is runtime.temporal_state
-    assert torch.all(result.left_eye == 0.75)
-    assert torch.all(result.right_eye == 0.25)
+    assert torch.all(result.left_eye == 0.25)
+    assert torch.all(result.right_eye == 0.75)
     assert result.debug_info["stereo_compute_backend"] == "cuda_triton"
     assert result.debug_info["hole_fill_backend"] == "triton_directional_content_aware_radius3"
     assert result.debug_info["openxr_prewarp_backend"] == "triton_full_synthesis_eyes"
@@ -165,8 +165,8 @@ def test_openxr_triton_no_fill_uses_fused_rgba_u8_output(monkeypatch):
     )
 
     assert len(calls) == 1
-    assert result.left_eye is synthesis_right
-    assert result.right_eye is synthesis_left
+    assert result.left_eye is synthesis_left
+    assert result.right_eye is synthesis_right
     assert result.left_eye.dtype == torch.uint8
     assert result.debug_info["sbs_backend"] == "openxr_triton_no_fill_fused_rgba_u8"
     assert result.debug_info["openxr_prewarp_backend"] == "triton_no_fill_fused_rgba_u8"
@@ -278,8 +278,8 @@ def test_vulkan_fallback_openxr_output_normalizes_generic_eye_order():
         / "runtime.py"
     ).read_text(encoding="utf-8")
 
-    assert "left_eye = vulkan_stereo.right_eye" in source
-    assert "right_eye = vulkan_stereo.left_eye" in source
+    assert "left_eye = vulkan_stereo.left_eye" in source
+    assert "right_eye = vulkan_stereo.right_eye" in source
 
 
 def test_openxr_depth_temporal_is_disabled_with_stereo_temporal(monkeypatch):

@@ -49,6 +49,7 @@ class StereoRuntimeConfig:
     trt_workspace_gb: int = 4
     use_cuda_graph: bool = False
     profile_sync: bool = False
+    parallel_inference: bool = False
     # Optional program-controlled OpenXR visual regression output directory.
     openxr_visual_regression_dir: str | Path | None = None
     depth_upsample: DepthUpsampleMode = "bilinear"
@@ -276,6 +277,7 @@ def runtime_config_from_d2s_settings(
         color_tint=float(settings.get("Color Tint", 0.0)),
         debug_output=_to_bool(settings.get("Debug Stereo Output", False)),
         profile_sync=_to_bool(settings.get("Depth Profile Sync", settings.get("Profile Sync", False))),
+        parallel_inference=_to_bool(settings.get("Parallel Inference", False)),
         stereo_compute_backend=_normalize_stereo_compute_backend(
             settings.get("Stereo Compute Backend", "auto")
         ),

@@ -581,7 +581,6 @@ class OpenXrVulkanPresenter(
         self._vulkan_projection_composer_active = False
         self._vulkan_projection_composer_frame_id: int | None = None
         self._last_vulkan_projection_composer_status: tuple[Any, ...] | None = None
-        self._last_projection_composition_contract: tuple[Any, ...] | None = None
         self._quad_swapchains: list[_EyeSwapchain] = []
         self._quad_swapchain_format: int | None = None
         self._quad_swapchain_extent: tuple[int, int] | None = None
@@ -1073,6 +1072,8 @@ class OpenXrVulkanPresenter(
         else:
             self._notify_headset_waiting()
         try:
+            if self._on_breakdown_inc is not None:
+                self._on_breakdown_inc("openxr_input_sample", 1)
             self._sync_controller_inputs(1.0 / 90.0)
             self._update_aim_poses(frame_state.predicted_display_time)
             self._update_grip_poses(frame_state.predicted_display_time)
@@ -1171,9 +1172,6 @@ class OpenXrVulkanPresenter(
                         layer_structures.extend(self._last_quad_layers)
                         layer_pointers.extend(
                             ctypes.pointer(item) for item in self._last_quad_layers
-                        )
-                        self._report_projection_composition_contract(
-                            len(self._last_quad_layers)
                         )
         finally:
             if not bool(getattr(self.vulkan, "device_lost", False)):
@@ -4040,31 +4038,6 @@ class OpenXrVulkanPresenter(
             flush=True,
         )
 
-    def _report_projection_composition_contract(
-        self, quad_layer_count: int
-    ) -> None:
-        layered = bool(self._multiview_active and len(self.swapchains) == 1)
-        contract = (
-            True,
-            2,
-            "array_size=2" if layered else "per_eye_array_size=1",
-            len(self.swapchains),
-            int(quad_layer_count),
-            "projection_then_quad",
-            len(self.swapchains),
-        )
-        if contract == self._last_projection_composition_contract:
-            return
-        self._last_projection_composition_contract = contract
-        print(
-            "[OpenXRViewer] composition contract: "
-            f"projection=1 views={contract[1]} "
-            f"swapchain={contract[2]} handles={contract[3]} "
-            f"quad_layers={contract[4]} order={contract[5]} "
-            f"projection_release_handles={contract[6]}",
-            flush=True,
-        )
-
     def _projection_screen_push_constants(self, view: Any) -> bytes:
         if self._filament_screen is None:
             raise RuntimeError("Vulkan Projection Composer screen is unavailable")
@@ -4166,28 +4139,29 @@ class OpenXrVulkanPresenter(
             self._vulkan_projection_screen_pass = VulkanProjectionScreenPass(
                 self.vulkan, target_format
             )
-        timelines: list[int] = []
+        projection_draws = []
         for eye_index, source in enumerate(sources):
             target_eye, image_index = (
                 acquired_images[0] if layered else acquired_images[eye_index]
             )
-            timelines.append(
-                self._vulkan_projection_screen_pass.submit(
-                    source,
-                    target_eye.resources[image_index],
-                    array_layer=eye_index if layered else 0,
-                    eye_index=eye_index,
-                    frame_slot=int(self.frame_count) % 3,
-                    push_constants=self._projection_screen_push_constants(
+            projection_draws.append(
+                {
+                    "source": source,
+                    "target": target_eye.resources[image_index],
+                    "array_layer": eye_index if layered else 0,
+                    "eye_index": eye_index,
+                    "frame_slot": int(self.frame_count) % 3,
+                    "push_constants": self._projection_screen_push_constants(
                         views[eye_index]
                     ),
-                    clear_color=self.config.clear_color,
-                    wait_semaphore=prepare_source(frame.frame_id, eye_index),
-                )
+                    "clear_color": self.config.clear_color,
+                    "wait_semaphore": prepare_source(frame.frame_id, eye_index),
+                }
             )
+        timeline = self._vulkan_projection_screen_pass.submit_stereo(projection_draws)
         self._vulkan_projection_composer_frame_id = int(frame.frame_id)
         self._vulkan_projection_composer_active = True
-        return max(timelines)
+        return int(timeline)
 
     def _try_enable_filament_multiview(self, bridge: Any) -> bool:
         if not (
@@ -5608,6 +5582,8 @@ class OpenXrVulkanPresenter(
 
     def _record_xr_presented_frame(self) -> None:
         timestamp = time.perf_counter()
+        if self._on_breakdown_inc is not None:
+            self._on_breakdown_inc("openxr_presented_frame", 1)
         self._tool_overlay_xr_frame_ts.append(timestamp)
         count = len(self._tool_overlay_xr_frame_ts)
         if count < 2:

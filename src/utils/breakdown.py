@@ -38,6 +38,11 @@ LATEST_KEYS = {
     "rt_synthesis_ms",
     "rt_total_ms",
     "openxr_async_effects_enabled",
+    "parallel_inference_enabled",
+    "parallel_inference_pending_limit",
+    "parallel_inference_workers",
+    "parallel_inference_pending",
+    "parallel_inference_dropped",
 }
 
 
@@ -166,6 +171,16 @@ class FPSBreakdown:
                 self.stats["rt_hole_fill_radius"] = int(debug.get("hole_fill_radius", 0))
             if "hole_fill_strength" in debug:
                 self.stats["rt_hole_fill_strength"] = float(debug.get("hole_fill_strength", 0.0))
+            if "parallel_inference_enabled" in debug:
+                self.stats["parallel_inference_enabled"] = int(debug.get("parallel_inference_enabled", 0))
+            if "parallel_inference_pending_limit" in debug:
+                self.stats["parallel_inference_pending_limit"] = int(debug.get("parallel_inference_pending_limit", 1))
+            if "parallel_inference_workers" in debug:
+                self.stats["parallel_inference_workers"] = int(debug.get("parallel_inference_workers", 0))
+            if "parallel_inference_pending" in debug:
+                self.stats["parallel_inference_pending"] = int(debug.get("parallel_inference_pending", 0))
+            if "parallel_inference_dropped" in debug:
+                self.stats["parallel_inference_dropped"] = int(debug.get("parallel_inference_dropped", 0))
             if "fast_plus_fused_backend" in debug:
                 self.stats["rt_fast_plus_fused_backend"] = str(debug.get("fast_plus_fused_backend"))
             if "fast_plus_fused_skip" in debug:
@@ -234,6 +249,9 @@ class FPSBreakdown:
             f"rt_pending_cuda={rate('runtime_pending_cuda'):.1f} "
             f"rt_pending_wait={rate('runtime_pending_cuda_inflight'):.1f} "
             f"rt_pending_age={avg_ms('rt_pending_age'):.2f}ms "
+            f"rt_parallel={int(stats.get('parallel_inference_enabled', 0))} "
+            f"rt_parallel_workers={int(stats.get('parallel_inference_workers', 0))} "
+            f"rt_pending_limit={int(stats.get('parallel_inference_pending_limit', 1))} "
             f"viewer_get={rate('viewer_get'):.1f} "
             f"viewer_drop={rate('viewer_drop'):.1f} "
             f"screen_new={rate('openxr_new_screen_frame'):.1f} "
@@ -244,6 +262,8 @@ class FPSBreakdown:
             f"source_lat={avg_ms('openxr_source_latency'):.2f}ms "
             f"loop={rate('loops'):.1f} "
             f"xr_loop={rate('openxr_loop'):.1f} "
+            f"xr_input_fps={rate('openxr_input_sample'):.1f} "
+            f"xr_present_fps={rate('openxr_presented_frame'):.1f} "
             f"xr_should={rate('openxr_should_render'):.1f} "
             f"xr_no_render={rate('openxr_no_render'):.1f} "
             f"xr_no_fresh={rate('openxr_no_fresh'):.1f} "

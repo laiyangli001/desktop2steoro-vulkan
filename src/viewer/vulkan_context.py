@@ -247,7 +247,7 @@ class VulkanContext:
         self._command_buffer = None
         self._fence = None
         self._frame_contexts: list[VulkanFrameContext] = []
-        self._frame_index = 0
+        self._frame_indices = {role: 0 for role in ("graphics", "compute", "transfer")}
         self._timeline_semaphore = None
         self._timeline_value = 0
         self._image_states = ImageStateTracker(
@@ -1126,7 +1126,8 @@ class VulkanContext:
             queue_role = str(role).lower()
             if queue_role not in ("graphics", "compute", "transfer"):
                 raise ValueError(f"unknown Vulkan queue role: {role}")
-            frame = self._frame_contexts[self._frame_index]
+            frame_index = self._frame_indices[queue_role]
+            frame = self._frame_contexts[frame_index]
             queue_resources = frame.queue_resources[queue_role]
             # Reuse is bounded by the frame fence instead of allocating per submit.
             try:
@@ -1174,7 +1175,9 @@ class VulkanContext:
             except Exception as exc:
                 self.mark_device_lost(exc)
                 raise
-            self._frame_index = (self._frame_index + 1) % self.frame_context_count
+            self._frame_indices[queue_role] = (
+                frame_index + 1
+            ) % self.frame_context_count
             return queue_resources.timeline_value
 
     def wait_idle(self) -> None:

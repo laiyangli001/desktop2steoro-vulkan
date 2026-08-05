@@ -138,6 +138,7 @@ class GUIConfigMixin:
         trt_val = cfg.get("TensorRT")
         if trt_val is not None:
             self.tensorrt_cb.value = trt_val
+        self.parallel_inference_cb.value = bool(cfg.get("Parallel Inference", DEFAULTS["Parallel Inference"]))
         self.recompile_trt_cb.value = cfg.get("Recompile TensorRT", DEFAULTS["Recompile TensorRT"])
         mgx_val = cfg.get("MIGraphX")
         if mgx_val is not None:
@@ -286,6 +287,7 @@ class GUIConfigMixin:
             "Stream Quality": self._parse_int(self.stream_quality_dd.value, DEFAULTS["Stream Quality"]),
             "torch.compile": self.torch_compile_cb.value,
             **accelerator_values,
+            "Parallel Inference": bool(self.parallel_inference_cb.value),
             **recompile_values,
             "Capture Tool": self.capture_tool_dd.value,
             "Fill 16:9": self.fill_16_9_cb.value,

@@ -453,6 +453,8 @@ class GUIBuilderMixin:
         self.torch_compile_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="torch.compile")
         self.tensorrt_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT,
             label="TensorRT", on_change=self._on_trt_toggle)
+        self.parallel_inference_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT,
+            label="Parallel Inference", value=True, on_change=self.on_stereo_hot_param_change)
         self.coreml_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT,
             label="CoreML", on_change=self._on_coreml_toggle)
         self.openvino_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT,
@@ -473,6 +475,9 @@ class GUIBuilderMixin:
         self._advanced_stereo_rows.extend([self.row4a, self.row4b, self.row4c])
         for row in self._advanced_stereo_rows:
             row.visible = self.advanced_stereo_cb.value
+        self.parallel_inference_row = ft.Row(
+            [ft.Container(width=S(130)), self.parallel_inference_cb], spacing=1
+        )
 
         # Row 6: Computing device
         self.computing_device_label = ft.Text("Computing Device:", size=FONT_SIZE, width=S(130))
@@ -640,7 +645,8 @@ class GUIBuilderMixin:
         depth_group = ft.Container(
             ft.Column([row0, row1, stereo_row0, hole_fill_row, advanced_stereo_row,
                        convergence_depth_row, depth_strength_row, row2b, stereo_row1, stereo_row3, stereo_row3b,
-                       stereo_row3c, stereo_row4, self.row4a, self.row4b, self.row4c], spacing=S(8)),
+                       stereo_row3c, stereo_row4, self.row4a, self.row4b, self.row4c,
+                       self.parallel_inference_row], spacing=S(8)),
             margin=ft.Margin(0, 0, 0, S(8)),
             border=ft.Border(ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE),
                              ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE)),

@@ -670,6 +670,7 @@ class GUIHandlerMixin:
         self.acceleration_label.value = t["Inference Acceleration:"]
         self.torch_compile_cb.label = t["torch.compile"]
         self.tensorrt_cb.label = t["TensorRT"]
+        self.parallel_inference_cb.label = t.get("Parallel Inference", "Parallel Inference")
         self.coreml_cb.label = t["CoreML"]
         self.openvino_cb.label = t["OpenVINO"]
         self.recompile_trt_cb.label = t["Recompile TensorRT"]

@@ -298,6 +298,63 @@ class VulkanProjectionScreenPass:
         clear_color: tuple[float, float, float, float],
         wait_semaphore: Any | None,
     ) -> int:
+        draw = self._prepare_draw(
+            source,
+            target,
+            array_layer=array_layer,
+            eye_index=eye_index,
+            frame_slot=frame_slot,
+            push_constants=push_constants,
+            clear_color=clear_color,
+        )
+        timeline = self.context.submit_on(
+            "graphics",
+            lambda command_buffer: self._record_draw(command_buffer, draw),
+            wait_semaphore=wait_semaphore,
+        )
+        self._complete_draw(draw, timeline)
+        return int(timeline)
+
+    def submit_stereo(self, draws: list[dict[str, Any]]) -> int:
+        """Submit both eye projection draws in one graphics queue submission."""
+        if len(draws) != 2:
+            raise ValueError("stereo projection requires exactly two draws")
+        prepared = [
+            self._prepare_draw(
+                item["source"],
+                item["target"],
+                array_layer=int(item["array_layer"]),
+                eye_index=int(item["eye_index"]),
+                frame_slot=int(item["frame_slot"]),
+                push_constants=item["push_constants"],
+                clear_color=item["clear_color"],
+            )
+            for item in draws
+        ]
+        wait_semaphores = [item["wait_semaphore"] for item in draws]
+        wait_semaphores = [item for item in wait_semaphores if item is not None]
+        timeline = self.context.submit_on(
+            "graphics",
+            lambda command_buffer: [
+                self._record_draw(command_buffer, draw) for draw in prepared
+            ],
+            wait_semaphore=wait_semaphores,
+        )
+        for draw in prepared:
+            self._complete_draw(draw, timeline)
+        return int(timeline)
+
+    def _prepare_draw(
+        self,
+        source: Any,
+        target: Any,
+        *,
+        array_layer: int,
+        eye_index: int,
+        frame_slot: int,
+        push_constants: bytes,
+        clear_color: tuple[float, float, float, float],
+    ) -> dict[str, Any]:
         if self.pipeline is None or len(push_constants) != self._PUSH_CONSTANT_SIZE:
             raise RuntimeError("Vulkan projection screen pass is unavailable")
         if int(target.format) != self.target_format:
@@ -334,112 +391,120 @@ class VulkanProjectionScreenPass:
             None,
         )
         _view, framebuffer = self._target_view_and_framebuffer(target, array_layer)
-        payload = self.vk.ffi.new("char[]", push_constants)
+        return {
+            "target": target,
+            "array_layer": int(array_layer),
+            "framebuffer": framebuffer,
+            "descriptor_set": descriptor_set,
+            "payload": self.vk.ffi.new("char[]", push_constants),
+            "clear_color": clear_color,
+            "descriptor_index": descriptor_index,
+        }
 
-        def record(command_buffer: Any) -> None:
-            transition = self.vk.VkImageMemoryBarrier(
-                sType=self.vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                srcAccessMask=0,
-                dstAccessMask=self.vk.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-                oldLayout=self.vk.VK_IMAGE_LAYOUT_UNDEFINED,
-                newLayout=self.vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                srcQueueFamilyIndex=self.vk.VK_QUEUE_FAMILY_IGNORED,
-                dstQueueFamilyIndex=self.vk.VK_QUEUE_FAMILY_IGNORED,
-                image=target.image,
-                subresourceRange=self.vk.VkImageSubresourceRange(
-                    aspectMask=self.vk.VK_IMAGE_ASPECT_COLOR_BIT,
-                    baseMipLevel=0,
-                    levelCount=1,
-                    baseArrayLayer=int(array_layer),
-                    layerCount=1,
-                ),
-            )
-            self.vk.vkCmdPipelineBarrier(
-                command_buffer,
-                self.vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                self.vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                0, 0, None, 0, None, 1, [transition],
-            )
-            self.vk.vkCmdBeginRenderPass(
-                command_buffer,
-                self.vk.VkRenderPassBeginInfo(
-                    sType=self.vk.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-                    renderPass=self.render_pass,
-                    framebuffer=framebuffer,
-                    renderArea=self.vk.VkRect2D(
-                        offset=self.vk.VkOffset2D(x=0, y=0),
-                        extent=self.vk.VkExtent2D(
-                            width=int(target.width), height=int(target.height)
-                        ),
-                    ),
-                    clearValueCount=1,
-                    pClearValues=[
-                        self.vk.VkClearValue(
-                            color=self.vk.VkClearColorValue(
-                                float32=[float(value) for value in clear_color]
-                            )
-                        )
-                    ],
-                ),
-                self.vk.VK_SUBPASS_CONTENTS_INLINE,
-            )
-            self.vk.vkCmdSetViewport(
-                command_buffer,
-                0,
-                1,
-                [
-                    self.vk.VkViewport(
-                        x=0.0,
-                        y=0.0,
-                        width=float(target.width),
-                        height=float(target.height),
-                        minDepth=0.0,
-                        maxDepth=1.0,
-                    )
-                ],
-            )
-            self.vk.vkCmdSetScissor(
-                command_buffer,
-                0,
-                1,
-                [
-                    self.vk.VkRect2D(
-                        offset=self.vk.VkOffset2D(x=0, y=0),
-                        extent=self.vk.VkExtent2D(
-                            width=int(target.width), height=int(target.height)
-                        ),
-                    )
-                ],
-            )
-            self.vk.vkCmdBindPipeline(
-                command_buffer,
-                self.vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
-                self.pipeline,
-            )
-            self.vk.vkCmdBindDescriptorSets(
-                command_buffer,
-                self.vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
-                self.pipeline_layout,
-                0,
-                1,
-                [descriptor_set],
-                0,
-                None,
-            )
-            self.vk.vkCmdPushConstants(
-                command_buffer,
-                self.pipeline_layout,
-                self.vk.VK_SHADER_STAGE_VERTEX_BIT,
-                0,
-                self._PUSH_CONSTANT_SIZE,
-                payload,
-            )
-            self.vk.vkCmdDraw(command_buffer, self._VERTEX_COUNT, 1, 0, 0)
-            self.vk.vkCmdEndRenderPass(command_buffer)
-
-        timeline = self.context.submit_on(
-            "graphics", record, wait_semaphore=wait_semaphore
+    def _record_draw(self, command_buffer: Any, draw: dict[str, Any]) -> None:
+        target = draw["target"]
+        transition = self.vk.VkImageMemoryBarrier(
+            sType=self.vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            srcAccessMask=0,
+            dstAccessMask=self.vk.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+            oldLayout=self.vk.VK_IMAGE_LAYOUT_UNDEFINED,
+            newLayout=self.vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            srcQueueFamilyIndex=self.vk.VK_QUEUE_FAMILY_IGNORED,
+            dstQueueFamilyIndex=self.vk.VK_QUEUE_FAMILY_IGNORED,
+            image=target.image,
+            subresourceRange=self.vk.VkImageSubresourceRange(
+                aspectMask=self.vk.VK_IMAGE_ASPECT_COLOR_BIT,
+                baseMipLevel=0,
+                levelCount=1,
+                baseArrayLayer=int(draw["array_layer"]),
+                layerCount=1,
+            ),
         )
+        self.vk.vkCmdPipelineBarrier(
+            command_buffer,
+            self.vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            self.vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            0, 0, None, 0, None, 1, [transition],
+        )
+        self.vk.vkCmdBeginRenderPass(
+            command_buffer,
+            self.vk.VkRenderPassBeginInfo(
+                sType=self.vk.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+                renderPass=self.render_pass,
+                framebuffer=draw["framebuffer"],
+                renderArea=self.vk.VkRect2D(
+                    offset=self.vk.VkOffset2D(x=0, y=0),
+                    extent=self.vk.VkExtent2D(
+                        width=int(target.width), height=int(target.height)
+                    ),
+                ),
+                clearValueCount=1,
+                pClearValues=[
+                    self.vk.VkClearValue(
+                        color=self.vk.VkClearColorValue(
+                            float32=[float(value) for value in draw["clear_color"]]
+                        )
+                    )
+                ],
+            ),
+            self.vk.VK_SUBPASS_CONTENTS_INLINE,
+        )
+        self.vk.vkCmdSetViewport(
+            command_buffer,
+            0,
+            1,
+            [
+                self.vk.VkViewport(
+                    x=0.0,
+                    y=0.0,
+                    width=float(target.width),
+                    height=float(target.height),
+                    minDepth=0.0,
+                    maxDepth=1.0,
+                )
+            ],
+        )
+        self.vk.vkCmdSetScissor(
+            command_buffer,
+            0,
+            1,
+            [
+                self.vk.VkRect2D(
+                    offset=self.vk.VkOffset2D(x=0, y=0),
+                    extent=self.vk.VkExtent2D(
+                        width=int(target.width), height=int(target.height)
+                    ),
+                )
+            ],
+        )
+        self.vk.vkCmdBindPipeline(
+            command_buffer,
+            self.vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
+            self.pipeline,
+        )
+        self.vk.vkCmdBindDescriptorSets(
+            command_buffer,
+            self.vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
+            self.pipeline_layout,
+            0,
+            1,
+            [draw["descriptor_set"]],
+            0,
+            None,
+        )
+        self.vk.vkCmdPushConstants(
+            command_buffer,
+            self.pipeline_layout,
+            self.vk.VK_SHADER_STAGE_VERTEX_BIT,
+            0,
+            self._PUSH_CONSTANT_SIZE,
+            draw["payload"],
+        )
+        self.vk.vkCmdDraw(command_buffer, self._VERTEX_COUNT, 1, 0, 0)
+        self.vk.vkCmdEndRenderPass(command_buffer)
+
+    def _complete_draw(self, draw: dict[str, Any], timeline: int) -> None:
+        target = draw["target"]
         self.context.register_image_state(
             target.image,
             ImageState(
@@ -449,8 +514,7 @@ class VulkanProjectionScreenPass:
                 queue_family_index=self.context.queue_family_index,
             ),
         )
-        self.descriptor_timelines[descriptor_index] = int(timeline)
-        return int(timeline)
+        self.descriptor_timelines[draw["descriptor_index"]] = int(timeline)
 
     def close(self) -> None:
         if self.context.device is not None:
