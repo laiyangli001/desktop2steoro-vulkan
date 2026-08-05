@@ -567,7 +567,14 @@ class DistillAnyDepthBaseNativeTensorRt:
         self.force_rebuild = bool(force_rebuild)
         self.use_cuda_graph = bool(use_cuda_graph)
         self.profile_sync = bool(profile_sync)
-        self.execution_slot_count = min(3, max(1, int(execution_slot_count)))
+        requested_slots = min(3, max(1, int(execution_slot_count)))
+        self.execution_slot_count = 1
+        if requested_slots > 1:
+            print(
+                "[TensorRT] native Myelin engine uses one execution context; "
+                "parallel inference is disabled for this provider",
+                flush=True,
+            )
         self.depth_upsample = depth_upsample
         self.depth_upsample_edge_strength = float(depth_upsample_edge_strength)
         self.dtype = _dtype_from_onnx_name(self.onnx_path, torch.float16)

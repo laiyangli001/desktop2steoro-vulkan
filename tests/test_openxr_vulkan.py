@@ -888,8 +888,7 @@ def test_screen_quad_reprojection_uploads_stereo_layers_and_releases_source(monk
     presenter._filament_screen = ((0.0, 1.0, -2.0), 2.0, 1.0, (0.0, 0.0, 0.0))
     presenter._ensure_quad_swapchains = lambda width, height: presenter._quad_swapchains.extend(
         [] if presenter._quad_swapchains else [
-            _EyeSwapchain("left-quad", [], width, height, ["left-target"]),
-            _EyeSwapchain("right-quad", [], width, height, ["right-target"]),
+            _EyeSwapchain("stereo-quad", [], width, height, ["quad-target"], array_size=2),
         ]
     )
     presenter.vulkan = SimpleNamespace(
@@ -922,13 +921,68 @@ def test_screen_quad_reprojection_uploads_stereo_layers_and_releases_source(monk
     presenter._render_screen_quad_reprojection(frame)
 
     assert calls == [
-        ("left-source", "left-target", "left-ready"),
-        ("right-source", "right-target", "right-ready"),
+        ("left-source", "quad-target", "left-ready"),
+        ("right-source", "quad-target", "right-ready"),
         ("release", 33, 19),
     ]
     assert presenter._screen_quad_reprojection_active is True
     assert [layer.eye_visibility for layer in presenter._last_screen_quad_layers] == [
         "left", "right"
+    ]
+
+
+def test_screen_quad_reprojection_eye_diagnostic_clears_each_eye(monkeypatch) -> None:
+    calls = []
+
+    class FakeXr:
+        LEFT = "left"
+        RIGHT = "right"
+        INFINITE_DURATION = 1
+        acquire_swapchain_image = staticmethod(lambda _handle: 0)
+        wait_swapchain_image = staticmethod(lambda _handle, _wait_info: None)
+        release_swapchain_image = staticmethod(lambda _handle: None)
+        SwapchainImageWaitInfo = staticmethod(lambda *, timeout: timeout)
+
+    monkeypatch.setenv("D2S_OPENXR_SCREEN_QUAD_EYE_DIAGNOSTIC", "1")
+    presenter = OpenXrVulkanPresenter()
+    presenter.xr = FakeXr
+    presenter.session = object()
+    presenter.reference_space = object()
+    presenter._filament_screen = ((0.0, 1.0, -2.0), 2.0, 1.0, (0.0, 0.0, 0.0))
+    presenter._ensure_quad_swapchains = lambda width, height: presenter._quad_swapchains.extend(
+        [] if presenter._quad_swapchains else [
+            _EyeSwapchain(
+                "stereo-quad", [], width, height, [SimpleNamespace(image="quad-target")], array_size=2
+            ),
+        ]
+    )
+    presenter.vulkan = SimpleNamespace(
+        clear_color_image=lambda image, color, **kwargs: calls.append((image, color, kwargs)) or 19,
+        copy_image=lambda *_args, **_kwargs: pytest.fail("diagnostic must not copy source frames"),
+    )
+    monkeypatch.setattr(
+        OpenXrCompositionBuilder,
+        "quad_layer",
+        lambda _self, _swapchain, _position, _width, _height, _rotation, eye: SimpleNamespace(
+            eye_visibility=("left", "right")[eye]
+        ),
+    )
+    frame = VulkanStereoOutputFrame(
+        frame_id=33,
+        timestamp=0.0,
+        left_eye=SimpleNamespace(image="left-source", width=4, height=2),
+        right_eye=SimpleNamespace(image="right-source", width=4, height=2),
+        metadata={
+            "_vulkan_source_prepare_for_sampling": lambda *_args: pytest.fail("diagnostic must not prepare sources"),
+            "_vulkan_source_consumer_release": lambda *_args, **_kwargs: None,
+        },
+    )
+
+    presenter._render_screen_quad_reprojection(frame)
+
+    assert calls == [
+        ("quad-target", (1.0, 0.0, 0.0, 1.0), {"base_array_layer": 0}),
+        ("quad-target", (0.0, 1.0, 0.0, 1.0), {"base_array_layer": 1}),
     ]
 
 
@@ -3776,6 +3830,31 @@ def test_projection_layer_builder_maps_multiview_to_array_layers() -> None:
         "stereo-chain",
         "stereo-chain",
     ]
+
+
+def test_quad_layer_builder_maps_each_eye_to_its_array_layer() -> None:
+    class FakeXr:
+        EyeVisibility = SimpleNamespace(LEFT="left", RIGHT="right")
+        CompositionLayerQuad = staticmethod(lambda **kwargs: kwargs)
+        SwapchainSubImage = staticmethod(lambda **kwargs: kwargs)
+        Rect2Di = staticmethod(lambda **kwargs: kwargs)
+        Offset2Di = staticmethod(lambda **kwargs: kwargs)
+        Extent2Di = staticmethod(lambda **kwargs: kwargs)
+        Posef = staticmethod(lambda **kwargs: kwargs)
+        Quaternionf = staticmethod(lambda **kwargs: kwargs)
+        Vector3f = staticmethod(lambda **kwargs: kwargs)
+        Extent2Df = staticmethod(lambda **kwargs: kwargs)
+
+    swapchain = _EyeSwapchain("stereo-quad", [], 10, 20, array_size=2)
+    builder = OpenXrCompositionBuilder(FakeXr, "local-space")
+
+    layers = [
+        builder.quad_layer(swapchain, (0.0, 0.0, -1.0), 1.0, 1.0, (0.0, 0.0, 0.0), eye)
+        for eye in (0, 1)
+    ]
+
+    assert [layer["eye_visibility"] for layer in layers] == ["left", "right"]
+    assert [layer["sub_image"]["image_array_index"] for layer in layers] == [0, 1]
 
 
 def test_copy_image_reads_selected_source_layer_into_destination_layer_zero() -> None:

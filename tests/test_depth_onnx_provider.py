@@ -424,6 +424,18 @@ def test_native_tensorrt_defers_load_until_frame_artifact_size_is_known(tmp_path
     assert provider._engine is None
 
 
+def test_native_tensorrt_uses_one_execution_slot_for_myelin(tmp_path):
+    from stereo_runtime.providers.nvidia.tensorrt_native import NativeTensorRtDepthProvider
+
+    provider = NativeTensorRtDepthProvider(
+        device="cuda",
+        cache_dir=tmp_path,
+        execution_slot_count=3,
+    )
+
+    assert provider.execution_slot_count == 1
+
+
 def test_native_tensorrt_load_prints_compact_engine_path(monkeypatch, tmp_path, capsys):
     import stereo_runtime.providers.nvidia.tensorrt_native as native_module
 

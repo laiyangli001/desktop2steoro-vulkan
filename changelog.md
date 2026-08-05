@@ -3,6 +3,8 @@
 本文件只记录用户可感知的功能、行为变化、重要修复和架构里程碑，不记录逐次调试过程。新记录按日期倒序追加，并将同一目标的连续修改归纳为一条有效结果。
 
 ## 2026-08-05
+- Added a minimal OpenXR screen-Quad eye diagnostic: one `array_size=2` swapchain supplies red-left layer 0 and green-right layer 1, each with its matching eye visibility, so VDXR per-eye array-layer support can be verified before changing the runtime DLL.
+- Fixed native TensorRT Myelin `enqueueV3` failures in OpenXR screen-quad reprojection: native TensorRT now uses one execution context, so the runtime stays on the safe single-depth-worker path instead of concurrently loading the same Myelin graph.
 - OpenXR 并行推理实验完成实机验证：native TensorRT 现在使用两个独立 execution context、CUDA stream、输入/输出缓冲和完成 event；pipeline 在 TensorRT 按首帧尺寸延迟完成 engine 加载后自动创建两个深度 worker，按 `frame_id` 有界重排并保持补洞、temporal、OpenXR/Vulkan 提交单线程。GUI“并行推理”移至高级立体参数之后，默认开启且可手动关闭。RTX 2060 动态内容实测开启后 SBS/处理帧率较单路提升约 6~10 FPS；日志可通过 `rt_parallel_workers=2`、`rt_pending_limit=2` 和交替的 `rt_depth_slot=0/2`、`1/2` 验证实际双路执行。
 - Vulkan Projection Composer 完成纯 Vulkan 图形管线迁移：平面和曲面虚拟屏幕现在以世界空间三角带直接光栅化到每眼 Projection swapchain，复用现有 zero-copy 左右眼纹理与同步契约；移除 Homography 中间图、矩形复制和 Filament 回退，OPAQUE 运行时启用实验开关后也保持纯 Vulkan 路径。
 - 修复头部移动或屏幕穿过视锥边界时出现的透明矩形、闪烁、残影、丢屏和绕头旋转：每个 XR tick 清理已获取的双眼目标，由 Vulkan 固定功能完成近平面与 FOV 裁剪，屏幕离开视野后不再复用错误矩形或旧帧。

@@ -516,7 +516,7 @@ class OpenXrCompositionBuilder:
                     offset=self.xr.Offset2Di(x=0, y=0),
                     extent=self.xr.Extent2Di(width=swapchain.width, height=swapchain.height),
                 ),
-                image_array_index=0,
+                image_array_index=eye_index if swapchain.array_size >= 2 else 0,
             ),
             pose=self.xr.Posef(
                 orientation=self.xr.Quaternionf(x=qx, y=qy, z=qz, w=qw),
@@ -5696,7 +5696,7 @@ class OpenXrVulkanPresenter(
             raise RuntimeError("OpenXrVulkanPresenter is not initialized")
 
     def _ensure_quad_swapchains(self, width: int, height: int) -> None:
-        if self._quad_swapchain_extent == (width, height) and len(self._quad_swapchains) == 2:
+        if self._quad_swapchain_extent == (width, height) and len(self._quad_swapchains) == 1:
             return
         if self.xr is None or self.session is None or self.vulkan is None:
             return
@@ -5706,28 +5706,28 @@ class OpenXrVulkanPresenter(
         # The runtime output contract is display-referred sRGB. Match the
         # validated legacy Quad Layer path and prefer an sRGB target.
         quad_format = _select_swapchain_format(vk, formats, "srgb")
-        for _ in range(2):
-            handle = self.xr.create_swapchain(
-                self.session,
-                self.xr.SwapchainCreateInfo(
-                    usage_flags=(self.xr.SwapchainUsageFlags.COLOR_ATTACHMENT_BIT
-                                 | self.xr.SwapchainUsageFlags.TRANSFER_DST_BIT),
-                    format=quad_format, sample_count=1, width=width, height=height,
-                    face_count=1, array_size=1, mip_count=1,
-                ),
-            )
-            images = list(self.xr.enumerate_swapchain_images(
-                handle, self.xr.SwapchainImageVulkan2KHR
-            ))
-            self._quad_swapchains.append(_EyeSwapchain(
-                handle, images, width, height,
-                self._register_swapchain_images(images, width, height, quad_format),
-            ))
+        handle = self.xr.create_swapchain(
+            self.session,
+            self.xr.SwapchainCreateInfo(
+                usage_flags=(self.xr.SwapchainUsageFlags.COLOR_ATTACHMENT_BIT
+                             | self.xr.SwapchainUsageFlags.TRANSFER_DST_BIT),
+                format=quad_format, sample_count=1, width=width, height=height,
+                face_count=1, array_size=2, mip_count=1,
+            ),
+        )
+        images = list(self.xr.enumerate_swapchain_images(
+            handle, self.xr.SwapchainImageVulkan2KHR
+        ))
+        self._quad_swapchains.append(_EyeSwapchain(
+            handle, images, width, height,
+            self._register_swapchain_images(images, width, height, quad_format),
+            array_size=2,
+        ))
         self._quad_swapchain_format = int(quad_format)
         self._quad_swapchain_extent = (width, height)
         print(
             f"[OpenXRViewer] Quad layer swapchains created: "
-            f"format={_vulkan_format_name(vk, quad_format)} extent={width}x{height}",
+            f"format={_vulkan_format_name(vk, quad_format)} extent={width}x{height} array_size=2",
             flush=True,
         )
 
@@ -5935,26 +5935,27 @@ class OpenXrVulkanPresenter(
         width = int(output_frame.left_eye.width)
         height = int(output_frame.left_eye.height)
         self._ensure_quad_swapchains(width, height)
-        if len(self._quad_swapchains) < 2:
+        if len(self._quad_swapchains) != 1:
             return layers
         position, screen_width, screen_height, rotation = self._filament_screen
+        quad_swapchain = self._quad_swapchains[0]
         screen_layers = []
-        for eye_index, eye in enumerate(self._quad_swapchains):
-            source = output_frame.left_eye if eye_index == 0 else output_frame.right_eye
-            with _acquired_swapchain_image(self.xr, eye) as image_index:
+        with _acquired_swapchain_image(self.xr, quad_swapchain) as image_index:
+            for eye_index, source in enumerate((output_frame.left_eye, output_frame.right_eye)):
                 # The output contract is top-left and the Vulkan swapchain
                 # image uses the same row order. Do not apply a second Y
                 # transform here; screen pose is handled independently below.
                 self.vulkan.copy_image(
                     source,
-                    eye.resources[image_index],
+                    quad_swapchain.resources[image_index],
+                    destination_array_layer=eye_index,
                     flip_y=False,
                 )
-            screen_layers.append(OpenXrCompositionBuilder(
-                self.xr, self.reference_space
-            ).quad_layer(
-                eye, position, screen_width, screen_height, rotation, eye_index
-            ))
+                screen_layers.append(OpenXrCompositionBuilder(
+                    self.xr, self.reference_space
+                ).quad_layer(
+                    quad_swapchain, position, screen_width, screen_height, rotation, eye_index
+                ))
         self._last_screen_quad_layers = screen_layers
         if screen_layers and self._on_breakdown_inc is not None:
             self._on_breakdown_inc("openxr_new_screen_frame", 1)
@@ -6021,33 +6022,45 @@ class OpenXrVulkanPresenter(
             raise RuntimeError("stereo screen Quad source extents differ")
         upload_started = time.perf_counter()
         self._ensure_quad_swapchains(width, height)
-        if len(self._quad_swapchains) != 2:
+        if len(self._quad_swapchains) != 1:
             raise RuntimeError("stereo screen Quad swapchains are unavailable")
         prepare_source = frame.metadata["_vulkan_source_prepare_for_sampling"]
         position, screen_width, screen_height, rotation = self._filament_screen
+        diagnostic = _env_flag("D2S_OPENXR_SCREEN_QUAD_EYE_DIAGNOSTIC")
         screen_layers = []
         copy_timeline = 0
-        for eye_index, (eye, source) in enumerate(
-            zip(self._quad_swapchains, (frame.left_eye, frame.right_eye))
-        ):
-            visible_semaphore = prepare_source(frame.frame_id, eye_index)
-            with _acquired_swapchain_image(self.xr, eye) as image_index:
-                copy_timeline = max(
-                    copy_timeline,
-                    int(
-                        self.vulkan.copy_image(
-                            source,
-                            eye.resources[image_index],
-                            wait_semaphore=visible_semaphore,
-                            flip_y=False,
-                        )
-                    ),
+        quad_swapchain = self._quad_swapchains[0]
+        with _acquired_swapchain_image(self.xr, quad_swapchain) as image_index:
+            for eye_index, source in enumerate((frame.left_eye, frame.right_eye)):
+                if diagnostic:
+                    color = ((1.0, 0.0, 0.0, 1.0), (0.0, 1.0, 0.0, 1.0))[eye_index]
+                    copy_timeline = max(
+                        copy_timeline,
+                        int(self.vulkan.clear_color_image(
+                            quad_swapchain.resources[image_index].image,
+                            color,
+                            base_array_layer=eye_index,
+                        )),
+                    )
+                else:
+                    visible_semaphore = prepare_source(frame.frame_id, eye_index)
+                    copy_timeline = max(
+                        copy_timeline,
+                        int(
+                            self.vulkan.copy_image(
+                                source,
+                                quad_swapchain.resources[image_index],
+                                wait_semaphore=visible_semaphore,
+                                destination_array_layer=eye_index,
+                                flip_y=False,
+                            )
+                        ),
+                    )
+                screen_layers.append(
+                    OpenXrCompositionBuilder(self.xr, self.reference_space).quad_layer(
+                        quad_swapchain, position, screen_width, screen_height, rotation, eye_index
+                    )
                 )
-            screen_layers.append(
-                OpenXrCompositionBuilder(self.xr, self.reference_space).quad_layer(
-                    eye, position, screen_width, screen_height, rotation, eye_index
-                )
-            )
         frame.metadata["_vulkan_consumer_release_timeline"] = max(
             int(frame.metadata.get("_vulkan_consumer_release_timeline", 0)),
             copy_timeline,
@@ -6069,7 +6082,8 @@ class OpenXrVulkanPresenter(
         self._screen_quad_reprojection_frame_id = int(frame.frame_id)
         self._screen_quad_reprojection_active = True
         self._report_screen_quad_reprojection_status(
-            "active", f"source={width}x{height}"
+            "eye_diagnostic=left_red_right_green" if diagnostic else "active",
+            f"source={width}x{height}",
         )
         if self._on_breakdown_inc is not None:
             self._on_breakdown_inc("openxr_screen_quad_new", 1)
