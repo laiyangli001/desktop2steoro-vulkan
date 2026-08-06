@@ -2,6 +2,13 @@
 
 本文件只记录用户可感知的功能、行为变化、重要修复和架构里程碑，不记录逐次调试过程。新记录按日期倒序追加，并将同一目标的连续修改归纳为一条有效结果。
 
+## 2026-08-06
+- Virtual Desktop 不支持 OpenXR Quad swapchain，移除 Screen Quad Reprojection 实验启动脚本；默认输出继续使用已验证的 Projection swapchain Vulkan Composer 路径，不影响左右眼 Projection Layer 提交。
+- Vulkan Projection Composer 完成屏幕质量链：按输入/头显档位执行原生 LOD0→MIP、Lanczos2→RCAS→MIP 或 EASU→RCAS→MIP，再进行最终平面/曲面屏幕投影。质量链保持每个 OpenXR 帧实时执行，确保 MIP LOD、MIP 偏移和 RCAS 参数改动立即生效；提供关闭质量链的 LOD0 性能对比开关，但不降低输入或 swapchain 分辨率。
+- 捕捉设备高级设置新增 Vulkan 屏幕采样实时参数：最小 LOD、最大 LOD、MIP 偏移和 RCAS 锐化，并提供中英文说明和建议值；默认 `max LOD=0.35`、`MIP bias=-0.35`、`RCAS=0.50`。
+- 并行深度推理的 native TensorRT slot 改为独立 engine/runtime/context、CUDA stream、输入输出缓冲和完成 event，避免 Myelin graph 被多个 context 重复加载；创建失败或运行时压力过大自动退回安全单路。GUI 将并行推理提升为补洞模式下的常用选项，提供“单路推理 / 两路推理 / 三路推理”，默认两路，并将“显示高级立体参数”置于其右侧。
+- 修复 Flet GUI 多次最大化/最小化后黑屏：窗口尺寸变化使用可取消的延迟双重刷新，避免恢复阶段丢失重绘。
+
 ## 2026-08-05
 - Added a minimal OpenXR screen-Quad eye diagnostic: one `array_size=2` swapchain supplies red-left layer 0 and green-right layer 1, each with its matching eye visibility, so VDXR per-eye array-layer support can be verified before changing the runtime DLL.
 - Fixed native TensorRT Myelin `enqueueV3` failures in OpenXR screen-quad reprojection: native TensorRT now uses one execution context, so the runtime stays on the safe single-depth-worker path instead of concurrently loading the same Myelin graph.
