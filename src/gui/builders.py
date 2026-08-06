@@ -1,5 +1,6 @@
 """GUI Builder Mixin — UI construction, layout calculation, window sizing."""
 import os
+import asyncio
 import flet as ft
 from utils import OS_NAME, ALL_MODELS, DEFAULT_PORT
 from utils.xr_headset_presets import xr_headset_options, xr_headset_to_display
@@ -91,7 +92,28 @@ class GUIBuilderMixin:
             self.page.update()
 
     def _on_page_resize(self, e=None):
-        pass
+        """Debounce a repaint after Windows minimize/restore transitions."""
+        task = getattr(self, "_resize_repaint_task", None)
+        if task is not None and not task.done():
+            task.cancel()
+        loop = getattr(self, "_loop", None)
+        if loop is None or loop.is_closed() or getattr(self, "_closed", False):
+            return
+        self._resize_repaint_task = loop.create_task(self._repaint_after_resize())
+
+    async def _repaint_after_resize(self):
+        try:
+            await asyncio.sleep(0.12)
+            if getattr(self, "_closed", False):
+                return
+            self.page.update()
+            await asyncio.sleep(0.05)
+            if not getattr(self, "_closed", False):
+                self.page.update()
+        except asyncio.CancelledError:
+            return
+        except RuntimeError:
+            return
 
     def _spacing_width(self, controls, spacing):
         visible_count = sum(1 for ctrl in controls if self._control_has_effective_content(ctrl))
@@ -216,7 +238,7 @@ class GUIBuilderMixin:
             self.foreground_pop_label, self.midground_pop_label, self.background_pop_label,
             self.antialiasing_label, self.stereo_preset_label, self.parallax_budget_label,
             self.scene_reset_label, self.edge_dilation_label, self.mask_feather_label, self.hole_fill_mode_label,
-            self.depth_separation_label,
+            self.depth_separation_label, self.parallel_inference_label,
             self.acceleration_label, self.computing_device_label, self.capture_tool_label,
             self.target_fps_label, self.render_policy_label, self.render_fixed_label,
             self.render_min_dimension_label, self.run_mode_label,
@@ -224,7 +246,8 @@ class GUIBuilderMixin:
             self.stream_url_label, self.stream_port_label,
             self.stream_proto_label, self.audio_label, self.crf_label,
             self.color_brightness_label, self.color_saturation_label,
-            self.color_temperature_label,
+            self.color_temperature_label, self.projection_min_lod_label,
+            self.projection_mip_lod_bias_label,
         ]
         right_labels = [
             self.temporal_strength_label,
@@ -233,7 +256,8 @@ class GUIBuilderMixin:
             self.display_mode_label, self.xr_headset_label, self.environment_label,
             self.theme_label, self.stream_quality_label, self.stream_key_label,
             self.audio_delay_label, self.color_contrast_label,
-            self.color_gamma_label, self.color_tint_label,
+            self.color_gamma_label, self.color_tint_label, self.projection_max_lod_label,
+            self.projection_rcas_sharpness_label,
         ]
 
         def _est(t):
@@ -281,11 +305,11 @@ class GUIBuilderMixin:
             on_select=self.on_model_size_change,
             width=S(110))
         self.fp16_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="FP16")
-        self.parallel_inference_label = ft.Text("Parallel Inference:", size=FONT_SIZE)
+        self.parallel_inference_label = ft.Text("Parallel Inference:", size=FONT_SIZE, width=S(130))
         self.parallel_inference_dd = CompactDropdown(
-            options=["Off", "2", "3"],
-            value="2",
-            width=S(70),
+            options=["单路推理", "两路推理", "三路推理"],
+            value="两路推理",
+            width=S(130),
             on_select=self.on_stereo_hot_param_change,
         )
         row0 = ft.Row([
@@ -375,7 +399,10 @@ class GUIBuilderMixin:
             label="Advanced Stereo", value=False, on_change=self.on_advanced_stereo_change)
         hole_fill_row = ft.Row([self.hole_fill_mode_label, self.hole_fill_mode_dd,
             ft.Container(width=S(40)), self.depth_separation_label, self.depth_separation_dd], spacing=1)
-        advanced_stereo_row = ft.Row([ft.Container(width=S(130)), self.advanced_stereo_cb], spacing=1)
+        common_runtime_row = ft.Row([
+            self.parallel_inference_label, self.parallel_inference_dd,
+            ft.Container(width=S(40)), self.advanced_stereo_cb,
+        ], spacing=1)
 
         self.temporal_strength_label = ft.Text("Temporal Strength:", size=FONT_SIZE, width=S(130))
         self.temporal_strength_dd = CompactDropdown(options=[f"{i / 10:.1f}" for i in range(0, 11)],
@@ -418,7 +445,6 @@ class GUIBuilderMixin:
         stereo_row4 = ft.Row([
             self.cross_eyed_cb,
             ft.Container(width=S(20)), self.fp16_cb,
-            ft.Container(width=S(20)), self.parallel_inference_label, self.parallel_inference_dd,
         ], spacing=1)
 
         self.color_brightness_label = ft.Text("Color Brightness:", size=FONT_SIZE, width=S(130))
@@ -456,6 +482,34 @@ class GUIBuilderMixin:
         color_row3 = ft.Row([
             self.color_temperature_label, self.color_temperature_dd,
             ft.Container(width=S(40)), self.color_tint_label, self.color_tint_dd,
+        ], spacing=1)
+        projection_min_lod_tooltip = "Limits the lowest mip level sampled by the Vulkan projection. Recommended: 0.00."
+        self.projection_min_lod_label = ft.Text("Min LOD:", size=FONT_SIZE, width=S(130), tooltip=projection_min_lod_tooltip)
+        self.projection_min_lod_dd = CompactDropdown(
+            options=[f"{i / 20:.2f}" for i in range(0, 41)], value="0.00", width=S(130),
+            on_select=self.on_stereo_hot_param_change, tooltip=projection_min_lod_tooltip)
+        projection_max_lod_tooltip = "Caps the highest mip level used by the Vulkan projection. Recommended: 0.35."
+        self.projection_max_lod_label = ft.Text("Max LOD:", size=FONT_SIZE, width=S(130), tooltip=projection_max_lod_tooltip)
+        self.projection_max_lod_dd = CompactDropdown(
+            options=[f"{i / 20:.2f}" for i in range(0, 41)], value="0.35", width=S(130),
+            on_select=self.on_stereo_hot_param_change, tooltip=projection_max_lod_tooltip)
+        projection_lod_row = ft.Row([
+            self.projection_min_lod_label, self.projection_min_lod_dd,
+            ft.Container(width=S(40)), self.projection_max_lod_label, self.projection_max_lod_dd,
+        ], spacing=1)
+        projection_mip_lod_bias_tooltip = "Biases projection texture sampling toward sharper mip levels. Recommended: -0.35."
+        self.projection_mip_lod_bias_label = ft.Text("MIP Bias:", size=FONT_SIZE, width=S(130), tooltip=projection_mip_lod_bias_tooltip)
+        self.projection_mip_lod_bias_dd = CompactDropdown(
+            options=[f"{-i / 20:.2f}" for i in range(30, -1, -1)], value="-0.35", width=S(130),
+            on_select=self.on_stereo_hot_param_change, tooltip=projection_mip_lod_bias_tooltip)
+        projection_rcas_tooltip = "Applies RCAS sharpening before mip generation. Recommended: 0.50."
+        self.projection_rcas_sharpness_label = ft.Text("RCAS:", size=FONT_SIZE, width=S(130), tooltip=projection_rcas_tooltip)
+        self.projection_rcas_sharpness_dd = CompactDropdown(
+            options=[f"{i / 20:.2f}" for i in range(0, 21)], value="0.50", width=S(130),
+            on_select=self.on_stereo_hot_param_change, tooltip=projection_rcas_tooltip)
+        projection_sharpen_row = ft.Row([
+            self.projection_mip_lod_bias_label, self.projection_mip_lod_bias_dd,
+            ft.Container(width=S(40)), self.projection_rcas_sharpness_label, self.projection_rcas_sharpness_dd,
         ], spacing=1)
 
         self._advanced_stereo_rows = [convergence_depth_row, depth_strength_row, row2b, stereo_row1, stereo_row3, stereo_row3b, stereo_row3c, stereo_row4]
@@ -548,7 +602,7 @@ class GUIBuilderMixin:
         self.upscaler_sharpness_dd = CompactDropdown(options=["0.00"], value="0.00", width=S(1))
         self.upscaler_sharpness_dd.visible = False
         self.row6c = ft.Row([], spacing=1, visible=False)
-        self._advanced_device_rows = [color_row1, color_row2, color_row3]
+        self._advanced_device_rows = [color_row1, color_row2, color_row3, projection_lod_row, projection_sharpen_row]
         for row in self._advanced_device_rows:
             row.visible = self.advanced_device_cb.value
         if OS_NAME == "Linux":
@@ -650,7 +704,7 @@ class GUIBuilderMixin:
 
         # Assembly
         depth_group = ft.Container(
-            ft.Column([row0, row1, stereo_row0, hole_fill_row, advanced_stereo_row,
+            ft.Column([row0, row1, stereo_row0, hole_fill_row, common_runtime_row,
                        convergence_depth_row, depth_strength_row, row2b, stereo_row1, stereo_row3,
                        stereo_row3b, stereo_row3c, stereo_row4, self.row4a, self.row4b, self.row4c], spacing=S(8)),
             margin=ft.Margin(0, 0, 0, S(8)),
@@ -658,7 +712,7 @@ class GUIBuilderMixin:
                              ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE)),
             border_radius=6, padding=ft.Padding(S(16), S(10), S(16), S(10)))
         device_group = ft.Container(
-            ft.Column([row5, row6, color_row1, color_row2, color_row3, self.row6b, self.row6d, self.row6e, self.row6f,
+            ft.Column([row5, row6, color_row1, color_row2, color_row3, projection_lod_row, projection_sharpen_row, self.row6b, self.row6d, self.row6e, self.row6f,
                        self.row7a, self.row7b, row8, self.row6c, self.row9], spacing=S(8)),
             margin=ft.Margin(0, 0, 0, S(8)),
             border=ft.Border(ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE),

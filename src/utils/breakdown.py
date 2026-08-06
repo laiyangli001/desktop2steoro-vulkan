@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import os
 import threading
 import time
 
@@ -22,6 +23,11 @@ LATEST_KEYS = {
     "rt_output_dtype",
     "rt_output_pack",
     "rt_sbs_backend",
+    "rt_openxr_prewarp_backend",
+    "rt_no_fill_fused_reason",
+    "rt_temporal_enabled",
+    "rt_refine_enabled",
+    "rt_occlusion_enabled",
     "rt_occ_backend",
     "rt_fill_backend",
     "rt_hole_fill_mode",
@@ -35,15 +41,34 @@ LATEST_KEYS = {
     "rt_parallax_budget_preset",
     "rt_depth_total_ms",
     "rt_depth_model_ms",
+    "rt_depth_slot_wait_ms",
     "rt_synthesis_ms",
     "rt_total_ms",
     "openxr_async_effects_enabled",
     "parallel_inference_enabled",
     "parallel_inference_pending_limit",
     "parallel_inference_workers",
+    "parallel_inference_effective_workers",
+    "parallel_inference_backoff",
+    "parallel_inference_adaptive_backoff",
     "parallel_inference_pending",
     "parallel_inference_dropped",
+    "openxr_vulkan_projection_quality_chain_requested",
 }
+
+
+def _breakdown_log_interval() -> float:
+    try:
+        return max(float(os.environ.get("D2S_FPS_BREAKDOWN_INTERVAL", "15.0")), 0.1)
+    except (TypeError, ValueError):
+        return 15.0
+
+
+def _breakdown_log_limit() -> int:
+    try:
+        return max(int(os.environ.get("D2S_FPS_BREAKDOWN_LIMIT", "5")), 0)
+    except (TypeError, ValueError):
+        return 5
 
 
 class FPSBreakdown:
@@ -73,8 +98,8 @@ class FPSBreakdown:
         }
         self.last_log = time.perf_counter()
         self.log_count = 0
-        self.log_limit = 5
-        self.log_delay = 15.0
+        self.log_limit = _breakdown_log_limit()
+        self.log_delay = _breakdown_log_interval()
 
     def inc(self, name: str, amount: int | float = 1) -> None:
         if not self.enabled:
@@ -136,7 +161,7 @@ class FPSBreakdown:
         timing = getattr(runtime_result, "timing", None) or {}
         debug = getattr(runtime_result, "debug_info", None) or {}
         with self.lock:
-            for key in ("depth_total_ms", "depth_model_ms", "synthesis_ms", "pack_ms", "total_ms"):
+            for key in ("depth_total_ms", "depth_model_ms", "depth_slot_wait_ms", "synthesis_ms", "pack_ms", "total_ms"):
                 value = timing.get(key)
                 if value is not None:
                     self.stats[f"rt_{key}"] = float(value)
@@ -161,6 +186,17 @@ class FPSBreakdown:
             )
             if "sbs_backend" in debug:
                 self.stats["rt_sbs_backend"] = str(debug.get("sbs_backend"))
+            if "openxr_prewarp_backend" in debug:
+                self.stats["rt_openxr_prewarp_backend"] = str(debug.get("openxr_prewarp_backend"))
+            if "openxr_no_fill_fused_reason" in debug:
+                self.stats["rt_no_fill_fused_reason"] = str(debug.get("openxr_no_fill_fused_reason"))
+            for debug_key, stat_key in (
+                ("runtime_temporal_enabled", "rt_temporal_enabled"),
+                ("runtime_refine_enabled", "rt_refine_enabled"),
+                ("runtime_occlusion_enabled", "rt_occlusion_enabled"),
+            ):
+                if debug_key in debug:
+                    self.stats[stat_key] = int(bool(debug.get(debug_key)))
             if "occlusion_mask_backend" in debug:
                 self.stats["rt_occ_backend"] = str(debug.get("occlusion_mask_backend"))
             if "hole_fill_backend" in debug:
@@ -177,10 +213,20 @@ class FPSBreakdown:
                 self.stats["parallel_inference_pending_limit"] = int(debug.get("parallel_inference_pending_limit", 1))
             if "parallel_inference_workers" in debug:
                 self.stats["parallel_inference_workers"] = int(debug.get("parallel_inference_workers", 0))
+            if "parallel_inference_effective_workers" in debug:
+                self.stats["parallel_inference_effective_workers"] = int(debug.get("parallel_inference_effective_workers", 0))
+            if "parallel_inference_backoff" in debug:
+                self.stats["parallel_inference_backoff"] = int(debug.get("parallel_inference_backoff", 0))
+            if "parallel_inference_adaptive_backoff" in debug:
+                self.stats["parallel_inference_adaptive_backoff"] = int(debug.get("parallel_inference_adaptive_backoff", 0))
             if "parallel_inference_pending" in debug:
                 self.stats["parallel_inference_pending"] = int(debug.get("parallel_inference_pending", 0))
             if "parallel_inference_dropped" in debug:
                 self.stats["parallel_inference_dropped"] = int(debug.get("parallel_inference_dropped", 0))
+            if "openxr_vulkan_projection_quality_chain_requested" in debug:
+                self.stats["openxr_vulkan_projection_quality_chain_requested"] = int(
+                    bool(debug.get("openxr_vulkan_projection_quality_chain_requested", 0))
+                )
             if "fast_plus_fused_backend" in debug:
                 self.stats["rt_fast_plus_fused_backend"] = str(debug.get("fast_plus_fused_backend"))
             if "fast_plus_fused_skip" in debug:
@@ -202,7 +248,7 @@ class FPSBreakdown:
         if not self.enabled:
             return
         now = time.perf_counter() if now is None else now
-        if self.log_count >= self.log_limit:
+        if self.log_limit > 0 and self.log_count >= self.log_limit:
             return
         elapsed = now - self.last_log
         if elapsed < self.log_delay:
@@ -239,6 +285,7 @@ class FPSBreakdown:
 
         print(
             "[FPSBreakdown] "
+            f"sample={self.log_count} window={elapsed:.2f}s "
             f"target={self.target_fps}Hz "
             f"cap={rate('capture'):.1f} raw={rate('raw_get'):.1f} "
             f"overwrite={rate('raw_overwritten'):.1f} drain_drop={rate('raw_dropped_stale'):.1f} "
@@ -247,10 +294,15 @@ class FPSBreakdown:
             f"rt_backpressure_drop={rate('runtime_drop_backpressure'):.1f} "
             f"rt_cuda_inflight_drop={rate('runtime_drop_cuda_inflight'):.1f} "
             f"rt_pending_cuda={rate('runtime_pending_cuda'):.1f} "
-            f"rt_pending_wait={rate('runtime_pending_cuda_inflight'):.1f} "
+            f"rt_pending_publish={rate('runtime_pending_cuda_wait'):.1f} "
+            f"rt_pending_inflight={rate('runtime_pending_cuda_inflight'):.1f} "
+            f"rt_pending_wait={avg_ms('rt_pending_wait'):.2f}ms "
             f"rt_pending_age={avg_ms('rt_pending_age'):.2f}ms "
             f"rt_parallel={int(stats.get('parallel_inference_enabled', 0))} "
             f"rt_parallel_workers={int(stats.get('parallel_inference_workers', 0))} "
+            f"rt_parallel_effective_workers={int(stats.get('parallel_inference_effective_workers', 0))} "
+            f"rt_parallel_backoff={int(stats.get('parallel_inference_backoff', 0))} "
+            f"rt_parallel_adaptive={int(stats.get('parallel_inference_adaptive_backoff', 0))} "
             f"rt_pending_limit={int(stats.get('parallel_inference_pending_limit', 1))} "
             f"viewer_get={rate('viewer_get'):.1f} "
             f"viewer_drop={rate('viewer_drop'):.1f} "
@@ -264,7 +316,13 @@ class FPSBreakdown:
             f"screen_quad_fallback={rate('openxr_screen_quad_fallback'):.1f} "
             f"vk_composer_requested={int(bool(stats.get('openxr_vulkan_projection_composer_requested', False)))} "
             f"vk_composer_active={int(bool(stats.get('openxr_vulkan_projection_composer_active', False)))} "
+            f"vk_quality_chain={int(bool(stats.get('openxr_vulkan_projection_quality_chain_requested', False)))} "
             f"vk_composer_frame={int(stats.get('openxr_vulkan_projection_composer_frame_id', -1))} "
+            f"vk_composer_fallback={rate('openxr_vulkan_projection_composer_fallback'):.1f} "
+            f"vk_rcas={rate('openxr_vulkan_composer_rcas'):.1f} "
+            f"vk_rcas_skip={rate('openxr_vulkan_composer_rcas_skip'):.1f} "
+            f"vk_mip={rate('openxr_vulkan_composer_mip'):.1f} "
+            f"vk_mip_skip={rate('openxr_vulkan_composer_mip_skip'):.1f} "
             f"xr_path={stats.get('openxr_projection_path', 'uninitialized')} "
             f"screen_age={avg_value('openxr_screen_frame_age_frames'):.2f}f "
             f"screen_quality_failed={rate('openxr_screen_quality_failed'):.1f} "
@@ -334,6 +392,7 @@ class FPSBreakdown:
             f"xr_wait_r={avg_ms('openxr_projection_wait_eye1'):.2f}ms "
             f"xr_shared={avg_ms('openxr_projection_shared_prepare'):.2f}ms "
             f"filament_lock_wait={avg_ms('openxr_filament_lock_wait'):.2f}ms "
+            f"vk_composer_fallback_prepare={avg_ms('openxr_vulkan_composer_fallback_prepare'):.2f}ms "
             f"mv_source_prepare={avg_ms('openxr_filament_multiview_source_prepare'):.2f}ms "
             f"mv_source_wait={avg_ms('openxr_filament_multiview_source_wait'):.2f}ms "
             f"mv_state={avg_ms('openxr_filament_multiview_state'):.2f}ms "
@@ -444,6 +503,7 @@ class FPSBreakdown:
             f"rt_backend={stats.get('rt_backend', 'unknown')} "
             f"rt_depth={stats.get('rt_depth_total_ms', 0.0):.2f}ms "
             f"rt_model={stats.get('rt_depth_model_ms', 0.0):.2f}ms "
+            f"rt_slot_wait={stats.get('rt_depth_slot_wait_ms', 0.0):.2f}ms "
             f"rt_synth={stats.get('rt_synthesis_ms', 0.0):.2f}ms "
             f"rt_total={stats.get('rt_total_ms', 0.0):.2f}ms "
             f"rt_depth_backend={stats.get('rt_depth_backend', 'unknown')} "
@@ -451,6 +511,11 @@ class FPSBreakdown:
             f"rt_out={stats.get('rt_output_dtype', 'unknown')} "
             f"rt_pack={stats.get('rt_output_pack', 'n/a')} "
             f"rt_sbs={stats.get('rt_sbs_backend', 'unknown')} "
+            f"rt_prewarp={stats.get('rt_openxr_prewarp_backend', 'n/a')} "
+            f"rt_no_fill={stats.get('rt_no_fill_fused_reason', 'n/a')} "
+            f"rt_temporal={int(stats.get('rt_temporal_enabled', 0))} "
+            f"rt_refine={int(stats.get('rt_refine_enabled', 0))} "
+            f"rt_occlusion={int(stats.get('rt_occlusion_enabled', 0))} "
             f"rt_depth_strength={stats.get('rt_depth_strength', 'n/a')} "
             f"rt_convergence={stats.get('rt_convergence', 'n/a')} "
             f"rt_max_disp={stats.get('rt_resolved_max_disparity_px', stats.get('rt_max_disparity_px', 'n/a'))} "

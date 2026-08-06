@@ -83,6 +83,10 @@ def test_hot_reload_value_snapshot_parses_expected_fields():
         "Anaglyph Method": "gray",
         "Cross Eyed": "yes",
         "Screen Edge Mask Suppression": "2",
+        "Vulkan Projection Min LOD": "0.15",
+        "Vulkan Projection Max LOD": "0.45",
+        "Vulkan Projection MIP LOD Bias": "-0.25",
+        "Vulkan Projection RCAS Sharpness": "0.65",
         "Debug Stereo Output": "yes",
     }
 
@@ -118,6 +122,10 @@ def test_hot_reload_value_snapshot_parses_expected_fields():
     assert values["anaglyph_method"] == "gray"
     assert values["cross_eyed"] is True
     assert values["screen_edge_mask_suppression"] == 2
+    assert values["vulkan_projection_min_lod"] == 0.15
+    assert values["vulkan_projection_max_lod"] == 0.45
+    assert values["vulkan_projection_mip_lod_bias"] == -0.25
+    assert values["vulkan_projection_rcas_sharpness"] == 0.65
     assert values["debug_output"] is True
     assert values["debug_flags"] == {"debug_output": True}
 

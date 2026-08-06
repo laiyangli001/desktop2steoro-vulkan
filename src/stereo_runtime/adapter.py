@@ -557,6 +557,10 @@ def openxr_render_config_from_snapshot(
         background_shift_scale=1.0 if snapshot.background_shift_scale is None else float(snapshot.background_shift_scale),
         screen_roll=float(screen_roll),
         padding_mode=padding_mode,
+        vulkan_projection_min_lod=0.0 if snapshot.vulkan_projection_min_lod is None else float(snapshot.vulkan_projection_min_lod),
+        vulkan_projection_max_lod=0.35 if snapshot.vulkan_projection_max_lod is None else float(snapshot.vulkan_projection_max_lod),
+        vulkan_projection_mip_lod_bias=-0.35 if snapshot.vulkan_projection_mip_lod_bias is None else float(snapshot.vulkan_projection_mip_lod_bias),
+        vulkan_projection_rcas_sharpness=0.5 if snapshot.vulkan_projection_rcas_sharpness is None else float(snapshot.vulkan_projection_rcas_sharpness),
     )
 
 

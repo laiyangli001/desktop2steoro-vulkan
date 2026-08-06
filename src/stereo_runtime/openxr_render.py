@@ -26,6 +26,10 @@ class OpenXRRenderConfig:
     background_shift_scale: float = 1.0
     screen_roll: float = 0.0
     padding_mode: PaddingMode = "reflection"
+    vulkan_projection_min_lod: float = 0.0
+    vulkan_projection_max_lod: float = 0.35
+    vulkan_projection_mip_lod_bias: float = -0.35
+    vulkan_projection_rcas_sharpness: float = 0.5
 
 
 @dataclass(frozen=True)

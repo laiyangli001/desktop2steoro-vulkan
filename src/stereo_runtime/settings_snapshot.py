@@ -57,6 +57,10 @@ _HOT_RELOAD_FIELDS = frozenset(
         "color_gamma",
         "color_temperature",
         "color_tint",
+        "vulkan_projection_min_lod",
+        "vulkan_projection_max_lod",
+        "vulkan_projection_mip_lod_bias",
+        "vulkan_projection_rcas_sharpness",
         "fused",
     }
 )
@@ -181,6 +185,10 @@ class RuntimeSettingsSnapshot:
     color_gamma: float | None = None
     color_temperature: float | None = None
     color_tint: float | None = None
+    vulkan_projection_min_lod: float | None = None
+    vulkan_projection_max_lod: float | None = None
+    vulkan_projection_mip_lod_bias: float | None = None
+    vulkan_projection_rcas_sharpness: float | None = None
     fused: bool | None = None
     depth_backend: str | None = None
     model_id: str | None = None

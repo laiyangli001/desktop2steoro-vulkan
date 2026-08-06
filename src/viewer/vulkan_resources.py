@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import ctypes
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -20,6 +21,7 @@ class VulkanImageResource:
     access_mask: int
     stage_mask: int
     queue_family_index: int
+    mip_levels: int = 1
     external: bool = True
     label: str = "external-image"
 
@@ -28,6 +30,8 @@ class VulkanImageResource:
             raise ValueError("Vulkan image dimensions must be positive")
         if self.image is None:
             raise ValueError("Vulkan image handle is required")
+        if int(self.mip_levels) < 1:
+            raise ValueError("Vulkan image mip level count must be positive")
         if not str(self.label).strip():
             raise ValueError("Vulkan image label must not be empty")
 
@@ -35,6 +39,149 @@ class VulkanImageResource:
         if self.view is None:
             raise ValueError(f"Vulkan image view is required for {self.label}")
         return self.view
+
+
+class VulkanTransientImage:
+    """Own a device-local image used only inside the Vulkan presentation path."""
+
+    def __init__(
+        self,
+        context: Any,
+        width: int,
+        height: int,
+        *,
+        format: int,
+        label: str,
+        mip_levels: int = 1,
+    ) -> None:
+        if int(width) < 1 or int(height) < 1:
+            raise ValueError("transient image dimensions must be positive")
+        if not str(label).strip():
+            raise ValueError("transient image label must not be empty")
+        max_mip_levels = int(math.floor(math.log2(max(int(width), int(height))))) + 1
+        if int(mip_levels) < 1 or int(mip_levels) > max_mip_levels:
+            raise ValueError("transient image mip level count is invalid")
+        self.context = context
+        self.vk = context.vk
+        self.width = int(width)
+        self.height = int(height)
+        self.format = int(format)
+        self.label = str(label)
+        self.mip_levels = int(mip_levels)
+        self.image = None
+        self.memory = None
+        self.view = None
+        self.resource: VulkanImageResource | None = None
+        self._create()
+
+    def _create(self) -> None:
+        vk = self.vk
+        sharing_families = list(
+            dict.fromkeys((self.context.queue_family_index, self.context.compute_queue_family_index))
+        )
+        sharing_mode = (
+            vk.VK_SHARING_MODE_CONCURRENT
+            if len(sharing_families) > 1
+            else vk.VK_SHARING_MODE_EXCLUSIVE
+        )
+        self.image = vk.vkCreateImage(
+            self.context.device,
+            vk.VkImageCreateInfo(
+                sType=vk.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+                imageType=vk.VK_IMAGE_TYPE_2D,
+                format=self.format,
+                extent=vk.VkExtent3D(width=self.width, height=self.height, depth=1),
+                mipLevels=self.mip_levels,
+                arrayLayers=1,
+                samples=vk.VK_SAMPLE_COUNT_1_BIT,
+                tiling=vk.VK_IMAGE_TILING_OPTIMAL,
+                usage=(
+                    vk.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
+                    | vk.VK_IMAGE_USAGE_SAMPLED_BIT
+                    | vk.VK_IMAGE_USAGE_TRANSFER_SRC_BIT
+                    | vk.VK_IMAGE_USAGE_TRANSFER_DST_BIT
+                ),
+                sharingMode=sharing_mode,
+                queueFamilyIndexCount=len(sharing_families) if len(sharing_families) > 1 else 0,
+                pQueueFamilyIndices=sharing_families if len(sharing_families) > 1 else None,
+                initialLayout=vk.VK_IMAGE_LAYOUT_UNDEFINED,
+            ),
+            None,
+        )
+        requirements = vk.vkGetImageMemoryRequirements(self.context.device, self.image)
+        properties = vk.vkGetPhysicalDeviceMemoryProperties(self.context.physical_device)
+        memory_type = next(
+            (
+                index
+                for index, item in enumerate(properties.memoryTypes)
+                if requirements.memoryTypeBits & (1 << index)
+                and item.propertyFlags & vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+            ),
+            None,
+        )
+        if memory_type is None:
+            raise RuntimeError("no device-local memory type for transient image")
+        self.memory = vk.vkAllocateMemory(
+            self.context.device,
+            vk.VkMemoryAllocateInfo(
+                sType=vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+                allocationSize=requirements.size,
+                memoryTypeIndex=memory_type,
+            ),
+            None,
+        )
+        vk.vkBindImageMemory(self.context.device, self.image, self.memory, 0)
+        self.view = vk.vkCreateImageView(
+            self.context.device,
+            vk.VkImageViewCreateInfo(
+                sType=vk.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                image=self.image,
+                viewType=vk.VK_IMAGE_VIEW_TYPE_2D,
+                format=self.format,
+                subresourceRange=vk.VkImageSubresourceRange(
+                    aspectMask=vk.VK_IMAGE_ASPECT_COLOR_BIT,
+                    baseMipLevel=0,
+                    levelCount=self.mip_levels,
+                    baseArrayLayer=0,
+                    layerCount=1,
+                ),
+            ),
+            None,
+        )
+        self.resource = VulkanImageResource(
+            context=self.context,
+            image=self.image,
+            view=self.view,
+            width=self.width,
+            height=self.height,
+            format=self.format,
+            layout=vk.VK_IMAGE_LAYOUT_UNDEFINED,
+            access_mask=0,
+            stage_mask=0,
+            queue_family_index=self.context.queue_family_index,
+            mip_levels=self.mip_levels,
+            external=False,
+            label=self.label,
+        )
+        self.context.register_external_image(self.resource)
+
+    def close(self) -> None:
+        if self.resource is not None:
+            try:
+                self.context.unregister_external_image(self.resource)
+            except Exception:
+                pass
+        if self.context.device is not None:
+            if self.view is not None:
+                self.vk.vkDestroyImageView(self.context.device, self.view, None)
+            if self.image is not None:
+                self.vk.vkDestroyImage(self.context.device, self.image, None)
+            if self.memory is not None:
+                self.vk.vkFreeMemory(self.context.device, self.memory, None)
+        self.resource = None
+        self.view = None
+        self.image = None
+        self.memory = None
 
 
 class VulkanExternalImageRegistry:

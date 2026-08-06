@@ -110,6 +110,7 @@ class DepthRuntime:
         timing = {
             "depth_preprocess_ms": float(profile.preprocess_ms),
             "depth_model_ms": float(profile.model_ms),
+            "depth_slot_wait_ms": float(profile.slot_wait_ms),
             "depth_postprocess_ms": float(profile.postprocess_ms),
             "depth_total_ms": float(total_ms),
             "total_ms": float(total_ms),
@@ -134,6 +135,7 @@ class DepthRuntime:
                     model_ms=float(getattr(result, "model_ms", 0.0)),
                     postprocess_ms=float(getattr(result, "postprocess_ms", 0.0)),
                     cuda_timing_events=dict(getattr(result, "cuda_timing_events", None) or {}),
+                    slot_wait_ms=float(getattr(result, "slot_wait_ms", 0.0)),
                 )
 
         start = time.perf_counter()
@@ -724,6 +726,9 @@ def _add_runtime_config_debug_info(debug: dict[str, Any], config: StereoConfig) 
     debug.setdefault("stereo_synthesis_mode", "packed_synthesis")
     debug.setdefault("depth_strength", float(config.depth_strength))
     debug.setdefault("max_disparity_px", None if config.max_disparity_px is None else float(config.max_disparity_px))
+    debug.setdefault("runtime_temporal_enabled", int(bool(config.temporal)))
+    debug.setdefault("runtime_refine_enabled", int(bool(config.refine)))
+    debug.setdefault("runtime_occlusion_enabled", int(bool(config.occlusion)))
     debug.setdefault("parallax_preset", str(config.parallax_preset))
     debug.setdefault("convergence", _debug_scalar_no_sync(config.convergence))
     debug.setdefault("foreground_shift_scale", float(getattr(config, "foreground_shift_scale", 1.0)))
@@ -1190,6 +1195,7 @@ class StereoRuntime:
         timing = {
             "depth_preprocess_ms": float(profile.preprocess_ms),
             "depth_model_ms": float(profile.model_ms),
+            "depth_slot_wait_ms": float(profile.slot_wait_ms),
             "depth_postprocess_ms": float(profile.postprocess_ms),
             "depth_total_ms": float(depth_total_ms),
             "synthesis_ms": float(synthesis_ms),
@@ -1551,6 +1557,7 @@ class StereoRuntime:
         timing = {
             "depth_preprocess_ms": float(profile.preprocess_ms),
             "depth_model_ms": float(profile.model_ms),
+            "depth_slot_wait_ms": float(profile.slot_wait_ms),
             "depth_postprocess_ms": float(profile.postprocess_ms),
             "depth_total_ms": float(depth_total_ms),
             "synthesis_ms": float(synthesis_ms),
@@ -1790,6 +1797,7 @@ class StereoRuntime:
                     preprocess_ms=float(getattr(result, "preprocess_ms", 0.0)),
                     model_ms=float(getattr(result, "model_ms", 0.0)),
                     postprocess_ms=float(getattr(result, "postprocess_ms", 0.0)),
+                    slot_wait_ms=float(getattr(result, "slot_wait_ms", 0.0)),
                 )
 
         start = time.perf_counter()
@@ -2233,6 +2241,10 @@ def _add_openxr_config_debug_info(debug: dict[str, Any], config: OpenXRRenderCon
     debug["openxr_foreground_shift_scale"] = float(getattr(config, "foreground_shift_scale", 1.0))
     debug["openxr_midground_shift_scale"] = float(getattr(config, "midground_shift_scale", 1.0))
     debug["openxr_background_shift_scale"] = float(getattr(config, "background_shift_scale", 1.0))
+    debug["vulkan_projection_min_lod"] = float(getattr(config, "vulkan_projection_min_lod", 0.0))
+    debug["vulkan_projection_max_lod"] = float(getattr(config, "vulkan_projection_max_lod", 0.35))
+    debug["vulkan_projection_mip_lod_bias"] = float(getattr(config, "vulkan_projection_mip_lod_bias", -0.35))
+    debug["vulkan_projection_rcas_sharpness"] = float(getattr(config, "vulkan_projection_rcas_sharpness", 0.5))
     uniforms = _openxr_shader_uniforms(
         config,
         render_size=render_size,

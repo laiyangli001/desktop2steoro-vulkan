@@ -665,6 +665,19 @@ class GUIHandlerMixin:
         self.color_gamma_label.value = t["Color Gamma:"]
         self.color_temperature_label.value = t["Color Temperature:"]
         self.color_tint_label.value = t["Color Tint:"]
+        self.projection_min_lod_label.value = t["Projection Min LOD:"]
+        self.projection_max_lod_label.value = t["Projection Max LOD:"]
+        self.projection_mip_lod_bias_label.value = t["Projection MIP Bias:"]
+        self.projection_rcas_sharpness_label.value = t["Projection RCAS:"]
+        projection_tooltips = (
+            (self.projection_min_lod_label, self.projection_min_lod_dd, t["Projection Min LOD tooltip"]),
+            (self.projection_max_lod_label, self.projection_max_lod_dd, t["Projection Max LOD tooltip"]),
+            (self.projection_mip_lod_bias_label, self.projection_mip_lod_bias_dd, t["Projection MIP Bias tooltip"]),
+            (self.projection_rcas_sharpness_label, self.projection_rcas_sharpness_dd, t["Projection RCAS tooltip"]),
+        )
+        for label, dropdown, tooltip in projection_tooltips:
+            label.tooltip = tooltip
+            dropdown.set_tooltip(tooltip)
         self.cross_eyed_cb.label = t["Cross Eyed"]
         self.advanced_stereo_cb.label = t["Advanced Stereo"]
         self.acceleration_label.value = t["Inference Acceleration:"]

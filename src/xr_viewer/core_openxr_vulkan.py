@@ -98,6 +98,11 @@ _MSDF_OSD_PADDING_Y = 14.0
 _MSDF_OSD_REFERENCE_HEIGHT = 78.0
 _TOOL_OVERLAY_UPDATE_INTERVAL = 1.0
 
+# Virtual Desktop does not accept the stereo screen Quad swapchain used by the
+# reprojection experiment. Keep the implementation isolated for diagnosis, but
+# never allow it to take ownership of the primary screen presentation path.
+_SCREEN_QUAD_REPROJECTION_SUPPORTED = False
+
 
 def _env_flag(name: str, default: bool = False) -> bool:
     return str(os.environ.get(name, "1" if default else "0")).strip().lower() in {
@@ -583,14 +588,32 @@ class OpenXrVulkanPresenter(
         self.swapchains: list[_EyeSwapchain] = []
         self._multiview_active = False
         self._vulkan_projection_composer_requested = _env_flag(
-            "D2S_VULKAN_PROJECTION_COMPOSER"
+            "D2S_VULKAN_PROJECTION_COMPOSER", default=True
+        )
+        self._vulkan_projection_quality_chain_requested = _env_flag(
+            "D2S_VULKAN_PROJECTION_QUALITY_CHAIN", default=True
         )
         self._vulkan_projection_composer_active = False
         self._vulkan_projection_composer_frame_id: int | None = None
         self._last_vulkan_projection_composer_status: tuple[Any, ...] | None = None
-        self._screen_quad_reprojection_requested = _env_flag(
+        self._last_vulkan_projection_composer_fallback: tuple[str, str] | None = None
+        screen_quad_reprojection_requested = _env_flag(
             "D2S_OPENXR_SCREEN_QUAD_REPROJECTION"
         )
+        self._screen_quad_reprojection_requested = bool(
+            screen_quad_reprojection_requested
+            and _SCREEN_QUAD_REPROJECTION_SUPPORTED
+        )
+        if (
+            screen_quad_reprojection_requested
+            and not _SCREEN_QUAD_REPROJECTION_SUPPORTED
+        ):
+            print(
+                "[OpenXRViewer] Screen Quad Reprojection disabled: "
+                "Virtual Desktop stereo Quad swapchain is unsupported; "
+                "using Projection swapchain",
+                flush=True,
+            )
         self._screen_quad_reprojection_active = False
         self._screen_quad_reprojection_frame_id: int | None = None
         self._last_screen_quad_reprojection_status: tuple[Any, ...] | None = None
@@ -656,6 +679,7 @@ class OpenXrVulkanPresenter(
         self._last_filament_screen_image_status = None
         self._last_screen_resolution_status = None
         self._last_screen_sampling_status = None
+        self._active_screen_sampling_plan: ScreenSamplingPlan | None = None
         self._controller_hdr_lighting = False
         self._last_filament_screen_light = None
         self._filament_fill_light_color = self.config.filament_fill_light_color
@@ -4168,7 +4192,9 @@ class OpenXrVulkanPresenter(
             flush=True,
         )
 
-    def _projection_screen_push_constants(self, view: Any) -> bytes:
+    def _projection_screen_push_constants(
+        self, view: Any, sampling_constants: bytes | None = None
+    ) -> bytes:
         if self._filament_screen is None:
             raise RuntimeError("Vulkan Projection Composer screen is unavailable")
         position, width, height, rotation = self._filament_screen
@@ -4185,21 +4211,77 @@ class OpenXrVulkanPresenter(
         ).astype(np.float32)
         # Vulkan's positive-height viewport maps positive NDC Y downward.
         view_projection[1, :] *= -1.0
+        if sampling_constants is None:
+            sampling_values = np.zeros(4, dtype=np.float32)
+        else:
+            sampling_values = np.frombuffer(sampling_constants, dtype="<f4")
+            if sampling_values.size != 4 or not np.all(np.isfinite(sampling_values)):
+                raise ValueError("Vulkan Projection Composer sampling constants are invalid")
         values = np.concatenate((
             view_projection.reshape(-1, order="F"),
-            np.asarray((*position, 0.0), dtype=np.float32),
-            np.asarray((*screen_rotation[:3, 0], 0.0), dtype=np.float32),
-            np.asarray((*screen_rotation[:3, 1], 0.0), dtype=np.float32),
+            np.asarray((*position, sampling_values[0]), dtype=np.float32),
+            np.asarray((*screen_rotation[:3, 0], sampling_values[1]), dtype=np.float32),
+            np.asarray((*screen_rotation[:3, 1], sampling_values[2]), dtype=np.float32),
             np.asarray((
                 float(width) * 0.5,
                 float(height) * 0.5,
                 0.72 if self._screen_curved else 0.0,
-                0.0,
+                sampling_values[3],
             ), dtype=np.float32),
         )).astype("<f4", copy=False)
         if values.size != 32 or not np.all(np.isfinite(values)):
             raise ValueError("Vulkan Projection Composer screen transform is invalid")
         return values.tobytes()
+
+    def _projection_screen_sampling_constants(self, source: Any, target: Any) -> bytes:
+        width = int(getattr(source, "width", 0))
+        height = int(getattr(source, "height", 0))
+        if width <= 0 or height <= 0:
+            raise ValueError("Vulkan Projection Composer source size is invalid")
+        target_width = int(getattr(target, "width", 0))
+        target_height = int(getattr(target, "height", 0))
+        if target_width <= 0 or target_height <= 0:
+            raise ValueError("Vulkan Projection Composer target size is invalid")
+        # The quality chain runs before world-space projection. The final
+        # screen pass always samples the completed quality mip texture.
+        values = np.asarray(
+            (
+                1.0 / float(width),
+                1.0 / float(height),
+                1.0,
+                0.0,
+            ),
+            dtype="<f4",
+        )
+        return values.tobytes()
+
+    def _apply_vulkan_projection_sampling(
+        self,
+        frame: VulkanStereoOutputFrame,
+        *,
+        quality_chain_enabled: bool = True,
+    ) -> None:
+        screen_pass = self._vulkan_projection_screen_pass
+        if screen_pass is None:
+            return
+        metadata = frame.metadata or {}
+        try:
+            if not quality_chain_enabled:
+                screen_pass.set_sampling_config(
+                    min_lod=0.0,
+                    max_lod=0.0,
+                    mip_lod_bias=0.0,
+                    rcas_sharpness=0.0,
+                )
+                return
+            screen_pass.set_sampling_config(
+                min_lod=metadata.get("vulkan_projection_min_lod", 0.0),
+                max_lod=metadata.get("vulkan_projection_max_lod", 0.35),
+                mip_lod_bias=metadata.get("vulkan_projection_mip_lod_bias", -0.35),
+                rcas_sharpness=metadata.get("vulkan_projection_rcas_sharpness", 0.5),
+            )
+        except (TypeError, ValueError):
+            return
 
     def _render_vulkan_projection_composer(
         self,
@@ -4246,11 +4328,11 @@ class OpenXrVulkanPresenter(
             raise RuntimeError(
                 "Vulkan Projection Composer source preparation is unavailable"
             )
-        sources = (frame.left_eye, frame.right_eye)
+        source_inputs = (frame.left_eye, frame.right_eye)
         status = (
             layered,
-            int(sources[0].width),
-            int(sources[0].height),
+            int(source_inputs[0].width),
+            int(source_inputs[0].height),
             int(acquired_images[0][0].width),
             int(acquired_images[0][0].height),
             bool(self._screen_curved),
@@ -4269,8 +4351,16 @@ class OpenXrVulkanPresenter(
             self._vulkan_projection_screen_pass = VulkanProjectionScreenPass(
                 self.vulkan, target_format
             )
+        self._apply_vulkan_projection_sampling(
+            frame,
+            quality_chain_enabled=self._vulkan_projection_quality_chain_requested,
+        )
+        plan = self._active_screen_sampling_plan
+        use_quality_mip = bool(
+            self._vulkan_projection_quality_chain_requested and plan is not None
+        )
         projection_draws = []
-        for eye_index, source in enumerate(sources):
+        for eye_index, source in enumerate(source_inputs):
             source_prepare_started = time.perf_counter()
             wait_semaphore = prepare_source(frame.frame_id, eye_index)
             if self._on_breakdown_add_time is not None:
@@ -4282,6 +4372,9 @@ class OpenXrVulkanPresenter(
             target_eye, image_index = (
                 acquired_images[0] if layered else acquired_images[eye_index]
             )
+            sampling_constants = self._projection_screen_sampling_constants(
+                source, target_eye.resources[image_index]
+            )
             projection_draws.append(
                 {
                     "source": source,
@@ -4290,7 +4383,7 @@ class OpenXrVulkanPresenter(
                     "eye_index": eye_index,
                     "frame_slot": int(self.frame_count) % 3,
                     "push_constants": self._projection_screen_push_constants(
-                        views[eye_index]
+                        views[eye_index], sampling_constants
                     ),
                     "clear_color": self.config.clear_color,
                     "wait_semaphore": wait_semaphore,
@@ -4302,7 +4395,28 @@ class OpenXrVulkanPresenter(
                     time.perf_counter() - draw_prepare_started,
                 )
         submit_started = time.perf_counter()
-        timeline = self._vulkan_projection_screen_pass.submit_stereo(projection_draws)
+        timeline = None
+        if use_quality_mip:
+            try:
+                timeline = self._vulkan_projection_screen_pass.try_submit_stereo_quality_mip(
+                    projection_draws,
+                    mode=plan.mode,
+                    filter_scale=plan.filter_scale,
+                    upscale_scale=plan.upscale_scale,
+                )
+            except Exception as exc:
+                print(
+                    "[OpenXRViewer] Vulkan projection quality chain skipped: "
+                    f"{type(exc).__name__}: {exc}",
+                    flush=True,
+                )
+        if self._on_breakdown_inc is not None and use_quality_mip:
+            if timeline is not None:
+                self._on_breakdown_inc("openxr_vulkan_composer_quality", 1)
+            else:
+                self._on_breakdown_inc("openxr_vulkan_composer_quality_skip", 1)
+        if timeline is None:
+            timeline = self._vulkan_projection_screen_pass.submit_stereo(projection_draws)
         if self._on_breakdown_add_time is not None:
             self._on_breakdown_add_time(
                 "openxr_vulkan_composer_submit",
@@ -4457,22 +4571,32 @@ class OpenXrVulkanPresenter(
                 f"effective={plan.effective_tier_k}K "
                 f"filter_scale={plan.filter_scale:.2f} mode={plan.mode} "
                 f"upscale_scale={plan.upscale_scale:.2f} "
-                "bridge_sampling="
+                "sampling_owner="
                 + (
-                    "active"
-                    if bool(
-                        getattr(
-                            self.filament_bridge,
-                            "screen_sampling_abi_available",
-                            False,
+                    "vulkan_baseline_linear"
+                    if self._vulkan_projection_composer_requested
+                    else (
+                        "filament_bridge"
+                        if bool(
+                            getattr(
+                                self.filament_bridge,
+                                "screen_sampling_abi_available",
+                                False,
+                            )
                         )
+                        else "filament_bridge_unavailable"
                     )
-                    else "unavailable"
                 ),
                 flush=True,
             )
-        if status_changed and self.filament_bridge is not None and hasattr(
+        self._active_screen_sampling_plan = plan
+        if (
+            status_changed
+            and not self._vulkan_projection_composer_requested
+            and self.filament_bridge is not None
+            and hasattr(
             self.filament_bridge, "set_screen_sampling"
+            )
         ):
             self.filament_bridge.set_screen_sampling(plan.filter_scale)
             if hasattr(self.filament_bridge, "set_screen_upscale"):
@@ -5102,6 +5226,41 @@ class OpenXrVulkanPresenter(
             if callback is not None:
                 callback(name, max(0.0, time.perf_counter() - started))
 
+        def prepare_filament_rendering() -> None:
+            nonlocal filament_queue_locked, finished_semaphore_available
+            if (
+                self.filament_bridge is not None
+                and filament_queue_lock is not None
+                and not filament_queue_locked
+            ):
+                filament_lock_started = time.perf_counter()
+                filament_queue_lock.acquire()
+                filament_queue_locked = True
+                record_time("openxr_filament_lock_wait", filament_lock_started)
+            if self.filament_bridge is None:
+                return
+            self._update_filament_screen_light(
+                self.filament_bridge,
+                presentation_frame,
+            )
+            self._update_filament_glow(
+                self.filament_bridge,
+                presentation_frame,
+            )
+            # Controller transforms and GLB animation state are shared by
+            # both eye Views. Updating them twice adds owner-thread work
+            # without changing either eye's scene state.
+            self._update_filament_controllers(self.filament_bridge)
+            if hasattr(self.filament_bridge, "apply_animations"):
+                self.filament_bridge.apply_animations(animation_time)
+            finished_semaphore_available = bool(
+                getattr(
+                    self.filament_bridge,
+                    "finished_drawing_semaphore_abi_available",
+                    False,
+                )
+            )
+
         try:
             # Acquire the complete stereo pair before entering either blocking
             # wait. This gives the runtime both requests up front and avoids
@@ -5123,17 +5282,6 @@ class OpenXrVulkanPresenter(
                     f"openxr_projection_wait_eye{eye_index}", wait_started
                 )
             record_time("openxr_swapchain_wait", wait_pair_started)
-
-            if (
-                self.filament_bridge is not None
-                and filament_queue_lock is not None
-                and not use_vulkan_projection_composer
-                and not use_screen_quad_reprojection
-            ):
-                filament_lock_started = time.perf_counter()
-                filament_queue_lock.acquire()
-                filament_queue_locked = True
-                record_time("openxr_filament_lock_wait", filament_lock_started)
 
             shared_prepare_started = time.perf_counter()
             screen_image_projection = (
@@ -5157,32 +5305,9 @@ class OpenXrVulkanPresenter(
                 and not use_vulkan_projection_composer
                 and not use_screen_quad_reprojection
             ):
-                self._update_filament_screen_light(
-                    self.filament_bridge,
-                    presentation_frame,
-                )
-                self._update_filament_glow(
-                    self.filament_bridge,
-                    presentation_frame,
-                )
-                # Controller transforms and GLB animation state are shared by
-                # both eye Views. Updating them twice adds owner-thread work
-                # without changing either eye's scene state.
-                self._update_filament_controllers(self.filament_bridge)
-                if hasattr(self.filament_bridge, "apply_animations"):
-                    self.filament_bridge.apply_animations(animation_time)
+                prepare_filament_rendering()
             record_time("openxr_projection_shared_prepare", shared_prepare_started)
 
-            finished_semaphore_available = bool(
-                self.filament_bridge is not None
-                and not use_vulkan_projection_composer
-                and not use_screen_quad_reprojection
-                and getattr(
-                    self.filament_bridge,
-                    "finished_drawing_semaphore_abi_available",
-                    False,
-                )
-            )
             if use_screen_quad_reprojection:
                 try:
                     if isinstance(composer_frame, VulkanStereoOutputFrame):
@@ -5207,21 +5332,43 @@ class OpenXrVulkanPresenter(
                         and self._filament_screen is not None
                     )
             if not render_succeeded and use_vulkan_projection_composer:
-                composer_timeline = self._render_vulkan_projection_composer(
-                    composer_frame,
-                    acquired_images,
-                    composition_views,
-                )
-                composer_frame.metadata["_vulkan_consumer_release_timeline"] = max(
-                    int(
-                        composer_frame.metadata.get(
-                            "_vulkan_consumer_release_timeline", 0
+                try:
+                    composer_timeline = self._render_vulkan_projection_composer(
+                        composer_frame,
+                        acquired_images,
+                        composition_views,
+                    )
+                    composer_frame.metadata["_vulkan_consumer_release_timeline"] = max(
+                        int(
+                            composer_frame.metadata.get(
+                                "_vulkan_consumer_release_timeline", 0
+                            )
+                        ),
+                        int(composer_timeline),
+                    )
+                    render_succeeded = True
+                except Exception as exc:
+                    use_vulkan_projection_composer = False
+                    self._vulkan_projection_composer_active = False
+                    fallback_status = (type(exc).__name__, str(exc))
+                    if fallback_status != self._last_vulkan_projection_composer_fallback:
+                        self._last_vulkan_projection_composer_fallback = fallback_status
+                        print(
+                            "[OpenXRViewer] Vulkan projection composer fallback: "
+                            f"{fallback_status[0]}: {fallback_status[1]}",
+                            flush=True,
                         )
-                    ),
-                    int(composer_timeline),
-                )
-                render_succeeded = True
-            elif (
+                    if self._on_breakdown_inc is not None:
+                        self._on_breakdown_inc(
+                            "openxr_vulkan_projection_composer_fallback", 1
+                        )
+                    fallback_prepare_started = time.perf_counter()
+                    prepare_filament_rendering()
+                    record_time(
+                        "openxr_vulkan_composer_fallback_prepare",
+                        fallback_prepare_started,
+                    )
+            if (
                 not render_succeeded
                 and self._multiview_active
                 and self.filament_bridge is not None
@@ -5235,7 +5382,8 @@ class OpenXrVulkanPresenter(
                     record_time,
                 )
                 submitted_filament_eyes.append(0)
-            elif not render_succeeded:
+                render_succeeded = True
+            if not render_succeeded:
                 for eye_index, (eye, image_index) in enumerate(acquired_images):
                     screen_source = None
                     if self.filament_bridge is not None:
@@ -5400,6 +5548,10 @@ class OpenXrVulkanPresenter(
                 self._on_breakdown_set_latest(
                     "openxr_vulkan_projection_composer_requested",
                     self._vulkan_projection_composer_requested,
+                )
+                self._on_breakdown_set_latest(
+                    "openxr_vulkan_projection_quality_chain_requested",
+                    self._vulkan_projection_quality_chain_requested,
                 )
                 self._on_breakdown_set_latest(
                     "openxr_vulkan_projection_composer_active",

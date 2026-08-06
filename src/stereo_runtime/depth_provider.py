@@ -72,6 +72,7 @@ class DepthProfileResult:
     cuda_timing_events: dict[str, Any] = field(default_factory=dict)
     execution_slot: int | None = None
     execution_slot_count: int = 1
+    slot_wait_ms: float = 0.0
 
     @property
     def total_ms(self) -> float:
@@ -82,6 +83,7 @@ class DepthProfileResult:
             "preprocess_ms": float(self.preprocess_ms),
             "model_ms": float(self.model_ms),
             "postprocess_ms": float(self.postprocess_ms),
+            "slot_wait_ms": float(self.slot_wait_ms),
             "total_ms": float(self.total_ms),
         }
 

@@ -444,6 +444,20 @@ class VulkanContext:
         self._ensure_open()
         return self._timeline_value
 
+    def completed_timeline_value(self) -> int | None:
+        """Return the completed timeline value without waiting for GPU work."""
+        with self._lock:
+            self._ensure_open()
+            if self._timeline_semaphore is None:
+                return None
+            get_value = getattr(self.vk, "vkGetSemaphoreCounterValue", None)
+            if get_value is None:
+                return None
+            try:
+                return int(get_value(self.device, self._timeline_semaphore))
+            except Exception:
+                return None
+
     def image_handle_from_address(self, address: int) -> Any:
         self._ensure_open()
         if not address:

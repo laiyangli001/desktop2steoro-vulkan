@@ -40,6 +40,18 @@ class _ParallelDepthScheduler:
         self.next_frame_id = 0
         self.pending: list[_ParallelDepthJob] = []
         self.dropped = 0
+        self.effective_limit = self.worker_count
+
+    def can_submit(self) -> bool:
+        return len(self.pending) < self.effective_limit
+
+    def set_effective_limit(self, limit: int) -> bool:
+        resolved = max(1, min(self.worker_count, int(limit)))
+        if resolved == self.effective_limit:
+            return False
+        self.effective_limit = resolved
+        self.trim(resolved)
+        return True
 
     def submit(self, runtime_rgb, **metadata) -> _ParallelDepthJob:
         frame_id = self.next_frame_id
@@ -64,7 +76,7 @@ class _ParallelDepthScheduler:
         return job
 
     def trim(self, limit: int) -> None:
-        limit = max(1, int(limit))
+        limit = max(1, min(self.effective_limit, int(limit)))
         while len(self.pending) > limit:
             # Drop only work that has not started; cancelling a running CUDA
             # launch is unsafe and the bounded queue prevents accumulation.
@@ -530,6 +542,11 @@ def _runtime_motion_gate_enabled(ctx: RuntimePipelineContext) -> bool:
     }
 
 
+def _runtime_parallel_adaptive_backoff_enabled() -> bool:
+    value = str(os.environ.get("D2S_RUNTIME_PARALLEL_ADAPTIVE_BACKOFF", "0") or "0").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
 def _runtime_motion_threshold(name: str, default: float) -> float:
     try:
         return max(0.0, float(str(os.environ.get(name, default)).strip()))
@@ -673,16 +690,73 @@ class RuntimePipelineLoop:
         self._consecutive_runtime_errors = 0
         self._dual_pending_cooldown_until = 0.0
         self._parallel_depth_scheduler = None
+        self._parallel_backoff_until = 0.0
+        self._parallel_recovery_after = 0.0
 
     def _pending_depth_limit(self) -> int:
         limit = _runtime_pending_depth_limit(self.context)
-        # The GUI experimental switch explicitly requests the dual-slot A/B
-        # path; do not let the normal latest-frame queue backoff hide it.
-        if limit > 1 and getattr(self, "_parallel_depth_scheduler", None) is not None:
-            return limit
+        scheduler = getattr(self, "_parallel_depth_scheduler", None)
+        if limit > 1 and scheduler is not None:
+            return min(limit, scheduler.effective_limit)
         if limit > 1 and time.perf_counter() < self._dual_pending_cooldown_until:
             return 1
         return limit
+
+    @staticmethod
+    def _parallel_slot_wait_backoff_ms() -> float:
+        try:
+            return max(0.0, float(os.environ.get("D2S_RUNTIME_PARALLEL_SLOT_WAIT_BACKOFF_MS", "12")))
+        except (TypeError, ValueError):
+            return 12.0
+
+    @staticmethod
+    def _parallel_backoff_duration_s() -> float:
+        try:
+            return max(0.1, float(os.environ.get("D2S_RUNTIME_PARALLEL_BACKOFF_S", "1.5")))
+        except (TypeError, ValueError):
+            return 1.5
+
+    def _parallel_reduce_for_pressure(self, reason: str) -> None:
+        scheduler = getattr(self, "_parallel_depth_scheduler", None)
+        if scheduler is None or scheduler.effective_limit <= 1 or not _runtime_parallel_adaptive_backoff_enabled():
+            return
+        now = time.perf_counter()
+        changed = scheduler.set_effective_limit(scheduler.effective_limit - 1)
+        self._parallel_backoff_until = now + self._parallel_backoff_duration_s()
+        self._parallel_recovery_after = self._parallel_backoff_until
+        if changed:
+            self.context.source_stat_inc(
+                "runtime_parallel_backoff",
+                reason=reason,
+                active_workers=scheduler.effective_limit,
+            )
+            self.context.breakdown_inc("runtime_parallel_backoff")
+            print(
+                f"[RuntimePipeline] Parallel depth backoff: reason={reason} "
+                f"effective_workers={scheduler.effective_limit}/{scheduler.worker_count}",
+                flush=True,
+            )
+
+    def _parallel_recover_if_ready(self) -> None:
+        scheduler = getattr(self, "_parallel_depth_scheduler", None)
+        if scheduler is None or scheduler.effective_limit >= scheduler.worker_count or not _runtime_parallel_adaptive_backoff_enabled():
+            return
+        now = time.perf_counter()
+        if now < self._parallel_recovery_after:
+            return
+        if scheduler.set_effective_limit(scheduler.effective_limit + 1):
+            self._parallel_backoff_until = 0.0
+            self._parallel_recovery_after = now + self._parallel_backoff_duration_s()
+            self.context.source_stat_inc(
+                "runtime_parallel_recovery",
+                active_workers=scheduler.effective_limit,
+            )
+            self.context.breakdown_inc("runtime_parallel_recovery")
+            print(
+                f"[RuntimePipeline] Parallel depth recovery: effective_workers="
+                f"{scheduler.effective_limit}/{scheduler.worker_count}",
+                flush=True,
+            )
 
     def _rebuild_after_consecutive_failures(self) -> None:
         threshold_text = os.environ.get("D2S_RUNTIME_REBUILD_AFTER_ERRORS", "3")
@@ -777,6 +851,7 @@ class RuntimePipelineLoop:
             ctx.source_stat_inc("runtime_overwrite")
             if _runtime_pending_depth_limit(ctx) > 1:
                 self._dual_pending_cooldown_until = time.perf_counter() + 1.0
+                self._parallel_reduce_for_pressure("output_queue_full")
                 ctx.breakdown_inc("runtime_pending_cuda_backoff")
                 ctx.source_stat_inc("runtime_pending_cuda_backoff")
         ctx.breakdown_add_time("rt_put", time.perf_counter() - queue_put_start_time)
@@ -1004,18 +1079,20 @@ class RuntimePipelineLoop:
                 depth_profile = None
                 if ctx.run_mode == "OpenXR" and self._parallel_depth_scheduler is not None:
                     scheduler = self._parallel_depth_scheduler
-                    scheduler.submit(
-                        runtime_rgb,
-                        frame_rgb=frame_rgb,
-                        frame_raw=frame_raw,
-                        size=size,
-                        capture_start_time=capture_start_time,
-                        captured_frame=captured_frame,
-                        render_size=render_size,
-                        process_latency=process_latency,
-                        source_target_changed=source_target_changed,
-                        render_size_changed=render_size_changed,
-                    )
+                    self._parallel_recover_if_ready()
+                    if scheduler.can_submit():
+                        scheduler.submit(
+                            runtime_rgb,
+                            frame_rgb=frame_rgb,
+                            frame_raw=frame_raw,
+                            size=size,
+                            capture_start_time=capture_start_time,
+                            captured_frame=captured_frame,
+                            render_size=render_size,
+                            process_latency=process_latency,
+                            source_target_changed=source_target_changed,
+                            render_size_changed=render_size_changed,
+                        )
                     scheduler.trim(self._pending_depth_limit())
                     job = scheduler.pop_ready(block=False)
                     if job is None:
@@ -1033,6 +1110,8 @@ class RuntimePipelineLoop:
                     render_size_changed = job.render_size_changed
                     runtime_rgb = job.runtime_rgb
                     depth_profile = job.depth_profile
+                    if float(getattr(depth_profile, "slot_wait_ms", 0.0)) >= self._parallel_slot_wait_backoff_ms():
+                        self._parallel_reduce_for_pressure("tensorrt_slot_wait")
                     ctx.source_stat_inc("runtime_parallel_processed")
                     ctx.source_stat_inc("runtime_parallel_reorder_wait", frame_reorder_wait=0)
                     parallel_frame_id = job.frame_id
@@ -1096,6 +1175,16 @@ class RuntimePipelineLoop:
                         getattr(self._parallel_depth_scheduler, "worker_count", 0)
                     )
                     if self._parallel_depth_scheduler is not None:
+                        debug_info["parallel_inference_effective_workers"] = int(
+                            self._parallel_depth_scheduler.effective_limit
+                        )
+                        debug_info["parallel_inference_backoff"] = int(
+                            self._parallel_depth_scheduler.effective_limit
+                            < self._parallel_depth_scheduler.worker_count
+                        )
+                        debug_info["parallel_inference_adaptive_backoff"] = int(
+                            _runtime_parallel_adaptive_backoff_enabled()
+                        )
                         debug_info["parallel_inference_frame_id"] = parallel_frame_id
                         debug_info["parallel_inference_pending"] = int(
                             len(self._parallel_depth_scheduler.pending)

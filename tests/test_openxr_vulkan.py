@@ -30,6 +30,7 @@ from viewer.vulkan_context import (
     _find_queue_families,
 )
 from viewer.vulkan_resources import VulkanImageResource
+from viewer.vulkan_projection_screen import VulkanProjectionScreenPass
 from xr_viewer.core_openxr_vulkan import (
     OpenXrCompositionBuilder,
     OpenXrVulkanConfig,
@@ -50,6 +51,7 @@ from xr_viewer.msdf_font_atlas import MsdfFontAtlas
 from viewer.controller_help import get_controller_help_rows
 from viewer.vulkan_msdf_quad import VulkanMsdfQuadRequest
 from xr_viewer.xr_math import _xr_quat_to_mat4
+from utils.screen_resolution_policy import build_screen_sampling_plan
 
 
 def test_vulkan_version_round_trip() -> None:
@@ -833,19 +835,152 @@ def test_presenter_defaults_to_capability_gated_zero_copy_path(monkeypatch) -> N
     assert presenter._filament_screen_image_enabled is True
 
 
-def test_projection_composer_is_opt_in_and_keeps_existing_fallback(monkeypatch) -> None:
+def test_projection_composer_defaults_on_and_can_be_explicitly_disabled(monkeypatch) -> None:
     monkeypatch.delenv("D2S_VULKAN_PROJECTION_COMPOSER", raising=False)
-    presenter = OpenXrVulkanPresenter()
-    assert presenter._vulkan_projection_composer_requested is False
-    assert presenter._vulkan_projection_composer_active is False
-
-    monkeypatch.setenv("D2S_VULKAN_PROJECTION_COMPOSER", "1")
     presenter = OpenXrVulkanPresenter()
     assert presenter._vulkan_projection_composer_requested is True
     assert presenter._vulkan_projection_composer_active is False
 
+    monkeypatch.setenv("D2S_VULKAN_PROJECTION_COMPOSER", "0")
+    presenter = OpenXrVulkanPresenter()
+    assert presenter._vulkan_projection_composer_requested is False
+    assert presenter._vulkan_projection_composer_active is False
 
-def test_screen_quad_reprojection_is_opt_in(monkeypatch) -> None:
+
+def test_projection_quality_chain_defaults_on_and_can_be_disabled(monkeypatch) -> None:
+    monkeypatch.delenv("D2S_VULKAN_PROJECTION_QUALITY_CHAIN", raising=False)
+    presenter = OpenXrVulkanPresenter()
+    assert presenter._vulkan_projection_quality_chain_requested is True
+
+    monkeypatch.setenv("D2S_VULKAN_PROJECTION_QUALITY_CHAIN", "0")
+    presenter = OpenXrVulkanPresenter()
+    assert presenter._vulkan_projection_quality_chain_requested is False
+
+
+def test_projection_composer_sampling_does_not_mutate_filament_bridge() -> None:
+    calls = []
+
+    class Bridge:
+        screen_sampling_abi_available = True
+
+        def set_screen_sampling(self, value):
+            calls.append(("sampling", value))
+
+        def set_screen_upscale(self, value):
+            calls.append(("upscale", value))
+
+    presenter = OpenXrVulkanPresenter()
+    presenter.filament_bridge = Bridge()
+    presenter._filament_screen = ((0.0, 0.0, -2.0), 2.0, 1.0, (0.0, 0.0, 0.0))
+    frame = VulkanStereoOutputFrame(
+        frame_id=1,
+        timestamp=0.0,
+        left_eye=SimpleNamespace(width=1920, height=1080),
+        right_eye=SimpleNamespace(width=1920, height=1080),
+        metadata={"capture_size": (1920, 1080)},
+    )
+
+    plan = presenter._apply_screen_sampling_policy(frame)
+
+    assert plan is not None
+    assert presenter._active_screen_sampling_plan is plan
+    assert calls == []
+
+
+def test_projection_composer_final_pass_samples_completed_quality_mips() -> None:
+    presenter = OpenXrVulkanPresenter()
+    source = SimpleNamespace(width=3840, height=2160)
+    target = SimpleNamespace(width=3648, height=3648)
+    presenter._active_screen_sampling_plan = build_screen_sampling_plan(3840, 2160, 2)
+
+    values = np.frombuffer(
+        presenter._projection_screen_sampling_constants(source, target), dtype="<f4"
+    )
+
+    assert values.tolist() == pytest.approx((1.0 / 3840.0, 1.0 / 2160.0, 1.0, 0.0))
+
+    presenter._active_screen_sampling_plan = build_screen_sampling_plan(1920, 1080, 2)
+    values = np.frombuffer(
+        presenter._projection_screen_sampling_constants(source, target), dtype="<f4"
+    )
+    assert values.tolist() == pytest.approx((1.0 / 3840.0, 1.0 / 2160.0, 1.0, 0.0))
+
+
+def test_projection_composer_routes_sampling_policy_to_quality_chain() -> None:
+    source = inspect.getsource(OpenXrVulkanPresenter._render_vulkan_projection_composer)
+
+    assert "try_submit_stereo_quality_mip(" in source
+    assert "mode=plan.mode" in source
+    assert "filter_scale=plan.filter_scale" in source
+    assert "upscale_scale=plan.upscale_scale" in source
+    assert "self._vulkan_projection_quality_chain_requested" in source
+    assert "cached_sources" not in source
+    assert "if timeline is None:" in source
+
+
+def test_projection_quality_chain_disabled_forces_lod0_sampling() -> None:
+    source = inspect.getsource(OpenXrVulkanPresenter._apply_vulkan_projection_sampling)
+
+    assert "quality_chain_enabled" in source
+    assert "min_lod=0.0" in source
+    assert "max_lod=0.0" in source
+    assert "mip_lod_bias=0.0" in source
+    assert "rcas_sharpness=0.0" in source
+
+
+def test_projection_quality_chain_bypasses_rcas_when_sharpness_is_zero() -> None:
+    source = inspect.getsource(VulkanProjectionScreenPass.try_submit_stereo_quality_mip)
+    mip_source = inspect.getsource(VulkanProjectionScreenPass.try_submit_stereo_mip)
+
+    assert 'mode == "native_mip"' in source
+    assert "try_submit_stereo_mip(" in source
+    assert "use_rcas = self.rcas_sharpness > 0.0" in source
+    assert "use_rcas = self.rcas_sharpness > 0.0" in mip_source
+    assert "_record_rcas_draw" in mip_source
+    assert "if use_rcas:" in mip_source
+
+
+def test_projection_mip_lod_bias_defaults_and_clamps(monkeypatch) -> None:
+    monkeypatch.delenv("D2S_VULKAN_PROJECTION_MIP_LOD_BIAS", raising=False)
+    assert VulkanProjectionScreenPass._mip_lod_bias_from_env() == -0.35
+    monkeypatch.setenv("D2S_VULKAN_PROJECTION_MIP_LOD_BIAS", "-2.0")
+    assert VulkanProjectionScreenPass._mip_lod_bias_from_env() == -1.5
+
+    monkeypatch.setenv("D2S_VULKAN_PROJECTION_MIP_LOD_BIAS", "invalid")
+    assert VulkanProjectionScreenPass._mip_lod_bias_from_env() == -0.35
+
+
+def test_projection_sampling_config_clamps_and_orders_lods() -> None:
+    assert VulkanProjectionScreenPass._normalize_sampling_config(1.0, 0.25, -2.0, 2.0) == (
+        1.0,
+        1.0,
+        -1.5,
+        1.0,
+    )
+
+def test_projection_rcas_sharpness_defaults_and_clamps(monkeypatch) -> None:
+    monkeypatch.delenv("D2S_VULKAN_PROJECTION_RCAS_SHARPNESS", raising=False)
+    assert VulkanProjectionScreenPass._rcas_sharpness_from_env() == 0.5
+
+    monkeypatch.setenv("D2S_VULKAN_PROJECTION_RCAS_SHARPNESS", "2.0")
+    assert VulkanProjectionScreenPass._rcas_sharpness_from_env() == 1.0
+
+    monkeypatch.setenv("D2S_VULKAN_PROJECTION_RCAS_SHARPNESS", "invalid")
+    assert VulkanProjectionScreenPass._rcas_sharpness_from_env() == 0.5
+
+
+def test_projection_max_mip_lod_defaults_and_clamps(monkeypatch) -> None:
+    monkeypatch.delenv("D2S_VULKAN_PROJECTION_MAX_LOD", raising=False)
+    assert VulkanProjectionScreenPass._max_mip_lod_from_env() == 0.35
+
+    monkeypatch.setenv("D2S_VULKAN_PROJECTION_MAX_LOD", "20.0")
+    assert VulkanProjectionScreenPass._max_mip_lod_from_env() == 16.0
+
+    monkeypatch.setenv("D2S_VULKAN_PROJECTION_MAX_LOD", "invalid")
+    assert VulkanProjectionScreenPass._max_mip_lod_from_env() == 0.35
+
+
+def test_screen_quad_reprojection_is_disabled_for_virtual_desktop(monkeypatch) -> None:
     monkeypatch.delenv("D2S_OPENXR_SCREEN_QUAD_REPROJECTION", raising=False)
     presenter = OpenXrVulkanPresenter()
     assert presenter._screen_quad_reprojection_requested is False
@@ -853,7 +988,7 @@ def test_screen_quad_reprojection_is_opt_in(monkeypatch) -> None:
 
     monkeypatch.setenv("D2S_OPENXR_SCREEN_QUAD_REPROJECTION", "1")
     presenter = OpenXrVulkanPresenter()
-    assert presenter._screen_quad_reprojection_requested is True
+    assert presenter._screen_quad_reprojection_requested is False
     assert presenter._screen_quad_reprojection_active is False
 
 
@@ -3313,6 +3448,114 @@ def test_projection_updates_shared_filament_state_once_per_stereo_pair(
     assert calls.count("end") == 2
 
 
+def test_projection_composer_failure_falls_back_to_filament_in_same_frame(
+    monkeypatch,
+) -> None:
+    calls: list[str] = []
+
+    class FakeXr:
+        INFINITE_DURATION = 1
+
+        @staticmethod
+        def acquire_swapchain_image(_handle):
+            return 0
+
+        @staticmethod
+        def wait_swapchain_image(_handle, _wait_info):
+            return None
+
+        @staticmethod
+        def release_swapchain_image(_handle):
+            return None
+
+        @staticmethod
+        def SwapchainImageWaitInfo(*, timeout):
+            return timeout
+
+    class FakeBridge:
+        def apply_animations(self, _seconds):
+            calls.append("animations")
+
+        def set_active_eye(self, eye_index):
+            calls.append(f"active:{eye_index}")
+
+        def set_screen_image(self, _image, **_kwargs):
+            calls.append("screen")
+
+        def set_acquired_image(self, image_index):
+            calls.append(f"image:{image_index}")
+
+        def begin_frame(self):
+            calls.append("begin")
+
+        def end_frame(self):
+            calls.append("end")
+
+    fallback_count: list[int] = []
+    presenter = OpenXrVulkanPresenter(
+        on_breakdown_inc=lambda name, value: (
+            fallback_count.append(value)
+            if name == "openxr_vulkan_projection_composer_fallback"
+            else None
+        )
+    )
+    presenter.xr = FakeXr
+    presenter.vulkan = SimpleNamespace(
+        _lock=threading.RLock(),
+        vk=SimpleNamespace(
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL=1,
+            VK_ACCESS_SHADER_READ_BIT=2,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT=4,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT=8,
+        ),
+    )
+    presenter.swapchains = [
+        _EyeSwapchain(
+            "left", [SimpleNamespace(image=None)], 1, 1, resources=[object()]
+        ),
+        _EyeSwapchain(
+            "right", [SimpleNamespace(image=None)], 1, 1, resources=[object()]
+        ),
+    ]
+    presenter.filament_bridge = FakeBridge()
+    presenter._filament_screen = ((0.0, 0.0, -2.0), 2.0, 1.0, (0.0, 0.0, 0.0))
+    presenter._apply_filament_profile = lambda views: views
+    presenter._report_screen_resolution = lambda *_args: None
+    presenter._apply_screen_sampling_policy = lambda *_args: None
+    presenter._report_filament_screen_image_status = lambda *_args: None
+    presenter._update_filament_screen_light = lambda *_args: None
+    presenter._update_filament_glow = lambda *_args: None
+    presenter._update_filament_controllers = lambda *_args: calls.append("controllers")
+    presenter._maybe_capture_visual_regression_frame = lambda *_args, **_kwargs: None
+    presenter._render_vulkan_projection_composer = lambda *_args: (
+        _ for _ in ()
+    ).throw(RuntimeError("submit failed"))
+    monkeypatch.setattr(
+        "xr_viewer.core_openxr_vulkan._update_filament_camera",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        OpenXrCompositionBuilder,
+        "projection_layer",
+        lambda *_args: "projection",
+    )
+    frame = VulkanStereoOutputFrame(
+        frame_id=7,
+        timestamp=0.0,
+        left_eye=SimpleNamespace(image="left", width=1, height=1, format=43),
+        right_eye=SimpleNamespace(image="right", width=1, height=1, format=43),
+        metadata={"_vulkan_source_prepare_for_sampling": lambda *_args: None},
+    )
+
+    assert presenter._render_projection_layer([object(), object()], frame) == "projection"
+    assert fallback_count == [1]
+    assert not presenter._vulkan_projection_composer_active
+    assert calls.count("controllers") == 1
+    assert calls.count("animations") == 1
+    assert calls.count("begin") == 2
+    assert calls.count("end") == 2
+
+
 @pytest.mark.parametrize(
     ("screen_image_projection", "screen_eye_renderables_available"),
     [(False, False), (True, False), (True, True)],
@@ -3450,6 +3693,7 @@ def test_projection_keeps_unsafe_stereo_batch_disabled(
 
 
 def test_multiview_projection_renders_one_layered_filament_frame(monkeypatch) -> None:
+    monkeypatch.setenv("D2S_VULKAN_PROJECTION_COMPOSER", "0")
     calls = []
     capture_calls = []
 
@@ -3634,6 +3878,7 @@ def test_multiview_source_failure_restores_active_eye(monkeypatch) -> None:
 
 
 def test_projection_reuses_displayed_output_without_releasing_it(monkeypatch) -> None:
+    monkeypatch.setenv("D2S_VULKAN_PROJECTION_COMPOSER", "0")
     calls: list[tuple[str, object]] = []
     from utils.breakdown import FPSBreakdown
 

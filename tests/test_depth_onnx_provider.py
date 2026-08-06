@@ -1,6 +1,8 @@
 import sys
+import threading
 from pathlib import Path
 
+import pytest
 import torch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -424,7 +426,7 @@ def test_native_tensorrt_defers_load_until_frame_artifact_size_is_known(tmp_path
     assert provider._engine is None
 
 
-def test_native_tensorrt_uses_one_execution_slot_for_myelin(tmp_path):
+def test_native_tensorrt_preserves_requested_execution_slots(tmp_path):
     from stereo_runtime.providers.nvidia.tensorrt_native import NativeTensorRtDepthProvider
 
     provider = NativeTensorRtDepthProvider(
@@ -433,7 +435,7 @@ def test_native_tensorrt_uses_one_execution_slot_for_myelin(tmp_path):
         execution_slot_count=3,
     )
 
-    assert provider.execution_slot_count == 1
+    assert provider.execution_slot_count == 3
 
 
 def test_native_tensorrt_load_prints_compact_engine_path(monkeypatch, tmp_path, capsys):
@@ -514,6 +516,10 @@ def test_native_tensorrt_provider_reports_execution_slot(monkeypatch, tmp_path):
             calls.append(("run", synchronize, tuple(tensor.shape)))
             return torch.zeros(1, 1, 2, 2, dtype=torch.float32), 1
 
+        def slot_acquire_wait_ms(self, slot_index):
+            assert slot_index == 1
+            return 7.5
+
         def mark_slot_available_after_current_stream(self, slot_index):
             calls.append(("release", slot_index))
 
@@ -538,6 +544,7 @@ def test_native_tensorrt_provider_reports_execution_slot(monkeypatch, tmp_path):
 
     assert result.execution_slot == 1
     assert result.execution_slot_count == 2
+    assert result.slot_wait_ms == 7.5
     assert calls == [("run", False, (1, 3, 2, 2)), ("release", 1)]
 
 
@@ -562,6 +569,167 @@ def test_native_tensorrt_engine_skips_slot_with_unfinished_event():
 
     assert slot.index == 1
     assert engine._next_slot_index == 0
+
+
+def test_native_tensorrt_engine_reserves_slot_atomically():
+    from stereo_runtime.providers.nvidia.tensorrt_native import (
+        NativeTensorRtEngine,
+        _NativeTensorRtExecutionSlot,
+    )
+
+    engine = object.__new__(NativeTensorRtEngine)
+    engine._slots = [_NativeTensorRtExecutionSlot(0, object())]
+    engine._next_slot_index = 0
+    engine._slot_lock = threading.Lock()
+
+    slot = engine._acquire_slot()
+
+    assert slot.reserved is True
+    assert engine._slots[0].reserved is True
+
+
+def test_native_tensorrt_engine_records_slot_wait(monkeypatch):
+    import stereo_runtime.providers.nvidia.tensorrt_native as native_module
+    from stereo_runtime.providers.nvidia.tensorrt_native import (
+        NativeTensorRtEngine,
+        _NativeTensorRtExecutionSlot,
+    )
+
+    class Event:
+        def __init__(self):
+            self.ready = False
+
+        def query(self):
+            return self.ready
+
+        def synchronize(self):
+            self.ready = True
+
+    event = Event()
+    engine = object.__new__(NativeTensorRtEngine)
+    engine._slots = [_NativeTensorRtExecutionSlot(0, object(), available_event=event)]
+    engine._next_slot_index = 0
+    engine._slot_lock = threading.Lock()
+    ticks = iter((10.0, 10.025))
+    monkeypatch.setattr(native_module.time, "perf_counter", lambda: next(ticks))
+
+    slot = engine._acquire_slot()
+
+    assert abs(slot.last_acquire_wait_ms - 25.0) < 0.001
+    assert abs(engine.slot_acquire_wait_ms(0) - 25.0) < 0.001
+
+
+def test_native_tensorrt_engine_uses_independent_runtime_and_engine_per_slot(monkeypatch, tmp_path):
+    from stereo_runtime.providers.nvidia.tensorrt_native import NativeTensorRtEngine
+
+    created_runtimes = []
+
+    class FakeLogger:
+        ERROR = 1
+
+        def __init__(self, level):
+            self.level = level
+
+    class FakeContext:
+        pass
+
+    class FakeEngine:
+        num_io_tensors = 2
+
+        def __init__(self, runtime_index):
+            self.runtime_index = runtime_index
+
+        def create_execution_context(self):
+            return FakeContext()
+
+        def get_tensor_name(self, index):
+            return ("input", "output")[index]
+
+        def get_tensor_mode(self, name):
+            return "input" if name == "input" else "output"
+
+        def get_tensor_shape(self, name):
+            return (1, 3, 294, 518)
+
+    class FakeRuntime:
+        def __init__(self, logger):
+            self.index = len(created_runtimes)
+            created_runtimes.append(self)
+
+        def deserialize_cuda_engine(self, serialized):
+            assert serialized == b"trt"
+            return FakeEngine(self.index)
+
+    class FakeTrt:
+        Logger = FakeLogger
+        Runtime = FakeRuntime
+
+        class TensorIOMode:
+            INPUT = "input"
+
+    engine_path = tmp_path / "model.trt"
+    engine_path.write_bytes(b"trt")
+    monkeypatch.setitem(sys.modules, "tensorrt", FakeTrt)
+    monkeypatch.setattr(torch.cuda, "Stream", lambda *, device: object())
+
+    engine = NativeTensorRtEngine(engine_path, execution_slot_count=3)
+
+    assert engine.pipeline_slot_count == 3
+    assert len({id(slot.runtime) for slot in engine._slots}) == 3
+    assert len({id(slot.engine) for slot in engine._slots}) == 3
+    assert [slot.engine.runtime_index for slot in engine._slots] == [0, 1, 2]
+
+
+def test_native_tensorrt_engine_falls_back_when_extra_engine_is_unavailable(monkeypatch, tmp_path, capsys):
+    from stereo_runtime.providers.nvidia.tensorrt_native import NativeTensorRtEngine
+
+    class FakeLogger:
+        ERROR = 1
+
+        def __init__(self, level):
+            self.level = level
+
+    class FakeEngine:
+        num_io_tensors = 2
+
+        def create_execution_context(self):
+            return object()
+
+        def get_tensor_name(self, index):
+            return ("input", "output")[index]
+
+        def get_tensor_mode(self, name):
+            return "input" if name == "input" else "output"
+
+        def get_tensor_shape(self, name):
+            return (1, 3, 294, 518)
+
+    class FakeRuntime:
+        calls = 0
+
+        def __init__(self, logger):
+            pass
+
+        def deserialize_cuda_engine(self, serialized):
+            FakeRuntime.calls += 1
+            return FakeEngine() if FakeRuntime.calls == 1 else None
+
+    class FakeTrt:
+        Logger = FakeLogger
+        Runtime = FakeRuntime
+
+        class TensorIOMode:
+            INPUT = "input"
+
+    engine_path = tmp_path / "model.trt"
+    engine_path.write_bytes(b"trt")
+    monkeypatch.setitem(sys.modules, "tensorrt", FakeTrt)
+    monkeypatch.setattr(torch.cuda, "Stream", lambda *, device: object())
+
+    engine = NativeTensorRtEngine(engine_path, execution_slot_count=2)
+
+    assert engine.pipeline_slot_count == 1
+    assert "execution slot 2/2 unavailable; using 1 slot(s)" in capsys.readouterr().out
 
 
 def test_native_tensorrt_engine_close_waits_for_slot_event():

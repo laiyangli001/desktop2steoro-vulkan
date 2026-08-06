@@ -113,6 +113,10 @@ class GUIConfigMixin:
         self.color_gamma_dd.value = f'{self._parse_float(cfg.get("Color Gamma", DEFAULTS["Color Gamma"]), DEFAULTS["Color Gamma"]):.1f}'
         self.color_temperature_dd.value = str(int(self._parse_float(cfg.get("Color Temperature", DEFAULTS["Color Temperature"]), DEFAULTS["Color Temperature"])))
         self.color_tint_dd.value = str(int(self._parse_float(cfg.get("Color Tint", DEFAULTS["Color Tint"]), DEFAULTS["Color Tint"])))
+        self.projection_min_lod_dd.value = f'{self._parse_float(cfg.get("Vulkan Projection Min LOD", DEFAULTS["Vulkan Projection Min LOD"]), DEFAULTS["Vulkan Projection Min LOD"]):.2f}'
+        self.projection_max_lod_dd.value = f'{self._parse_float(cfg.get("Vulkan Projection Max LOD", DEFAULTS["Vulkan Projection Max LOD"]), DEFAULTS["Vulkan Projection Max LOD"]):.2f}'
+        self.projection_mip_lod_bias_dd.value = f'{self._parse_float(cfg.get("Vulkan Projection MIP LOD Bias", DEFAULTS["Vulkan Projection MIP LOD Bias"]), DEFAULTS["Vulkan Projection MIP LOD Bias"]):.2f}'
+        self.projection_rcas_sharpness_dd.value = f'{self._parse_float(cfg.get("Vulkan Projection RCAS Sharpness", DEFAULTS["Vulkan Projection RCAS Sharpness"]), DEFAULTS["Vulkan Projection RCAS Sharpness"]):.2f}'
         self.advanced_stereo_cb.value = False
         self._sync_advanced_stereo_visibility()
         self._sync_device_advanced_visibility(cfg.get("Run Mode", DEFAULTS.get("Run Mode", "Local Viewer")))
@@ -145,7 +149,11 @@ class GUIConfigMixin:
             parallel_workers = int(parallel_workers)
         except (TypeError, ValueError):
             parallel_workers = 2
-        self.parallel_inference_dd.value = str(parallel_workers) if parallel_workers in {2, 3} else "Off"
+        self.parallel_inference_dd.value = {
+            1: "单路推理",
+            2: "两路推理",
+            3: "三路推理",
+        }.get(parallel_workers, "两路推理")
         self.recompile_trt_cb.value = cfg.get("Recompile TensorRT", DEFAULTS["Recompile TensorRT"])
         mgx_val = cfg.get("MIGraphX")
         if mgx_val is not None:
@@ -265,6 +273,10 @@ class GUIConfigMixin:
             "Color Gamma": self._parse_float(self.color_gamma_dd.value, DEFAULTS["Color Gamma"]),
             "Color Temperature": self._parse_float(self.color_temperature_dd.value, DEFAULTS["Color Temperature"]),
             "Color Tint": self._parse_float(self.color_tint_dd.value, DEFAULTS["Color Tint"]),
+            "Vulkan Projection Min LOD": self._parse_float(self.projection_min_lod_dd.value, DEFAULTS["Vulkan Projection Min LOD"]),
+            "Vulkan Projection Max LOD": self._parse_float(self.projection_max_lod_dd.value, DEFAULTS["Vulkan Projection Max LOD"]),
+            "Vulkan Projection MIP LOD Bias": self._parse_float(self.projection_mip_lod_bias_dd.value, DEFAULTS["Vulkan Projection MIP LOD Bias"]),
+            "Vulkan Projection RCAS Sharpness": self._parse_float(self.projection_rcas_sharpness_dd.value, DEFAULTS["Vulkan Projection RCAS Sharpness"]),
             "Depth Pop": depth_pop,
             "Foreground Pop": self._parse_float(self.foreground_pop_dd.value, DEFAULTS["Foreground Pop"]),
             "Midground Pop": self._parse_float(self.midground_pop_dd.value, DEFAULTS["Midground Pop"]),
@@ -294,8 +306,12 @@ class GUIConfigMixin:
             "Stream Quality": self._parse_int(self.stream_quality_dd.value, DEFAULTS["Stream Quality"]),
             "torch.compile": self.torch_compile_cb.value,
             **accelerator_values,
-            "Parallel Inference": self.parallel_inference_dd.value != "Off",
-            "Parallel Inference Workers": self._parse_int(self.parallel_inference_dd.value, 1),
+            "Parallel Inference": self.parallel_inference_dd.value != "单路推理",
+            "Parallel Inference Workers": {
+                "单路推理": 1,
+                "两路推理": 2,
+                "三路推理": 3,
+            }.get(self.parallel_inference_dd.value, 2),
             **recompile_values,
             "Capture Tool": self.capture_tool_dd.value,
             "Fill 16:9": self.fill_16_9_cb.value,
@@ -391,6 +407,10 @@ class GUIConfigMixin:
             "Color Gamma": self._parse_float(self.color_gamma_dd.value, DEFAULTS["Color Gamma"]),
             "Color Temperature": self._parse_float(self.color_temperature_dd.value, DEFAULTS["Color Temperature"]),
             "Color Tint": self._parse_float(self.color_tint_dd.value, DEFAULTS["Color Tint"]),
+            "Vulkan Projection Min LOD": self._parse_float(self.projection_min_lod_dd.value, DEFAULTS["Vulkan Projection Min LOD"]),
+            "Vulkan Projection Max LOD": self._parse_float(self.projection_max_lod_dd.value, DEFAULTS["Vulkan Projection Max LOD"]),
+            "Vulkan Projection MIP LOD Bias": self._parse_float(self.projection_mip_lod_bias_dd.value, DEFAULTS["Vulkan Projection MIP LOD Bias"]),
+            "Vulkan Projection RCAS Sharpness": self._parse_float(self.projection_rcas_sharpness_dd.value, DEFAULTS["Vulkan Projection RCAS Sharpness"]),
             "Cross Eyed": bool(self.cross_eyed_cb.value),
         })
         ok, err = save_yaml(path, cfg)

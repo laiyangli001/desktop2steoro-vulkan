@@ -483,8 +483,8 @@ Stereo Preset: cinema
 Stereo Quality: quality_4k
 Stereo Compute Backend: auto
 Parallax Budget Preset: standard
-Temporal: false
-Temporal Strength: 0.0
+Temporal: true
+Temporal Strength: 0.25
 Auto Scene Reset: true
 Scene Reset Threshold: 0.22
 Edge Dilation: 1
@@ -501,6 +501,10 @@ Color Saturation: 1.0
 Color Gamma: 1.0
 Color Temperature: 0.0
 Color Tint: 0.0
+Vulkan Projection Min LOD: 0.0
+Vulkan Projection Max LOD: 0.3
+Vulkan Projection MIP LOD Bias: -0.3
+Vulkan Projection RCAS Sharpness: 0.5
 Display Mode: Half-SBS
 FP16: true
 torch.compile: true
@@ -543,8 +547,8 @@ Lossless Scaling Support: false
 Capture Tool: WindowsCaptureCUDA
 Fill 16:9: true
 Fix Viewer Aspect: false
-Stereo Output: 1
-Show Log Panel: true
+Stereo Output: 2
+Show Log Panel: false
 OpenVINO: null
 OpenXR Color Mode: sRGB
 Synthetic View: quality_4k

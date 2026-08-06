@@ -4,13 +4,91 @@ from types import SimpleNamespace
 from pathlib import Path
 
 from stereo_runtime.pipeline import (
+    _ParallelDepthScheduler,
     RuntimePipelineLoop,
     _enable_openxr_depth_cuda_graph_if_needed,
     _motion_sample,
     _motion_score,
     _runtime_motion_gate_enabled,
     _runtime_pending_depth_limit,
+    _runtime_parallel_adaptive_backoff_enabled,
 )
+
+
+def test_parallel_depth_scheduler_enforces_effective_submission_limit():
+    scheduler = object.__new__(_ParallelDepthScheduler)
+    scheduler.worker_count = 3
+    scheduler.effective_limit = 3
+    scheduler.pending = [object(), object()]
+    scheduler.trim = lambda _limit: None
+
+    assert scheduler.can_submit() is True
+    assert scheduler.set_effective_limit(2) is True
+    assert scheduler.can_submit() is False
+    assert scheduler.set_effective_limit(1) is True
+    assert scheduler.effective_limit == 1
+
+
+def test_parallel_scheduler_backoff_and_recovery_supports_three_workers(monkeypatch):
+    monkeypatch.setenv("D2S_RUNTIME_PARALLEL_ADAPTIVE_BACKOFF", "1")
+    class Scheduler:
+        worker_count = 3
+        effective_limit = 3
+
+        def set_effective_limit(self, limit):
+            self.effective_limit = max(1, min(self.worker_count, limit))
+            return True
+
+    events = []
+    loop = object.__new__(RuntimePipelineLoop)
+    loop.context = SimpleNamespace(
+        source_stat_inc=lambda name, **kwargs: events.append((name, kwargs)),
+        breakdown_inc=lambda *args, **kwargs: None,
+    )
+    loop._parallel_depth_scheduler = Scheduler()
+    loop._parallel_backoff_until = 0.0
+    loop._parallel_recovery_after = 0.0
+    monkeypatch.setattr("stereo_runtime.pipeline.time.perf_counter", lambda: 10.0)
+    monkeypatch.setenv("D2S_RUNTIME_PARALLEL_BACKOFF_S", "1.5")
+
+    loop._parallel_reduce_for_pressure("test")
+    assert loop._parallel_depth_scheduler.effective_limit == 2
+    loop._parallel_reduce_for_pressure("test")
+    assert loop._parallel_depth_scheduler.effective_limit == 1
+
+    monkeypatch.setattr("stereo_runtime.pipeline.time.perf_counter", lambda: 11.6)
+    loop._parallel_recover_if_ready()
+    assert loop._parallel_depth_scheduler.effective_limit == 2
+    monkeypatch.setattr("stereo_runtime.pipeline.time.perf_counter", lambda: 13.2)
+    loop._parallel_recover_if_ready()
+    assert loop._parallel_depth_scheduler.effective_limit == 3
+    assert [name for name, _kwargs in events] == [
+        "runtime_parallel_backoff",
+        "runtime_parallel_backoff",
+        "runtime_parallel_recovery",
+        "runtime_parallel_recovery",
+    ]
+
+
+def test_parallel_adaptive_backoff_can_be_disabled(monkeypatch):
+    monkeypatch.setenv("D2S_RUNTIME_PARALLEL_ADAPTIVE_BACKOFF", "0")
+    assert _runtime_parallel_adaptive_backoff_enabled() is False
+
+    class Scheduler:
+        worker_count = 2
+        effective_limit = 2
+
+    events = []
+    loop = object.__new__(RuntimePipelineLoop)
+    loop.context = SimpleNamespace(
+        source_stat_inc=lambda name, **kwargs: events.append(name),
+        breakdown_inc=lambda *args, **kwargs: None,
+    )
+    loop._parallel_depth_scheduler = Scheduler()
+    loop._parallel_reduce_for_pressure("test")
+
+    assert loop._parallel_depth_scheduler.effective_limit == 2
+    assert events == []
 
 
 def test_openxr_motion_gate_matches_legacy_default(monkeypatch):
