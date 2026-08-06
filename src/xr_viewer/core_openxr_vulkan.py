@@ -2904,47 +2904,6 @@ class OpenXrVulkanPresenter(
         hits = (self._screen_ray_hit_for_hand(0), self._screen_ray_hit_for_hand(1))
         left_grip = bool(inputs[0].get("grip", 0.0) > 0.5)
         right_grip = bool(inputs[1].get("grip", 0.0) > 0.5)
-        # v2.5: right Grip + left-stick X adjusts the current edge-effect
-        # opacity without requiring either laser to hit the screen.
-        left_stick_x = float(inputs[0].get("joystick_x", 0.0) or 0.0)
-        left_stick_y = float(inputs[0].get("joystick_y", 0.0) or 0.0)
-        if (
-            right_grip
-            and not left_grip
-            and abs(left_stick_x) > self._input_deadzone()
-            and abs(left_stick_x) > abs(left_stick_y)
-        ):
-            input_dt = max(0.001, min(0.1, float(self._last_frame_dt)))
-            mode = self._normalize_filament_glow_mode(self._filament_glow_mode)
-            if mode == "veil":
-                previous = float(self._frosted_veil_alpha)
-                value = max(0.0, min(1.0, previous + left_stick_x * 0.8 * input_dt))
-                if value != previous:
-                    self._frosted_veil_alpha = value
-                    self._preset_name_overlay = f"Veil {int(round(value * 100.0))}%"
-                    self._preset_osd_show_t = now
-            elif mode in {"glow", "surround"}:
-                multiplier_attribute = (
-                    "_filament_glow_shell_intensity_multiplier"
-                    if mode == "surround"
-                    else "_filament_glow_intensity_multiplier"
-                )
-                default_multiplier = (
-                    self._filament_glow_shell_default_multiplier
-                    if mode == "surround"
-                    else self._filament_glow_default_multiplier
-                )
-                base = max(float(default_multiplier), 1e-6)
-                previous = max(
-                    0.0,
-                    min(1.0, float(getattr(self, multiplier_attribute)) / base),
-                )
-                value = max(0.0, min(1.0, previous + left_stick_x * 0.8 * input_dt))
-                if value != previous:
-                    setattr(self, multiplier_attribute, value * base)
-                    label = "Surround Glow" if mode == "surround" else "Glow"
-                    self._preset_name_overlay = f"{label} {int(round(value * 100.0))}%"
-                    self._preset_osd_show_t = now
         if not (
             right_grip
             and not left_grip

@@ -302,7 +302,8 @@ def test_openxr_depth_temporal_is_disabled_with_stereo_temporal(monkeypatch):
     runtime.close()
 
 
-def test_openxr_default_auto_mode_builds_deferred_vulkan_request(monkeypatch):
+@pytest.mark.parametrize("depth_strength", (0.0, 1.75))
+def test_openxr_deferred_vulkan_request_uses_runtime_depth_strength(monkeypatch, depth_strength):
     monkeypatch.setattr(
         runtime_module,
         "probe_triton_runtime",
@@ -321,7 +322,7 @@ def test_openxr_default_auto_mode_builds_deferred_vulkan_request(monkeypatch):
 
     result = runtime.process_openxr_frame(
         torch.rand(1, 3, 8, 12),
-        OpenXRRenderConfig(),
+        OpenXRRenderConfig(depth_strength=depth_strength),
     )
 
     assert result.vulkan_compute_request is not None
@@ -331,6 +332,7 @@ def test_openxr_default_auto_mode_builds_deferred_vulkan_request(monkeypatch):
     assert result.vulkan_compute_request.params.foreground_scale == 1.15
     assert result.vulkan_compute_request.params.midground_scale == 1.05
     assert result.vulkan_compute_request.params.background_scale == 1.05
+    assert result.vulkan_compute_request.params.depth_strength == depth_strength
     runtime.close()
 
 

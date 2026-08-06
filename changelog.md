@@ -2,6 +2,10 @@
 
 本文件只记录用户可感知的功能、行为变化、重要修复和架构里程碑，不记录逐次调试过程。新记录按日期倒序追加，并将同一目标的连续修改归纳为一条有效结果。
 
+## 2026-08-07
+- Fixed OpenXR 3D Depth on/off and live Depth Strength changes for the Vulkan deferred compositor: every frame now forwards the current runtime depth value to the Vulkan stereo push constants, so `0.0` produces mono output and controller adjustments apply on the next rendered frame.
+- Removed the conflicting continuous OpenXR Glow adjustment shortcut; existing 3D Depth controls are unchanged.
+
 ## 2026-08-06
 - Virtual Desktop 不支持 OpenXR Quad swapchain，移除 Screen Quad Reprojection 实验启动脚本；默认输出继续使用已验证的 Projection swapchain Vulkan Composer 路径，不影响左右眼 Projection Layer 提交。
 - Vulkan Projection Composer 完成屏幕质量链：按输入/头显档位执行原生 LOD0→MIP、Lanczos2→RCAS→MIP 或 EASU→RCAS→MIP，再进行最终平面/曲面屏幕投影。质量链保持每个 OpenXR 帧实时执行，确保 MIP LOD、MIP 偏移和 RCAS 参数改动立即生效；提供关闭质量链的 LOD0 性能对比开关，但不降低输入或 swapchain 分辨率。

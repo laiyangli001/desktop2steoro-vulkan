@@ -1375,6 +1375,10 @@ class StereoRuntime:
                 midground_shift_scale=float(getattr(stereo_config, "midground_shift_scale", 1.0)),
                 background_shift_scale=float(getattr(stereo_config, "background_shift_scale", 1.0)),
             )
+        openxr_stereo_config = replace(
+            stereo_config,
+            depth_strength=max(0.0, float(openxr_config_for_frame.depth_strength)),
+        )
         _record_cuda_event(cuda_events, "depth", rgb_frame)
 
         openxr_render_ms = 0.0
@@ -1390,7 +1394,7 @@ class StereoRuntime:
             deferred_request, deferred_reason = self._build_vulkan_compute_request(
                 output_rgb,
                 depth,
-                stereo_config,
+                openxr_stereo_config,
             )
             # OpenXR must defer the final stereo dispatch to the Presenter so
             # it can write directly into Presenter-owned images. This remains
@@ -1409,7 +1413,7 @@ class StereoRuntime:
                 from .vulkan_stereo_pass import vulkan_hole_fill_backend_name
 
                 render_backend = {
-                    "backend": str(stereo_config.backend),
+                    "backend": str(openxr_stereo_config.backend),
                     "sbs_backend": "vulkan_deferred_stereo",
                     "warp_composite_backend": "vulkan_layered_stereo_output_image",
                     "occlusion_mask_backend": "vulkan_layered_stereo_output_image",
@@ -1429,13 +1433,13 @@ class StereoRuntime:
                 vulkan_stereo, vulkan_skip = self._try_vulkan_fused_stereo(
                     output_rgb,
                     depth,
-                    stereo_config,
+                    openxr_stereo_config,
                     skip_sbs_output=True,
                 )
                 if vulkan_stereo is not None:
                     left_eye = vulkan_stereo.left_eye
                     right_eye = vulkan_stereo.right_eye
-                    if bool(getattr(stereo_config, "cross_eyed", False)):
+                    if bool(getattr(openxr_stereo_config, "cross_eyed", False)):
                         left_eye, right_eye = right_eye, left_eye
                     output_format = "openxr_eye_views"
                     render_backend = dict(vulkan_stereo.debug_info)
@@ -1447,14 +1451,14 @@ class StereoRuntime:
                     no_fill_fused, no_fill_fused_reason = _try_openxr_no_fill_fused_rgba_u8(
                         output_rgb,
                         depth,
-                        stereo_config,
+                        openxr_stereo_config,
                         cuda_events,
                     )
                     if no_fill_fused is not None:
                         synthesis_left, synthesis_right, fused_debug = no_fill_fused
                         left_eye = synthesis_left
                         right_eye = synthesis_right
-                        if bool(getattr(stereo_config, "cross_eyed", False)):
+                        if bool(getattr(openxr_stereo_config, "cross_eyed", False)):
                             left_eye, right_eye = right_eye, left_eye
                         output_format = "openxr_eye_views"
                         render_backend = dict(fused_debug)
@@ -1469,7 +1473,7 @@ class StereoRuntime:
                     else:
                         # Reuse the canonical synthesis path when the dedicated
                         # no-fill kernel cannot preserve the selected behavior.
-                        triton_config = replace(stereo_config, output_format="mono")
+                        triton_config = replace(openxr_stereo_config, output_format="mono")
                         triton_stereo = synthesize_stereo(
                             output_rgb,
                             depth,
@@ -1514,7 +1518,7 @@ class StereoRuntime:
                     pack_start = time.perf_counter()
                     left_eye = openxr.left_eye
                     right_eye = openxr.right_eye
-                    if bool(getattr(stereo_config, "cross_eyed", False)):
+                    if bool(getattr(openxr_stereo_config, "cross_eyed", False)):
                         left_eye, right_eye = right_eye, left_eye
                     _record_cuda_event(cuda_events, "openxr_pack_start", left_eye)
                     if _openxr_runtime_output_uint8_enabled():
@@ -1592,7 +1596,7 @@ class StereoRuntime:
         debug["hot_reload_changed_fields"] = list(self.last_settings_changed_fields)
         _consume_pending_temporal_reset_reasons(self, debug)
         _add_active_settings_debug_info(debug, self.active_settings_snapshot)
-        _add_runtime_config_debug_info(debug, stereo_config)
+        _add_runtime_config_debug_info(debug, openxr_stereo_config)
         debug.update(convergence_debug)
         provider_info = self.provider_report()
         _add_depth_contract_debug_info(debug, depth, provider_info)
@@ -1600,7 +1604,7 @@ class StereoRuntime:
         debug["runtime_output_pack_backend"] = pack_backend
         shader_uniforms = None
         if openxr_config is not None:
-            shader_uniforms = _add_openxr_config_debug_info(debug, openxr_config, left_eye)
+            shader_uniforms = _add_openxr_config_debug_info(debug, openxr_config_for_frame, left_eye)
         debug["runtime_depth_upsample"] = self.config.depth_upsample
         _add_preprocess_debug_info(debug, rgb_frame)
         if memory:
