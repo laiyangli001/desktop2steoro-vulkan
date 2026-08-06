@@ -1,5 +1,5 @@
 Capture Mode: Monitor
-Monitor Index: 3
+Monitor Index: 1
 Window Title: ''
 Show FPS: false
 Model List:
@@ -472,10 +472,10 @@ Depth Resolution: 518
 Anti-aliasing: 1
 Depth Antialias Strength: 1.0
 Depth Pop: 0.0
-Foreground Pop: 1.15
-Midground Pop: 1.05
-Background Pop: 1.05
-Depth Separation Preset: standard
+Foreground Pop: 1.25
+Midground Pop: 1.1
+Background Pop: 1.0
+Depth Separation Preset: strong
 Convergence: 0.0
 Dynamic Convergence: false
 Dynamic Convergence Strength: 0.0
@@ -502,9 +502,9 @@ Color Gamma: 1.0
 Color Temperature: 0.0
 Color Tint: 0.0
 Vulkan Projection Min LOD: 0.0
-Vulkan Projection Max LOD: 0.3
-Vulkan Projection MIP LOD Bias: -0.3
-Vulkan Projection RCAS Sharpness: 0.5
+Vulkan Projection Max LOD: 0.15
+Vulkan Projection MIP LOD Bias: -0.35
+Vulkan Projection RCAS Sharpness: 0.35
 Display Mode: Half-SBS
 FP16: true
 torch.compile: true
@@ -548,7 +548,7 @@ Capture Tool: WindowsCaptureCUDA
 Fill 16:9: true
 Fix Viewer Aspect: false
 Stereo Output: 2
-Show Log Panel: false
+Show Log Panel: true
 OpenVINO: null
 OpenXR Color Mode: sRGB
 Synthetic View: quality_4k
