@@ -39,14 +39,16 @@ shared Scene; each eye's active Renderer brackets only its own external
 Swapchain frame.
 
 The bridge also exposes `filament_bridge_depth_output_abi_available` as an
-explicit capability probe. It returns true when the pinned Vulkan backend is
-used: the Presenter supplies paired per-eye depth images and the backend
-consumes them through `SwapChainBundle::depth` and `depthFormat`. No color
-image or CPU-side approximation is accepted as depth.
+explicit capability probe. It currently returns false: the backend accepts
+the depth metadata, but the external depth image layout and render-pass
+ownership contract is not complete. The Presenter therefore keeps the
+depth-sensitive path disabled and falls back to color-only swapchains. No
+color image or CPU-side approximation is accepted as depth.
 
-The bridge populates that bundle with a valid borrowed Vulkan image and keeps
-the per-eye handle queryable for diagnostics. The backend remains responsible
-for the required layout transition before rendering and after presentation.
+The bridge can populate that bundle with a borrowed Vulkan image and keeps the
+per-eye handle queryable for diagnostics. The remaining native work is to
+implement the required layout transition and render-pass ownership before
+advertising the capability.
 
 The desktop preview ABI exposes `filament_preview_apply_animations` for embedded glTF animations.
 

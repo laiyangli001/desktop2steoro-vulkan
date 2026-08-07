@@ -15,8 +15,8 @@ $env:D2S_OPENXR_DEBUG = "1"
 
 Write-Host "D2S_VULKAN_PROJECTION_COMPOSER=1"
 Write-Host "D2S_FILAMENT_DEPTH_SWAPCHAIN=1"
-Write-Host "Expected log: Filament depth attachments bound: eyes=2"
-Write-Host "If creation fails, expected fallback: color-only swapchains"
+Write-Host "Current expected log: depth capability output=0 and safe color-only fallback"
+Write-Host "Depth binding stays disabled until native render-pass ownership is complete"
 Write-Host "Starting the normal Windows launcher..."
 
 & $runBat

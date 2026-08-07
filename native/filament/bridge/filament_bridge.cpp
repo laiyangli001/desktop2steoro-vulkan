@@ -224,9 +224,11 @@ int filament_bridge_vulkan_external_image_abi_available(
 }
 
 int filament_bridge_depth_output_abi_available(const FilamentBridge*) {
-    // The pinned Vulkan backend consumes the borrowed per-eye depth image
-    // through SwapChainBundle::depth/depthFormat.
-    return 1;
+    // The backend accepts the metadata, but the external depth image layout
+    // and render-pass ownership contract is not complete yet. Do not expose
+    // it as a usable producer depth output; the Presenter must fall back to
+    // color-only swapchains until that contract is implemented end-to-end.
+    return 0;
 }
 
 int filament_bridge_get_depth_attachment(

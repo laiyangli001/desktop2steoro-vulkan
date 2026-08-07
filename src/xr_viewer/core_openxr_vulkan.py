@@ -3804,6 +3804,7 @@ class OpenXrVulkanPresenter(
                     _env_flag("D2S_FILAMENT_DEPTH_SWAPCHAIN", default=False)
                     and depth_create_abi
                     and depth_query_abi
+                    and depth_output_abi
                 )
                 if (
                     getattr(bridge, "depth_swapchain_abi_available", False)
