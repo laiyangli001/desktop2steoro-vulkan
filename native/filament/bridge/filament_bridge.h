@@ -142,6 +142,9 @@ FILAMENT_BRIDGE_API int filament_bridge_vulkan_external_image_abi_available(
 // Color-only external swapchains must return 0.
 FILAMENT_BRIDGE_API int filament_bridge_depth_output_abi_available(
         const FilamentBridge* bridge);
+FILAMENT_BRIDGE_API int filament_bridge_get_depth_attachment(
+        const FilamentBridge* bridge, uint32_t eye_index,
+        const void** image_handle, int32_t* format);
 // Return the borrowed Filament render-finished semaphore for the active eye.
 // The caller must consume it before the next frame reuses the swapchain slot.
 FILAMENT_BRIDGE_API int filament_bridge_get_finished_drawing_semaphore(

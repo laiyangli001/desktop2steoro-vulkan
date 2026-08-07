@@ -4086,6 +4086,7 @@ class OpenXrVulkanPresenter(
         frame: VulkanStereoOutputFrame,
         acquired_images: list[tuple[_EyeSwapchain, int]],
         views: list[Any],
+        filament_wait_semaphores: list[Any] | tuple[Any, ...] = (),
     ) -> int:
         if self.vulkan is None or len(acquired_images) not in {1, 2}:
             raise RuntimeError("Vulkan Projection Composer has no valid targets")
@@ -4155,7 +4156,9 @@ class OpenXrVulkanPresenter(
         )
         plan = self._active_screen_sampling_plan
         use_quality_mip = bool(
-            self._vulkan_projection_quality_chain_requested and plan is not None
+            self._vulkan_projection_quality_chain_requested
+            and plan is not None
+            and not filament_wait_semaphores
         )
         projection_draws = []
         glow_source = (frame.metadata or {}).get("glow_vulkan_image")
@@ -4266,8 +4269,9 @@ class OpenXrVulkanPresenter(
         if timeline is None:
             timeline = self._vulkan_projection_screen_pass.submit_stereo(
                 projection_draws,
-                load_target=surround_active,
+                load_target=bool(surround_active or filament_wait_semaphores),
                 wait_for_timeline=surround_timeline,
+                extra_wait_semaphores=filament_wait_semaphores,
             )
         if (
             not surround_requested
@@ -4950,6 +4954,52 @@ class OpenXrVulkanPresenter(
             else None
         )
 
+    def _render_filament_for_projection_composer(
+        self,
+        render_views: list[Any],
+        acquired_images: list[tuple[_EyeSwapchain, int]],
+        animation_time: float,
+        record_time: Callable[[str, float], None],
+    ) -> list[Any]:
+        """Render environment/controllers before Composer overlays the SBS image."""
+        bridge = self.filament_bridge
+        if bridge is None or len(acquired_images) != 2:
+            return []
+        finished_available = bool(
+            getattr(bridge, "finished_drawing_semaphore_abi_available", False)
+        )
+        semaphores: list[Any] = []
+        # Keep the established safe per-eye end-frame behavior until the
+        # Composer/Filament shared queue contract has been validated.
+        deferred = False
+        for eye_index, (eye, image_index) in enumerate(acquired_images):
+            state_started = time.perf_counter()
+            bridge.set_active_eye(eye_index)
+            _update_filament_camera(
+                bridge,
+                render_views[eye_index],
+                near_plane=self._profile_near_plane,
+                far_plane=self._profile_far_plane,
+            )
+            record_time(f"openxr_filament_eye{eye_index}_state", state_started)
+            bridge.set_acquired_image(image_index)
+            queue_started = time.perf_counter()
+            bridge.begin_frame()
+            record_time(f"openxr_filament_eye{eye_index}_queue", queue_started)
+            finish_started = time.perf_counter()
+            if deferred:
+                bridge.end_frame_deferred()
+            else:
+                bridge.end_frame()
+            record_time(
+                f"openxr_filament_eye{eye_index}_finish_wait", finish_started
+            )
+            if finished_available:
+                semaphore = bridge.get_finished_drawing_semaphore()
+                if semaphore is not None:
+                    semaphores.append(semaphore)
+        return semaphores
+
     def _render_projection_layer(
         self,
         views: list[Any],
@@ -4986,6 +5036,8 @@ class OpenXrVulkanPresenter(
         submitted_filament_eyes: list[int] = []
         completion_drain_attempted = False
         finished_semaphore_available = False
+        filament_composer_wait_semaphores: list[Any] = []
+        filament_composer_rendered = False
         render_succeeded = False
         self._vulkan_projection_composer_active = False
         self._screen_quad_reprojection_active = False
@@ -5081,7 +5133,6 @@ class OpenXrVulkanPresenter(
             )
             if (
                 self.filament_bridge is not None
-                and not use_vulkan_projection_composer
                 and not use_screen_quad_reprojection
             ):
                 prepare_filament_rendering()
@@ -5111,11 +5162,31 @@ class OpenXrVulkanPresenter(
                     )
             if not render_succeeded and use_vulkan_projection_composer:
                 try:
-                    composer_timeline = self._render_vulkan_projection_composer(
-                        composer_frame,
-                        acquired_images,
-                        composition_views,
-                    )
+                    # The per-eye Composer LOAD path is not compatible with
+                    # Filament multiview's array target yet. Keep the
+                    # established multiview path intact until it has an
+                    # explicit array-image semaphore contract.
+                    if self.filament_bridge is not None and not self._multiview_active:
+                        filament_composer_wait_semaphores = (
+                            self._render_filament_for_projection_composer(
+                                render_views,
+                                acquired_images,
+                                animation_time,
+                                record_time,
+                            )
+                        )
+                        filament_composer_rendered = True
+                    if filament_composer_wait_semaphores:
+                        composer_timeline = self._render_vulkan_projection_composer(
+                            composer_frame,
+                            acquired_images,
+                            composition_views,
+                            filament_wait_semaphores=filament_composer_wait_semaphores,
+                        )
+                    else:
+                        composer_timeline = self._render_vulkan_projection_composer(
+                            composer_frame, acquired_images, composition_views
+                        )
                     composer_frame.metadata["_vulkan_consumer_release_timeline"] = max(
                         int(
                             composer_frame.metadata.get(
@@ -5142,12 +5213,34 @@ class OpenXrVulkanPresenter(
                         self._on_breakdown_inc(
                             "openxr_vulkan_projection_composer_fallback", 1
                         )
-                    fallback_prepare_started = time.perf_counter()
-                    prepare_filament_rendering()
-                    record_time(
-                        "openxr_vulkan_composer_fallback_prepare",
-                        fallback_prepare_started,
-                    )
+                    if filament_composer_rendered:
+                        if filament_composer_wait_semaphores:
+                            drain_started = time.perf_counter()
+                            consumer_completion_timeline = self.vulkan.submit_on(
+                                "graphics",
+                                lambda _command_buffer: None,
+                                wait_semaphore=filament_composer_wait_semaphores,
+                            )
+                            record_time("openxr_filament_completion_drain", drain_started)
+                            if isinstance(sampling_frame, VulkanStereoOutputFrame):
+                                sampling_frame.metadata[
+                                    "_vulkan_consumer_release_timeline"
+                                ] = max(
+                                    int(
+                                        sampling_frame.metadata.get(
+                                            "_vulkan_consumer_release_timeline", 0
+                                        )
+                                    ),
+                                    int(consumer_completion_timeline),
+                                )
+                        render_succeeded = True
+                    else:
+                        fallback_prepare_started = time.perf_counter()
+                        prepare_filament_rendering()
+                        record_time(
+                            "openxr_vulkan_composer_fallback_prepare",
+                            fallback_prepare_started,
+                        )
             if (
                 not render_succeeded
                 and self._multiview_active
@@ -5204,7 +5297,7 @@ class OpenXrVulkanPresenter(
                 if semaphore is not None
             )
             expected_semaphores = 1 if self._multiview_active else 2
-            if use_vulkan_projection_composer:
+            if use_vulkan_projection_composer or filament_composer_rendered:
                 expected_semaphores = 0
             if finished_semaphore_available and len(published_semaphores) != expected_semaphores:
                 raise RuntimeError(

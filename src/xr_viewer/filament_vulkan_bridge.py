@@ -224,6 +224,23 @@ class FilamentVulkanBridge:
         function = getattr(
             self._library, "filament_bridge_create_eye_swapchain_with_depth", None
         )
+
+    def get_depth_attachment(self, eye_index: int) -> tuple[int, int] | None:
+        """Return the borrowed native depth image and format when ready."""
+        self._ensure_loaded()
+        function = getattr(self._library, "filament_bridge_get_depth_attachment", None)
+        if function is None:
+            return None
+        image = ctypes.c_void_p()
+        format_value = ctypes.c_int32()
+        if not function(
+            self._handle,
+            int(eye_index),
+            ctypes.byref(image),
+            ctypes.byref(format_value),
+        ):
+            return None
+        return int(image.value or 0), int(format_value.value)
         if function is None:
             raise FilamentBridgeError("Filament depth swapchain ABI is unavailable")
         array_type = ctypes.c_void_p * len(values)
@@ -960,6 +977,17 @@ class FilamentVulkanBridge:
             depth_output_abi.argtypes = [ctypes.c_void_p]
             depth_output_abi.restype = ctypes.c_int
             self._depth_output_abi_available = bool(depth_output_abi(None))
+        depth_attachment = getattr(
+            library, "filament_bridge_get_depth_attachment", None
+        )
+        if depth_attachment is not None:
+            depth_attachment.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_uint32,
+                ctypes.POINTER(ctypes.c_void_p),
+                ctypes.POINTER(ctypes.c_int32),
+            ]
+            depth_attachment.restype = ctypes.c_int
         if hasattr(library, "filament_bridge_get_finished_drawing_semaphore"):
             library.filament_bridge_get_finished_drawing_semaphore.argtypes = [
                 ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)

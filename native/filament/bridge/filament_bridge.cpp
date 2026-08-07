@@ -1,5 +1,7 @@
 #include "filament_bridge.h"
 
+#include "bridge_internal.h"
+
 #include "bridge_context.h"
 #include "bridge_controller.h"
 #include "bridge_controller_guide.h"
@@ -225,6 +227,23 @@ int filament_bridge_depth_output_abi_available(const FilamentBridge*) {
     // The current external swapchain contract carries color images only. A
     // depth result must not be inferred from color or from CPU-side data.
     return 0;
+}
+
+int filament_bridge_get_depth_attachment(
+        const FilamentBridge* bridge, uint32_t eye_index,
+        const void** image_handle, int32_t* format) {
+    if (!bridge || !image_handle || !format || eye_index >= bridge->eyes.size()) {
+        return 0;
+    }
+    const auto* external = bridge->eyes[eye_index].external_swapchain;
+    if (!external || external->depth == VK_NULL_HANDLE ||
+            external->depth_format == VK_FORMAT_UNDEFINED) {
+        return 0;
+    }
+    *image_handle = reinterpret_cast<const void*>(
+            reinterpret_cast<uintptr_t>(external->depth));
+    *format = static_cast<int32_t>(external->depth_format);
+    return 1;
 }
 
 int filament_bridge_get_finished_drawing_semaphore(

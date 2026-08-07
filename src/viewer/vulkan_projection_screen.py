@@ -1174,6 +1174,7 @@ class VulkanProjectionScreenPass:
         *,
         load_target: bool = False,
         wait_for_timeline: int = 0,
+        extra_wait_semaphores: list[Any] | tuple[Any, ...] = (),
     ) -> int:
         """Submit both eye projection draws in one graphics queue submission."""
         if len(draws) != 2:
@@ -1195,6 +1196,9 @@ class VulkanProjectionScreenPass:
             prepared.append(draw)
         wait_semaphores = [item["wait_semaphore"] for item in draws]
         wait_semaphores = [item for item in wait_semaphores if item is not None]
+        wait_semaphores.extend(
+            item for item in extra_wait_semaphores if item is not None
+        )
         submit_profile: dict[str, float] = {}
         timeline = self.context.submit_on(
             "graphics",

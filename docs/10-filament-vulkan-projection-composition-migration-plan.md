@@ -165,6 +165,18 @@ swapchain ABI 存在时才创建每眼单样本深度图并注入；旧版 bridg
 回到颜色-only swapchain，不改变现有运行路径。该附件目前服务于 Filament producer，
 尚未被 Projection Composer 作为激光深度输入使用。
 
+native bridge 另提供 `filament_bridge_get_depth_attachment` 只读查询，用于确认每眼
+深度句柄和格式确实已绑定；查询成功不等于 Composer 已完成深度测试，后者仍要求
+Projection RenderPass/Framebuffer 使用同一深度资源并完成 producer-to-presenter 的
+layout/timeline 交接。
+
+当前合成顺序已先接入颜色 producer：非 multiview 的每眼 Filament swapchain 在
+Projection Composer 前完成环境/手柄绘制，Composer 通过 render-finished semaphore
+等待后以 `LOAD` 方式叠加 SBS、Glow 和其它 Vulkan overlay。若 Composer 失败，已完成的
+Filament semaphore 会先经过 graphics queue drain，再走环境/手柄安全降级，避免遗留
+未消费的 producer 完成点。Filament multiview 暂不进入这条 per-eye LOAD 实验路径，
+保持原有 multiview 行为，待 array-image 的 producer/consumer 同步契约单独验证。
+
 ### 阶段 4：迁移激光和 Glow
 
 激光：
