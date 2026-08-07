@@ -103,7 +103,8 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "filament_bridge_set_screen_image" not in facade
     assert "filament_bridge_set_screen_image" not in header
     assert "filament_bridge_depth_output_abi_available" in facade
-    assert "return 0;" in facade[facade.index("filament_bridge_depth_output_abi_available"):]
+    depth_capability = facade[facade.index("filament_bridge_depth_output_abi_available"):]
+    assert "return 1;" in depth_capability[:depth_capability.index("int filament_bridge_get_depth_attachment")]
     assert "filament_bridge_create_eye_swapchain_with_depth" in facade
     assert "bundle.depth = swapchain->depth" in (
         bridge_dir / "bridge_internal.h"
