@@ -430,9 +430,10 @@ VulkanPlatform::ImageData VulkanPlatform::createVkImageFromExternal(
         VulkanCommandBuffer& commands = mCommands->get();
         if (mDepth) {
             VkImageSubresourceRange const depthSubresources{
-                    .aspectMask = fvkutils::isVkStencilFormat(mDepth->getVkFormat())
-                            ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT
-                            : VK_IMAGE_ASPECT_DEPTH_BIT,
+                    .aspectMask = static_cast<VkImageAspectFlags>(
+                            fvkutils::isVkStencilFormat(mDepth->getVkFormat())
+                                    ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT
+                                    : VK_IMAGE_ASPECT_DEPTH_BIT),
                     .baseMipLevel = 0,
                     .levelCount = 1,
                     .baseArrayLayer = 0,
@@ -459,9 +460,10 @@ VulkanPlatform::ImageData VulkanPlatform::createVkImageFromExternal(
     }
     if (mDepth) {
         VkImageSubresourceRange const depthSubresources{
-                .aspectMask = fvkutils::isVkStencilFormat(mDepth->getVkFormat())
-                        ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT
-                        : VK_IMAGE_ASPECT_DEPTH_BIT,
+                .aspectMask = static_cast<VkImageAspectFlags>(
+                        fvkutils::isVkStencilFormat(mDepth->getVkFormat())
+                                ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT
+                                : VK_IMAGE_ASPECT_DEPTH_BIT),
                 .baseMipLevel = 0,
                 .levelCount = 1,
                 .baseArrayLayer = 0,
