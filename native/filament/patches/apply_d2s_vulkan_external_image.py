@@ -23,6 +23,7 @@ def main() -> int:
     vulkan_platform_h = root / "filament/backend/include/backend/platforms/VulkanPlatform.h"
     vulkan_platform_cpp = root / "filament/backend/src/vulkan/platform/VulkanPlatform.cpp"
     vulkan_driver_cpp = root / "filament/backend/src/vulkan/VulkanDriver.cpp"
+    vulkan_swapchain_cpp = root / "filament/backend/src/vulkan/VulkanSwapChain.cpp"
     vulkan_texture_cpp = root / "filament/backend/src/vulkan/VulkanTexture.cpp"
     vulkan_handles_h = root / "filament/backend/src/vulkan/VulkanHandles.h"
     vulkan_handles_cpp = root / "filament/backend/src/vulkan/VulkanHandles.cpp"
@@ -418,6 +419,60 @@ VulkanPlatform::ImageData VulkanPlatform::createVkImageFromExternal(
 }
 
 """
+    replace_once(
+        vulkan_swapchain_cpp,
+        """    if (!mHeadless && mTransitionSwapChainImageLayoutForPresent) {
+        VulkanCommandBuffer& commands = mCommands->get();
+        VkImageSubresourceRange const subresources{
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+""",
+        """    if (!mHeadless && mTransitionSwapChainImageLayoutForPresent) {
+        VulkanCommandBuffer& commands = mCommands->get();
+        if (mDepth) {
+            VkImageSubresourceRange const depthSubresources{
+                    .aspectMask = fvkutils::isVkStencilFormat(mDepth->getVkFormat())
+                            ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT
+                            : VK_IMAGE_ASPECT_DEPTH_BIT,
+                    .baseMipLevel = 0,
+                    .levelCount = 1,
+                    .baseArrayLayer = 0,
+                    .layerCount = mLayerCount,
+            };
+            mDepth->transitionLayout(&commands, depthSubresources,
+                    VulkanLayout::DEPTH_STENCIL_ATTACHMENT);
+        }
+        VkImageSubresourceRange const subresources{
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+""",
+    )
+    replace_once(
+        vulkan_swapchain_cpp,
+        """    if (imageSyncData.imageReadySemaphore != VK_NULL_HANDLE) {
+        mCommands->injectDependency(imageSyncData.imageReadySemaphore,
+                VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+    }
+    mAcquired = true;
+""",
+        """    if (imageSyncData.imageReadySemaphore != VK_NULL_HANDLE) {
+        mCommands->injectDependency(imageSyncData.imageReadySemaphore,
+                VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+    }
+    if (mDepth) {
+        VkImageSubresourceRange const depthSubresources{
+                .aspectMask = fvkutils::isVkStencilFormat(mDepth->getVkFormat())
+                        ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT
+                        : VK_IMAGE_ASPECT_DEPTH_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = mLayerCount,
+        };
+        mDepth->transitionLayout(&mCommands->get(), depthSubresources,
+                VulkanLayout::DEPTH_STENCIL_ATTACHMENT);
+    }
+    mAcquired = true;
+""",
+    )
     vulkan_platform_cpp.write_text(
         cpp.replace(marker, helper + marker), encoding="utf-8", newline=""
     )
