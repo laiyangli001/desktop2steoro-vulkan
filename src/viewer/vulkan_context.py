@@ -481,6 +481,183 @@ class VulkanContext:
             self._external_image_registry = registry
         registry.register(resource)
 
+    def adopt_external_depth_attachment(self, resource: Any) -> None:
+        """Adopt the producer's completed depth layout for a later consumer.
+
+        The producer completion semaphore is still required by the consumer
+        submission. This method only records the layout/access contract after
+        that semaphore has been published; it does not submit a barrier or
+        claim that the image is already safe to sample.
+        """
+        self._ensure_open()
+        if getattr(resource, "context", self) is not self:
+            raise VulkanCapabilityError(
+                "external depth image belongs to a different context"
+            )
+        vk = self.vk
+        image_key = _cffi_handle_address(vk, resource.image)
+        self._image_states.require_owner(image_key, self.queue_family_index)
+        self._image_states.update(
+            image_key,
+            ImageState(
+                layout=vk.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                access_mask=vk.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                stage_mask=(
+                    vk.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT
+                    | vk.VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT
+                ),
+                queue_family_index=self.queue_family_index,
+            ),
+        )
+
+    def prepare_external_depth_for_sampling(
+        self,
+        resource: Any,
+        *,
+        wait_for_timeline: int | None = None,
+        wait_semaphore: Any | None = None,
+        wait_semaphore_value: int | None = None,
+        signal_semaphore: Any | None = None,
+        signal_semaphore_value: int | None = None,
+    ) -> int:
+        """Transition an adopted Filament depth image to shader-read layout."""
+        self._ensure_open()
+        if getattr(resource, "context", self) is not self:
+            raise VulkanCapabilityError(
+                "external depth image belongs to a different context"
+            )
+        vk = self.vk
+        image_key = _cffi_handle_address(vk, resource.image)
+        state = self._image_states.get(
+            image_key, undefined_layout=vk.VK_IMAGE_LAYOUT_UNDEFINED
+        )
+        self._image_states.require_owner(image_key, self.queue_family_index)
+        if state.layout != vk.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
+            raise VulkanCapabilityError(
+                "external depth image must be adopted from the attachment layout"
+            )
+        aspect_mask = int(
+            getattr(resource, "_aspect_mask", vk.VK_IMAGE_ASPECT_DEPTH_BIT)
+        )
+
+        def record(command_buffer: Any) -> None:
+            barrier = vk.VkImageMemoryBarrier(
+                sType=vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                srcAccessMask=state.access_mask,
+                dstAccessMask=vk.VK_ACCESS_SHADER_READ_BIT,
+                oldLayout=state.layout,
+                newLayout=vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                srcQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+                dstQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+                image=resource.image,
+                subresourceRange=_depth_subresource_range(
+                    vk, aspect_mask=aspect_mask
+                ),
+            )
+            vk.vkCmdPipelineBarrier(
+                command_buffer,
+                state.stage_mask,
+                vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                0,
+                0,
+                None,
+                0,
+                None,
+                1,
+                [barrier],
+            )
+
+        timeline_value = self.submit_on(
+            "graphics",
+            record,
+            wait_for_timeline=wait_for_timeline,
+            wait_semaphore=wait_semaphore,
+            wait_semaphore_value=wait_semaphore_value,
+            signal_semaphore=signal_semaphore,
+            signal_semaphore_value=signal_semaphore_value,
+        )
+        self._image_states.update(
+            image_key,
+            ImageState(
+                layout=vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                access_mask=vk.VK_ACCESS_SHADER_READ_BIT,
+                stage_mask=vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                queue_family_index=self.queue_family_index,
+            ),
+        )
+        return int(timeline_value)
+
+    def release_external_depth_from_sampling(
+        self,
+        resource: Any,
+        *,
+        wait_for_timeline: int | None = None,
+    ) -> int:
+        """Return a sampled depth image to Filament's attachment layout."""
+        self._ensure_open()
+        if getattr(resource, "context", self) is not self:
+            raise VulkanCapabilityError(
+                "external depth image belongs to a different context"
+            )
+        vk = self.vk
+        image_key = _cffi_handle_address(vk, resource.image)
+        state = self._image_states.get(
+            image_key, undefined_layout=vk.VK_IMAGE_LAYOUT_UNDEFINED
+        )
+        self._image_states.require_owner(image_key, self.queue_family_index)
+        if state.layout != vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+            raise VulkanCapabilityError(
+                "external depth image must be shader-readable before release"
+            )
+        aspect_mask = int(
+            getattr(resource, "_aspect_mask", vk.VK_IMAGE_ASPECT_DEPTH_BIT)
+        )
+
+        def record(command_buffer: Any) -> None:
+            barrier = vk.VkImageMemoryBarrier(
+                sType=vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                srcAccessMask=vk.VK_ACCESS_SHADER_READ_BIT,
+                dstAccessMask=vk.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                oldLayout=state.layout,
+                newLayout=vk.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                srcQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+                dstQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+                image=resource.image,
+                subresourceRange=_depth_subresource_range(
+                    vk, aspect_mask=aspect_mask
+                ),
+            )
+            vk.vkCmdPipelineBarrier(
+                command_buffer,
+                vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                vk.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT
+                | vk.VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                0,
+                0,
+                None,
+                0,
+                None,
+                1,
+                [barrier],
+            )
+
+        timeline_value = self.submit_on(
+            "graphics", record, wait_for_timeline=wait_for_timeline
+        )
+        self._image_states.update(
+            image_key,
+            ImageState(
+                layout=vk.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                access_mask=vk.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                stage_mask=(
+                    vk.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT
+                    | vk.VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT
+                ),
+                queue_family_index=self.queue_family_index,
+            ),
+        )
+        return int(timeline_value)
+
     def unregister_external_image(self, resource: Any) -> None:
         registry = getattr(self, "_external_image_registry", None)
         if registry is None:
@@ -1808,6 +1985,16 @@ def _color_subresource_range(
         levelCount=1,
         baseArrayLayer=int(base_array_layer),
         layerCount=int(layer_count),
+    )
+
+
+def _depth_subresource_range(vk: Any, *, aspect_mask: int) -> Any:
+    return vk.VkImageSubresourceRange(
+        aspectMask=int(aspect_mask),
+        baseMipLevel=0,
+        levelCount=1,
+        baseArrayLayer=0,
+        layerCount=1,
     )
 
 

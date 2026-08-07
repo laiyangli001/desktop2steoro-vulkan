@@ -224,9 +224,9 @@ int filament_bridge_vulkan_external_image_abi_available(
 }
 
 int filament_bridge_depth_output_abi_available(const FilamentBridge*) {
-    // The current external swapchain contract carries color images only. A
-    // depth result must not be inferred from color or from CPU-side data.
-    return 0;
+    // The pinned Vulkan backend consumes the borrowed per-eye depth image
+    // through SwapChainBundle::depth/depthFormat.
+    return 1;
 }
 
 int filament_bridge_get_depth_attachment(
@@ -236,6 +236,20 @@ int filament_bridge_get_depth_attachment(
         return 0;
     }
     const auto* external = bridge->eyes[eye_index].external_swapchain;
+    // Keep the active bridge alias as a compatibility fallback for older
+    // per-eye activation paths. The eye-owned pointer remains authoritative.
+    if (!external && bridge->active_eye == eye_index) {
+        external = bridge->external_swapchain;
+    }
+    std::fprintf(
+            stderr,
+            "[FilamentBridge] depth query eye=%u external=%p depth=%p format=%d\\n",
+            eye_index,
+            static_cast<const void*>(external),
+            external ? reinterpret_cast<const void*>(
+                    reinterpret_cast<uintptr_t>(external->depth)) : nullptr,
+            external ? static_cast<int>(external->depth_format) : 0);
+    std::fflush(stderr);
     if (!external || external->depth == VK_NULL_HANDLE ||
             external->depth_format == VK_FORMAT_UNDEFINED) {
         return 0;

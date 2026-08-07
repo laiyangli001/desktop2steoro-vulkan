@@ -9,6 +9,7 @@ layout(set = 0, binding = 0, std430) readonly buffer LaserState {
     float time;
 } state;
 
+
 layout(location = 0) in vec2 laser_uv;
 layout(location = 0) out vec4 output_color;
 

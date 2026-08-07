@@ -199,8 +199,8 @@ class VulkanDepthAttachment(VulkanTransientImage):
         vk = context.vk
         selected = None
         for candidate in (
-            getattr(vk, "VK_FORMAT_D32_SFLOAT", None),
             getattr(vk, "VK_FORMAT_D24_UNORM_S8_UINT", None),
+            getattr(vk, "VK_FORMAT_D32_SFLOAT", None),
             getattr(vk, "VK_FORMAT_D16_UNORM", None),
         ):
             if candidate is None:

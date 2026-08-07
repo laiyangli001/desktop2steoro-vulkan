@@ -386,7 +386,7 @@ class VulkanProjectionScreenPass:
                         vk.VK_SHADER_STAGE_VERTEX_BIT
                         | vk.VK_SHADER_STAGE_FRAGMENT_BIT
                     ),
-                )
+                ),
             ],
         )
         self.laser_descriptor_pool = vk.vkCreateDescriptorPool(

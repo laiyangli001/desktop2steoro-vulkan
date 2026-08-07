@@ -593,6 +593,9 @@ class OpenXrVulkanPresenter(
         self._vulkan_projection_quality_chain_requested = _env_flag(
             "D2S_VULKAN_PROJECTION_QUALITY_CHAIN", default=True
         )
+        self._filament_projection_only = _env_flag(
+            "D2S_FILAMENT_PROJECTION_ONLY", default=False
+        )
         self._vulkan_projection_composer_active = False
         self._vulkan_projection_composer_frame_id: int | None = None
         self._last_vulkan_projection_composer_status: tuple[Any, ...] | None = None
@@ -604,6 +607,7 @@ class OpenXrVulkanPresenter(
         # would change the legacy root-occlusion behavior.
         self._vulkan_projection_laser_depth_available = False
         self._last_vulkan_projection_laser_depth_status: str | None = None
+        self._last_vulkan_projection_laser_prepare_status: str | None = None
         screen_quad_reprojection_requested = _env_flag(
             "D2S_OPENXR_SCREEN_QUAD_REPROJECTION"
         )
@@ -652,6 +656,7 @@ class OpenXrVulkanPresenter(
         self._quad_swapchain_extent: tuple[int, int] | None = None
         self.filament_bridge: Any | None = None
         self._filament_depth_attachments: list[VulkanDepthAttachment] = []
+        self._filament_depth_attachments_bound = False
         self.session_state: Any = None
         self.session_running = False
         self.exit_requested = False
@@ -3764,11 +3769,51 @@ class OpenXrVulkanPresenter(
                 queue_family_index=self.vulkan.queue_family_index,
                 queue_index=0,
             )
-            self._multiview_active = self._try_enable_filament_multiview(bridge)
+            # The current producer depth contract is per-eye.  Prefer that
+            # contract over Filament multiview so Vulkan laser occlusion can
+            # consume one depth attachment and completion semaphore per eye.
+            # Virtual Desktop does not reliably accept a single stereo array
+            # swapchain. Keep the OpenXR, Filament and Vulkan paths aligned on
+            # two independent per-eye swapchains.
+            self._multiview_active = False
+            if getattr(bridge, "multiview_abi_available", False):
+                print(
+                    "[OpenXRViewer] Filament multiview disabled: "
+                    "Virtual Desktop requires per-eye swapchains",
+                    flush=True,
+                )
             if not self._multiview_active:
-                use_depth_swapchain = bool(
+                depth_create_abi = bool(
                     getattr(bridge, "depth_swapchain_abi_available", False)
                 )
+                depth_output_abi = bool(
+                    getattr(bridge, "depth_output_abi_available", False)
+                )
+                depth_query_abi = callable(
+                    getattr(bridge, "get_depth_attachment", None)
+                )
+                print(
+                    "[OpenXRViewer] Filament depth capability: "
+                    f"create={int(depth_create_abi)} "
+                    f"query={int(depth_query_abi)} "
+                    f"output={int(depth_output_abi)} "
+                    f"requested={int(_env_flag('D2S_FILAMENT_DEPTH_SWAPCHAIN', default=False))}",
+                    flush=True,
+                )
+                use_depth_swapchain = bool(
+                    _env_flag("D2S_FILAMENT_DEPTH_SWAPCHAIN", default=False)
+                    and depth_create_abi
+                    and depth_query_abi
+                )
+                if (
+                    getattr(bridge, "depth_swapchain_abi_available", False)
+                    and not use_depth_swapchain
+                ):
+                    print(
+                        "[OpenXRViewer] Filament depth swapchain injection disabled: "
+                        "set D2S_FILAMENT_DEPTH_SWAPCHAIN=1 to test",
+                        flush=True,
+                    )
                 if use_depth_swapchain:
                     try:
                         self._filament_depth_attachments = [
@@ -3790,6 +3835,7 @@ class OpenXrVulkanPresenter(
                             f"{type(exc).__name__}: {exc}",
                             flush=True,
                         )
+                depth_query_mismatch = False
                 for eye_index, eye in enumerate(self.swapchains):
                     if use_depth_swapchain:
                         depth = self._filament_depth_attachments[eye_index]
@@ -3802,6 +3848,25 @@ class OpenXrVulkanPresenter(
                             depth_image=depth.image,
                             depth_format=depth.format,
                         )
+                        query_depth = getattr(bridge, "get_depth_attachment", None)
+                        if callable(query_depth):
+                            native_depth = query_depth(eye_index)
+                            expected_image_address = int(
+                                depth.vk.ffi.cast("uintptr_t", depth.image)
+                            )
+                            if (
+                                not native_depth
+                                or int(native_depth[1]) != int(depth.format)
+                            ):
+                                depth_query_mismatch = True
+                                print(
+                                    "[OpenXRViewer] Filament depth attachment query mismatch: "
+                                    f"eye={eye_index} native={native_depth} "
+                                    f"expected_image=0x{expected_image_address:x} "
+                                    f"expected_format={int(depth.format)}; continuing with "
+                                    "the created depth swapchain",
+                                    flush=True,
+                                )
                     else:
                         bridge.create_eye_swapchain(
                             eye_index,
@@ -3810,6 +3875,31 @@ class OpenXrVulkanPresenter(
                             width=eye.width,
                             height=eye.height,
                         )
+                if use_depth_swapchain and depth_query_mismatch:
+                    print(
+                        "[OpenXRViewer] Filament depth swapchain rejected by native "
+                        "image query; falling back to color-only swapchains",
+                        flush=True,
+                    )
+                    for attachment in self._filament_depth_attachments:
+                        attachment.close()
+                    self._filament_depth_attachments.clear()
+                    for eye_index, eye in enumerate(self.swapchains):
+                        bridge.create_eye_swapchain(
+                            eye_index,
+                            (image.image for image in eye.images),
+                            format=self.swapchain_format,
+                            width=eye.width,
+                            height=eye.height,
+                        )
+                    use_depth_swapchain = False
+                self._filament_depth_attachments_bound = bool(use_depth_swapchain)
+                if self._filament_depth_attachments_bound:
+                    print(
+                        "[OpenXRViewer] Filament depth attachments bound: "
+                        f"eyes={len(self._filament_depth_attachments)}",
+                        flush=True,
+                    )
             glb_path = self.config.filament_glb_path
             if glb_path:
                 bridge.load_glb(asset_reads["environment"].result())
@@ -4150,6 +4240,65 @@ class OpenXrVulkanPresenter(
             self._vulkan_projection_screen_pass = VulkanProjectionScreenPass(
                 self.vulkan, target_format
             )
+        if self._filament_projection_only and filament_wait_semaphores:
+            timeline = self.vulkan.submit_on(
+                "graphics",
+                lambda _command_buffer: None,
+                wait_semaphore=filament_wait_semaphores,
+            )
+            if not getattr(self, "_filament_projection_only_logged", False):
+                self._filament_projection_only_logged = True
+                print(
+                    "[OpenXRViewer] Filament projection-only diagnostic active: "
+                    "SBS/Glow Vulkan overlays skipped",
+                    flush=True,
+                )
+            self._vulkan_projection_composer_frame_id = int(frame.frame_id)
+            self._vulkan_projection_composer_active = True
+            return int(timeline)
+        depth_sampling_timeline = 0
+        depth_sampling_active = False
+        self._vulkan_projection_laser_depth_available = False
+        # Filament remains the owner of controller laser rendering.  The
+        # Vulkan depth-laser experiment is intentionally disabled while the
+        # producer output contract is being migrated.
+        if self._vulkan_projection_laser_depth_available and (
+            not self._multiview_active
+            and self._filament_depth_attachments_bound
+            and len(filament_wait_semaphores) == 2
+        ):
+            try:
+                depth_sampling_active = bool(
+                    self._vulkan_projection_screen_pass.set_laser_depth_attachments(
+                        self._filament_depth_attachments
+                    )
+                )
+                prepare_depth = getattr(
+                    self.vulkan, "prepare_external_depth_for_sampling", None
+                )
+                if depth_sampling_active and callable(prepare_depth):
+                    for eye_index, semaphore in enumerate(filament_wait_semaphores):
+                        depth_sampling_timeline = max(
+                            int(depth_sampling_timeline),
+                            int(
+                                prepare_depth(
+                                    self._filament_depth_attachments[eye_index].resource,
+                                    wait_semaphore=semaphore,
+                                )
+                            ),
+                        )
+                    self._vulkan_projection_laser_depth_available = True
+                    filament_wait_semaphores = ()
+                else:
+                    depth_sampling_active = False
+            except Exception as exc:
+                depth_sampling_active = False
+                self._vulkan_projection_laser_depth_available = False
+                print(
+                    "[OpenXRViewer] Vulkan projection depth sampling skipped: "
+                    f"{type(exc).__name__}: {exc}",
+                    flush=True,
+                )
         self._apply_vulkan_projection_sampling(
             frame,
             quality_chain_enabled=self._vulkan_projection_quality_chain_requested,
@@ -4211,6 +4360,20 @@ class OpenXrVulkanPresenter(
                     "openxr_vulkan_composer_draw_prepare",
                     time.perf_counter() - draw_prepare_started,
                 )
+        laser_prepare_status = (
+            "owner=filament "
+            f"vulkan_depth={int(self._vulkan_projection_laser_depth_available)} "
+            f"draws={sum(1 for draw in projection_draws if 'laser_params' in draw)} "
+            f"aim_l={int(self._aim_mat_l is not None)} aim_r={int(self._aim_mat_r is not None)} "
+            f"grip_l={int(self._grip_mat_l is not None)} grip_r={int(self._grip_mat_r is not None)}"
+        )
+        if laser_prepare_status != self._last_vulkan_projection_laser_prepare_status:
+            self._last_vulkan_projection_laser_prepare_status = laser_prepare_status
+            print(
+                "[OpenXRViewer] Vulkan projection laser prepare: "
+                f"{laser_prepare_status}",
+                flush=True,
+            )
         submit_started = time.perf_counter()
         timeline = None
         surround_timeline = 0
@@ -4253,7 +4416,9 @@ class OpenXrVulkanPresenter(
                     filter_scale=plan.filter_scale,
                     upscale_scale=plan.upscale_scale,
                     load_target=surround_active,
-                    wait_for_timeline=surround_timeline,
+                    wait_for_timeline=max(
+                        int(surround_timeline), int(depth_sampling_timeline)
+                    ),
                 )
             except Exception as exc:
                 print(
@@ -4269,8 +4434,14 @@ class OpenXrVulkanPresenter(
         if timeline is None:
             timeline = self._vulkan_projection_screen_pass.submit_stereo(
                 projection_draws,
-                load_target=bool(surround_active or filament_wait_semaphores),
-                wait_for_timeline=surround_timeline,
+                load_target=bool(
+                    surround_active
+                    or filament_wait_semaphores
+                    or depth_sampling_timeline
+                ),
+                wait_for_timeline=max(
+                    int(surround_timeline), int(depth_sampling_timeline)
+                ),
                 extra_wait_semaphores=filament_wait_semaphores,
             )
         if (
@@ -4311,14 +4482,32 @@ class OpenXrVulkanPresenter(
                         f"{laser_error[0]}: {laser_error[1]}",
                         flush=True,
                     )
-        elif not self._vulkan_projection_laser_depth_available:
+        elif (
+            self.filament_bridge is None
+            or not getattr(self.filament_bridge, "laser_abi_available", False)
+        ):
             if self._last_vulkan_projection_laser_depth_status != "unavailable":
                 self._last_vulkan_projection_laser_depth_status = "unavailable"
                 print(
-                    "[OpenXRViewer] Vulkan projection laser disabled: "
-                    "Filament producer depth attachment is unavailable",
+                    "[OpenXRViewer] Controller laser unavailable: "
+                    "Filament laser ABI is not available",
                     flush=True,
                 )
+        if depth_sampling_active:
+            release_depth = getattr(
+                self.vulkan, "release_external_depth_from_sampling", None
+            )
+            if callable(release_depth):
+                for attachment in self._filament_depth_attachments:
+                    timeline = max(
+                        int(timeline),
+                        int(
+                            release_depth(
+                                attachment.resource,
+                                wait_for_timeline=int(timeline),
+                            )
+                        ),
+                    )
         if self._on_breakdown_add_time is not None:
             self._on_breakdown_add_time(
                 "openxr_vulkan_composer_submit",
@@ -4998,6 +5187,12 @@ class OpenXrVulkanPresenter(
                 semaphore = bridge.get_finished_drawing_semaphore()
                 if semaphore is not None:
                     semaphores.append(semaphore)
+            if eye_index < len(self._filament_depth_attachments):
+                adopt_depth = getattr(
+                    self.vulkan, "adopt_external_depth_attachment", None
+                )
+                if callable(adopt_depth):
+                    adopt_depth(self._filament_depth_attachments[eye_index].resource)
         return semaphores
 
     def _render_projection_layer(

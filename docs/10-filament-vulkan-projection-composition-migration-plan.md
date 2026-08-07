@@ -16,6 +16,9 @@
 
 迁移工作的行为基准固定为删除前的 Filament 实现。Vulkan 只替换执行后端，禁止自行改写屏幕/Glow 的几何、跟随关系、参数公式、模式映射、颜色混合、可见性条件或降级语义。尚未完成原样迁移的效果必须保持关闭，不能用近似实现代替，也不能依赖实机反复试错来重新定义既有行为。
 - Projection swapchain 优先 `array_size=2`，失败回退 per-eye。Virtual Desktop 已验证不接受双眼 Screen Quad swapchain；该实验永久停用，不能影响 Projection 主路径。
+- 遮挡顺序固定：无环境模型时为“手柄 → Glow → 屏幕”；加载环境模型时为“手柄 → 屏幕 → 环境”。
+  该顺序必须由 Filament producer depth 与 Vulkan Projection depth attachment 共同保证，不能用
+  纯提交顺序或整屏透明度近似替代。
 
 ## 2. 明确删减的照明范围
 
@@ -170,6 +173,12 @@ native bridge 另提供 `filament_bridge_get_depth_attachment` 只读查询，�
 Projection RenderPass/Framebuffer 使用同一深度资源并完成 producer-to-presenter 的
 layout/timeline 交接。
 
+Presenter 现在已提供两段式深度状态交接：Filament 完成后先登记
+`DEPTH_STENCIL_ATTACHMENT_OPTIMAL` producer 状态，未来 Composer 提交再通过完成
+semaphore 调用 `prepare_external_depth_for_sampling` 转为
+`SHADER_READ_ONLY_OPTIMAL`。在激光 descriptor、shader 和坐标比较尚未完成前，
+该转换接口不自动调用，避免改变现有激光显示行为。
+
 当前合成顺序已先接入颜色 producer：非 multiview 的每眼 Filament swapchain 在
 Projection Composer 前完成环境/手柄绘制，Composer 通过 render-finished semaphore
 等待后以 `LOAD` 方式叠加 SBS、Glow 和其它 Vulkan overlay。若 Composer 失败，已完成的
@@ -199,12 +208,10 @@ latest-frame 资源，Presenter 不再用 Filament Glow 外部图像 ABI 判断�
 
 完成条件：激光遮挡、Glow 五态和 latest-frame 复用正确；Glow 线程不阻塞主屏幕。
 
-当前激光迁移进度：旧 `bridge_laser.cpp` 的双平面束几何、六段彩虹渐变、时间动画和
-逐手显隐已加入 Vulkan Projection overlay，并使用独立有界 descriptor/参数 slot。当前
-Vulkan Producer contract 仍只暴露颜色完成点，没有环境/手柄深度附件；因此 Composer
-不会启用无深度测试的激光绘制，并在运行日志中报告
-`Filament producer depth attachment is unavailable`。现有 Filament Bridge 的激光
-ABI 暂不删除，待深度附件交接、深度测试和根部遮挡验证完成后再切换并移除旧 ABI。
+当前激光迁移进度：按照兼容性要求，手柄模型、手柄动画、环境模型和激光继续由
+Filament 统一渲染；Projection Composer 只等待 Filament 完成 semaphore，并把同一
+左右眼 per-eye swapchain 结果作为环境/手柄/激光底图，再叠加 SBS 和 Vulkan Glow。
+Vulkan 激光深度采样实验保持关闭，现有 Filament Bridge 激光 ABI 暂不删除。
 
 ### 阶段 5：Tool Quad 与两处 2D 光圈
 
