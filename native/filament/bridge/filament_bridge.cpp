@@ -243,20 +243,26 @@ int filament_bridge_get_depth_attachment(
     }
     std::fprintf(
             stderr,
-            "[FilamentBridge] depth query eye=%u external=%p depth=%p format=%d\\n",
+            "[FilamentBridge] depth query eye=%u external=%p depth=%p format=%d\n",
             eye_index,
             static_cast<const void*>(external),
-            external ? reinterpret_cast<const void*>(
-                    reinterpret_cast<uintptr_t>(external->depth)) : nullptr,
-            external ? static_cast<int>(external->depth_format) : 0);
+            reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(
+                    bridge->depth_attachments[eye_index])),
+            static_cast<int>(bridge->depth_attachment_formats[eye_index]));
     std::fflush(stderr);
-    if (!external || external->depth == VK_NULL_HANDLE ||
-            external->depth_format == VK_FORMAT_UNDEFINED) {
+    const VkImage depth = bridge->depth_attachments[eye_index] != VK_NULL_HANDLE
+            ? bridge->depth_attachments[eye_index]
+            : (external ? external->depth : VK_NULL_HANDLE);
+    const VkFormat depth_format =
+            bridge->depth_attachment_formats[eye_index] != VK_FORMAT_UNDEFINED
+            ? bridge->depth_attachment_formats[eye_index]
+            : (external ? external->depth_format : VK_FORMAT_UNDEFINED);
+    if (depth == VK_NULL_HANDLE || depth_format == VK_FORMAT_UNDEFINED) {
         return 0;
     }
     *image_handle = reinterpret_cast<const void*>(
-            reinterpret_cast<uintptr_t>(external->depth));
-    *format = static_cast<int32_t>(external->depth_format);
+            reinterpret_cast<uintptr_t>(depth));
+    *format = static_cast<int32_t>(depth_format);
     return 1;
 }
 

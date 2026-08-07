@@ -329,6 +329,11 @@ struct FilamentBridge {
     std::array<uint16_t, 6> controller_guide_indices{};
     std::array<MsdfTextPage, 4> text_pages{};
     std::array<FilamentEyeTarget, 2> eyes;
+    // Keep the borrowed depth contract independent from the active-eye alias
+    // and ExternalSwapChain lifetime used by Filament internals.
+    std::array<VkImage, 2> depth_attachments{};
+    std::array<VkFormat, 2> depth_attachment_formats{
+        VK_FORMAT_UNDEFINED, VK_FORMAT_UNDEFINED};
     uint32_t active_eye = 0;
     std::vector<uint8_t> glb_bytes;
     std::string last_error;

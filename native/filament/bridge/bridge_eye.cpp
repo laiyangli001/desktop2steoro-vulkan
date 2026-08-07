@@ -85,6 +85,8 @@ int bridge_eye_create_target_swapchain(
         eye.swapchain = nullptr;
         eye.external_swapchain = nullptr;
     }
+    bridge->depth_attachments[eye_index] = VK_NULL_HANDLE;
+    bridge->depth_attachment_formats[eye_index] = VK_FORMAT_UNDEFINED;
     auto* external = bridge->platform->create_external_swapchain(
             image_handles, image_count, static_cast<VkFormat>(format), width, height);
     if (!external) {
@@ -104,6 +106,8 @@ int bridge_eye_create_target_swapchain(
     external_swapchain->depth_format = depth_image_handle
             ? static_cast<VkFormat>(depth_format)
             : VK_FORMAT_UNDEFINED;
+    bridge->depth_attachments[eye_index] = external_swapchain->depth;
+    bridge->depth_attachment_formats[eye_index] = external_swapchain->depth_format;
     eye.swapchain = bridge->engine->createSwapChain(external, swapchain_flags);
     if (!eye.swapchain) {
         bridge->platform->destroy(external);
