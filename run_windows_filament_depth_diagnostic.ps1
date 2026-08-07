@@ -15,8 +15,8 @@ $env:D2S_OPENXR_DEBUG = "1"
 
 Write-Host "D2S_VULKAN_PROJECTION_COMPOSER=1"
 Write-Host "D2S_FILAMENT_DEPTH_SWAPCHAIN=1"
-Write-Host "Current expected log: depth capability output=0 and safe color-only fallback"
-Write-Host "Depth binding stays disabled until native render-pass ownership is complete"
+Write-Host "Current expected log: depth capability create=1 query=1 output=1 requested=1"
+Write-Host "Depth binding is enabled for hardware validation"
 Write-Host "Starting the normal Windows launcher..."
 
 & $runBat
