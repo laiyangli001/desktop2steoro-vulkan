@@ -20,6 +20,11 @@ class VulkanStereoOutputFrame:
     metadata: dict[str, Any] = field(default_factory=dict)
     color_space: str = "srgb"
     image_origin: str = "top_left"
+    # Optional producer-owned depth resources.  They are deliberately kept
+    # separate from color images so consumers can require a real depth
+    # attachment before enabling occlusion-sensitive overlays.
+    left_depth: Any | None = None
+    right_depth: Any | None = None
 
     def __post_init__(self) -> None:
         if int(self.frame_id) < 0:
@@ -28,6 +33,8 @@ class VulkanStereoOutputFrame:
             raise ValueError("output timestamp must not be negative")
         if self.left_eye is None or self.right_eye is None:
             raise ValueError("output frame requires both left_eye and right_eye")
+        if (self.left_depth is None) != (self.right_depth is None):
+            raise ValueError("output frame depth resources must contain both eyes")
         if not str(self.output_format).strip():
             raise ValueError("output_format must not be empty")
         if str(self.color_space).strip().lower() not in {"srgb", "linear"}:

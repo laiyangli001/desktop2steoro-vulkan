@@ -71,7 +71,8 @@ int bridge_eye_create_swapchain(
 int bridge_eye_create_target_swapchain(
         FilamentBridge* bridge, uint32_t eye_index,
         const void* const* image_handles, uint32_t image_count,
-        int32_t format, uint32_t width, uint32_t height) {
+        int32_t format, uint32_t width, uint32_t height,
+        const void* depth_image_handle, int32_t depth_format) {
     if (!bridge || !bridge->engine || !bridge->platform ||
             eye_index >= bridge->eyes.size()) return 0;
     auto& eye = bridge->eyes[eye_index];
@@ -95,6 +96,14 @@ int bridge_eye_create_target_swapchain(
             static_cast<VkFormat>(format) == VK_FORMAT_B8G8R8A8_SRGB) {
         swapchain_flags = filament::SwapChain::CONFIG_SRGB_COLORSPACE;
     }
+    auto* external_swapchain =
+            static_cast<OpenXrVulkanPlatform::ExternalSwapChain*>(external);
+    external_swapchain->depth = depth_image_handle
+            ? reinterpret_cast<VkImage>(const_cast<void*>(depth_image_handle))
+            : VK_NULL_HANDLE;
+    external_swapchain->depth_format = depth_image_handle
+            ? static_cast<VkFormat>(depth_format)
+            : VK_FORMAT_UNDEFINED;
     eye.swapchain = bridge->engine->createSwapChain(external, swapchain_flags);
     if (!eye.swapchain) {
         bridge->platform->destroy(external);

@@ -82,7 +82,9 @@ class OpenXrVulkanPlatform final : public VulkanPlatform {
 public:
     struct ExternalSwapChain final : Platform::SwapChain {
         std::vector<VkImage> images;
+        VkImage depth = VK_NULL_HANDLE;
         VkFormat format = VK_FORMAT_UNDEFINED;
+        VkFormat depth_format = VK_FORMAT_UNDEFINED;
         VkExtent2D extent{0, 0};
         uint32_t layer_count = 1;
         uint32_t pending_image = kInvalidImageIndex;
@@ -156,6 +158,8 @@ public:
             bundle.colors.push_back(image);
         }
         bundle.colorFormat = swapchain->format;
+        bundle.depth = swapchain->depth;
+        bundle.depthFormat = swapchain->depth_format;
         bundle.extent = swapchain->extent;
         bundle.layerCount = swapchain->layer_count;
         return bundle;

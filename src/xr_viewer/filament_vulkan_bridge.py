@@ -51,6 +51,8 @@ class FilamentVulkanBridge:
         self._controller_guide_abi_available = False
         self._text_overlay_abi_available = False
         self._vulkan_external_image_abi_available = False
+        self._depth_output_abi_available = False
+        self._depth_swapchain_abi_available = False
         self._passthrough_backdrop_abi_available = False
         self._ambient_light_abi_available = False
         self._controller_ambient_light_abi_available = False
@@ -89,6 +91,14 @@ class FilamentVulkanBridge:
     @property
     def vulkan_external_image_abi_available(self) -> bool:
         return self._vulkan_external_image_abi_available
+
+    @property
+    def depth_output_abi_available(self) -> bool:
+        return self._depth_output_abi_available
+
+    @property
+    def depth_swapchain_abi_available(self) -> bool:
+        return self._depth_swapchain_abi_available
 
     @property
     def passthrough_backdrop_abi_available(self) -> bool:
@@ -192,6 +202,44 @@ class FilamentVulkanBridge:
                 int(height),
             ),
             "create_eye_swapchain",
+        )
+
+    def create_eye_swapchain_with_depth(
+        self,
+        eye_index: int,
+        image_handles: Iterable[Any],
+        *,
+        format: int,
+        width: int,
+        height: int,
+        depth_image: Any,
+        depth_format: int,
+    ) -> None:
+        self._ensure_loaded()
+        values = [ctypes.c_void_p(_as_pointer_value(image)) for image in image_handles]
+        if int(eye_index) not in (0, 1) or not values:
+            raise ValueError("eye_index must be 0 or 1 and swapchain must not be empty")
+        if depth_image is None:
+            raise ValueError("depth_image must not be empty")
+        function = getattr(
+            self._library, "filament_bridge_create_eye_swapchain_with_depth", None
+        )
+        if function is None:
+            raise FilamentBridgeError("Filament depth swapchain ABI is unavailable")
+        array_type = ctypes.c_void_p * len(values)
+        self._check_result(
+            function(
+                self._handle,
+                int(eye_index),
+                array_type(*values),
+                len(values),
+                int(format),
+                int(width),
+                int(height),
+                ctypes.c_void_p(_as_pointer_value(depth_image)),
+                int(depth_format),
+            ),
+            "create_eye_swapchain_with_depth",
         )
 
     def create_stereo_swapchain(
@@ -669,6 +717,23 @@ class FilamentVulkanBridge:
             ctypes.c_uint32,
         ]
         library.filament_bridge_create_eye_swapchain.restype = ctypes.c_int
+        create_eye_swapchain_with_depth = getattr(
+            library, "filament_bridge_create_eye_swapchain_with_depth", None
+        )
+        if create_eye_swapchain_with_depth is not None:
+            create_eye_swapchain_with_depth.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_uint32,
+                ctypes.POINTER(ctypes.c_void_p),
+                ctypes.c_uint32,
+                ctypes.c_int32,
+                ctypes.c_uint32,
+                ctypes.c_uint32,
+                ctypes.c_void_p,
+                ctypes.c_int32,
+            ]
+            create_eye_swapchain_with_depth.restype = ctypes.c_int
+            self._depth_swapchain_abi_available = True
         multiview_abi = getattr(
             library, "filament_bridge_multiview_abi_available", None
         )
@@ -888,6 +953,13 @@ class FilamentVulkanBridge:
             self._vulkan_external_image_abi_available = bool(
                 external_image_abi(None)
             )
+        depth_output_abi = getattr(
+            library, "filament_bridge_depth_output_abi_available", None
+        )
+        if depth_output_abi is not None:
+            depth_output_abi.argtypes = [ctypes.c_void_p]
+            depth_output_abi.restype = ctypes.c_int
+            self._depth_output_abi_available = bool(depth_output_abi(None))
         if hasattr(library, "filament_bridge_get_finished_drawing_semaphore"):
             library.filament_bridge_get_finished_drawing_semaphore.argtypes = [
                 ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)

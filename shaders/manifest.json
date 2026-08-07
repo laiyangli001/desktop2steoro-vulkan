@@ -140,6 +140,55 @@
       "precision": "fp32"
     },
     {
+      "name": "d2s_projection_glow_vert",
+      "source": "d2s_projection_glow_vert.vert",
+      "spirv": "d2s_projection_glow_vert.spv",
+      "stage": "vertex",
+      "entry": "main",
+      "descriptor_bindings": [
+        {"set": 0, "binding": 1, "kind": "storage_buffer", "access": "read_only", "format": null}
+      ],
+      "push_constants_size": 128,
+      "precision": "fp32"
+    },
+    {
+      "name": "d2s_projection_glow_frag",
+      "source": "d2s_projection_glow_frag.frag",
+      "spirv": "d2s_projection_glow_frag.spv",
+      "stage": "fragment",
+      "entry": "main",
+      "descriptor_bindings": [
+        {"set": 0, "binding": 0, "kind": "combined_image_sampler", "access": "read_only", "format": null},
+        {"set": 0, "binding": 1, "kind": "storage_buffer", "access": "read_only", "format": null}
+      ],
+      "push_constants_size": 128,
+      "precision": "fp32"
+    },
+    {
+      "name": "d2s_projection_laser_vert",
+      "source": "d2s_projection_laser_vert.vert",
+      "spirv": "d2s_projection_laser_vert.spv",
+      "stage": "vertex",
+      "entry": "main",
+      "descriptor_bindings": [
+        {"set": 0, "binding": 0, "kind": "storage_buffer", "access": "read_only", "format": null}
+      ],
+      "push_constants_size": 64,
+      "precision": "fp32"
+    },
+    {
+      "name": "d2s_projection_laser_frag",
+      "source": "d2s_projection_laser_frag.frag",
+      "spirv": "d2s_projection_laser_frag.spv",
+      "stage": "fragment",
+      "entry": "main",
+      "descriptor_bindings": [
+        {"set": 0, "binding": 0, "kind": "storage_buffer", "access": "read_only", "format": null}
+      ],
+      "push_constants_size": 64,
+      "precision": "fp32"
+    },
+    {
       "name": "d2s_projection_rcas_vert",
       "source": "d2s_projection_rcas_vert.vert",
       "spirv": "d2s_projection_rcas_vert.spv",

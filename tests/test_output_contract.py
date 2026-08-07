@@ -53,3 +53,25 @@ def test_output_frame_declares_srgb_top_left_contract() -> None:
 def test_output_frame_rejects_unknown_image_origin() -> None:
     with pytest.raises(ValueError, match="image_origin"):
         VulkanStereoOutputFrame(1, 0.0, object(), object(), image_origin="right")
+
+
+def test_output_frame_requires_depth_resources_for_both_eyes() -> None:
+    with pytest.raises(ValueError, match="both eyes"):
+        VulkanStereoOutputFrame(
+            1,
+            0.0,
+            object(),
+            object(),
+            left_depth=object(),
+        )
+
+    frame = VulkanStereoOutputFrame(
+        1,
+        0.0,
+        object(),
+        object(),
+        left_depth=object(),
+        right_depth=object(),
+    )
+    assert frame.left_depth is not None
+    assert frame.right_depth is not None

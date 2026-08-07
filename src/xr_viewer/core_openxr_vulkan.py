@@ -28,7 +28,12 @@ from viewer.vulkan_context import (
     find_graphics_queue_family,
     make_vulkan_version,
 )
-from viewer.vulkan_resources import VulkanExportableImage, VulkanHostImage, VulkanImageResource
+from viewer.vulkan_resources import (
+    VulkanDepthAttachment,
+    VulkanExportableImage,
+    VulkanHostImage,
+    VulkanImageResource,
+)
 from viewer.vulkan_msdf_quad import VulkanMsdfQuadRenderer, VulkanMsdfQuadRequest
 from viewer.vulkan_projection_screen import VulkanProjectionScreenPass
 from app_runtime.output_contract import VulkanStereoOutputFrame
@@ -423,7 +428,7 @@ class OpenXrVulkanUnavailableError(RuntimeError):
 class OpenXrVulkanConfig:
     application_name: str = "Desktop2Stereo Vulkan"
     render_scale: float = 1.0
-    clear_color: tuple[float, float, float, float] = (0.02, 0.04, 0.08, 1.0)
+    clear_color: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0)
     requested_vulkan_version: int = make_vulkan_version(1, 4, 0)
     # Keep the validated OpenXR projection target as sRGB. The Filament bridge
     # is configured for linear Rec709 output so the target performs one OETF.
@@ -592,6 +597,13 @@ class OpenXrVulkanPresenter(
         self._vulkan_projection_composer_frame_id: int | None = None
         self._last_vulkan_projection_composer_status: tuple[Any, ...] | None = None
         self._last_vulkan_projection_composer_fallback: tuple[str, str] | None = None
+        self._last_vulkan_projection_glow_error: tuple[str, str] | None = None
+        self._last_vulkan_projection_laser_error: tuple[str, str] | None = None
+        # The current Filament producer exposes color completion only.  Do not
+        # draw a Vulkan laser without the producer depth attachment: that
+        # would change the legacy root-occlusion behavior.
+        self._vulkan_projection_laser_depth_available = False
+        self._last_vulkan_projection_laser_depth_status: str | None = None
         screen_quad_reprojection_requested = _env_flag(
             "D2S_OPENXR_SCREEN_QUAD_REPROJECTION"
         )
@@ -624,6 +636,10 @@ class OpenXrVulkanPresenter(
                 "openxr_vulkan_projection_composer_frame_id", -1
             )
             self._on_breakdown_set_latest(
+                "openxr_vulkan_projection_laser_depth_available",
+                self._vulkan_projection_laser_depth_available,
+            )
+            self._on_breakdown_set_latest(
                 "openxr_screen_quad_reprojection_requested",
                 self._screen_quad_reprojection_requested,
             )
@@ -635,6 +651,7 @@ class OpenXrVulkanPresenter(
         self._tool_quad_swapchain_format: int | None = None
         self._quad_swapchain_extent: tuple[int, int] | None = None
         self.filament_bridge: Any | None = None
+        self._filament_depth_attachments: list[VulkanDepthAttachment] = []
         self.session_state: Any = None
         self.session_running = False
         self.exit_requested = False
@@ -3026,6 +3043,12 @@ class OpenXrVulkanPresenter(
             except Exception:
                 pass
             self.filament_bridge = None
+        for attachment in self._filament_depth_attachments:
+            try:
+                attachment.close()
+            except Exception:
+                pass
+        self._filament_depth_attachments.clear()
 
         if self._output_adapter is not None:
             try:
@@ -3743,14 +3766,50 @@ class OpenXrVulkanPresenter(
             )
             self._multiview_active = self._try_enable_filament_multiview(bridge)
             if not self._multiview_active:
+                use_depth_swapchain = bool(
+                    getattr(bridge, "depth_swapchain_abi_available", False)
+                )
+                if use_depth_swapchain:
+                    try:
+                        self._filament_depth_attachments = [
+                            VulkanDepthAttachment(
+                                self.vulkan,
+                                eye.width,
+                                eye.height,
+                                label=f"filament-depth-eye{eye_index}",
+                            )
+                            for eye_index, eye in enumerate(self.swapchains)
+                        ]
+                    except Exception as exc:
+                        for attachment in self._filament_depth_attachments:
+                            attachment.close()
+                        self._filament_depth_attachments.clear()
+                        use_depth_swapchain = False
+                        print(
+                            "[OpenXRViewer] Filament depth attachments disabled: "
+                            f"{type(exc).__name__}: {exc}",
+                            flush=True,
+                        )
                 for eye_index, eye in enumerate(self.swapchains):
-                    bridge.create_eye_swapchain(
-                        eye_index,
-                        (image.image for image in eye.images),
-                        format=self.swapchain_format,
-                        width=eye.width,
-                        height=eye.height,
-                    )
+                    if use_depth_swapchain:
+                        depth = self._filament_depth_attachments[eye_index]
+                        bridge.create_eye_swapchain_with_depth(
+                            eye_index,
+                            (image.image for image in eye.images),
+                            format=self.swapchain_format,
+                            width=eye.width,
+                            height=eye.height,
+                            depth_image=depth.image,
+                            depth_format=depth.format,
+                        )
+                    else:
+                        bridge.create_eye_swapchain(
+                            eye_index,
+                            (image.image for image in eye.images),
+                            format=self.swapchain_format,
+                            width=eye.width,
+                            height=eye.height,
+                        )
             glb_path = self.config.filament_glb_path
             if glb_path:
                 bridge.load_glb(asset_reads["environment"].result())
@@ -3873,6 +3932,127 @@ class OpenXrVulkanPresenter(
         )
         return values.tobytes()
 
+    def _projection_glow_state(self) -> tuple[int, bytes] | None:
+        """Encode the legacy Filament Glow state for Vulkan shaders."""
+        mode = self._normalize_filament_glow_mode(self._filament_glow_mode)
+        if (
+            mode == "off"
+            or not self._filament_glow_environment_enabled
+            or self._passthrough_backdrop
+            or self._filament_screen is None
+        ):
+            return None
+        mode_value = {
+            "glow": 1,
+            "glow2": 2,
+            "veil": 3,
+            "frosted": 4,
+            "surround": 5,
+        }.get(mode)
+        if mode_value is None:
+            return None
+        glow_multiplier = max(0.0, float(self._filament_glow_intensity_multiplier))
+        shell_multiplier = max(
+            0.0, float(self._filament_glow_shell_intensity_multiplier)
+        )
+        if (mode_value == 5 and shell_multiplier <= 0.0) or (
+            mode_value != 5 and glow_multiplier <= 0.0
+        ):
+            return None
+        screen_center, screen_width, screen_height, _rotation = self._filament_screen
+        head = np.asarray(
+            self._head_position_w
+            if self._head_position_w is not None
+            else (0.0, 0.0, 0.0),
+            dtype=np.float64,
+        )
+        screen_long = max(float(screen_width), float(screen_height), 2.4)
+        distance = max(
+            float(np.linalg.norm(head - np.asarray(screen_center, dtype=np.float64))),
+            0.5,
+        )
+        glow_range = (
+            max(float(self._filament_glow_width), 0.75)
+            * (screen_long / 2.4)
+            * (distance / 2.0)
+            * 20.0
+        )
+        if mode_value == 2:
+            glow_range *= 0.5
+        glow_size = (
+            float(screen_width) + glow_range * 2.0,
+            float(screen_height) + glow_range * 2.0,
+        )
+        values = np.asarray(
+            (
+                float(head[0]), float(head[1]), float(head[2]), float(mode_value),
+                max(0.0, float(self._filament_glow_intensity)),
+                max(0.0, float(self._filament_glow_width)),
+                glow_multiplier,
+                shell_multiplier,
+                max(0.0, float(self._frosted_glow_intensity)),
+                min(1.0, max(0.0, float(self._frosted_glow_alpha))),
+                float(glow_size[0]) if mode_value <= 2 else min(
+                    1.0, max(0.0, float(self._frosted_glow_threshold))
+                ),
+                float(glow_size[1]) if mode_value <= 2 else max(
+                    0.0, float(self._frosted_glow_lod)
+                ),
+                max(0.0, float(self._frosted_glow_blend)),
+                max(0.1, float(self._frosted_glow_thickness)),
+                float(screen_width) * 0.5 if mode_value <= 2 else max(
+                    0.0, float(self._frosted_glow_diffuse)
+                ),
+                float(screen_height) * 0.5 if mode_value <= 2 else max(
+                    0.0001, float(self._frosted_glow_inset)
+                ),
+                max(0.0, float(self._frosted_veil_intensity)),
+                min(1.0, max(0.0, float(self._frosted_veil_alpha))),
+                float(math.fmod(time.monotonic(), 1024.0)),
+                0.0,
+                max(0.0, float(self._filament_glow_shell_radius)),
+                max(0.0, float(self._filament_glow_shell_height)),
+                screen_long,
+                distance,
+            ),
+            dtype="<f4",
+        )
+        return int(mode_value), values.tobytes()
+
+    def _projection_laser_params(self, hand: int) -> bytes | None:
+        """Pack the legacy controller laser transform for Vulkan overlay draw."""
+        hand = int(hand)
+        if hand not in (0, 1):
+            return None
+        grip_matrix = self._grip_mat_l if hand == 0 else self._grip_mat_r
+        aim_matrix = self._aim_mat_l if hand == 0 else self._aim_mat_r
+        last_move = self._laser_last_move_l if hand == 0 else self._laser_last_move_r
+        if (
+            grip_matrix is None
+            or aim_matrix is None
+            or self._frame_now - float(last_move) > self._LASER_HIDE_AFTER
+        ):
+            return None
+        origin, direction = self._controller_interaction_ray(hand)
+        if origin is None or direction is None:
+            return None
+        right_axis = aim_matrix[:3, 0].astype(np.float64)
+        right_axis /= max(float(np.linalg.norm(right_axis)), 1e-8)
+        beam_origin = origin.astype(np.float64) + direction * 0.11
+        normal_axis = np.cross(right_axis, direction)
+        normal_axis /= max(float(np.linalg.norm(normal_axis)), 1e-8)
+        right_axis = np.cross(direction, normal_axis)
+        right_axis /= max(float(np.linalg.norm(right_axis)), 1e-8)
+        laser_matrix = np.eye(4, dtype=np.float32)
+        laser_matrix[:3, 0] = (right_axis * 0.006).astype(np.float32)
+        laser_matrix[:3, 1] = (direction * 0.4).astype(np.float32)
+        laser_matrix[:3, 2] = (normal_axis * 0.006).astype(np.float32)
+        laser_matrix[:3, 3] = beam_origin.astype(np.float32)
+        values = np.zeros(20, dtype=np.float32)
+        values[:16] = laser_matrix.reshape(-1, order="F")
+        values[16] = float(math.fmod(self._frame_now, 1024.0))
+        return values.astype("<f4", copy=False).tobytes()
+
     def _apply_vulkan_projection_sampling(
         self,
         frame: VulkanStereoOutputFrame,
@@ -3979,6 +4159,7 @@ class OpenXrVulkanPresenter(
         )
         projection_draws = []
         glow_source = (frame.metadata or {}).get("glow_vulkan_image")
+        glow_state = self._projection_glow_state()
         for eye_index, source in enumerate(source_inputs):
             source_prepare_started = time.perf_counter()
             wait_semaphore = prepare_source(frame.frame_id, eye_index)
@@ -3994,21 +4175,34 @@ class OpenXrVulkanPresenter(
             sampling_constants = self._projection_screen_sampling_constants(
                 source, target_eye.resources[image_index]
             )
-            projection_draws.append(
-                {
-                    "source": source,
-                    "target": target_eye.resources[image_index],
-                    "array_layer": eye_index if layered else 0,
-                    "eye_index": eye_index,
-                    "frame_slot": int(self.frame_count) % 3,
-                    "push_constants": self._projection_screen_push_constants(
-                        views[eye_index], sampling_constants
-                    ),
-                    "clear_color": self.config.clear_color,
-                    "wait_semaphore": wait_semaphore,
-                    "glow_source": glow_source,
-                }
+            screen_push_constants = self._projection_screen_push_constants(
+                views[eye_index], sampling_constants
             )
+            projection_draw = {
+                "source": source,
+                "target": target_eye.resources[image_index],
+                "array_layer": eye_index if layered else 0,
+                "eye_index": eye_index,
+                "frame_slot": int(self.frame_count) % 3,
+                "push_constants": screen_push_constants,
+                "clear_color": self.config.clear_color,
+                "wait_semaphore": wait_semaphore,
+            }
+            laser_params = (
+                self._projection_laser_params(eye_index)
+                if self._vulkan_projection_laser_depth_available
+                else None
+            )
+            if laser_params is not None:
+                projection_draw["laser_params"] = laser_params
+                projection_draw["laser_push_constants"] = screen_push_constants[:64]
+            if glow_source is not None and glow_state is not None:
+                projection_draw["glow_source"] = glow_source
+                projection_draw["glow_push_constants"] = screen_push_constants
+                projection_draw["glow_mode"] = glow_state[0]
+                projection_draw["glow_params"] = glow_state[1]
+                projection_draw["glow_curved"] = bool(self._screen_curved)
+            projection_draws.append(projection_draw)
             if self._on_breakdown_add_time is not None:
                 self._on_breakdown_add_time(
                     "openxr_vulkan_composer_draw_prepare",
@@ -4016,6 +4210,38 @@ class OpenXrVulkanPresenter(
                 )
         submit_started = time.perf_counter()
         timeline = None
+        surround_timeline = 0
+        surround_requested = bool(
+            glow_state is not None
+            and glow_state[0] == 5
+            and all("glow_source" in draw for draw in projection_draws)
+        )
+        surround_active = False
+        if surround_requested:
+            # Match the legacy Filament scene split: Surround is room/background
+            # emission and must be occluded by the opaque SBS surface.  The
+            # remaining four Glow modes are foreground effects drawn afterward.
+            try:
+                surround_timeline = (
+                    self._vulkan_projection_screen_pass.submit_stereo_glow(
+                        projection_draws,
+                        wait_for_timeline=0,
+                        clear_target=True,
+                    )
+                )
+                surround_active = True
+                self._last_vulkan_projection_glow_error = None
+                if self._on_breakdown_inc is not None:
+                    self._on_breakdown_inc("openxr_vulkan_composer_glow", 1)
+            except Exception as exc:
+                glow_error = (type(exc).__name__, str(exc))
+                if glow_error != self._last_vulkan_projection_glow_error:
+                    self._last_vulkan_projection_glow_error = glow_error
+                    print(
+                        "[OpenXRViewer] Vulkan projection Surround skipped: "
+                        f"{glow_error[0]}: {glow_error[1]}",
+                        flush=True,
+                    )
         if use_quality_mip:
             try:
                 timeline = self._vulkan_projection_screen_pass.try_submit_stereo_quality_mip(
@@ -4023,6 +4249,8 @@ class OpenXrVulkanPresenter(
                     mode=plan.mode,
                     filter_scale=plan.filter_scale,
                     upscale_scale=plan.upscale_scale,
+                    load_target=surround_active,
+                    wait_for_timeline=surround_timeline,
                 )
             except Exception as exc:
                 print(
@@ -4036,13 +4264,57 @@ class OpenXrVulkanPresenter(
             else:
                 self._on_breakdown_inc("openxr_vulkan_composer_quality_skip", 1)
         if timeline is None:
-            timeline = self._vulkan_projection_screen_pass.submit_stereo(projection_draws)
-        if glow_source is not None and self._filament_glow_environment_enabled:
-            timeline = self._vulkan_projection_screen_pass.submit_stereo_glow(
-                projection_draws, wait_for_timeline=int(timeline)
+            timeline = self._vulkan_projection_screen_pass.submit_stereo(
+                projection_draws,
+                load_target=surround_active,
+                wait_for_timeline=surround_timeline,
             )
-            if self._on_breakdown_inc is not None:
-                self._on_breakdown_inc("openxr_vulkan_composer_glow", 1)
+        if (
+            not surround_requested
+            and all("glow_source" in draw for draw in projection_draws)
+        ):
+            try:
+                timeline = self._vulkan_projection_screen_pass.submit_stereo_glow(
+                    projection_draws, wait_for_timeline=int(timeline)
+                )
+                self._last_vulkan_projection_glow_error = None
+                if self._on_breakdown_inc is not None:
+                    self._on_breakdown_inc("openxr_vulkan_composer_glow", 1)
+            except Exception as exc:
+                glow_error = (type(exc).__name__, str(exc))
+                if glow_error != self._last_vulkan_projection_glow_error:
+                    self._last_vulkan_projection_glow_error = glow_error
+                    print(
+                        "[OpenXRViewer] Vulkan projection Glow skipped: "
+                        f"{glow_error[0]}: {glow_error[1]}",
+                        flush=True,
+                    )
+        if any("laser_params" in draw for draw in projection_draws):
+            try:
+                timeline = self._vulkan_projection_screen_pass.submit_stereo_laser(
+                    projection_draws,
+                    wait_for_timeline=int(timeline),
+                )
+                self._last_vulkan_projection_laser_error = None
+                if self._on_breakdown_inc is not None:
+                    self._on_breakdown_inc("openxr_vulkan_composer_laser", 1)
+            except Exception as exc:
+                laser_error = (type(exc).__name__, str(exc))
+                if laser_error != self._last_vulkan_projection_laser_error:
+                    self._last_vulkan_projection_laser_error = laser_error
+                    print(
+                        "[OpenXRViewer] Vulkan projection laser skipped: "
+                        f"{laser_error[0]}: {laser_error[1]}",
+                        flush=True,
+                    )
+        elif not self._vulkan_projection_laser_depth_available:
+            if self._last_vulkan_projection_laser_depth_status != "unavailable":
+                self._last_vulkan_projection_laser_depth_status = "unavailable"
+                print(
+                    "[OpenXRViewer] Vulkan projection laser disabled: "
+                    "Filament producer depth attachment is unavailable",
+                    flush=True,
+                )
         if self._on_breakdown_add_time is not None:
             self._on_breakdown_add_time(
                 "openxr_vulkan_composer_submit",

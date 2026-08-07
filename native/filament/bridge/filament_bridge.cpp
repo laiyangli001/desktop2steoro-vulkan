@@ -38,6 +38,16 @@ int filament_bridge_create_eye_swapchain(
             bridge, eye_index, image_handles, image_count, format, width, height);
 }
 
+int filament_bridge_create_eye_swapchain_with_depth(
+        FilamentBridge* bridge, uint32_t eye_index,
+        const void* const* image_handles, uint32_t image_count,
+        int32_t format, uint32_t width, uint32_t height,
+        const void* depth_image_handle, int32_t depth_format) {
+    return bridge_eye_create_target_swapchain(
+            bridge, eye_index, image_handles, image_count, format, width, height,
+            depth_image_handle, depth_format);
+}
+
 int filament_bridge_multiview_abi_available() { return 2; }
 int filament_bridge_multiview_supported(const FilamentBridge* bridge) {
     return bridge_eye_multiview_supported(bridge); }
@@ -209,6 +219,12 @@ int filament_bridge_vulkan_external_image_abi_available(
     // backend is extended with a real external-image implementation.
     return 0;
 #endif
+}
+
+int filament_bridge_depth_output_abi_available(const FilamentBridge*) {
+    // The current external swapchain contract carries color images only. A
+    // depth result must not be inferred from color or from CPU-side data.
+    return 0;
 }
 
 int filament_bridge_get_finished_drawing_semaphore(

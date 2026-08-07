@@ -8,7 +8,11 @@ from typing import Any
 
 from viewer.vulkan_compute_pipeline import read_spirv_words
 from viewer.vulkan_context import ImageState
-from viewer.vulkan_descriptors import DescriptorBinding, create_descriptor_set_layout
+from viewer.vulkan_descriptors import (
+    DescriptorBinding,
+    VulkanStorageBuffer,
+    create_descriptor_set_layout,
+)
 from viewer.vulkan_resources import VulkanTransientImage
 
 
@@ -17,6 +21,14 @@ class VulkanProjectionScreenPass:
 
     _SEGMENTS = 48
     _VERTEX_COUNT = (_SEGMENTS + 1) * 2
+    _GLOW_SEGMENTS = 64
+    _GLOW_SHELL_SEGMENTS = 96
+    _GLOW_VERTEX_COUNT = (_GLOW_SEGMENTS + 1) * 2
+    _FROST_FLAT_VERTEX_COUNT = 4 * 8 * 8 * 6
+    _FROST_CURVED_VERTEX_COUNT = (_GLOW_SEGMENTS * 2 + 2) * 6
+    _SURROUND_VERTEX_COUNT = 4 * 48 * _GLOW_SHELL_SEGMENTS * 6
+    _LASER_VERTEX_COUNT = 12
+    _LASER_PARAM_SIZE = 80
     _PUSH_CONSTANT_SIZE = 128
     _DESCRIPTOR_COUNT = 6
     _QUALITY_SLOT_COUNT = 3
@@ -54,6 +66,12 @@ class VulkanProjectionScreenPass:
         self.quality_descriptor_timelines = [0] * self._DESCRIPTOR_COUNT
         self.glow_descriptor_sets: list[Any] = []
         self.glow_descriptor_timelines = [0] * self._DESCRIPTOR_COUNT
+        self.glow_param_buffers: list[VulkanStorageBuffer] = []
+        self.laser_descriptor_set_layout = None
+        self.laser_descriptor_pool = None
+        self.laser_descriptor_sets: list[Any] = []
+        self.laser_descriptor_timelines = [0] * self._DESCRIPTOR_COUNT
+        self.laser_param_buffers: list[VulkanStorageBuffer] = []
         self.quality_slot_timelines = [0] * self._QUALITY_SLOT_COUNT
         self.quality_images: dict[tuple[int, int, int], list[VulkanTransientImage]] = {}
         self.mip_slot_timelines = [0] * self._QUALITY_SLOT_COUNT
@@ -66,6 +84,14 @@ class VulkanProjectionScreenPass:
         self.overlay_render_pass = None
         self.pipeline_layout = None
         self.pipeline = None
+        self.glow_pipeline = None
+        self.frost_pipeline = None
+        self.surround_pipeline = None
+        self.laser_pipeline = None
+        self.glow_pipeline_layout = None
+        self.laser_pipeline_layout = None
+        self.glow_descriptor_set_layout = None
+        self.glow_descriptor_pool = None
         self.rcas_pipeline_layout = None
         self.rcas_pipeline = None
         self.copy_pipeline_layout = None
@@ -205,6 +231,18 @@ class VulkanProjectionScreenPass:
         fragment_module = self._create_shader_module(
             shader_root / "d2s_projection_screen_frag.spv"
         )
+        glow_fragment_module = self._create_shader_module(
+            shader_root / "d2s_projection_glow_frag.spv"
+        )
+        glow_vertex_module = self._create_shader_module(
+            shader_root / "d2s_projection_glow_vert.spv"
+        )
+        laser_vertex_module = self._create_shader_module(
+            shader_root / "d2s_projection_laser_vert.spv"
+        )
+        laser_fragment_module = self._create_shader_module(
+            shader_root / "d2s_projection_laser_frag.spv"
+        )
         rcas_vertex_module = self._create_shader_module(
             shader_root / "d2s_projection_rcas_vert.spv"
         )
@@ -231,12 +269,12 @@ class VulkanProjectionScreenPass:
             self.context.device,
             vk.VkDescriptorPoolCreateInfo(
                 sType=vk.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-                maxSets=self._DESCRIPTOR_COUNT * 4,
+                maxSets=self._DESCRIPTOR_COUNT * 3,
                 poolSizeCount=1,
                 pPoolSizes=[
                     vk.VkDescriptorPoolSize(
                         type=vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                        descriptorCount=self._DESCRIPTOR_COUNT * 4,
+                        descriptorCount=self._DESCRIPTOR_COUNT * 3,
                     )
                 ],
             ),
@@ -248,8 +286,8 @@ class VulkanProjectionScreenPass:
                 vk.VkDescriptorSetAllocateInfo(
                     sType=vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
                     descriptorPool=self.descriptor_pool,
-                    descriptorSetCount=self._DESCRIPTOR_COUNT * 4,
-                    pSetLayouts=[self.descriptor_set_layout] * (self._DESCRIPTOR_COUNT * 4),
+                    descriptorSetCount=self._DESCRIPTOR_COUNT * 3,
+                    pSetLayouts=[self.descriptor_set_layout] * (self._DESCRIPTOR_COUNT * 3),
                 ),
             )
         )
@@ -257,9 +295,156 @@ class VulkanProjectionScreenPass:
         self.rcas_descriptor_sets = allocated_descriptor_sets[
             self._DESCRIPTOR_COUNT:self._DESCRIPTOR_COUNT * 2
         ]
-        self.quality_descriptor_sets = allocated_descriptor_sets[self._DESCRIPTOR_COUNT * 2:]
-        self.quality_descriptor_sets = self.quality_descriptor_sets[:self._DESCRIPTOR_COUNT]
-        self.glow_descriptor_sets = allocated_descriptor_sets[self._DESCRIPTOR_COUNT * 3:]
+        self.quality_descriptor_sets = allocated_descriptor_sets[
+            self._DESCRIPTOR_COUNT * 2:self._DESCRIPTOR_COUNT * 3
+        ]
+        self.glow_descriptor_set_layout = create_descriptor_set_layout(
+            self.context,
+            [
+                DescriptorBinding(
+                    0,
+                    vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                    stage_flags=vk.VK_SHADER_STAGE_FRAGMENT_BIT,
+                ),
+                DescriptorBinding(
+                    1,
+                    vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                    stage_flags=(
+                        vk.VK_SHADER_STAGE_VERTEX_BIT
+                        | vk.VK_SHADER_STAGE_FRAGMENT_BIT
+                    ),
+                ),
+            ],
+        )
+        self.glow_descriptor_pool = vk.vkCreateDescriptorPool(
+            self.context.device,
+            vk.VkDescriptorPoolCreateInfo(
+                sType=vk.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+                maxSets=self._DESCRIPTOR_COUNT,
+                poolSizeCount=2,
+                pPoolSizes=[
+                    vk.VkDescriptorPoolSize(
+                        type=vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                        descriptorCount=self._DESCRIPTOR_COUNT,
+                    ),
+                    vk.VkDescriptorPoolSize(
+                        type=vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                        descriptorCount=self._DESCRIPTOR_COUNT,
+                    ),
+                ],
+            ),
+            None,
+        )
+        self.glow_descriptor_sets = list(
+            vk.vkAllocateDescriptorSets(
+                self.context.device,
+                vk.VkDescriptorSetAllocateInfo(
+                    sType=vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+                    descriptorPool=self.glow_descriptor_pool,
+                    descriptorSetCount=self._DESCRIPTOR_COUNT,
+                    pSetLayouts=[self.glow_descriptor_set_layout]
+                    * self._DESCRIPTOR_COUNT,
+                ),
+            )
+        )
+        self.glow_param_buffers = [
+            VulkanStorageBuffer(self.context, 96)
+            for _ in range(self._DESCRIPTOR_COUNT)
+        ]
+        for descriptor_set, buffer in zip(
+            self.glow_descriptor_sets, self.glow_param_buffers
+        ):
+            vk.vkUpdateDescriptorSets(
+                self.context.device,
+                1,
+                [
+                    vk.VkWriteDescriptorSet(
+                        sType=vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                        dstSet=descriptor_set,
+                        dstBinding=1,
+                        descriptorCount=1,
+                        descriptorType=vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                        pBufferInfo=[
+                            vk.VkDescriptorBufferInfo(
+                                buffer=buffer.buffer,
+                                offset=0,
+                                range=96,
+                            )
+                        ],
+                    )
+                ],
+                0,
+                None,
+            )
+        self.laser_descriptor_set_layout = create_descriptor_set_layout(
+            self.context,
+            [
+                DescriptorBinding(
+                    0,
+                    vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                    stage_flags=(
+                        vk.VK_SHADER_STAGE_VERTEX_BIT
+                        | vk.VK_SHADER_STAGE_FRAGMENT_BIT
+                    ),
+                )
+            ],
+        )
+        self.laser_descriptor_pool = vk.vkCreateDescriptorPool(
+            self.context.device,
+            vk.VkDescriptorPoolCreateInfo(
+                sType=vk.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+                maxSets=self._DESCRIPTOR_COUNT,
+                poolSizeCount=1,
+                pPoolSizes=[
+                    vk.VkDescriptorPoolSize(
+                        type=vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                        descriptorCount=self._DESCRIPTOR_COUNT,
+                    )
+                ],
+            ),
+            None,
+        )
+        self.laser_descriptor_sets = list(
+            vk.vkAllocateDescriptorSets(
+                self.context.device,
+                vk.VkDescriptorSetAllocateInfo(
+                    sType=vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+                    descriptorPool=self.laser_descriptor_pool,
+                    descriptorSetCount=self._DESCRIPTOR_COUNT,
+                    pSetLayouts=[self.laser_descriptor_set_layout]
+                    * self._DESCRIPTOR_COUNT,
+                ),
+            )
+        )
+        self.laser_param_buffers = [
+            VulkanStorageBuffer(self.context, self._LASER_PARAM_SIZE)
+            for _ in range(self._DESCRIPTOR_COUNT)
+        ]
+        for descriptor_set, buffer in zip(
+            self.laser_descriptor_sets, self.laser_param_buffers
+        ):
+            vk.vkUpdateDescriptorSets(
+                self.context.device,
+                1,
+                [
+                    vk.VkWriteDescriptorSet(
+                        sType=vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                        dstSet=descriptor_set,
+                        dstBinding=0,
+                        descriptorCount=1,
+                        descriptorType=vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                        pBufferInfo=[
+                            vk.VkDescriptorBufferInfo(
+                                buffer=buffer.buffer,
+                                offset=0,
+                                range=self._LASER_PARAM_SIZE,
+                            )
+                        ],
+                    )
+                ],
+                0,
+                None,
+            )
         self.sampler = self._create_sampler()
         attachment = vk.VkAttachmentDescription(
             format=self.target_format,
@@ -275,6 +460,15 @@ class VulkanProjectionScreenPass:
             attachment=0,
             layout=vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         )
+        # Keep the subpass object alive across vkCreateRenderPass.  The Python
+        # Vulkan binding stores pColorAttachments in an auxiliary CFFI array
+        # owned by the VkSubpassDescription object; an inline temporary can be
+        # collected before the native call reads that nested pointer.
+        main_subpass = vk.VkSubpassDescription(
+            pipelineBindPoint=vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
+            colorAttachmentCount=1,
+            pColorAttachments=[color_reference],
+        )
         self.render_pass = vk.vkCreateRenderPass(
             self.context.device,
             vk.VkRenderPassCreateInfo(
@@ -282,13 +476,7 @@ class VulkanProjectionScreenPass:
                 attachmentCount=1,
                 pAttachments=[attachment],
                 subpassCount=1,
-                pSubpasses=[
-                    vk.VkSubpassDescription(
-                        pipelineBindPoint=vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
-                        colorAttachmentCount=1,
-                        pColorAttachments=[color_reference],
-                    )
-                ],
+                pSubpasses=[main_subpass],
             ),
             None,
         )
@@ -302,16 +490,18 @@ class VulkanProjectionScreenPass:
             initialLayout=vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
             finalLayout=vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         )
+        overlay_subpass = vk.VkSubpassDescription(
+            pipelineBindPoint=vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
+            colorAttachmentCount=1,
+            pColorAttachments=[color_reference],
+        )
         self.overlay_render_pass = vk.vkCreateRenderPass(
             self.context.device,
             vk.VkRenderPassCreateInfo(
                 sType=vk.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
                 attachmentCount=1, pAttachments=[overlay_attachment],
                 subpassCount=1,
-                pSubpasses=[vk.VkSubpassDescription(
-                    pipelineBindPoint=vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    colorAttachmentCount=1, pColorAttachments=[color_reference],
-                )],
+                pSubpasses=[overlay_subpass],
             ),
             None,
         )
@@ -321,6 +511,26 @@ class VulkanProjectionScreenPass:
                 sType=vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
                 setLayoutCount=1,
                 pSetLayouts=[self.descriptor_set_layout],
+                pushConstantRangeCount=1,
+                pPushConstantRanges=[
+                    vk.VkPushConstantRange(
+                        stageFlags=(
+                            vk.VK_SHADER_STAGE_VERTEX_BIT
+                            | vk.VK_SHADER_STAGE_FRAGMENT_BIT
+                        ),
+                        offset=0,
+                        size=self._PUSH_CONSTANT_SIZE,
+                    ),
+                ],
+            ),
+            None,
+        )
+        self.glow_pipeline_layout = vk.vkCreatePipelineLayout(
+            self.context.device,
+            vk.VkPipelineLayoutCreateInfo(
+                sType=vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+                setLayoutCount=1,
+                pSetLayouts=[self.glow_descriptor_set_layout],
                 pushConstantRangeCount=1,
                 pPushConstantRanges=[
                     vk.VkPushConstantRange(
@@ -386,7 +596,7 @@ class VulkanProjectionScreenPass:
                         attachmentCount=1,
                         pAttachments=[
                             vk.VkPipelineColorBlendAttachmentState(
-                                blendEnable=vk.VK_TRUE,
+                                blendEnable=vk.VK_FALSE,
                                 colorWriteMask=(
                                     vk.VK_COLOR_COMPONENT_R_BIT
                                     | vk.VK_COLOR_COMPONENT_G_BIT
@@ -406,6 +616,212 @@ class VulkanProjectionScreenPass:
                     ),
                     layout=self.pipeline_layout,
                     renderPass=self.render_pass,
+                    subpass=0,
+                    basePipelineIndex=-1,
+                )
+            ],
+            None,
+        )[0]
+        glow_stages = [
+            vk.VkPipelineShaderStageCreateInfo(
+                sType=vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                stage=vk.VK_SHADER_STAGE_VERTEX_BIT,
+                module=glow_vertex_module,
+                pName="main",
+            ),
+            vk.VkPipelineShaderStageCreateInfo(
+                sType=vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                stage=vk.VK_SHADER_STAGE_FRAGMENT_BIT,
+                module=glow_fragment_module,
+                pName="main",
+            ),
+        ]
+        def create_glow_pipeline(topology: int, *, additive: bool) -> Any:
+            blend = vk.VkPipelineColorBlendAttachmentState(
+                blendEnable=vk.VK_TRUE,
+                srcColorBlendFactor=(
+                    vk.VK_BLEND_FACTOR_ONE
+                    if additive
+                    else vk.VK_BLEND_FACTOR_SRC_ALPHA
+                ),
+                dstColorBlendFactor=(
+                    vk.VK_BLEND_FACTOR_ONE
+                    if additive
+                    else vk.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA
+                ),
+                colorBlendOp=vk.VK_BLEND_OP_ADD,
+                srcAlphaBlendFactor=(
+                    vk.VK_BLEND_FACTOR_ZERO
+                    if additive
+                    else vk.VK_BLEND_FACTOR_ONE
+                ),
+                dstAlphaBlendFactor=(
+                    vk.VK_BLEND_FACTOR_ONE
+                    if additive
+                    else vk.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA
+                ),
+                alphaBlendOp=vk.VK_BLEND_OP_ADD,
+                colorWriteMask=(
+                    vk.VK_COLOR_COMPONENT_R_BIT
+                    | vk.VK_COLOR_COMPONENT_G_BIT
+                    | vk.VK_COLOR_COMPONENT_B_BIT
+                    | (0 if additive else vk.VK_COLOR_COMPONENT_A_BIT)
+                ),
+            )
+            return vk.vkCreateGraphicsPipelines(
+                self.context.device,
+                None,
+                1,
+                [
+                    vk.VkGraphicsPipelineCreateInfo(
+                        sType=vk.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+                        stageCount=len(glow_stages),
+                        pStages=glow_stages,
+                        pVertexInputState=vk.VkPipelineVertexInputStateCreateInfo(
+                            sType=vk.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+                        ),
+                        pInputAssemblyState=vk.VkPipelineInputAssemblyStateCreateInfo(
+                            sType=vk.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+                            topology=topology,
+                        ),
+                        pViewportState=vk.VkPipelineViewportStateCreateInfo(
+                            sType=vk.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+                            viewportCount=1,
+                            scissorCount=1,
+                        ),
+                        pRasterizationState=vk.VkPipelineRasterizationStateCreateInfo(
+                            sType=vk.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+                            polygonMode=vk.VK_POLYGON_MODE_FILL,
+                            cullMode=vk.VK_CULL_MODE_NONE,
+                            frontFace=vk.VK_FRONT_FACE_COUNTER_CLOCKWISE,
+                            lineWidth=1.0,
+                        ),
+                        pMultisampleState=vk.VkPipelineMultisampleStateCreateInfo(
+                            sType=vk.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+                            rasterizationSamples=vk.VK_SAMPLE_COUNT_1_BIT,
+                        ),
+                        pColorBlendState=vk.VkPipelineColorBlendStateCreateInfo(
+                            sType=vk.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+                            attachmentCount=1,
+                            pAttachments=[blend],
+                        ),
+                        pDynamicState=vk.VkPipelineDynamicStateCreateInfo(
+                            sType=vk.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+                            dynamicStateCount=2,
+                            pDynamicStates=[
+                                vk.VK_DYNAMIC_STATE_VIEWPORT,
+                                vk.VK_DYNAMIC_STATE_SCISSOR,
+                            ],
+                        ),
+                        layout=self.glow_pipeline_layout,
+                        renderPass=self.overlay_render_pass,
+                        subpass=0,
+                        basePipelineIndex=-1,
+                    )
+                ],
+                None,
+            )[0]
+
+        self.glow_pipeline = create_glow_pipeline(
+            vk.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP, additive=False
+        )
+        self.frost_pipeline = create_glow_pipeline(
+            vk.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, additive=False
+        )
+        self.surround_pipeline = create_glow_pipeline(
+            vk.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, additive=True
+        )
+        self.laser_pipeline_layout = vk.vkCreatePipelineLayout(
+            self.context.device,
+            vk.VkPipelineLayoutCreateInfo(
+                sType=vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+                setLayoutCount=1,
+                pSetLayouts=[self.laser_descriptor_set_layout],
+                pushConstantRangeCount=1,
+                pPushConstantRanges=[
+                    vk.VkPushConstantRange(
+                        stageFlags=(
+                            vk.VK_SHADER_STAGE_VERTEX_BIT
+                            | vk.VK_SHADER_STAGE_FRAGMENT_BIT
+                        ),
+                        offset=0,
+                        size=64,
+                    )
+                ],
+            ),
+            None,
+        )
+        laser_stages = [
+            vk.VkPipelineShaderStageCreateInfo(
+                sType=vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                stage=vk.VK_SHADER_STAGE_VERTEX_BIT,
+                module=laser_vertex_module,
+                pName="main",
+            ),
+            vk.VkPipelineShaderStageCreateInfo(
+                sType=vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                stage=vk.VK_SHADER_STAGE_FRAGMENT_BIT,
+                module=laser_fragment_module,
+                pName="main",
+            ),
+        ]
+        self.laser_pipeline = vk.vkCreateGraphicsPipelines(
+            self.context.device,
+            None,
+            1,
+            [
+                vk.VkGraphicsPipelineCreateInfo(
+                    sType=vk.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+                    stageCount=len(laser_stages),
+                    pStages=laser_stages,
+                    pVertexInputState=vk.VkPipelineVertexInputStateCreateInfo(
+                        sType=vk.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+                    ),
+                    pInputAssemblyState=vk.VkPipelineInputAssemblyStateCreateInfo(
+                        sType=vk.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+                        topology=vk.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+                    ),
+                    pViewportState=vk.VkPipelineViewportStateCreateInfo(
+                        sType=vk.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+                        viewportCount=1,
+                        scissorCount=1,
+                    ),
+                    pRasterizationState=vk.VkPipelineRasterizationStateCreateInfo(
+                        sType=vk.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+                        polygonMode=vk.VK_POLYGON_MODE_FILL,
+                        cullMode=vk.VK_CULL_MODE_NONE,
+                        frontFace=vk.VK_FRONT_FACE_COUNTER_CLOCKWISE,
+                        lineWidth=1.0,
+                    ),
+                    pMultisampleState=vk.VkPipelineMultisampleStateCreateInfo(
+                        sType=vk.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+                        rasterizationSamples=vk.VK_SAMPLE_COUNT_1_BIT,
+                    ),
+                    pColorBlendState=vk.VkPipelineColorBlendStateCreateInfo(
+                        sType=vk.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+                        attachmentCount=1,
+                        pAttachments=[
+                            vk.VkPipelineColorBlendAttachmentState(
+                                blendEnable=vk.VK_FALSE,
+                                colorWriteMask=(
+                                    vk.VK_COLOR_COMPONENT_R_BIT
+                                    | vk.VK_COLOR_COMPONENT_G_BIT
+                                    | vk.VK_COLOR_COMPONENT_B_BIT
+                                    | vk.VK_COLOR_COMPONENT_A_BIT
+                                ),
+                            )
+                        ],
+                    ),
+                    pDynamicState=vk.VkPipelineDynamicStateCreateInfo(
+                        sType=vk.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+                        dynamicStateCount=2,
+                        pDynamicStates=[
+                            vk.VK_DYNAMIC_STATE_VIEWPORT,
+                            vk.VK_DYNAMIC_STATE_SCISSOR,
+                        ],
+                    ),
+                    layout=self.laser_pipeline_layout,
+                    renderPass=self.overlay_render_pass,
                     subpass=0,
                     basePipelineIndex=-1,
                 )
@@ -752,12 +1168,19 @@ class VulkanProjectionScreenPass:
         self._last_submit_timeline = int(timeline)
         return int(timeline)
 
-    def submit_stereo(self, draws: list[dict[str, Any]]) -> int:
+    def submit_stereo(
+        self,
+        draws: list[dict[str, Any]],
+        *,
+        load_target: bool = False,
+        wait_for_timeline: int = 0,
+    ) -> int:
         """Submit both eye projection draws in one graphics queue submission."""
         if len(draws) != 2:
             raise ValueError("stereo projection requires exactly two draws")
-        prepared = [
-            self._prepare_draw(
+        prepared = []
+        for item in draws:
+            draw = self._prepare_draw(
                 item["source"],
                 item["target"],
                 array_layer=int(item["array_layer"]),
@@ -765,9 +1188,11 @@ class VulkanProjectionScreenPass:
                 frame_slot=int(item["frame_slot"]),
                 push_constants=item["push_constants"],
                 clear_color=item["clear_color"],
+                overlay=bool(load_target),
             )
-            for item in draws
-        ]
+            if load_target:
+                draw["target_old_layout"] = self.vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+            prepared.append(draw)
         wait_semaphores = [item["wait_semaphore"] for item in draws]
         wait_semaphores = [item for item in wait_semaphores if item is not None]
         submit_profile: dict[str, float] = {}
@@ -777,6 +1202,7 @@ class VulkanProjectionScreenPass:
                 self._record_draw(command_buffer, draw) for draw in prepared
             ],
             wait_semaphore=wait_semaphores,
+            wait_for_timeline=int(wait_for_timeline),
             on_submit_profile=submit_profile.update,
         )
         self.last_submit_profile = submit_profile
@@ -790,56 +1216,154 @@ class VulkanProjectionScreenPass:
         draws: list[dict[str, Any]],
         *,
         wait_for_timeline: int,
+        clear_target: bool = False,
     ) -> int:
-        """Blend completed Vulkan Glow sources over the SBS projection pair."""
-        if len(draws) != 2 or self.pipeline is None:
+        """Draw the legacy screen-edge Glow around the opaque SBS surface."""
+        if len(draws) != 2 or self.glow_pipeline is None:
             return int(wait_for_timeline)
         prepared = []
-        completed = self.context.completed_timeline_value()
         for item in draws:
             source = item.get("glow_source")
-            if source is None:
+            push_constants = item.get("glow_push_constants")
+            params = item.get("glow_params")
+            mode = int(item.get("glow_mode", 0))
+            if (
+                source is None
+                or not isinstance(push_constants, (bytes, bytearray))
+                or not isinstance(params, (bytes, bytearray))
+                or len(params) != 96
+                or mode not in {1, 2, 3, 4, 5}
+            ):
                 return int(wait_for_timeline)
             eye_index = int(item["eye_index"])
-            descriptor_index = (eye_index * 3 + int(item["frame_slot"])) % self._DESCRIPTOR_COUNT
-            if completed is not None and self.glow_descriptor_timelines[descriptor_index] > completed:
-                return int(wait_for_timeline)
-            if self.context.image_state(source.image).layout != self.vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
-                return int(wait_for_timeline)
-            descriptor_set = self.glow_descriptor_sets[descriptor_index]
-            self.vk.vkUpdateDescriptorSets(
-                self.context.device, 1,
-                [self.vk.VkWriteDescriptorSet(
-                    sType=self.vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                    dstSet=descriptor_set, dstBinding=0, descriptorCount=1,
-                    descriptorType=self.vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                    pImageInfo=[self.vk.VkDescriptorImageInfo(
-                        sampler=self.sampler, imageView=source.require_view(),
-                        imageLayout=self.vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    )],
-                )], 0, None,
-            )
-            overlay = self._prepare_draw(
-                source, item["target"], array_layer=int(item["array_layer"]),
-                eye_index=eye_index, frame_slot=int(item["frame_slot"]),
-                push_constants=bytes(
-                    bytearray(item["push_constants"][:124])
-                    + struct.pack("<f", -1.0)
-                ),
+            descriptor_index = (
+                eye_index * 3 + int(item["frame_slot"])
+            ) % self._DESCRIPTOR_COUNT
+            glow_draw = self._prepare_draw(
+                source,
+                item["target"],
+                array_layer=int(item["array_layer"]),
+                eye_index=eye_index,
+                frame_slot=int(item["frame_slot"]),
+                push_constants=bytes(push_constants),
                 clear_color=item["clear_color"],
-                descriptor_set=descriptor_set,
-                overlay=True,
+                descriptor_set=self.glow_descriptor_sets[descriptor_index],
+                descriptor_timelines=self.glow_descriptor_timelines,
+                overlay=not clear_target,
             )
-            overlay["target_old_layout"] = self.vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
-            overlay["clear_target"] = False
-            prepared.append(overlay)
+            self.glow_param_buffers[descriptor_index].write_bytes(params)
+            if not clear_target:
+                glow_draw["target_old_layout"] = self.vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+            glow_draw["pipeline_layout"] = self.glow_pipeline_layout
+            if mode in {1, 2}:
+                glow_draw["pipeline"] = self.glow_pipeline
+                glow_draw["vertex_count"] = self._GLOW_VERTEX_COUNT
+            elif mode in {3, 4}:
+                glow_draw["pipeline"] = self.frost_pipeline
+                glow_draw["vertex_count"] = (
+                    self._FROST_CURVED_VERTEX_COUNT
+                    if bool(item.get("glow_curved", False))
+                    else self._FROST_FLAT_VERTEX_COUNT
+                )
+            else:
+                glow_draw["pipeline"] = self.surround_pipeline
+                glow_draw["vertex_count"] = self._SURROUND_VERTEX_COUNT
+            prepared.append(glow_draw)
         timeline = self.context.submit_on(
             "graphics",
-            lambda command_buffer: [self._record_draw(command_buffer, draw) for draw in prepared],
+            lambda command_buffer: [
+                self._record_draw(command_buffer, draw) for draw in prepared
+            ],
             wait_for_timeline=int(wait_for_timeline),
         )
         for draw in prepared:
             self.glow_descriptor_timelines[draw["descriptor_index"]] = int(timeline)
+        self._last_submit_timeline = int(timeline)
+        return int(timeline)
+
+    def _prepare_laser_draw(
+        self,
+        target: Any,
+        *,
+        array_layer: int,
+        eye_index: int,
+        frame_slot: int,
+        push_constants: bytes,
+        clear_color: tuple[float, float, float, float],
+    ) -> dict[str, Any]:
+        if self.laser_pipeline is None or len(push_constants) != 64:
+            raise RuntimeError("Vulkan projection laser pass is unavailable")
+        if int(target.format) != self.target_format:
+            raise ValueError("projection target format changed after pipeline creation")
+        descriptor_index = (
+            int(eye_index) * 3 + int(frame_slot)
+        ) % self._DESCRIPTOR_COUNT
+        last_use = self.laser_descriptor_timelines[descriptor_index]
+        if last_use:
+            self.context.wait_for_timeline(last_use)
+        _view, framebuffer = self._target_view_and_framebuffer(
+            target, array_layer, overlay=True
+        )
+        return {
+            "target": target,
+            "array_layer": int(array_layer),
+            "framebuffer": framebuffer,
+            "descriptor_set": self.laser_descriptor_sets[descriptor_index],
+            "payload": self.vk.ffi.new("char[]", push_constants),
+            "push_constant_size": 64,
+            "clear_color": clear_color,
+            "descriptor_index": descriptor_index,
+            "render_pass": self.overlay_render_pass,
+            "pipeline": self.laser_pipeline,
+            "pipeline_layout": self.laser_pipeline_layout,
+            "vertex_count": self._LASER_VERTEX_COUNT,
+            "target_old_layout": self.vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        }
+
+    def submit_stereo_laser(
+        self,
+        draws: list[dict[str, Any]],
+        *,
+        wait_for_timeline: int,
+    ) -> int:
+        """Draw visible legacy controller laser beams over the projection screen."""
+        if len(draws) != 2 or self.laser_pipeline is None:
+            return int(wait_for_timeline)
+        prepared = []
+        for item in draws:
+            params = item.get("laser_params")
+            if not isinstance(params, (bytes, bytearray)) or len(params) != self._LASER_PARAM_SIZE:
+                continue
+            laser_draw = self._prepare_laser_draw(
+                item["target"],
+                array_layer=int(item["array_layer"]),
+                eye_index=int(item["eye_index"]),
+                frame_slot=int(item["frame_slot"]),
+                push_constants=bytes(item["laser_push_constants"]),
+                clear_color=item["clear_color"],
+            )
+            self.laser_param_buffers[laser_draw["descriptor_index"]].write_bytes(params)
+            prepared.append(laser_draw)
+        if not prepared:
+            return int(wait_for_timeline)
+        timeline = self.context.submit_on(
+            "graphics",
+            lambda command_buffer: [
+                self._record_draw(command_buffer, draw) for draw in prepared
+            ],
+            wait_for_timeline=int(wait_for_timeline),
+        )
+        for draw in prepared:
+            self.context.register_image_state(
+                draw["target"].image,
+                ImageState(
+                    layout=self.vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                    access_mask=self.vk.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                    stage_mask=self.vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                    queue_family_index=self.context.queue_family_index,
+                ),
+            )
+            self.laser_descriptor_timelines[draw["descriptor_index"]] = int(timeline)
         self._last_submit_timeline = int(timeline)
         return int(timeline)
 
@@ -926,7 +1450,13 @@ class VulkanProjectionScreenPass:
         self._last_submit_timeline = int(timeline)
         return int(timeline)
 
-    def try_submit_stereo_mip(self, draws: list[dict[str, Any]]) -> int | None:
+    def try_submit_stereo_mip(
+        self,
+        draws: list[dict[str, Any]],
+        *,
+        load_target: bool = False,
+        wait_for_timeline: int = 0,
+    ) -> int | None:
         """Generate the final per-eye mip chain, with optional RCAS on mip zero."""
         use_rcas = self.rcas_sharpness > 0.0
         if (
@@ -1027,8 +1557,7 @@ class VulkanProjectionScreenPass:
                 )
                 rcas["target_old_layout"] = self.context.image_state(mip.image).layout
                 rcas_draws.append(rcas)
-            screen_draws.append(
-                self._prepare_draw(
+            screen_draw = self._prepare_draw(
                     mip,
                     item["target"],
                     array_layer=int(item["array_layer"]),
@@ -1037,8 +1566,13 @@ class VulkanProjectionScreenPass:
                     push_constants=item["push_constants"],
                     clear_color=item["clear_color"],
                     source_ready_in_submission=True,
-                )
+                    overlay=bool(load_target),
             )
+            if load_target:
+                screen_draw["target_old_layout"] = (
+                    self.vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+                )
+            screen_draws.append(screen_draw)
         wait_semaphores = [item["wait_semaphore"] for item in draws]
         wait_semaphores = [item for item in wait_semaphores if item is not None]
         submit_profile: dict[str, float] = {}
@@ -1060,6 +1594,7 @@ class VulkanProjectionScreenPass:
             "graphics",
             record_stereo,
             wait_semaphore=wait_semaphores,
+            wait_for_timeline=int(wait_for_timeline),
             on_submit_profile=submit_profile.update,
         )
         self.last_submit_profile = submit_profile
@@ -1081,10 +1616,16 @@ class VulkanProjectionScreenPass:
         mode: str,
         filter_scale: float,
         upscale_scale: float,
+        load_target: bool = False,
+        wait_for_timeline: int = 0,
     ) -> int | None:
         """Match Filament's quality chain before the final curved-screen draw."""
         if mode == "native_mip":
-            return self.try_submit_stereo_mip(draws)
+            return self.try_submit_stereo_mip(
+                draws,
+                load_target=load_target,
+                wait_for_timeline=wait_for_timeline,
+            )
         use_rcas = self.rcas_sharpness > 0.0
         if (
             len(draws) != 2
@@ -1168,12 +1709,18 @@ class VulkanProjectionScreenPass:
                         source_ready_in_submission=True,
                     )
                 )
-            screen_draws.append(self._prepare_draw(
+            screen_draw = self._prepare_draw(
                 mip, item["target"], array_layer=int(item["array_layer"]),
                 eye_index=eye_index, frame_slot=int(item["frame_slot"]),
                 push_constants=item["push_constants"], clear_color=item["clear_color"],
                 source_ready_in_submission=True,
-            ))
+                overlay=bool(load_target),
+            )
+            if load_target:
+                screen_draw["target_old_layout"] = (
+                    self.vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+                )
+            screen_draws.append(screen_draw)
         wait_semaphores = [item["wait_semaphore"] for item in draws if item["wait_semaphore"] is not None]
         submit_profile: dict[str, float] = {}
         def record_stereo(command_buffer: Any) -> None:
@@ -1195,6 +1742,7 @@ class VulkanProjectionScreenPass:
             "graphics",
             record_stereo,
             wait_semaphore=wait_semaphores,
+            wait_for_timeline=int(wait_for_timeline),
             on_submit_profile=submit_profile.update,
         )
         self.last_submit_profile = submit_profile
@@ -1529,6 +2077,7 @@ class VulkanProjectionScreenPass:
         clear_color: tuple[float, float, float, float],
         source_ready_in_submission: bool = False,
         descriptor_set: Any | None = None,
+        descriptor_timelines: list[int] | None = None,
         overlay: bool = False,
     ) -> dict[str, Any]:
         if (
@@ -1546,7 +2095,8 @@ class VulkanProjectionScreenPass:
         ):
             raise ValueError("projection screen source must be shader-readable")
         descriptor_index = (int(eye_index) * 3 + int(frame_slot)) % self._DESCRIPTOR_COUNT
-        last_use = self.descriptor_timelines[descriptor_index]
+        timeline_slots = descriptor_timelines or self.descriptor_timelines
+        last_use = timeline_slots[descriptor_index]
         if last_use:
             self.context.wait_for_timeline(last_use)
         descriptor_set = descriptor_set or self.descriptor_sets[descriptor_index]
@@ -1630,7 +2180,7 @@ class VulkanProjectionScreenPass:
             command_buffer,
             self.vk.VkRenderPassBeginInfo(
                 sType=self.vk.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-                renderPass=self.render_pass,
+                renderPass=draw.get("render_pass", self.render_pass),
                 framebuffer=draw["framebuffer"],
                 renderArea=self.vk.VkRect2D(
                     offset=self.vk.VkOffset2D(x=0, y=0),
@@ -1680,12 +2230,12 @@ class VulkanProjectionScreenPass:
         self.vk.vkCmdBindPipeline(
             command_buffer,
             self.vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
-            self.pipeline,
+            draw.get("pipeline", self.pipeline),
         )
         self.vk.vkCmdBindDescriptorSets(
             command_buffer,
             self.vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
-            self.pipeline_layout,
+            draw.get("pipeline_layout", self.pipeline_layout),
             0,
             1,
             [draw["descriptor_set"]],
@@ -1694,16 +2244,22 @@ class VulkanProjectionScreenPass:
         )
         self.vk.vkCmdPushConstants(
             command_buffer,
-            self.pipeline_layout,
+            draw.get("pipeline_layout", self.pipeline_layout),
             (
                 self.vk.VK_SHADER_STAGE_VERTEX_BIT
                 | self.vk.VK_SHADER_STAGE_FRAGMENT_BIT
             ),
             0,
-            self._PUSH_CONSTANT_SIZE,
+            int(draw.get("push_constant_size", self._PUSH_CONSTANT_SIZE)),
             draw["payload"],
         )
-        self.vk.vkCmdDraw(command_buffer, self._VERTEX_COUNT, 1, 0, 0)
+        self.vk.vkCmdDraw(
+            command_buffer,
+            int(draw.get("vertex_count", self._VERTEX_COUNT)),
+            1,
+            0,
+            0,
+        )
         self.vk.vkCmdEndRenderPass(command_buffer)
 
     def _prepare_rcas_draw(
@@ -1932,6 +2488,18 @@ class VulkanProjectionScreenPass:
                 self.vk.vkDestroyImageView(self.context.device, view, None)
             if self.pipeline is not None:
                 self.vk.vkDestroyPipeline(self.context.device, self.pipeline, None)
+            if self.glow_pipeline is not None:
+                self.vk.vkDestroyPipeline(self.context.device, self.glow_pipeline, None)
+            if self.frost_pipeline is not None:
+                self.vk.vkDestroyPipeline(self.context.device, self.frost_pipeline, None)
+            if self.surround_pipeline is not None:
+                self.vk.vkDestroyPipeline(
+                    self.context.device, self.surround_pipeline, None
+                )
+            if self.laser_pipeline is not None:
+                self.vk.vkDestroyPipeline(
+                    self.context.device, self.laser_pipeline, None
+                )
             if self.rcas_pipeline is not None:
                 self.vk.vkDestroyPipeline(self.context.device, self.rcas_pipeline, None)
             if self.copy_pipeline is not None:
@@ -1941,6 +2509,14 @@ class VulkanProjectionScreenPass:
             if self.pipeline_layout is not None:
                 self.vk.vkDestroyPipelineLayout(
                     self.context.device, self.pipeline_layout, None
+                )
+            if self.glow_pipeline_layout is not None:
+                self.vk.vkDestroyPipelineLayout(
+                    self.context.device, self.glow_pipeline_layout, None
+                )
+            if self.laser_pipeline_layout is not None:
+                self.vk.vkDestroyPipelineLayout(
+                    self.context.device, self.laser_pipeline_layout, None
                 )
             if self.rcas_pipeline_layout is not None:
                 self.vk.vkDestroyPipelineLayout(
@@ -1968,9 +2544,29 @@ class VulkanProjectionScreenPass:
                 self.vk.vkDestroyDescriptorPool(
                     self.context.device, self.descriptor_pool, None
                 )
+            for buffer in self.glow_param_buffers:
+                buffer.close()
+            for buffer in self.laser_param_buffers:
+                buffer.close()
+            if self.glow_descriptor_pool is not None:
+                self.vk.vkDestroyDescriptorPool(
+                    self.context.device, self.glow_descriptor_pool, None
+                )
             if self.descriptor_set_layout is not None:
                 self.vk.vkDestroyDescriptorSetLayout(
                     self.context.device, self.descriptor_set_layout, None
+                )
+            if self.glow_descriptor_set_layout is not None:
+                self.vk.vkDestroyDescriptorSetLayout(
+                    self.context.device, self.glow_descriptor_set_layout, None
+                )
+            if self.laser_descriptor_pool is not None:
+                self.vk.vkDestroyDescriptorPool(
+                    self.context.device, self.laser_descriptor_pool, None
+                )
+            if self.laser_descriptor_set_layout is not None:
+                self.vk.vkDestroyDescriptorSetLayout(
+                    self.context.device, self.laser_descriptor_set_layout, None
                 )
             for module in self.shader_modules:
                 self.vk.vkDestroyShaderModule(self.context.device, module, None)
@@ -1983,17 +2579,31 @@ class VulkanProjectionScreenPass:
         self.descriptor_sets.clear()
         self.rcas_descriptor_sets.clear()
         self.quality_descriptor_sets.clear()
+        self.glow_descriptor_sets.clear()
+        self.glow_param_buffers.clear()
+        self.laser_descriptor_sets.clear()
+        self.laser_param_buffers.clear()
         self.pipeline = None
+        self.glow_pipeline = None
+        self.frost_pipeline = None
+        self.surround_pipeline = None
+        self.laser_pipeline = None
         self.pipeline_layout = None
+        self.glow_pipeline_layout = None
+        self.laser_pipeline_layout = None
         self.rcas_pipeline = None
         self.rcas_pipeline_layout = None
         self.copy_pipeline = None
         self.copy_pipeline_layout = None
         self.quality_pipeline = None
         self.quality_pipeline_layout = None
+        self.laser_descriptor_set_layout = None
+        self.laser_descriptor_pool = None
         self.render_pass = None
         self.overlay_render_pass = None
         self.sampler = None
         self._retired_samplers.clear()
         self.descriptor_pool = None
         self.descriptor_set_layout = None
+        self.glow_descriptor_pool = None
+        self.glow_descriptor_set_layout = None

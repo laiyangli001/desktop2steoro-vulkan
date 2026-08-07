@@ -44,6 +44,11 @@ FILAMENT_BRIDGE_API int filament_bridge_create_eye_swapchain(
         FilamentBridge* bridge, uint32_t eye_index,
         const void* const* image_handles, uint32_t image_count,
         int32_t format, uint32_t width, uint32_t height);
+FILAMENT_BRIDGE_API int filament_bridge_create_eye_swapchain_with_depth(
+        FilamentBridge* bridge, uint32_t eye_index,
+        const void* const* image_handles, uint32_t image_count,
+        int32_t format, uint32_t width, uint32_t height,
+        const void* depth_image_handle, int32_t depth_format);
 FILAMENT_BRIDGE_API int filament_bridge_multiview_abi_available();
 FILAMENT_BRIDGE_API int filament_bridge_multiview_supported(
         const FilamentBridge* bridge);
@@ -132,6 +137,10 @@ FILAMENT_BRIDGE_API int filament_bridge_set_fill_light(
 // Reports whether this Bridge is backed by a Filament Vulkan backend that
 // supports sampling an application-owned VkImage as a material texture.
 FILAMENT_BRIDGE_API int filament_bridge_vulkan_external_image_abi_available(
+        const FilamentBridge* bridge);
+// Reports whether the bridge exports producer-owned per-eye depth images.
+// Color-only external swapchains must return 0.
+FILAMENT_BRIDGE_API int filament_bridge_depth_output_abi_available(
         const FilamentBridge* bridge);
 // Return the borrowed Filament render-finished semaphore for the active eye.
 // The caller must consume it before the next frame reuses the swapchain slot.

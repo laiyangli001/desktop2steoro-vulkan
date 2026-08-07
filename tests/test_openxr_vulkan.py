@@ -269,10 +269,12 @@ def test_presenter_validates_configuration() -> None:
 
 
 def test_openxr_defaults_to_validated_srgb_projection_target() -> None:
-    assert OpenXrVulkanConfig().swapchain_color_mode == "srgb"
-    assert OpenXrVulkanConfig().controller_model == "PICO"
-    assert OpenXrVulkanConfig().controller_guide_max_distance == pytest.approx(0.4)
-    assert OpenXrVulkanConfig().headset_model == "Pico 4 / 4 Ultra"
+    config = OpenXrVulkanConfig()
+    assert config.swapchain_color_mode == "srgb"
+    assert config.clear_color == (0.0, 0.0, 0.0, 1.0)
+    assert config.controller_model == "PICO"
+    assert config.controller_guide_max_distance == pytest.approx(0.4)
+    assert config.headset_model == "Pico 4 / 4 Ultra"
 
 
 def test_presenter_config_keeps_default_screen_geometry() -> None:
@@ -2441,6 +2443,100 @@ def test_projection_screen_keeps_eye_plane_crossing_for_gpu_clipping() -> None:
     assert np.frombuffer(payload, dtype="<f4")[-4:] == pytest.approx(
         (1.0, 0.5, 0.0, 0.0)
     )
+
+
+def test_projection_glow_state_preserves_legacy_screen_glow_parameters() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_screen = ((0.0, 0.0, -2.0), 2.0, 1.0, (0.0, 0.0, 0.0))
+    presenter._filament_glow_mode = "glow"
+    presenter._filament_glow_environment_enabled = True
+    presenter._filament_glow_width = 0.25
+    presenter._filament_glow_intensity = 0.5
+    presenter._filament_glow_intensity_multiplier = 1.5
+    presenter._head_position_w = np.asarray((0.0, 0.0, 0.0), dtype=np.float64)
+    state = presenter._projection_glow_state()
+
+    assert state is not None
+    mode, payload = state
+    values = np.frombuffer(payload, dtype="<f4")
+    assert mode == 1
+    assert len(payload) == 96
+    assert values[:4] == pytest.approx((0.0, 0.0, 0.0, 1.0))
+    assert values[4:8] == pytest.approx((0.5, 0.25, 1.5, 0.0))
+    assert values[10:12] == pytest.approx((32.0, 31.0))
+    assert values[14:16] == pytest.approx((1.0, 0.5))
+    assert values[22:24] == pytest.approx((2.4, 2.0))
+
+
+def test_projection_glow_is_absent_when_mode_is_off() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_glow_mode = "off"
+
+    assert presenter._projection_glow_state() is None
+
+
+@pytest.mark.parametrize(
+    ("mode", "mode_value"),
+    (("glow", 1), ("glow2", 2), ("veil", 3), ("frosted", 4), ("surround", 5)),
+)
+def test_projection_glow_maps_all_legacy_modes(mode: str, mode_value: int) -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_glow_environment_enabled = True
+    presenter._filament_screen = ((0.0, 0.0, -2.0), 2.0, 1.0, (0.0, 0.0, 0.0))
+    presenter._filament_glow_mode = mode
+    presenter._filament_glow_intensity_multiplier = 1.0
+    presenter._filament_glow_shell_intensity_multiplier = 1.0
+
+    state = presenter._projection_glow_state()
+
+    assert state is not None
+    assert state[0] == mode_value
+    assert np.frombuffer(state[1], dtype="<f4")[3] == pytest.approx(mode_value)
+
+
+def test_projection_glow_keeps_legacy_geometry_density_and_surround_order() -> None:
+    assert VulkanProjectionScreenPass._GLOW_SEGMENTS == 64
+    assert VulkanProjectionScreenPass._GLOW_SHELL_SEGMENTS == 96
+    assert VulkanProjectionScreenPass._SURROUND_VERTEX_COUNT == 4 * 48 * 96 * 6
+
+    source = inspect.getsource(
+        OpenXrVulkanPresenter._render_vulkan_projection_composer
+    )
+    assert "clear_target=True" in source
+    assert "load_target=surround_active" in source
+
+
+def test_projection_glow_does_not_repeat_the_producer_y_flip() -> None:
+    shader = (
+        Path(__file__).parents[1] / "shaders" / "d2s_projection_glow_frag.frag"
+    ).read_text(encoding="utf-8")
+
+    assert "vec2 content_uv = raw;" in shader
+    assert "vec2 sample_uv = uv;" in shader
+    assert "q.y = 1.0 - q.y;" not in shader
+
+
+def test_projection_laser_packs_legacy_beam_transform_and_animation() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._frame_now = 12.0
+    presenter._laser_last_move_l = 11.0
+    presenter._grip_mat_l = np.eye(4, dtype=np.float32)
+    presenter._aim_mat_l = np.eye(4, dtype=np.float32)
+    presenter._controller_interaction_ray = lambda _hand: (
+        np.asarray((0.0, 0.0, 0.0), dtype=np.float64),
+        np.asarray((0.0, 0.0, -1.0), dtype=np.float64),
+    )
+
+    payload = presenter._projection_laser_params(0)
+
+    assert payload is not None
+    values = np.frombuffer(payload, dtype="<f4")
+    assert len(payload) == 80
+    assert values[0:4] == pytest.approx((0.006, 0.0, 0.0, 0.0))
+    assert values[4:8] == pytest.approx((0.0, 0.0, -0.4, 0.0))
+    assert values[8:12] == pytest.approx((0.0, 0.006, 0.0, 0.0))
+    assert values[12:16] == pytest.approx((0.0, 0.0, -0.11, 1.0))
+    assert values[16] == pytest.approx(12.0)
 
 
 def test_screen_resolution_log_reports_source_and_projected_pixels(capsys) -> None:

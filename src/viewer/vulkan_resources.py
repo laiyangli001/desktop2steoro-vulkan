@@ -53,6 +53,8 @@ class VulkanTransientImage:
         format: int,
         label: str,
         mip_levels: int = 1,
+        usage: int | None = None,
+        aspect_mask: int | None = None,
     ) -> None:
         if int(width) < 1 or int(height) < 1:
             raise ValueError("transient image dimensions must be positive")
@@ -68,6 +70,8 @@ class VulkanTransientImage:
         self.format = int(format)
         self.label = str(label)
         self.mip_levels = int(mip_levels)
+        self._usage = usage
+        self._aspect_mask = aspect_mask
         self.image = None
         self.memory = None
         self.view = None
@@ -95,7 +99,7 @@ class VulkanTransientImage:
                 arrayLayers=1,
                 samples=vk.VK_SAMPLE_COUNT_1_BIT,
                 tiling=vk.VK_IMAGE_TILING_OPTIMAL,
-                usage=(
+                usage=self._usage if self._usage is not None else (
                     vk.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
                     | vk.VK_IMAGE_USAGE_SAMPLED_BIT
                     | vk.VK_IMAGE_USAGE_TRANSFER_SRC_BIT
@@ -139,7 +143,11 @@ class VulkanTransientImage:
                 viewType=vk.VK_IMAGE_VIEW_TYPE_2D,
                 format=self.format,
                 subresourceRange=vk.VkImageSubresourceRange(
-                    aspectMask=vk.VK_IMAGE_ASPECT_COLOR_BIT,
+                    aspectMask=(
+                        self._aspect_mask
+                        if self._aspect_mask is not None
+                        else vk.VK_IMAGE_ASPECT_COLOR_BIT
+                    ),
                     baseMipLevel=0,
                     levelCount=self.mip_levels,
                     baseArrayLayer=0,
@@ -182,6 +190,47 @@ class VulkanTransientImage:
         self.view = None
         self.image = None
         self.memory = None
+
+
+class VulkanDepthAttachment(VulkanTransientImage):
+    """Owned single-sample depth image that can be borrowed by Filament."""
+
+    def __init__(self, context: Any, width: int, height: int, *, label: str):
+        vk = context.vk
+        selected = None
+        for candidate in (
+            getattr(vk, "VK_FORMAT_D32_SFLOAT", None),
+            getattr(vk, "VK_FORMAT_D24_UNORM_S8_UINT", None),
+            getattr(vk, "VK_FORMAT_D16_UNORM", None),
+        ):
+            if candidate is None:
+                continue
+            properties = vk.vkGetPhysicalDeviceFormatProperties(
+                context.physical_device, candidate
+            )
+            if int(properties.optimalTilingFeatures) & int(
+                vk.VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT
+            ):
+                selected = int(candidate)
+                break
+        if selected is None:
+            raise RuntimeError("no Vulkan depth attachment format is supported")
+        aspect = vk.VK_IMAGE_ASPECT_DEPTH_BIT
+        if selected == getattr(vk, "VK_FORMAT_D24_UNORM_S8_UINT", -1):
+            aspect |= vk.VK_IMAGE_ASPECT_STENCIL_BIT
+        super().__init__(
+            context,
+            width,
+            height,
+            format=selected,
+            label=label,
+            mip_levels=1,
+            usage=(
+                vk.VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
+                | vk.VK_IMAGE_USAGE_SAMPLED_BIT
+            ),
+            aspect_mask=aspect,
+        )
 
 
 class VulkanExternalImageRegistry:

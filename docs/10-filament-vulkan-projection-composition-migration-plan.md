@@ -13,6 +13,8 @@
 - 单图 Tool Quad 承载 FPS 面板、操作指南、固定在虚拟屏幕上的 2D 光圈、固定在虚拟键盘上的 2D 光圈和虚拟键盘；主屏幕不使用 Quad swapchain。
 - OpenXR Session、swapchain acquire/release、Projection/Quad layer 构建和 `xrEndFrame` 由单一 Presenter 线程拥有。
 - 虚拟屏幕、效果和 UI 使用独立生产线程，通过有界 latest-frame 资源与 timeline 同步，不阻塞视频源帧率。
+
+迁移工作的行为基准固定为删除前的 Filament 实现。Vulkan 只替换执行后端，禁止自行改写屏幕/Glow 的几何、跟随关系、参数公式、模式映射、颜色混合、可见性条件或降级语义。尚未完成原样迁移的效果必须保持关闭，不能用近似实现代替，也不能依赖实机反复试错来重新定义既有行为。
 - Projection swapchain 优先 `array_size=2`，失败回退 per-eye。Virtual Desktop 已验证不接受双眼 Screen Quad swapchain；该实验永久停用，不能影响 Projection 主路径。
 
 ## 2. 明确删减的照明范围
@@ -133,6 +135,8 @@ Lanczos2 或 RCAS。最终 Projection shader 保持直接采样，避免把清�
 - 只加载环境 GLB、手柄 GLB、材质、动画和相机。
 - 输出每眼颜色和深度资源；不创建屏幕、激光、Glow Renderable。
 - 颜色/深度以 timeline 或等价完成点交给 Vulkan Composer。
+- `VulkanStereoOutputFrame` 预留成对的 `left_depth`/`right_depth` 资源字段；两眼必须
+  同时提供，禁止把颜色图或 CPU 深度替代真实 GPU 深度附件。
 - 基础环境光和头顶光保留为唯一手柄照明来源。
 - 删除屏幕放射光实体、平均色到手柄照明的路径和对应 ABI。
 
@@ -142,6 +146,24 @@ Vulkan Composer、曲面屏控制和交互命中使用，不代表 Filament Rend
 已删除；Glow 不再由 Filament Bridge 持有。
 
 完成条件：环境、手柄模型、按键动画和深度遮挡正确；屏幕光关闭后画面仍符合基准。
+
+当前阻塞：现有 Filament external swapchain 只接收颜色 `VkImage`，尚未导出环境/手柄
+深度资源，因此 `left_depth`/`right_depth` 目前为空，Composer 不启用深度敏感激光。
+必须先在 native producer 完成深度附件生命周期、layout 和 ready timeline 交接，再进入
+激光根部遮挡实机验收。
+
+已确认 pinned Filament Vulkan backend 的实际接入点是
+`VulkanPlatform::SwapChainBundle.depth/depthFormat`。后续实现必须填充该 backend
+attachment 并交接 layout；仅增加 C ABI 句柄而不进入 `SwapChainBundle` 不算完成。
+
+本阶段已加入 `filament_bridge_create_eye_swapchain_with_depth` 和对应 Python wrapper，
+可在创建 eye swapchain 时把借用的深度 `VkImage` 注入 `SwapChainBundle`。由于当前
+Presenter 尚未创建并发布这样的深度图，能力探针仍返回 false，旧路径行为不变。
+
+Presenter 侧已加入有界 `VulkanDepthAttachment` 创建和销毁逻辑：只有 native depth
+swapchain ABI 存在时才创建每眼单样本深度图并注入；旧版 bridge 或格式不支持时自动
+回到颜色-only swapchain，不改变现有运行路径。该附件目前服务于 Filament producer，
+尚未被 Projection Composer 作为激光深度输入使用。
 
 ### 阶段 4：迁移激光和 Glow
 
@@ -160,12 +182,17 @@ Glow：
 
 当前进度：Glow Compute 输出已标记为 `vulkan_projection_composer` 所有的
 latest-frame 资源，Presenter 不再用 Filament Glow 外部图像 ABI 判断该资源是否可用。
-Composer 已使用独立 `LOAD` RenderPass、Glow descriptor 和 graphics timeline
-提交透明 overlay；主 SBS RenderPass 仍负责 `CLEAR` 和屏幕绘制。Presenter 已不再调用
-Filament Glow 更新函数，旧 `filament_bridge_set_glow_*` ABI、native Glow 模块和 Python
-ctypes 绑定均已删除。`openxr_vulkan_composer_glow` 用于确认 Vulkan Glow 合成路径。
+主 SBS RenderPass 保持不透明绘制；此前将 Glow 图像覆盖整块 SBS 的临时 overlay 已删除。
+五态显示逻辑已按删除前 `bridge_glow.cpp` 迁入 Vulkan Graphics：`Glow/Glow2` 使用随屏幕移动、旋转、缩放和曲率更新的 64 段内外边缘几何；`Veil/Frosted` 使用原 8×8 四壁体积或 64 段曲面边界；`Surround` 使用四条 48×96 测地条带连接屏幕边缘与头部椭球光壳。`Glow/Glow2/Veil/Frosted` 在不透明 SBS 后通过 `LOAD` RenderPass 绘制；`Surround` 保持旧 Filament 的背景 Scene 顺序，先清屏并绘制加法光壳，再由 `LOAD` RenderPass 绘制不透明 SBS 将屏幕范围遮住。Vulkan Compute 仍只负责 Glow 源纹理预处理和区域平均，不重复实现显示几何。原范围、采样、衰减、噪声、混合、头部位置、默认环境和透视背景可见性条件均保留；每 descriptor slot 使用独立有界状态缓冲，禁止整屏覆盖和无界资源累积。Presenter 已不再调用 Filament Glow 更新函数，旧 `filament_bridge_set_glow_*` ABI、native Glow 模块和 Python ctypes 绑定均已删除。`openxr_vulkan_composer_glow` 用于确认成功提交。
 
 完成条件：激光遮挡、Glow 五态和 latest-frame 复用正确；Glow 线程不阻塞主屏幕。
+
+当前激光迁移进度：旧 `bridge_laser.cpp` 的双平面束几何、六段彩虹渐变、时间动画和
+逐手显隐已加入 Vulkan Projection overlay，并使用独立有界 descriptor/参数 slot。当前
+Vulkan Producer contract 仍只暴露颜色完成点，没有环境/手柄深度附件；因此 Composer
+不会启用无深度测试的激光绘制，并在运行日志中报告
+`Filament producer depth attachment is unavailable`。现有 Filament Bridge 的激光
+ABI 暂不删除，待深度附件交接、深度测试和根部遮挡验证完成后再切换并移除旧 ABI。
 
 ### 阶段 5：Tool Quad 与两处 2D 光圈
 
