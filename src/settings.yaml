@@ -1,5 +1,5 @@
 Capture Mode: Monitor
-Monitor Index: 1
+Monitor Index: 3
 Window Title: ''
 Show FPS: false
 Model List:
@@ -472,10 +472,10 @@ Depth Resolution: 518
 Anti-aliasing: 1
 Depth Antialias Strength: 1.0
 Depth Pop: 0.0
-Foreground Pop: 1.25
-Midground Pop: 1.1
-Background Pop: 1.0
-Depth Separation Preset: strong
+Foreground Pop: 1.15
+Midground Pop: 1.05
+Background Pop: 1.05
+Depth Separation Preset: standard
 Convergence: 0.0
 Dynamic Convergence: false
 Dynamic Convergence Strength: 0.0
@@ -502,15 +502,15 @@ Color Gamma: 1.0
 Color Temperature: 0.0
 Color Tint: 0.0
 Vulkan Projection Min LOD: 0.0
-Vulkan Projection Max LOD: 0.15
-Vulkan Projection MIP LOD Bias: -0.35
+Vulkan Projection Max LOD: 0.7
+Vulkan Projection MIP LOD Bias: -0.7
 Vulkan Projection RCAS Sharpness: 0.35
 Display Mode: Half-SBS
 FP16: true
 torch.compile: true
 TensorRT: true
 Parallel Inference: true
-Parallel Inference Workers: 3
+Parallel Inference Workers: 2
 Recompile TensorRT: false
 CoreML: null
 Recompile CoreML: false
