@@ -4308,7 +4308,6 @@ class OpenXrVulkanPresenter(
         use_quality_mip = bool(
             self._vulkan_projection_quality_chain_requested
             and plan is not None
-            and not filament_wait_semaphores
         )
         projection_draws = []
         glow_source = (frame.metadata or {}).get("glow_vulkan_image")

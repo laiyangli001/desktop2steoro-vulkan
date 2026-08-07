@@ -920,6 +920,14 @@ def test_projection_composer_routes_sampling_policy_to_quality_chain() -> None:
     assert "if timeline is None:" in source
 
 
+def test_projection_quality_chain_is_not_disabled_by_filament_waits() -> None:
+    source = inspect.getsource(OpenXrVulkanPresenter._render_vulkan_projection_composer)
+
+    # Filament waits synchronize the producer; they must not suppress the
+    # projection quality pass or make GUI LOD/MIP/RCAS settings ineffective.
+    assert "and not filament_wait_semaphores" not in source
+
+
 def test_projection_quality_chain_disabled_forces_lod0_sampling() -> None:
     source = inspect.getsource(OpenXrVulkanPresenter._apply_vulkan_projection_sampling)
 
