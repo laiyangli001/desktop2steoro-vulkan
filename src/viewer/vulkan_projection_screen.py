@@ -52,6 +52,8 @@ class VulkanProjectionScreenPass:
         self.rcas_descriptor_timelines = [0] * self._DESCRIPTOR_COUNT
         self.quality_descriptor_sets: list[Any] = []
         self.quality_descriptor_timelines = [0] * self._DESCRIPTOR_COUNT
+        self.glow_descriptor_sets: list[Any] = []
+        self.glow_descriptor_timelines = [0] * self._DESCRIPTOR_COUNT
         self.quality_slot_timelines = [0] * self._QUALITY_SLOT_COUNT
         self.quality_images: dict[tuple[int, int, int], list[VulkanTransientImage]] = {}
         self.mip_slot_timelines = [0] * self._QUALITY_SLOT_COUNT
@@ -61,6 +63,7 @@ class VulkanProjectionScreenPass:
         self._retired_samplers: list[tuple[Any, int]] = []
         self._last_submit_timeline = 0
         self.render_pass = None
+        self.overlay_render_pass = None
         self.pipeline_layout = None
         self.pipeline = None
         self.rcas_pipeline_layout = None
@@ -71,6 +74,7 @@ class VulkanProjectionScreenPass:
         self.quality_pipeline = None
         self.image_views: dict[tuple[int, int], Any] = {}
         self.framebuffers: dict[tuple[int, int, int, int], Any] = {}
+        self.overlay_framebuffers: dict[tuple[int, int, int, int], Any] = {}
         try:
             self._create()
         except Exception:
@@ -227,12 +231,12 @@ class VulkanProjectionScreenPass:
             self.context.device,
             vk.VkDescriptorPoolCreateInfo(
                 sType=vk.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-                maxSets=self._DESCRIPTOR_COUNT * 3,
+                maxSets=self._DESCRIPTOR_COUNT * 4,
                 poolSizeCount=1,
                 pPoolSizes=[
                     vk.VkDescriptorPoolSize(
                         type=vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                        descriptorCount=self._DESCRIPTOR_COUNT * 3,
+                        descriptorCount=self._DESCRIPTOR_COUNT * 4,
                     )
                 ],
             ),
@@ -244,8 +248,8 @@ class VulkanProjectionScreenPass:
                 vk.VkDescriptorSetAllocateInfo(
                     sType=vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
                     descriptorPool=self.descriptor_pool,
-                    descriptorSetCount=self._DESCRIPTOR_COUNT * 3,
-                    pSetLayouts=[self.descriptor_set_layout] * (self._DESCRIPTOR_COUNT * 3),
+                    descriptorSetCount=self._DESCRIPTOR_COUNT * 4,
+                    pSetLayouts=[self.descriptor_set_layout] * (self._DESCRIPTOR_COUNT * 4),
                 ),
             )
         )
@@ -254,6 +258,8 @@ class VulkanProjectionScreenPass:
             self._DESCRIPTOR_COUNT:self._DESCRIPTOR_COUNT * 2
         ]
         self.quality_descriptor_sets = allocated_descriptor_sets[self._DESCRIPTOR_COUNT * 2:]
+        self.quality_descriptor_sets = self.quality_descriptor_sets[:self._DESCRIPTOR_COUNT]
+        self.glow_descriptor_sets = allocated_descriptor_sets[self._DESCRIPTOR_COUNT * 3:]
         self.sampler = self._create_sampler()
         attachment = vk.VkAttachmentDescription(
             format=self.target_format,
@@ -283,6 +289,29 @@ class VulkanProjectionScreenPass:
                         pColorAttachments=[color_reference],
                     )
                 ],
+            ),
+            None,
+        )
+        overlay_attachment = vk.VkAttachmentDescription(
+            format=self.target_format,
+            samples=vk.VK_SAMPLE_COUNT_1_BIT,
+            loadOp=vk.VK_ATTACHMENT_LOAD_OP_LOAD,
+            storeOp=vk.VK_ATTACHMENT_STORE_OP_STORE,
+            stencilLoadOp=vk.VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+            stencilStoreOp=vk.VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            initialLayout=vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            finalLayout=vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        )
+        self.overlay_render_pass = vk.vkCreateRenderPass(
+            self.context.device,
+            vk.VkRenderPassCreateInfo(
+                sType=vk.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+                attachmentCount=1, pAttachments=[overlay_attachment],
+                subpassCount=1,
+                pSubpasses=[vk.VkSubpassDescription(
+                    pipelineBindPoint=vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    colorAttachmentCount=1, pColorAttachments=[color_reference],
+                )],
             ),
             None,
         )
@@ -357,7 +386,7 @@ class VulkanProjectionScreenPass:
                         attachmentCount=1,
                         pAttachments=[
                             vk.VkPipelineColorBlendAttachmentState(
-                                blendEnable=vk.VK_FALSE,
+                                blendEnable=vk.VK_TRUE,
                                 colorWriteMask=(
                                     vk.VK_COLOR_COMPONENT_R_BIT
                                     | vk.VK_COLOR_COMPONENT_G_BIT
@@ -647,7 +676,7 @@ class VulkanProjectionScreenPass:
         )[0]
 
     def _target_view_and_framebuffer(
-        self, target: Any, array_layer: int
+        self, target: Any, array_layer: int, *, overlay: bool = False
     ) -> tuple[Any, Any]:
         vk = self.vk
         view_key = (id(target.image), int(array_layer))
@@ -674,13 +703,14 @@ class VulkanProjectionScreenPass:
         framebuffer_key = (
             view_key[0], view_key[1], int(target.width), int(target.height)
         )
-        framebuffer = self.framebuffers.get(framebuffer_key)
+        framebuffer_cache = self.overlay_framebuffers if overlay else self.framebuffers
+        framebuffer = framebuffer_cache.get(framebuffer_key)
         if framebuffer is None:
             framebuffer = vk.vkCreateFramebuffer(
                 self.context.device,
                 vk.VkFramebufferCreateInfo(
                     sType=vk.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
-                    renderPass=self.render_pass,
+                    renderPass=self.overlay_render_pass if overlay else self.render_pass,
                     attachmentCount=1,
                     pAttachments=[view],
                     width=int(target.width),
@@ -689,7 +719,7 @@ class VulkanProjectionScreenPass:
                 ),
                 None,
             )
-            self.framebuffers[framebuffer_key] = framebuffer
+            framebuffer_cache[framebuffer_key] = framebuffer
         return view, framebuffer
 
     def submit(
@@ -752,6 +782,64 @@ class VulkanProjectionScreenPass:
         self.last_submit_profile = submit_profile
         for draw in prepared:
             self._complete_draw(draw, timeline)
+        self._last_submit_timeline = int(timeline)
+        return int(timeline)
+
+    def submit_stereo_glow(
+        self,
+        draws: list[dict[str, Any]],
+        *,
+        wait_for_timeline: int,
+    ) -> int:
+        """Blend completed Vulkan Glow sources over the SBS projection pair."""
+        if len(draws) != 2 or self.pipeline is None:
+            return int(wait_for_timeline)
+        prepared = []
+        completed = self.context.completed_timeline_value()
+        for item in draws:
+            source = item.get("glow_source")
+            if source is None:
+                return int(wait_for_timeline)
+            eye_index = int(item["eye_index"])
+            descriptor_index = (eye_index * 3 + int(item["frame_slot"])) % self._DESCRIPTOR_COUNT
+            if completed is not None and self.glow_descriptor_timelines[descriptor_index] > completed:
+                return int(wait_for_timeline)
+            if self.context.image_state(source.image).layout != self.vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+                return int(wait_for_timeline)
+            descriptor_set = self.glow_descriptor_sets[descriptor_index]
+            self.vk.vkUpdateDescriptorSets(
+                self.context.device, 1,
+                [self.vk.VkWriteDescriptorSet(
+                    sType=self.vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                    dstSet=descriptor_set, dstBinding=0, descriptorCount=1,
+                    descriptorType=self.vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                    pImageInfo=[self.vk.VkDescriptorImageInfo(
+                        sampler=self.sampler, imageView=source.require_view(),
+                        imageLayout=self.vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    )],
+                )], 0, None,
+            )
+            overlay = self._prepare_draw(
+                source, item["target"], array_layer=int(item["array_layer"]),
+                eye_index=eye_index, frame_slot=int(item["frame_slot"]),
+                push_constants=bytes(
+                    bytearray(item["push_constants"][:124])
+                    + struct.pack("<f", -1.0)
+                ),
+                clear_color=item["clear_color"],
+                descriptor_set=descriptor_set,
+                overlay=True,
+            )
+            overlay["target_old_layout"] = self.vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+            overlay["clear_target"] = False
+            prepared.append(overlay)
+        timeline = self.context.submit_on(
+            "graphics",
+            lambda command_buffer: [self._record_draw(command_buffer, draw) for draw in prepared],
+            wait_for_timeline=int(wait_for_timeline),
+        )
+        for draw in prepared:
+            self.glow_descriptor_timelines[draw["descriptor_index"]] = int(timeline)
         self._last_submit_timeline = int(timeline)
         return int(timeline)
 
@@ -1276,7 +1364,7 @@ class VulkanProjectionScreenPass:
             command_buffer,
             self.vk.VkRenderPassBeginInfo(
                 sType=self.vk.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-                renderPass=self.render_pass,
+                renderPass=draw.get("render_pass", self.render_pass),
                 framebuffer=draw["framebuffer"],
                 renderArea=self.vk.VkRect2D(
                     offset=self.vk.VkOffset2D(x=0, y=0),
@@ -1440,6 +1528,8 @@ class VulkanProjectionScreenPass:
         push_constants: bytes,
         clear_color: tuple[float, float, float, float],
         source_ready_in_submission: bool = False,
+        descriptor_set: Any | None = None,
+        overlay: bool = False,
     ) -> dict[str, Any]:
         if (
             self.pipeline is None
@@ -1459,7 +1549,7 @@ class VulkanProjectionScreenPass:
         last_use = self.descriptor_timelines[descriptor_index]
         if last_use:
             self.context.wait_for_timeline(last_use)
-        descriptor_set = self.descriptor_sets[descriptor_index]
+        descriptor_set = descriptor_set or self.descriptor_sets[descriptor_index]
         self.vk.vkUpdateDescriptorSets(
             self.context.device,
             1,
@@ -1482,7 +1572,9 @@ class VulkanProjectionScreenPass:
             0,
             None,
         )
-        _view, framebuffer = self._target_view_and_framebuffer(target, array_layer)
+        _view, framebuffer = self._target_view_and_framebuffer(
+            target, array_layer, overlay=overlay
+        )
         return {
             "target": target,
             "array_layer": int(array_layer),
@@ -1491,6 +1583,7 @@ class VulkanProjectionScreenPass:
             "payload": self.vk.ffi.new("char[]", push_constants),
             "clear_color": clear_color,
             "descriptor_index": descriptor_index,
+            "render_pass": self.overlay_render_pass if overlay else self.render_pass,
         }
 
     def _record_draw(self, command_buffer: Any, draw: dict[str, Any]) -> None:
@@ -1499,11 +1592,15 @@ class VulkanProjectionScreenPass:
         old_access = (
             self.vk.VK_ACCESS_SHADER_READ_BIT
             if old_layout == self.vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+            else self.vk.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
+            if old_layout == self.vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
             else 0
         )
         old_stage = (
             self.vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
             if old_layout == self.vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+            else self.vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
+            if old_layout == self.vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
             else self.vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
         )
         transition = self.vk.VkImageMemoryBarrier(
@@ -1829,6 +1926,8 @@ class VulkanProjectionScreenPass:
                     image.close()
             for framebuffer in self.framebuffers.values():
                 self.vk.vkDestroyFramebuffer(self.context.device, framebuffer, None)
+            for framebuffer in self.overlay_framebuffers.values():
+                self.vk.vkDestroyFramebuffer(self.context.device, framebuffer, None)
             for view in self.image_views.values():
                 self.vk.vkDestroyImageView(self.context.device, view, None)
             if self.pipeline is not None:
@@ -1857,6 +1956,10 @@ class VulkanProjectionScreenPass:
                 )
             if self.render_pass is not None:
                 self.vk.vkDestroyRenderPass(self.context.device, self.render_pass, None)
+            if self.overlay_render_pass is not None:
+                self.vk.vkDestroyRenderPass(
+                    self.context.device, self.overlay_render_pass, None
+                )
             if self.sampler is not None:
                 self.vk.vkDestroySampler(self.context.device, self.sampler, None)
             for sampler, _timeline in self._retired_samplers:
@@ -1872,6 +1975,7 @@ class VulkanProjectionScreenPass:
             for module in self.shader_modules:
                 self.vk.vkDestroyShaderModule(self.context.device, module, None)
         self.framebuffers.clear()
+        self.overlay_framebuffers.clear()
         self.image_views.clear()
         self.quality_images.clear()
         self.mip_images.clear()
@@ -1888,6 +1992,7 @@ class VulkanProjectionScreenPass:
         self.quality_pipeline = None
         self.quality_pipeline_layout = None
         self.render_pass = None
+        self.overlay_render_pass = None
         self.sampler = None
         self._retired_samplers.clear()
         self.descriptor_pool = None

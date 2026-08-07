@@ -1,7 +1,6 @@
 #include "bridge_eye.h"
 #include "bridge_internal.h"
 #include "bridge_material.h"
-#include "bridge_screen.h"
 
 #include <type_traits>
 
@@ -56,41 +55,6 @@ void bridge_eye_activate(FilamentBridge* bridge, uint32_t eye_index) {
     bridge->swapchain = eye.swapchain;
     bridge->external_swapchain = eye.external_swapchain;
     bridge->frame_active = eye.frame_active;
-    bridge->screen_material_instance =
-            bridge->screen_material_instances[eye_index];
-    bridge->screen_entity = bridge->screen_entities[eye_index];
-    bridge->screen_mip_copy_material_instance =
-            bridge->screen_mip_copy_material_instances[eye_index];
-    bridge->screen_mip_copy_entity =
-            bridge->screen_mip_copy_entities[eye_index];
-    bridge->screen_mip_copy_view =
-            bridge->screen_mip_copy_views[eye_index];
-    const bool use_mip = bridge->screen_mip_experiment_enabled &&
-            bridge->screen_mip_ready[eye_index] &&
-            bridge->screen_mip_textures[eye_index];
-    bridge->screen_textures[eye_index] = use_mip
-            ? bridge->screen_mip_textures[eye_index]
-            : bridge->screen_source_textures[eye_index];
-    bridge->screen_texture = bridge->screen_textures[eye_index];
-    if (bridge->screen_texture && bridge->screen_material_instance) {
-        bridge->screen_material_instance->setParameter(
-                "screenTextureLeft", bridge->screen_texture,
-                use_mip ? bridge->screen_texture_sampler
-                        : bridge->screen_source_texture_sampler);
-        bridge->screen_material_instance->setParameter(
-                "screenTextureRight", bridge->screen_texture,
-                use_mip ? bridge->screen_texture_sampler
-                        : bridge->screen_source_texture_sampler);
-    }
-    if (bridge->screen_mip_copy_material_instance &&
-            bridge->screen_source_textures[eye_index]) {
-        bridge->screen_mip_copy_material_instance->setParameter(
-                "screenTextureLeft", bridge->screen_source_textures[eye_index],
-                bridge->screen_source_texture_sampler);
-        bridge->screen_mip_copy_material_instance->setParameter(
-                "screenTextureRight", bridge->screen_source_textures[eye_index],
-                bridge->screen_source_texture_sampler);
-    }
 }
 
 int bridge_eye_create_swapchain(
@@ -318,13 +282,6 @@ int bridge_eye_begin_frame(FilamentBridge* bridge) {
                 bridge->active_eye, static_cast<void*>(bridge->renderer),
                 static_cast<void*>(bridge->swapchain), bridge->frame_active ? 1 : 0);
         std::fflush(stderr);
-    }
-    if (bridge->multiview_active) {
-        bridge_screen_prepare_eye(bridge, 0);
-        bridge_screen_prepare_eye(bridge, 1);
-        bridge_screen_bind_stereo_textures(bridge);
-    } else {
-        bridge_screen_prepare_frame(bridge);
     }
     bridge->renderer->render(bridge->view);
     // Multiview must render all foreground layers through one View. Sequential

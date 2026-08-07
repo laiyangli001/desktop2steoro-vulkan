@@ -94,8 +94,6 @@ add_library(filament_bridge SHARED
     bridge_controller_guide.cpp
     bridge_text_overlay.cpp
     bridge_laser.cpp
-    bridge_glow.cpp
-    bridge_screen.cpp
     bridge_material.cpp
     preview_bridge.cpp)
 target_compile_features(filament_bridge PRIVATE cxx_std_20)

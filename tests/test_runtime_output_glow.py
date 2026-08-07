@@ -11,7 +11,7 @@ def _adapter_with_backend(backend):
         _filament_glow_mode="glow",
         _filament_glow_environment_enabled=True,
         _frosted_glow_lod=5.4,
-        filament_bridge=SimpleNamespace(glow_vulkan_image_abi_available=True),
+        filament_bridge=SimpleNamespace(),
         vulkan=object(),
     )
     adapter._glow_gpu_backend = backend

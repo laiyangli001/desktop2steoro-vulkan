@@ -75,7 +75,6 @@ FILAMENT_BRIDGE_API int filament_bridge_end_frame(FilamentBridge* bridge);
 // Queue one eye without blocking, then wait once after both eyes are queued.
 FILAMENT_BRIDGE_API int filament_bridge_end_frame_deferred(FilamentBridge* bridge);
 FILAMENT_BRIDGE_API int filament_bridge_finish_frame_batch(FilamentBridge* bridge);
-FILAMENT_BRIDGE_API int filament_bridge_screen_eye_renderables_abi_available();
 // Submit queued work without blocking; wait once after the complete XR frame.
 FILAMENT_BRIDGE_API int filament_bridge_wait_for_idle(FilamentBridge* bridge);
 
@@ -130,66 +129,10 @@ FILAMENT_BRIDGE_API int filament_bridge_set_fill_light(
         float red, float green, float blue,
         float intensity,
         float direction_x, float direction_y, float direction_z);
-FILAMENT_BRIDGE_API int filament_bridge_create_screen(FilamentBridge* bridge);
-FILAMENT_BRIDGE_API int filament_bridge_set_screen(
-        FilamentBridge* bridge,
-        float position_x, float position_y, float position_z,
-        float width, float height,
-        float rotation_x_degrees, float rotation_y_degrees, float rotation_z_degrees);
-FILAMENT_BRIDGE_API int filament_bridge_set_screen_curved(
-        FilamentBridge* bridge, int curved);
-FILAMENT_BRIDGE_API int filament_bridge_set_screen_light(
-        FilamentBridge* bridge,
-        float red, float green, float blue, float intensity);
-// CPU-uploaded fallback for runtimes without the Vulkan Glow image ABI.
-FILAMENT_BRIDGE_API int filament_bridge_set_glow_source(
-        FilamentBridge* bridge, const uint8_t* rgba,
-        uint32_t width, uint32_t height);
-// Bind a borrowed, completed Vulkan image produced by the asynchronous Glow pass.
-FILAMENT_BRIDGE_API int filament_bridge_set_glow_image(
-        FilamentBridge* bridge, const void* image,
-        uint32_t width, uint32_t height, int32_t format);
-// mode: 0=off, 1=glow, 2=glow2, 3=veil, 4=frosted, 5=surround.
-FILAMENT_BRIDGE_API int filament_bridge_set_glow_state(
-        FilamentBridge* bridge, uint32_t mode,
-        float head_x, float head_y, float head_z,
-        float glow_intensity, float glow_width,
-        float glow_intensity_multiplier,
-        float frosted_intensity, float frosted_alpha,
-        float frosted_threshold, float frosted_lod,
-        float frosted_blend, float frosted_thickness,
-        float frosted_diffuse, float frosted_inset,
-        float veil_intensity, float veil_alpha,
-        float glow_shell_intensity_multiplier,
-        float glow_shell_radius, float glow_shell_height);
-// Set the matrix-selected source prefilter scale. One means no additional
-// prefiltering beyond the projected source footprint.
-FILAMENT_BRIDGE_API int filament_bridge_set_screen_sampling(
-        FilamentBridge* bridge, float filter_scale);
-FILAMENT_BRIDGE_API int filament_bridge_set_screen_upscale(
-        FilamentBridge* bridge, float upscale_scale);
-// Select the legacy external-image sampler (0) or the internal MIP path (1).
-FILAMENT_BRIDGE_API int filament_bridge_set_screen_sampling_mode(
-        FilamentBridge* bridge, int use_mip);
-// image is a borrowed Vulkan VkImage owned by the runtime output adapter.
-FILAMENT_BRIDGE_API int filament_bridge_set_screen_image(
-        FilamentBridge* bridge, const void* image,
-        uint32_t width, uint32_t height, int32_t format);
-FILAMENT_BRIDGE_API int filament_bridge_set_screen_source_version(
-        FilamentBridge* bridge, uint64_t version);
-FILAMENT_BRIDGE_API int filament_bridge_set_fixed_screen_image(
-        FilamentBridge* bridge, const uint8_t* rgba,
-        uint32_t width, uint32_t height);
-FILAMENT_BRIDGE_API int filament_bridge_get_screen_sampling_stats(
-        FilamentBridge* bridge, uint32_t eye_index,
-        uint64_t* source_binds, uint64_t* mip_generations);
 // Reports whether this Bridge is backed by a Filament Vulkan backend that
 // supports sampling an application-owned VkImage as a material texture.
 FILAMENT_BRIDGE_API int filament_bridge_vulkan_external_image_abi_available(
         const FilamentBridge* bridge);
-// Set a borrowed binary semaphore signaled by the runtime output producer.
-FILAMENT_BRIDGE_API int filament_bridge_set_screen_ready_semaphore(
-        FilamentBridge* bridge, const void* semaphore);
 // Return the borrowed Filament render-finished semaphore for the active eye.
 // The caller must consume it before the next frame reuses the swapchain slot.
 FILAMENT_BRIDGE_API int filament_bridge_get_finished_drawing_semaphore(

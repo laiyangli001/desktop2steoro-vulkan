@@ -489,8 +489,7 @@ def test_controller_callout_uses_projection_layer_not_quad_layer() -> None:
     source = (Path(__file__).resolve().parents[1] /
               "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
 
-    assert "return screen_layers + layers" in source
-    assert "return layers + screen_layers" not in source
+    assert "return self._render_tool_quad_layers(output_frame)" in source
     assert "bridge.set_controller_guide_texture(self._controller_callout_rgba)" in source
     assert "bridge.set_controller_guide(guide_matrix, visible=True)" in source
     assert 'specs.append(("controller_callouts"' not in source
@@ -829,10 +828,11 @@ def test_filament_controller_guide_tracks_geometry_and_visibility() -> None:
     assert visible is False
 
 
-def test_presenter_defaults_to_capability_gated_zero_copy_path(monkeypatch) -> None:
-    monkeypatch.delenv("D2S_ENABLE_FILAMENT_SCREEN_IMAGE", raising=False)
+def test_presenter_defaults_to_composer_only_screen_path(monkeypatch) -> None:
+    monkeypatch.delenv("D2S_VULKAN_PROJECTION_COMPOSER", raising=False)
     presenter = OpenXrVulkanPresenter()
-    assert presenter._filament_screen_image_enabled is True
+    assert presenter._vulkan_projection_composer_requested is True
+    assert not hasattr(presenter, "_filament_screen_image_enabled")
 
 
 def test_projection_composer_defaults_on_and_can_be_explicitly_disabled(monkeypatch) -> None:
@@ -1139,64 +1139,17 @@ def test_projection_composer_uses_direct_vulkan_rasterization_in_opaque_runtime(
     assert "self._vulkan_projection_composer_active" in source
 
 
-def test_filament_screen_image_requires_per_eye_external_ready_semaphores() -> None:
-    presenter = OpenXrVulkanPresenter()
-    presenter._filament_screen_image_enabled = True
+def test_filament_screen_image_abi_is_absent_from_presenter() -> None:
+    source = (Path(__file__).resolve().parents[1] /
+              "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
 
-    class Bridge:
-        screen_image_abi_available = True
-        vulkan_external_image_abi_available = True
-        screen_ready_semaphore_abi_available = True
-        async_submit_abi_available = True
-        finished_drawing_semaphore_abi_available = True
-
-    presenter.filament_bridge = Bridge()
-    frame = SimpleNamespace(
-        metadata={
-            "vulkan_output_sync": "cuda_stream_synchronized",
-            "vulkan_ready_semaphore_left": object(),
-            "vulkan_ready_semaphore_right": object(),
-        }
-    )
-    assert presenter._can_use_filament_screen_image(frame) is False
-    frame.metadata["vulkan_output_sync"] = "gpu_external_semaphore"
-    assert presenter._can_use_filament_screen_image(frame) is False
-    frame.metadata.update({
-        "vulkan_source_layout_left": "shader_read_only_optimal",
-        "vulkan_source_layout_right": "shader_read_only_optimal",
-        "vulkan_source_queue_family_left": 0,
-        "vulkan_source_queue_family_right": 0,
-        "_vulkan_source_prepare_for_sampling": lambda *_args: object(),
-        "_vulkan_source_consumer_release": lambda: None,
-    })
-    assert presenter._can_use_filament_screen_image(frame) is True
-
-
-def test_filament_screen_image_gate_reports_gpu_copy_fallback_reason() -> None:
-    presenter = OpenXrVulkanPresenter()
-    presenter._filament_screen_image_enabled = True
-
-    class Bridge:
-        screen_image_abi_available = True
-        vulkan_external_image_abi_available = True
-        screen_ready_semaphore_abi_available = True
-        async_submit_abi_available = True
-        finished_drawing_semaphore_abi_available = True
-
-    presenter.filament_bridge = Bridge()
-    frame = SimpleNamespace(metadata={"vulkan_output_sync": "gpu_synchronized"})
-
-    assert presenter._filament_screen_image_gate_reason(frame) == (
-        "producer_sync=gpu_synchronized"
-    )
-
-
-def test_filament_screen_image_status_ignores_normal_frame_reuse(capsys) -> None:
-    presenter = OpenXrVulkanPresenter()
-
-    presenter._report_filament_screen_image_status(None, False, "no_output_frame")
-
-    assert capsys.readouterr().out == ""
+    for symbol in (
+        "set_screen_image(",
+        "set_screen_ready_semaphore",
+        "_can_use_filament_screen_image",
+        "D2S_ENABLE_FILAMENT_SCREEN_IMAGE",
+    ):
+        assert symbol not in source
 
 
 def test_release_output_frame_waits_for_filament_finished_semaphores() -> None:
@@ -1626,169 +1579,6 @@ def test_x_long_press_action_cycles_v25_glow_modes_not_room_lighting() -> None:
     assert presenter._filament_glow_intensity_multiplier == pytest.approx(0.0)
     assert presenter._filament_glow_shell_intensity_multiplier == pytest.approx(0.0)
     assert presenter._preset_name_overlay == "Off"
-
-
-def test_filament_glow_uses_cpu_texture_without_rebinding_same_serial() -> None:
-    class Bridge:
-        glow_abi_available = True
-
-        def __init__(self) -> None:
-            self.sources = []
-            self.states = []
-
-        def set_glow_source(self, rgba, *, width, height) -> None:
-            self.sources.append((bytes(rgba), width, height))
-
-        def set_glow_state(self, mode, head, **values) -> None:
-            self.states.append((mode, tuple(float(value) for value in head), values))
-
-    presenter = OpenXrVulkanPresenter()
-    presenter._filament_glow_mode = "screen"
-    presenter._filament_glow_intensity_multiplier = 1.5
-    presenter._head_position_w = np.asarray((0.1, 1.7, -0.2), dtype=np.float64)
-    bridge = Bridge()
-    rgba = bytes((20, 40, 60, 255) * 4)
-    frame = SimpleNamespace(metadata={
-        "glow_cpu_rgba": rgba,
-        "glow_cpu_size": (2, 2),
-        "glow_cpu_serial": 7,
-        "glow_source_path": "cpu_uploaded_reference",
-    })
-
-    presenter._update_filament_glow(bridge, frame)
-    presenter._update_filament_glow(bridge, frame)
-
-    assert bridge.sources == [(rgba, 2, 2)]
-    assert len(bridge.states) == 2
-    assert bridge.states[0][0] == "screen"
-    assert bridge.states[0][1] == pytest.approx((0.1, 1.7, -0.2))
-    assert bridge.states[0][2]["glow_intensity"] == pytest.approx(0.175)
-
-
-def test_filament_surround_glow_keeps_legacy_shell_profile_and_vulkan_source() -> None:
-    class Bridge:
-        glow_abi_available = True
-        glow_vulkan_image_abi_available = True
-
-        def __init__(self) -> None:
-            self.images = []
-            self.states = []
-
-        def set_glow_image(self, resource) -> None:
-            self.images.append(resource)
-
-        def set_glow_state(self, mode, head, **values) -> None:
-            self.states.append((mode, tuple(float(value) for value in head), values))
-
-    presenter = OpenXrVulkanPresenter()
-    presenter._filament_glow_mode = "surround"
-    presenter._filament_glow_intensity_multiplier = 0.0
-    presenter._filament_glow_shell_intensity_multiplier = 1.85
-    presenter._filament_glow_shell_radius = 20.0
-    presenter._filament_glow_shell_height = 9.5
-    presenter._head_position_w = np.asarray((0.2, 1.6, -0.1), dtype=np.float64)
-    bridge = Bridge()
-    resource = SimpleNamespace(width=320, height=180)
-    frame = SimpleNamespace(metadata={
-        "glow_vulkan_image": resource,
-        "glow_vulkan_serial": 8,
-        "glow_source_size": (320, 180),
-        "glow_source_path": "vulkan_compute_external_image",
-    })
-
-    presenter._update_filament_glow(bridge, frame)
-
-    assert bridge.images == [resource]
-    assert bridge.states[0][0] == "surround"
-    assert bridge.states[0][1] == pytest.approx((0.2, 1.6, -0.1))
-    values = bridge.states[0][2]
-    assert values["glow_intensity_multiplier"] == pytest.approx(0.0)
-    assert values["glow_shell_intensity_multiplier"] == pytest.approx(1.85)
-    assert values["glow_shell_radius"] == pytest.approx(20.0)
-    assert values["glow_shell_height"] == pytest.approx(9.5)
-
-
-def test_filament_glow_is_disabled_for_glb_environments() -> None:
-    class Bridge:
-        glow_abi_available = True
-
-        def __init__(self) -> None:
-            self.sources = []
-            self.states = []
-
-        def set_glow_source(self, rgba, *, width, height) -> None:
-            self.sources.append((bytes(rgba), width, height))
-
-        def set_glow_state(self, mode, head, **values) -> None:
-            self.states.append((mode, values))
-
-    presenter = OpenXrVulkanPresenter(
-        OpenXrVulkanConfig(filament_glb_path="room.glb")
-    )
-    presenter._filament_glow_mode = "frosted"
-    presenter._filament_glow_intensity_multiplier = 1.5
-    bridge = Bridge()
-    frame = SimpleNamespace(
-        metadata={
-            "glow_cpu_rgba": bytes((20, 40, 60, 255) * 4),
-            "glow_cpu_size": (2, 2),
-            "glow_cpu_serial": 7,
-        }
-    )
-
-    presenter._update_filament_glow(bridge, frame)
-
-    assert bridge.sources == []
-    assert bridge.states[0][0] == "off"
-    assert bridge.states[0][1]["glow_intensity_multiplier"] == pytest.approx(0.0)
-
-
-def test_filament_glow_binds_completed_vulkan_image_once_per_serial(capsys) -> None:
-    class Bridge:
-        glow_abi_available = True
-        glow_vulkan_image_abi_available = True
-
-        def __init__(self) -> None:
-            self.images = []
-            self.states = []
-
-        def set_glow_image(self, resource) -> None:
-            self.images.append(resource)
-
-        def set_glow_state(self, mode, head, **values) -> None:
-            self.states.append((mode, tuple(float(value) for value in head), values))
-
-    presenter = OpenXrVulkanPresenter()
-    presenter._filament_glow_mode = "glow"
-    bridge = Bridge()
-    resource = SimpleNamespace(width=320, height=180)
-    frame = SimpleNamespace(metadata={
-        "glow_vulkan_image": resource,
-        "glow_vulkan_serial": 4,
-        "glow_source_size": (320, 180),
-        "glow_source_path": "vulkan_compute_external_image",
-    })
-
-    presenter._update_filament_glow(bridge, frame)
-    presenter._update_filament_glow(bridge, frame)
-    presenter._update_filament_glow(bridge, None)
-
-    next_resource = SimpleNamespace(width=320, height=180)
-    next_frame = SimpleNamespace(metadata={
-        "glow_vulkan_image": next_resource,
-        "glow_vulkan_serial": 5,
-        "glow_source_size": (320, 180),
-        "glow_source_path": "vulkan_compute_external_image",
-    })
-    presenter._update_filament_glow(bridge, next_frame)
-
-    assert bridge.images == [resource, next_resource]
-    assert len(bridge.states) == 4
-    output = capsys.readouterr().out
-    assert output.count("Glow reference path:") == 1
-    assert "source=missing" not in output
-    assert "texture=0x0" not in output
-    assert "texture=320x180" in output
 
 
 def test_screen_adjustment_osd_is_submitted_as_quad_layer() -> None:
@@ -2352,31 +2142,16 @@ def test_vulkan_shortcut_delegates_runtime_owned_actions() -> None:
     assert presenter._unsupported_shortcut_actions == set()
 
 
-def test_vulkan_shortcut_toggles_native_curved_screen() -> None:
-    class Bridge:
-        screen_curved_abi_available = True
-
-        def __init__(self) -> None:
-            self.curved: list[bool] = []
-            self.screens: list[tuple] = []
-
-        def set_screen_curved(self, curved: bool) -> None:
-            self.curved.append(curved)
-
-        def set_screen(self, *screen) -> None:
-            self.screens.append(screen)
-
+def test_vulkan_shortcut_toggles_composer_curved_screen() -> None:
     presenter = OpenXrVulkanPresenter()
     presenter._filament_screen = (
         (0.0, 0.0, -2.0), 2.4, 1.35, (0.0, 0.0, 0.0)
     )
-    presenter.filament_bridge = Bridge()
 
     presenter._dispatch_controller_shortcut("toggle_screen_shape")
     presenter._dispatch_controller_shortcut("toggle_screen_shape")
 
-    assert presenter.filament_bridge.curved == [True, False]
-    assert len(presenter.filament_bridge.screens) == 2
+    assert presenter._screen_curved is False
 
 
 def test_vulkan_shortcut_toggles_legacy_green_passthrough_backdrop() -> None:
@@ -2405,8 +2180,8 @@ def test_openxr_frame_gate_waits_for_runtime_output_before_filament() -> None:
     assert "if self._pending_output is None and not self._has_presented_frame:" in source
     assert "waiting for first runtime eye frame" in source
     assert "layer = self._render_projection_layer(views, output_frame)" in source
-    assert "bridge.set_screen_image(" in source
-    assert "D2S_ENABLE_FILAMENT_SCREEN_IMAGE" in source
+    assert "Vulkan Projection Composer" in source
+    assert "bridge.set_screen_image(" not in source
 
 
 def test_quad_layer_uses_runtime_output_size_and_openxr_visibility() -> None:
@@ -2574,34 +2349,12 @@ def test_quad_profile_rotation_uses_legacy_yaw_pitch_roll_order() -> None:
     assert abs(w - 2 ** -0.5) < 1e-6
 
 
-def test_projection_layer_binds_matching_runtime_eye_to_filament_screen() -> None:
+def test_projection_layer_routes_runtime_eyes_to_vulkan_composer() -> None:
     source = (Path(__file__).resolve().parents[1] /
               "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
-    assert "bridge.set_screen_image(" in source
-    assert "output_frame.left_eye" in source
-    assert "output_frame.right_eye" in source
-    assert "screen_image_abi_available" in source
-    assert "self._filament_screen_image_enabled" in source
-    assert "The main virtual screen is rendered in the Projection Layer" in source
-
-
-def test_filament_screen_status_reports_projection_target_extent() -> None:
-    presenter = OpenXrVulkanPresenter()
-    presenter.swapchains = [
-        SimpleNamespace(width=3648, height=3648),
-        SimpleNamespace(width=3648, height=3648),
-    ]
-    frame = SimpleNamespace(
-        left_eye=SimpleNamespace(width=3840, height=2160),
-        metadata={"vulkan_output_sync": "gpu_external_semaphore"},
-    )
-
-    presenter._report_filament_screen_image_status(frame, True, None)
-
-    assert presenter._last_filament_screen_image_status[-1] == (
-        (3648, 3648),
-        (3648, 3648),
-    )
+    assert "_render_vulkan_projection_composer(" in source
+    assert "bridge.set_screen_image(" not in source
+    assert "The main SBS screen is Projection Composer-only" in source
 
 
 def test_filament_screen_footprint_matches_projected_swapchain_pixels() -> None:
@@ -2757,31 +2510,6 @@ def test_screen_resolution_log_ignores_pose_jitter(capsys) -> None:
     presenter._report_screen_resolution([view, view], frame)
 
     assert capsys.readouterr().out == ""
-
-
-def test_filament_screen_status_reports_presenter_owned_cuda_image(capsys) -> None:
-    presenter = OpenXrVulkanPresenter()
-    frame = SimpleNamespace(
-        left_eye=SimpleNamespace(width=3840, height=2160),
-        metadata={
-            "vulkan_readback": "none",
-            "vulkan_output_path": "presenter_owned_storage_image",
-            "vulkan_output_sync": "gpu_external_semaphore",
-            "vulkan_compute_input_color_space": "srgb",
-            "vulkan_compute_output_image_format": "R8G8B8A8_UNORM",
-            "vulkan_compute_output_image_encoding": "linear",
-        },
-    )
-
-    presenter._report_filament_screen_image_status(frame, True, None)
-
-    output = capsys.readouterr().out
-    assert "vulkan_readback=none" in output
-    assert "vulkan_output_path=presenter_owned_storage_image" in output
-    assert "vulkan_output_sync=gpu_external_semaphore" in output
-    assert "vulkan_compute_input_color_space=srgb" in output
-    assert "vulkan_compute_output_image_format=R8G8B8A8_UNORM" in output
-    assert "vulkan_compute_output_image_encoding=linear" in output
 
 
 def test_presenter_run_until_owns_shutdown_close() -> None:
@@ -3354,8 +3082,6 @@ def test_projection_acquires_stereo_pair_before_waiting(monkeypatch) -> None:
     presenter._apply_filament_profile = lambda views: views
     presenter._report_screen_resolution = lambda *_args: None
     presenter._apply_screen_sampling_policy = lambda *_args: None
-    presenter._report_filament_screen_image_status = lambda *_args: None
-    presenter._can_use_filament_screen_image = lambda *_args: False
     monkeypatch.setattr(
         OpenXrCompositionBuilder,
         "projection_layer",
@@ -3426,10 +3152,6 @@ def test_projection_updates_shared_filament_state_once_per_stereo_pair(
     presenter._apply_filament_profile = lambda views: views
     presenter._report_screen_resolution = lambda *_args: None
     presenter._apply_screen_sampling_policy = lambda *_args: None
-    presenter._report_filament_screen_image_status = lambda *_args: None
-    presenter._can_use_filament_screen_image = lambda *_args: False
-    presenter._update_filament_screen_light = lambda *_args: None
-    presenter._update_filament_glow = lambda *_args: None
     presenter._update_filament_controllers = lambda *_args: calls.append("controllers")
     monkeypatch.setattr(
         "xr_viewer.core_openxr_vulkan._update_filament_camera",
@@ -3479,9 +3201,6 @@ def test_projection_composer_failure_falls_back_to_filament_in_same_frame(
         def set_active_eye(self, eye_index):
             calls.append(f"active:{eye_index}")
 
-        def set_screen_image(self, _image, **_kwargs):
-            calls.append("screen")
-
         def set_acquired_image(self, image_index):
             calls.append(f"image:{image_index}")
 
@@ -3522,9 +3241,6 @@ def test_projection_composer_failure_falls_back_to_filament_in_same_frame(
     presenter._apply_filament_profile = lambda views: views
     presenter._report_screen_resolution = lambda *_args: None
     presenter._apply_screen_sampling_policy = lambda *_args: None
-    presenter._report_filament_screen_image_status = lambda *_args: None
-    presenter._update_filament_screen_light = lambda *_args: None
-    presenter._update_filament_glow = lambda *_args: None
     presenter._update_filament_controllers = lambda *_args: calls.append("controllers")
     presenter._maybe_capture_visual_regression_frame = lambda *_args, **_kwargs: None
     presenter._render_vulkan_projection_composer = lambda *_args: (
@@ -3548,6 +3264,7 @@ def test_projection_composer_failure_falls_back_to_filament_in_same_frame(
     )
 
     assert presenter._render_projection_layer([object(), object()], frame) == "projection"
+    assert "screen" not in calls
     assert fallback_count == [1]
     assert not presenter._vulkan_projection_composer_active
     assert calls.count("controllers") == 1
@@ -3556,14 +3273,8 @@ def test_projection_composer_failure_falls_back_to_filament_in_same_frame(
     assert calls.count("end") == 2
 
 
-@pytest.mark.parametrize(
-    ("screen_image_projection", "screen_eye_renderables_available"),
-    [(False, False), (True, False), (True, True)],
-)
 def test_projection_keeps_unsafe_stereo_batch_disabled(
     monkeypatch,
-    screen_image_projection,
-    screen_eye_renderables_available,
 ) -> None:
     calls: list[str] = []
     timing_names: list[str] = []
@@ -3601,7 +3312,6 @@ def test_projection_keeps_unsafe_stereo_batch_disabled(
     class FakeBridge:
         stereo_batch_submit_abi_available = True
         finished_drawing_semaphore_abi_available = True
-        screen_eye_renderables_abi_available = screen_eye_renderables_available
 
         def __init__(self):
             self.active_eye = 0
@@ -3664,10 +3374,6 @@ def test_projection_keeps_unsafe_stereo_batch_disabled(
     presenter._apply_filament_profile = lambda views: views
     presenter._report_screen_resolution = lambda *_args: None
     presenter._apply_screen_sampling_policy = lambda *_args: None
-    presenter._report_filament_screen_image_status = lambda *_args: None
-    presenter._can_use_filament_screen_image = lambda *_args: screen_image_projection
-    presenter._update_filament_screen_light = lambda *_args: None
-    presenter._update_filament_glow = lambda *_args: None
     presenter._update_filament_controllers = lambda *_args: None
     monkeypatch.setattr(
         "xr_viewer.core_openxr_vulkan._update_filament_camera",
@@ -3722,15 +3428,6 @@ def test_multiview_projection_renders_one_layered_filament_frame(monkeypatch) ->
 
         def set_active_eye(self, eye_index):
             calls.append(("active", eye_index))
-
-        def set_screen_image(self, image, **_kwargs):
-            calls.append(("screen", image))
-
-        def set_screen_source_version(self, version):
-            calls.append(("version", version))
-
-        def set_screen_ready_semaphore(self, _semaphore):
-            raise AssertionError("multiview consumes source semaphores before Filament")
 
         def set_acquired_image(self, image_index):
             calls.append(("image", image_index))
@@ -3788,14 +3485,7 @@ def test_multiview_projection_renders_one_layered_filament_frame(monkeypatch) ->
     presenter._apply_filament_profile = lambda views: views
     presenter._report_screen_resolution = lambda *_args: None
     presenter._apply_screen_sampling_policy = lambda *_args: None
-    presenter._report_filament_screen_image_status = lambda *_args: None
-    presenter._can_use_filament_screen_image = lambda *_args: True
-    presenter._update_filament_screen_light = lambda *_args: None
-    presenter._update_filament_glow = lambda *_args: None
     presenter._update_filament_controllers = lambda *_args: None
-    presenter._maybe_capture_visual_regression_frame = (
-        lambda _frame, **kwargs: capture_calls.append(kwargs)
-    )
     monkeypatch.setattr(
         "xr_viewer.core_openxr_vulkan._update_filament_stereo_camera",
         lambda *_args, **_kwargs: calls.append("stereo-camera"),
@@ -3814,12 +3504,7 @@ def test_multiview_projection_renders_one_layered_filament_frame(monkeypatch) ->
         right_eye=SimpleNamespace(
             image="right", width=10, height=20, format=43, resource="right-resource"
         ),
-        metadata={
-            "visual_regression_dir": "capture",
-            "_vulkan_source_prepare_for_sampling": (
-                lambda _frame_id, eye_index: ("left-ready", "right-ready")[eye_index]
-            )
-        },
+        metadata={},
     )
 
     assert presenter._render_projection_layer([object(), object()], frame) == "projection"
@@ -3828,31 +3513,30 @@ def test_multiview_projection_renders_one_layered_filament_frame(monkeypatch) ->
     assert calls.count(("release", "layered")) == 1
     assert calls.count("begin") == 1
     assert calls.count("end") == 1
-    assert ("submit", "graphics", ("left-ready", "right-ready")) in calls
+    assert not any(
+        call == ("submit", "graphics", ("left-ready", "right-ready"))
+        for call in calls
+    )
     assert ("submit", "graphics", ("filament-finished",)) in calls
-    assert frame.metadata["_vulkan_consumer_release_timeline"] == 42
-    assert [call["projection_array_layer"] for call in capture_calls] == [0, 1]
-    assert [call["projection_resource"] for call in capture_calls] == [
-        "layered-resource",
-        "layered-resource",
-    ]
-    assert [call["source_resource"] for call in capture_calls] == [
-        "left-resource",
-        "right-resource",
-    ]
+    assert "_vulkan_consumer_release_timeline" not in frame.metadata
+    assert not capture_calls
 
 
-def test_multiview_source_failure_restores_active_eye(monkeypatch) -> None:
+def test_multiview_render_keeps_active_eye_zero(monkeypatch) -> None:
     active_eyes = []
 
     class FakeBridge:
         def set_active_eye(self, eye_index):
             active_eyes.append(eye_index)
 
-        @staticmethod
-        def set_screen_image(image, **_kwargs):
-            if image == "right":
-                raise RuntimeError("right source rejected")
+        def set_acquired_image(self, _image_index):
+            pass
+
+        def begin_frame(self):
+            pass
+
+        def end_frame(self):
+            pass
 
     presenter = OpenXrVulkanPresenter()
     presenter.filament_bridge = FakeBridge()
@@ -3869,10 +3553,9 @@ def test_multiview_source_failure_restores_active_eye(monkeypatch) -> None:
         lambda *_args, **_kwargs: None,
     )
 
-    with pytest.raises(RuntimeError, match="right source rejected"):
-        presenter._render_filament_multiview(
-            [object(), object()], frame, True, (None, 0), False, lambda *_args: None
-        )
+    presenter._render_filament_multiview(
+        [object(), object()], frame, (None, 0), False, lambda *_args: None
+    )
 
     assert active_eyes[-1] == 0
 
@@ -3906,15 +3589,6 @@ def test_projection_reuses_displayed_output_without_releasing_it(monkeypatch) ->
     class FakeBridge:
         def set_active_eye(self, _eye_index):
             pass
-
-        def set_screen_image(self, image, **_kwargs):
-            calls.append(("screen", image))
-
-        def set_screen_source_version(self, version):
-            calls.append(("version", version))
-
-        def set_screen_ready_semaphore(self, semaphore):
-            calls.append(("ready", semaphore))
 
         def set_acquired_image(self, _image_index):
             pass
@@ -3955,10 +3629,6 @@ def test_projection_reuses_displayed_output_without_releasing_it(monkeypatch) ->
     presenter._apply_filament_profile = lambda views: views
     presenter._report_screen_resolution = lambda *_args: None
     presenter._apply_screen_sampling_policy = lambda *_args: None
-    presenter._report_filament_screen_image_status = lambda *_args: None
-    presenter._can_use_filament_screen_image = lambda frame: frame is displayed
-    presenter._update_filament_screen_light = lambda *_args: None
-    presenter._update_filament_glow = lambda *_args: None
     presenter._update_filament_controllers = lambda *_args: None
     monkeypatch.setattr(
         "xr_viewer.core_openxr_vulkan._update_filament_camera",
@@ -3972,13 +3642,12 @@ def test_projection_reuses_displayed_output_without_releasing_it(monkeypatch) ->
 
     assert presenter._render_projection_layer([object(), object()], None) == "projection"
     assert presenter._displayed_output is displayed
-    assert ("screen", "left") in calls
-    assert ("screen", "right") in calls
-    assert breakdown.stats["openxr_reused_screen_frame"] == 1
-    assert breakdown.validate_openxr_async().passed
+    assert not any(name == "screen" for name, _value in calls)
+    assert "openxr_reused_screen_frame" not in breakdown.stats
+    assert "screen_present" in breakdown.validate_openxr_async().missing
 
 
-def test_quad_fallback_counts_cached_screen_reuse() -> None:
+def test_tool_quad_layers_never_reuse_the_main_screen() -> None:
     from utils.breakdown import FPSBreakdown
 
     breakdown = FPSBreakdown(enabled=True, target_fps=60)
@@ -3989,9 +3658,9 @@ def test_quad_fallback_counts_cached_screen_reuse() -> None:
     presenter._last_screen_quad_layers = ["cached-screen"]
     presenter._render_tool_quad_layers = lambda _frame: ["tools"]
 
-    assert presenter._render_quad_layers(None) == ["cached-screen", "tools"]
-    assert breakdown.stats["openxr_reused_screen_frame"] == 1
-    assert breakdown.validate_openxr_async().passed
+    assert presenter._render_quad_layers(None) == ["tools"]
+    assert "openxr_reused_screen_frame" not in breakdown.stats
+    assert "screen_present" in breakdown.validate_openxr_async().missing
 
 
 def test_tool_quad_format_is_enumerated_once_per_session() -> None:

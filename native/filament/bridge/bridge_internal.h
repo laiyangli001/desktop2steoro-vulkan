@@ -60,12 +60,6 @@ struct PreviewScreenVertex {
     filament::math::float2 uv;
 };
 
-struct GlowVertex {
-    filament::math::float3 position;
-    filament::math::float2 uv;
-    filament::math::float2 effect;
-};
-
 struct MsdfTextVertex {
     filament::math::float3 position;
     filament::math::float2 uv;
@@ -282,7 +276,7 @@ struct ControllerAsset {
     bool visible = true;
 };
 
-struct ScreenTextureSlot {
+struct ExternalImageTextureSlot {
     const void* image = nullptr;
     filament::Texture* texture = nullptr;
     uint32_t width = 0;
@@ -309,115 +303,7 @@ struct FilamentBridge {
     filament::IndirectLight* indirect_light = nullptr;
     filament::IndirectLight* controller_indirect_light = nullptr;
     filament::Scene* foreground_scene = nullptr;
-    utils::Entity screen_light;
-    filament::math::float3 screen_light_position{0.0f, 0.0f, 0.0f};
-    filament::math::float3 screen_light_direction{0.0f, 0.0f, -1.0f};
-    float screen_light_falloff = 2.0f;
-    std::array<utils::Entity, 2> screen_entities{};
-    utils::Entity screen_entity;
-    filament::VertexBuffer* screen_vertex_buffer = nullptr;
-    filament::IndexBuffer* screen_index_buffer = nullptr;
-    filament::Material* screen_material = nullptr;
-    std::array<filament::MaterialInstance*, 2> screen_material_instances{};
-    filament::MaterialInstance* screen_material_instance = nullptr;
-    bool screen_in_scene = false;
     bool passthrough_backdrop = false;
-    filament::Texture* screen_texture = nullptr;
-    std::array<filament::Texture*, 2> screen_source_textures{};
-    std::array<int32_t, 2> screen_source_formats{
-            VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_R8G8B8A8_SRGB};
-    std::array<filament::Texture*, 2> screen_textures{};
-    std::array<std::vector<ScreenTextureSlot>, 2> screen_texture_cache;
-    filament::TextureSampler screen_texture_sampler;
-    filament::TextureSampler screen_source_texture_sampler;
-    std::array<filament::Texture*, 2> screen_lanczos_textures{};
-    std::array<filament::RenderTarget*, 2> screen_lanczos_render_targets{};
-    std::array<filament::Texture*, 2> screen_mip_textures{};
-    std::array<filament::RenderTarget*, 2> screen_mip_render_targets{};
-    std::array<bool, 2> screen_mip_ready{};
-    std::array<uint64_t, 2> screen_source_bind_count{};
-    std::array<uint64_t, 2> screen_mip_generation_count{};
-    std::array<uint64_t, 2> screen_source_versions{};
-    std::array<uint64_t, 2> screen_last_mip_versions{};
-    filament::Texture* screen_fixed_source_texture = nullptr;
-    std::array<filament::MaterialInstance*, 2>
-            screen_mip_copy_material_instances{};
-    filament::MaterialInstance* screen_mip_copy_material_instance = nullptr;
-    std::array<utils::Entity, 2> screen_mip_copy_entities{};
-    utils::Entity screen_mip_copy_entity;
-    filament::VertexBuffer* screen_mip_copy_vertex_buffer = nullptr;
-    filament::IndexBuffer* screen_mip_copy_index_buffer = nullptr;
-    std::array<filament::View*, 2> screen_mip_copy_views{};
-    filament::View* screen_mip_copy_view = nullptr;
-    filament::Camera* screen_mip_copy_camera = nullptr;
-    std::array<PreviewScreenVertex, 4> screen_mip_copy_vertices{};
-    std::array<uint16_t, 6> screen_mip_copy_indices{};
-    bool screen_mip_experiment_enabled = true;
-    // Keep the legacy screen-quality sharpening strength explicit. The
-    // external Vulkan image has one mip level, so the screen material uses a
-    // footprint-aware filter followed by this bounded RCAS pass.
-    float screen_filter_sharpness = 0.35f;
-    // Matrix-selected prefilter scale for lower-tier headsets. A value of
-    // one preserves the source texel footprint exactly.
-    float screen_filter_scale = 1.0f;
-    float screen_upscale_scale = 1.0f;
-    std::vector<PreviewScreenVertex> screen_vertices;
-    std::vector<uint16_t> screen_indices;
-    bool screen_curved = false;
-    filament::math::float3 screen_center{0.0f, 0.0f, -2.0f};
-    filament::math::float3 screen_right{1.0f, 0.0f, 0.0f};
-    filament::math::float3 screen_up{0.0f, 1.0f, 0.0f};
-    filament::math::float3 screen_forward{0.0f, 0.0f, 1.0f};
-    float screen_width = 2.4f;
-    float screen_height = 1.35f;
-    uint32_t glow_mode = 0;
-    filament::math::float3 glow_head_position{0.0f, 0.0f, 0.0f};
-    float glow_intensity = 0.175f;
-    float glow_width = 0.75f;
-    float glow_intensity_multiplier = 0.0f;
-    float frosted_intensity = 1.0f;
-    float frosted_alpha = 0.42f;
-    float frosted_threshold = 0.46f;
-    float frosted_lod = 5.4f;
-    float frosted_blend = 1.35f;
-    float frosted_thickness = 1.6f;
-    float frosted_diffuse = 0.85f;
-    float frosted_inset = 0.045f;
-    float veil_intensity = 1.5f;
-    float veil_alpha = 1.0f;
-    float glow_shell_intensity_multiplier = 0.0f;
-    float glow_shell_radius = 20.0f;
-    float glow_shell_height = 9.5f;
-    filament::Texture* glow_source_texture = nullptr;
-    filament::Texture* glow_cpu_source_texture = nullptr;
-    std::vector<ScreenTextureSlot> glow_texture_cache;
-    bool glow_source_external = false;
-    filament::TextureSampler glow_texture_sampler;
-    filament::TextureSampler glow_external_texture_sampler;
-    filament::Material* glow_material = nullptr;
-    filament::MaterialInstance* glow_outer_material_instance = nullptr;
-    filament::MaterialInstance* glow_inner_material_instance = nullptr;
-    filament::Material* frost_material = nullptr;
-    filament::Material* glow_shell_material = nullptr;
-    filament::MaterialInstance* frost_material_instance = nullptr;
-    filament::MaterialInstance* veil_material_instance = nullptr;
-    filament::MaterialInstance* glow_shell_material_instance = nullptr;
-    filament::VertexBuffer* glow_vertex_buffer = nullptr;
-    filament::IndexBuffer* glow_index_buffer = nullptr;
-    filament::VertexBuffer* frost_vertex_buffer = nullptr;
-    filament::IndexBuffer* frost_index_buffer = nullptr;
-    filament::VertexBuffer* glow_shell_vertex_buffer = nullptr;
-    filament::IndexBuffer* glow_shell_index_buffer = nullptr;
-    utils::Entity glow_outer_entity;
-    utils::Entity glow_inner_entity;
-    utils::Entity frost_entity;
-    utils::Entity glow_shell_entity;
-    std::vector<GlowVertex> glow_vertices;
-    std::vector<uint16_t> glow_indices;
-    std::vector<GlowVertex> frost_vertices;
-    std::vector<uint16_t> frost_indices;
-    std::vector<GlowVertex> glow_shell_vertices;
-    std::vector<uint16_t> glow_shell_indices;
     filament::backend::VulkanPlatform::VulkanSharedContext shared_context{};
     MaterialBrightnessState brightness;
     std::array<ControllerAsset, 2> controllers;

@@ -4,11 +4,9 @@
 #include "bridge_controller.h"
 #include "bridge_controller_guide.h"
 #include "bridge_eye.h"
-#include "bridge_glow.h"
 #include "bridge_laser.h"
 #include "bridge_material.h"
 #include "bridge_scene.h"
-#include "bridge_screen.h"
 #include "bridge_text_overlay.h"
 #include "preview_bridge.h"
 
@@ -99,7 +97,6 @@ int filament_bridge_end_frame_deferred(FilamentBridge* bridge) {
     return bridge_eye_end_frame_deferred(bridge); }
 int filament_bridge_finish_frame_batch(FilamentBridge* bridge) {
     return bridge_eye_finish_frame_batch(bridge); }
-int filament_bridge_screen_eye_renderables_abi_available() { return 1; }
 int filament_bridge_wait_for_idle(FilamentBridge* bridge) {
     return bridge_context_wait_for_idle(bridge); }
 
@@ -202,101 +199,6 @@ int filament_bridge_set_fill_light(
             direction_x, direction_y, direction_z);
 }
 
-int filament_bridge_create_screen(FilamentBridge* bridge) {
-    return bridge_screen_create(bridge);
-}
-
-int filament_bridge_set_screen(
-        FilamentBridge* bridge,
-        float position_x, float position_y, float position_z,
-        float width, float height,
-        float rotation_x_degrees, float rotation_y_degrees,
-        float rotation_z_degrees) {
-    return bridge_screen_update(
-            bridge, position_x, position_y, position_z, width, height,
-            rotation_x_degrees, rotation_y_degrees, rotation_z_degrees);
-}
-
-int filament_bridge_set_screen_curved(FilamentBridge* bridge, int curved) {
-    return bridge_screen_set_curved(bridge, curved);
-}
-
-int filament_bridge_set_screen_light(
-        FilamentBridge* bridge,
-        float red, float green, float blue, float intensity) {
-    return bridge_screen_set_light(bridge, red, green, blue, intensity);
-}
-
-int filament_bridge_set_glow_source(
-        FilamentBridge* bridge, const uint8_t* rgba,
-        uint32_t width, uint32_t height) {
-    return bridge_glow_set_source(bridge, rgba, width, height);
-}
-
-int filament_bridge_set_glow_image(
-        FilamentBridge* bridge, const void* image,
-        uint32_t width, uint32_t height, int32_t format) {
-    return bridge_glow_set_image(bridge, image, width, height, format);
-}
-
-int filament_bridge_set_glow_state(
-        FilamentBridge* bridge, uint32_t mode,
-        float head_x, float head_y, float head_z,
-        float glow_intensity, float glow_width,
-        float glow_intensity_multiplier,
-        float frosted_intensity, float frosted_alpha,
-        float frosted_threshold, float frosted_lod,
-        float frosted_blend, float frosted_thickness,
-        float frosted_diffuse, float frosted_inset,
-        float veil_intensity, float veil_alpha,
-        float glow_shell_intensity_multiplier, float glow_shell_radius, float glow_shell_height) {
-    return bridge_glow_set_state(
-            bridge, mode, head_x, head_y, head_z, glow_intensity, glow_width,
-            glow_intensity_multiplier, frosted_intensity, frosted_alpha,
-            frosted_threshold, frosted_lod, frosted_blend, frosted_thickness,
-            frosted_diffuse, frosted_inset, veil_intensity, veil_alpha,
-            glow_shell_intensity_multiplier, glow_shell_radius, glow_shell_height);
-}
-
-int filament_bridge_set_screen_sampling(
-        FilamentBridge* bridge, float filter_scale) {
-    return bridge_screen_set_sampling(bridge, filter_scale);
-}
-
-int filament_bridge_set_screen_upscale(
-        FilamentBridge* bridge, float upscale_scale) {
-    return bridge_screen_set_upscale(bridge, upscale_scale);
-}
-
-int filament_bridge_set_screen_sampling_mode(
-        FilamentBridge* bridge, int use_mip) {
-    return bridge_screen_set_sampling_mode(bridge, use_mip);
-}
-
-int filament_bridge_set_screen_image(
-        FilamentBridge* bridge, const void* image,
-        uint32_t width, uint32_t height, int32_t format) {
-    return bridge_screen_set_image(bridge, image, width, height, format);
-}
-
-int filament_bridge_set_screen_source_version(
-        FilamentBridge* bridge, uint64_t version) {
-    return bridge_screen_set_source_version(bridge, version);
-}
-
-int filament_bridge_set_fixed_screen_image(
-        FilamentBridge* bridge, const uint8_t* rgba,
-        uint32_t width, uint32_t height) {
-    return bridge_screen_set_fixed_image(bridge, rgba, width, height);
-}
-
-int filament_bridge_get_screen_sampling_stats(
-        FilamentBridge* bridge, uint32_t eye_index,
-        uint64_t* source_binds, uint64_t* mip_generations) {
-    return bridge_screen_get_sampling_stats(
-            bridge, eye_index, source_binds, mip_generations);
-}
-
 int filament_bridge_vulkan_external_image_abi_available(
         const FilamentBridge*) {
 #if defined(D2S_FILAMENT_VULKAN_EXTERNAL_IMAGE)
@@ -307,11 +209,6 @@ int filament_bridge_vulkan_external_image_abi_available(
     // backend is extended with a real external-image implementation.
     return 0;
 #endif
-}
-
-int filament_bridge_set_screen_ready_semaphore(
-        FilamentBridge* bridge, const void* semaphore) {
-    return bridge_eye_set_ready_semaphore(bridge, semaphore);
 }
 
 int filament_bridge_get_finished_drawing_semaphore(

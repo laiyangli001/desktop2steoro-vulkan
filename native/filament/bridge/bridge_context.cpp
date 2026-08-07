@@ -6,7 +6,6 @@
 #include "bridge_laser.h"
 #include "bridge_material.h"
 #include "bridge_scene.h"
-#include "bridge_screen.h"
 #include "bridge_text_overlay.h"
 
 void bridge_set_error(FilamentBridge* bridge, const char* message) {
@@ -195,7 +194,6 @@ void bridge_context_destroy(FilamentBridge* bridge) {
     bridge_laser_destroy(bridge);
     bridge_controller_guide_destroy(bridge);
     bridge_text_overlay_destroy(bridge);
-    bridge_screen_destroy(bridge);
     if (bridge->renderer && bridge->engine) {
         bridge->engine->destroy(bridge->renderer);
         bridge->renderer = nullptr;
@@ -235,9 +233,6 @@ void bridge_context_destroy(FilamentBridge* bridge) {
     }
     if (!bridge->controller_top_light.isNull() && bridge->engine) {
         bridge->engine->destroy(bridge->controller_top_light);
-    }
-    if (!bridge->screen_light.isNull() && bridge->engine) {
-        bridge->engine->destroy(bridge->screen_light);
     }
     if (bridge->indirect_light && bridge->engine) {
         if (bridge->scene) bridge->scene->setIndirectLight(nullptr);

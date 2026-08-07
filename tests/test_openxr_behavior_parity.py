@@ -35,7 +35,7 @@ def test_laser_hit_rings_use_the_vulkan_quad_contract() -> None:
 
     assert "def _cursor_overlay_specs" in source
     assert "specs.extend(self._cursor_overlay_specs" in source
-    assert "return [self._upload_tool_quad(*spec) for spec in specs]" in source
+    assert "layers = [self._upload_tool_quad(*spec) for spec in specs]" in source
     assert "CompositionLayerQuad" in source
     assert "_render_laser_hit_circles" not in source
 

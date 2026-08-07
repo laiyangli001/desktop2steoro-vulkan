@@ -160,5 +160,7 @@ void main() {
         : (params.size_curve.w > 0.5
             ? sample_lanczos2(texture_uv)
             : texture(screen_texture, texture_uv));
-    output_color = vec4(color.rgb, 1.0);
+    output_color = vec4(color.rgb, params.size_curve.w < -0.5
+        ? clamp(dot(color.rgb, vec3(0.299, 0.587, 0.114)) * 0.35, 0.0, 0.35)
+        : 1.0);
 }

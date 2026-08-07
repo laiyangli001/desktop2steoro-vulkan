@@ -178,11 +178,6 @@ def _openxr_filament_config(settings: dict) -> dict[str, object]:
         # exported through utils; keep the Vulkan entrypoint as a consumer.
         "filament_screen_width": float(OPENXR_SCREEN_WIDTH),
         "filament_screen_distance": float(OPENXR_SCREEN_DISTANCE),
-        # MIP is the production default. Set this hidden diagnostic setting to
-        # legacy for the old/new screen sampling A/B capture.
-        "filament_screen_sampling_mode": str(
-            settings.get("Filament Screen Sampling Mode", "mip")
-        ),
     }
 
 

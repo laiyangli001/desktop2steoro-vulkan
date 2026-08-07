@@ -283,10 +283,10 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
         if self.backend_name != "cuda":
             self._set_glow_gpu_status(f"cpu_fallback backend={self.backend_name}")
             return {}
-        bridge = getattr(self.presenter, "filament_bridge", None)
-        glow_image_available = bool(
-            getattr(bridge, "glow_vulkan_image_abi_available", False)
-        )
+        # The source image is produced by the Vulkan Glow worker.  Do not use
+        # the removed Filament screen/Glow ABI as a capability gate: the
+        # Projection Composer owns the eventual sampling pass.
+        glow_image_available = self.presenter.vulkan is not None
         gpu_glow_active = glow_active and glow_image_available
         try:
             if self._glow_gpu_backend is None:
@@ -303,7 +303,7 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
                 )
             else:
                 reason = (
-                    "glow_external_image_abi"
+                    "vulkan_projection_composer_source"
                     if glow_active and not glow_image_available
                     else "glow_inactive"
                 )
@@ -347,6 +347,8 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
                     int(getattr(resource, "width", 0)),
                     int(getattr(resource, "height", 0)),
                 )
+                metadata["glow_composer_source_ready"] = True
+                metadata["glow_composer_source_owner"] = "vulkan_projection_composer"
             return metadata
         except Exception as exc:
             self._set_glow_gpu_status(
@@ -363,6 +365,8 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
                             int(getattr(resource, "width", 0)),
                             int(getattr(resource, "height", 0)),
                         )
+                        metadata["glow_composer_source_ready"] = True
+                        metadata["glow_composer_source_owner"] = "vulkan_projection_composer"
                         return metadata
                 except Exception:
                     pass
@@ -551,7 +555,7 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
         ]
         env_external_semaphore_requested = self._external_semaphore_requested()
         presenter_ready_semaphore_available = bool(
-            getattr(self.presenter, "screen_ready_semaphore_available", False)
+            getattr(self.presenter, "source_ready_semaphore_available", False)
         )
         external_semaphore_requested = bool(
             env_external_semaphore_requested and presenter_ready_semaphore_available
@@ -564,7 +568,7 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
                 )
             elif not presenter_ready_semaphore_available:
                 self._external_semaphore_request_reason = (
-                    "filament_ready_semaphore_abi_unavailable"
+                    "projection_composer_source_semaphore_unavailable"
                 )
         try:
             if not external_semaphore_requested:
@@ -692,7 +696,7 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
             right_ready = None
             use_external_semaphore = bool(
                 self.external_semaphore_enabled
-                and getattr(self.presenter, "screen_ready_semaphore_available", False)
+                and getattr(self.presenter, "source_ready_semaphore_available", False)
             )
             external_semaphore_requested = bool(
                 self._external_semaphore_request_enabled

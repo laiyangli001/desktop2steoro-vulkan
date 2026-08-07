@@ -442,11 +442,6 @@ class OpenXrVulkanConfig:
     filament_screen_width: float = _DEFAULT_XR_HEADSET_PRESET.width_m
     filament_screen_distance: float = _DEFAULT_XR_HEADSET_PRESET.distance_m
     filament_ambient_light_color: tuple[float, float, float] = (0.14, 0.13, 0.15)
-    filament_screen_light_color: tuple[float, float, float] = (0.92, 0.96, 1.0)
-    filament_screen_light_intensity: float = 3.5
-    # The normal path uses the internal Filament MIP chain. The legacy mode is
-    # retained only for controlled A/B visual regression captures.
-    filament_screen_sampling_mode: str = "mip"
     filament_fill_light_color: tuple[float, float, float] = (0.55, 0.55, 0.58)
     filament_fill_light_intensity: float = 1.0
     filament_fill_light_direction: tuple[float, float, float] = (-0.35, -1.0, -0.55)
@@ -664,24 +659,10 @@ class OpenXrVulkanPresenter(
         self._filament_scene_exposure = self.config.filament_scene_exposure_ev
         self._filament_skybox_brightness = self.config.filament_skybox_brightness
         self._filament_ambient_light_color = self.config.filament_ambient_light_color
-        self._filament_screen_light_color = self.config.filament_screen_light_color
-        self._filament_screen_light_intensity = (
-            self.config.filament_screen_light_intensity
-        )
-        self._filament_screen_sampling_mode = str(
-            self.config.filament_screen_sampling_mode
-        ).strip().lower()
-        if self._filament_screen_sampling_mode not in {"legacy", "mip"}:
-            raise ValueError(
-                "filament_screen_sampling_mode must be 'legacy' or 'mip'"
-            )
-        self._screen_ready_semaphore_abi_available = False
-        self._last_filament_screen_image_status = None
         self._last_screen_resolution_status = None
         self._last_screen_sampling_status = None
         self._active_screen_sampling_plan: ScreenSamplingPlan | None = None
         self._controller_hdr_lighting = False
-        self._last_filament_screen_light = None
         self._filament_fill_light_color = self.config.filament_fill_light_color
         self._filament_fill_light_intensity = self.config.filament_fill_light_intensity
         self._filament_fill_light_direction = self.config.filament_fill_light_direction
@@ -724,13 +705,6 @@ class OpenXrVulkanPresenter(
         self._filament_screen_head_initialized = False
         self._screen_curved = False
         self._passthrough_backdrop = False
-        # The virtual screen must be rendered as scene geometry so each eye
-        # samples its own stereo output. Quad Layer is reserved for 2D tools.
-        self._filament_screen_image_enabled = os.environ.get(
-            # Prefer zero-copy when the per-frame synchronization contract is
-            # available; _can_use_filament_screen_image provides the fallback.
-            "D2S_ENABLE_FILAMENT_SCREEN_IMAGE", "1"
-        ).strip().lower() in {"1", "true", "yes", "on"}
         self._controllers_root = Path(__file__).resolve().parent / "controllers"
         self._controller_brands = discover_controller_brands(self._controllers_root)
         self._controller_brand = select_controller_brand(
@@ -940,8 +914,9 @@ class OpenXrVulkanPresenter(
         return self._initialized
 
     @property
-    def screen_ready_semaphore_available(self) -> bool:
-        return self._screen_ready_semaphore_abi_available
+    def source_ready_semaphore_available(self) -> bool:
+        """Whether Projection Composer can consume exported source semaphores."""
+        return bool(self._vulkan_projection_composer_requested and self.vulkan is not None)
 
     def _controller_ambient_light_color(self) -> tuple[float, float, float]:
         """Return the room ambient color without controller compensation."""
@@ -1475,7 +1450,6 @@ class OpenXrVulkanPresenter(
             ("preview_exposure", "_filament_scene_exposure"),
             ("env_exposure", "_filament_scene_exposure"),
             ("preview_skybox_brightness", "_filament_skybox_brightness"),
-            ("screen_light_intensity", "_filament_screen_light_intensity"),
             ("controller_head_light_intensity", "_filament_fill_light_intensity"),
         ):
             if key in preset:
@@ -1521,7 +1495,6 @@ class OpenXrVulkanPresenter(
             self._filament_fill_light_intensity,
             self._filament_fill_light_direction,
         )
-        self._last_filament_screen_light = None
 
     def _cycle_shortcut_screen_preset(self) -> None:
         if self._filament_screen is None:
@@ -1572,8 +1545,6 @@ class OpenXrVulkanPresenter(
             f"  @ {float(distance):.2f} m"
         )
         self._preset_osd_show_t = time.perf_counter()
-        if self.filament_bridge is not None:
-            self.filament_bridge.set_screen(position, width, height, rotation)
 
     def _controller_callback_depth_strength(self) -> float | None:
         """Read the synchronously updated runtime value when available."""
@@ -1620,8 +1591,6 @@ class OpenXrVulkanPresenter(
             if self._filament_screen_profile_authored:
                 if self._filament_screen_initial is not None:
                     self._filament_screen = self._filament_screen_initial
-                    if self.filament_bridge is not None:
-                        self.filament_bridge.set_screen(*self._filament_screen)
                     self._preset_name_overlay = "Screen Reset"
                     self._preset_osd_show_t = time.perf_counter()
             else:
@@ -1630,16 +1599,7 @@ class OpenXrVulkanPresenter(
         elif action == "cycle_screen_preset":
             self._cycle_shortcut_screen_preset()
         elif action == "toggle_screen_shape":
-            bridge = self.filament_bridge
-            if bridge is None or not getattr(
-                bridge, "screen_curved_abi_available", False
-            ):
-                self._unsupported_shortcut_actions.add(action)
-                return
             self._screen_curved = not self._screen_curved
-            bridge.set_screen_curved(self._screen_curved)
-            if self._filament_screen is not None:
-                bridge.set_screen(*self._filament_screen)
             self._preset_name_overlay = (
                 "Curved Screen" if self._screen_curved else "Flat Screen"
             )
@@ -1791,8 +1751,6 @@ class OpenXrVulkanPresenter(
         )
         self._filament_screen = (position, width, height, next_rotation)
         self._screen_osd_show_t = time.perf_counter()
-        if self.filament_bridge is not None:
-            self.filament_bridge.set_screen(*self._filament_screen)
 
     def _adjust_shortcut_screen_size(
         self, width_delta: float, distance_delta: float
@@ -1817,8 +1775,6 @@ class OpenXrVulkanPresenter(
             rotation,
         )
         self._screen_osd_show_t = time.perf_counter()
-        if self.filament_bridge is not None:
-            self.filament_bridge.set_screen(*self._filament_screen)
 
     def _adjust_shortcut_keyboard(
         self, width_delta: float, distance_delta: float
@@ -2260,8 +2216,6 @@ class OpenXrVulkanPresenter(
         _old_position, width, height, old_rotation = self._filament_screen
         pose_rotation = tuple(rotation if rotation is not None else old_rotation)
         self._filament_screen = (tuple(float(value) for value in position), width, height, pose_rotation)
-        if self.filament_bridge is not None:
-            self.filament_bridge.set_screen(self._filament_screen[0], width, height, pose_rotation)
 
     def _set_keyboard_world_position(self, position) -> None:
         _screen_position, _width, screen_height, _rotation = self._filament_screen or (
@@ -2435,102 +2389,6 @@ class OpenXrVulkanPresenter(
             rotation,
         )
         self._screen_osd_show_t = time.perf_counter()
-        if self.filament_bridge is not None:
-            self.filament_bridge.set_screen(*self._filament_screen)
-
-    def _filament_screen_image_gate_reason(
-        self, output_frame: VulkanStereoOutputFrame | None
-    ) -> str | None:
-        """Return the first reason the direct Filament screen path is unavailable."""
-
-        if output_frame is None:
-            return "no_output_frame"
-        if not self._filament_screen_image_enabled:
-            return "disabled_by_D2S_ENABLE_FILAMENT_SCREEN_IMAGE"
-        if self.filament_bridge is None:
-            return "filament_bridge_unavailable"
-        abi_requirements = (
-            ("screen_image_abi", "screen_image_abi_available"),
-            ("vulkan_external_image_abi", "vulkan_external_image_abi_available"),
-            ("screen_ready_semaphore_abi", "screen_ready_semaphore_abi_available"),
-            ("async_submit_abi", "async_submit_abi_available"),
-            (
-                "finished_drawing_semaphore_abi",
-                "finished_drawing_semaphore_abi_available",
-            ),
-        )
-        for label, attribute in abi_requirements:
-            if not bool(getattr(self.filament_bridge, attribute, False)):
-                return f"bridge_{label}_unavailable"
-
-        metadata = dict(output_frame.metadata or {})
-        if metadata.get("vulkan_output_sync") not in {
-            "gpu_external_semaphore",
-            # Compatibility for older producer adapters still in the queue.
-            "cuda_external_semaphore",
-            "vulkan_compute_external_semaphore",
-        }:
-            return f"producer_sync={metadata.get('vulkan_output_sync', 'missing')}"
-        for eye in ("left", "right"):
-            layout = metadata.get(f"vulkan_source_layout_{eye}")
-            if layout not in {"general", "shader_read_only_optimal"}:
-                return f"source_{eye}_layout={layout!r}"
-            if metadata.get(f"vulkan_source_queue_family_{eye}") is None:
-                return f"source_{eye}_queue_family_missing"
-        if not callable(metadata.get("_vulkan_source_consumer_release")):
-            return "consumer_release_callback_missing"
-        if not callable(metadata.get("_vulkan_source_prepare_for_sampling")):
-            return "source_prepare_callback_missing"
-        if not metadata.get("vulkan_ready_semaphore_left"):
-            return "left_ready_semaphore_missing"
-        if not metadata.get("vulkan_ready_semaphore_right"):
-            return "right_ready_semaphore_missing"
-        return None
-
-    def _report_filament_screen_image_status(
-        self,
-        output_frame: VulkanStereoOutputFrame | None,
-        active: bool,
-        reason: str | None,
-    ) -> None:
-        """Log direct-screen activation changes without producing per-frame noise."""
-
-        # No new runtime frame is a normal reuse tick. Keep the last real
-        # producer/direct-path status instead of alternating with no_output_frame.
-        if output_frame is None:
-            return
-        metadata = dict(output_frame.metadata or {}) if output_frame is not None else {}
-        target_extent = self._projection_eye_extents()
-        status = (
-            bool(active),
-            reason or "active",
-            metadata.get("vulkan_output_sync"),
-            metadata.get("vulkan_input_path"),
-            metadata.get("vulkan_compute_input_color_space"),
-            metadata.get("vulkan_compute_output_image_format"),
-            metadata.get("vulkan_compute_output_image_encoding"),
-            int(getattr(output_frame.left_eye, "width", 0)) if output_frame else 0,
-            int(getattr(output_frame.left_eye, "height", 0)) if output_frame else 0,
-            target_extent,
-        )
-        if status == self._last_filament_screen_image_status:
-            return
-        self._last_filament_screen_image_status = status
-        print(
-            "[OpenXRViewer] Filament screen image "
-            f"active={bool(active)} reason={reason or 'none'} "
-            f"vulkan_readback={metadata.get('vulkan_readback', 'missing')} "
-            f"vulkan_output_path={metadata.get('vulkan_output_path', 'missing')} "
-            f"vulkan_output_sync={metadata.get('vulkan_output_sync', 'missing')} "
-            f"vulkan_input_path={metadata.get('vulkan_input_path', 'missing')} "
-            f"vulkan_input_upload_ms={metadata.get('vulkan_input_upload_ms', 'missing')} "
-            f"vulkan_compute_input_color_space={metadata.get('vulkan_compute_input_color_space', 'missing')} "
-            f"vulkan_compute_output_image_format={metadata.get('vulkan_compute_output_image_format', 'missing')} "
-            f"vulkan_compute_output_image_encoding={metadata.get('vulkan_compute_output_image_encoding', 'missing')} "
-            f"source={status[7]}x{status[8]} "
-            f"projection_target={status[9] or 'unknown'}",
-            flush=True,
-        )
 
     def _screen_projection_world_points(self) -> np.ndarray | None:
         if self._filament_screen is None:
@@ -2735,166 +2593,6 @@ class OpenXrVulkanPresenter(
             f"curved={bool(self._screen_curved)}",
             flush=True,
         )
-
-    def _can_use_filament_screen_image(
-        self, output_frame: VulkanStereoOutputFrame | None
-    ) -> bool:
-        """Require a producer completion primitive before zero-copy sampling.
-
-        A raw VkImage handle is not sufficient to establish visibility for a
-        Filament shader. The producer must publish both per-eye ready
-        semaphores, and the bridge must consume them from the same Vulkan
-        device before rendering the imported image.
-        """
-        return self._filament_screen_image_gate_reason(output_frame) is None
-
-    def _update_filament_screen_light(
-        self, bridge: Any, output_frame: VulkanStereoOutputFrame | None
-    ) -> None:
-        if (
-            self._filament_screen is None
-            or not hasattr(bridge, "set_screen_light")
-        ):
-            return
-        neutral = np.asarray(self._filament_screen_light_color, dtype=np.float64)
-        color = neutral
-        if output_frame is not None:
-            sample = (output_frame.metadata or {}).get("screen_light_linear_rgb")
-            if isinstance(sample, (list, tuple)) and len(sample) >= 3:
-                sampled = np.asarray(sample[:3], dtype=np.float64)
-                if np.all(np.isfinite(sampled)):
-                    # The neutral/base contribution is supplied by the
-                    # independently weighted controller lights. Keep the
-                    # screen spotlight chroma equal to the Vulkan reduction.
-                    color = sampled
-        color = np.clip(color, 0.0, 8.0)
-        state = (
-            *(round(float(value), 4) for value in color),
-            round(float(self._filament_screen_light_intensity), 4),
-        )
-        if state == self._last_filament_screen_light:
-            return
-        bridge.set_screen_light(color, self._filament_screen_light_intensity)
-        self._last_filament_screen_light = state
-
-    def _update_filament_glow(
-        self, bridge: Any, output_frame: VulkanStereoOutputFrame | None
-    ) -> None:
-        """Bind the newest completed Vulkan Glow image, with CPU fallback."""
-        if not bool(getattr(bridge, "glow_abi_available", False)):
-            return
-        environment_enabled = bool(self._filament_glow_environment_enabled)
-        metadata = (
-            dict(getattr(output_frame, "metadata", None) or {})
-            if environment_enabled
-            else {}
-        )
-        source_path = str(metadata.get("glow_source_path", ""))
-        external = metadata.get("glow_vulkan_image")
-        external_serial = int(metadata.get("glow_vulkan_serial", 0) or 0)
-        rgba = metadata.get("glow_cpu_rgba")
-        size = metadata.get("glow_cpu_size", (0, 0))
-        serial = int(metadata.get("glow_cpu_serial", 0) or 0)
-        source_status = None
-        if (
-            external is not None
-            and external_serial > 0
-            and bool(getattr(bridge, "glow_vulkan_image_abi_available", False))
-        ):
-            size = metadata.get(
-                "glow_source_size",
-                (
-                    int(getattr(external, "width", 0)),
-                    int(getattr(external, "height", 0)),
-                ),
-            )
-            if self._last_filament_glow_source_key != ("vulkan", external_serial):
-                bridge.set_glow_image(external)
-                self._last_filament_glow_source_key = ("vulkan", external_serial)
-            source_status = (
-                self._normalize_filament_glow_mode(self._filament_glow_mode),
-                source_path or "vulkan_compute_external_image",
-                int(size[0]) if isinstance(size, (tuple, list)) and len(size) >= 2 else 0,
-                int(size[1]) if isinstance(size, (tuple, list)) and len(size) >= 2 else 0,
-            )
-        elif (
-            serial > 0
-            and self._last_filament_glow_source_key != ("cpu", serial)
-            and isinstance(rgba, (bytes, bytearray, memoryview))
-            and isinstance(size, (tuple, list))
-            and len(size) >= 2
-        ):
-            width, height = int(size[0]), int(size[1])
-            if width > 0 and height > 0 and len(rgba) == width * height * 4:
-                bridge.set_glow_source(bytes(rgba), width=width, height=height)
-                self._last_filament_glow_source_serial = serial
-                self._last_filament_glow_source_key = ("cpu", serial)
-                source_status = (
-                    self._normalize_filament_glow_mode(self._filament_glow_mode),
-                    source_path or "cpu_uploaded_reference",
-                    width,
-                    height,
-                )
-        elif (
-            serial > 0
-            and self._last_filament_glow_source_key == ("cpu", serial)
-            and isinstance(size, (tuple, list))
-            and len(size) >= 2
-        ):
-            source_status = (
-                self._normalize_filament_glow_mode(self._filament_glow_mode),
-                source_path or "cpu_uploaded_reference",
-                int(size[0]),
-                int(size[1]),
-            )
-
-        head = (
-            np.asarray(self._head_position_w, dtype=np.float64)
-            if self._head_position_w is not None
-            else np.zeros(3, dtype=np.float64)
-        )
-        bridge.set_glow_state(
-            self._filament_glow_mode if environment_enabled else "off",
-            head,
-            glow_intensity=self._filament_glow_intensity,
-            glow_width=self._filament_glow_width,
-            glow_intensity_multiplier=(
-                self._filament_glow_intensity_multiplier
-                if environment_enabled
-                else 0.0
-            ),
-            frosted_intensity=self._frosted_glow_intensity,
-            frosted_alpha=self._frosted_glow_alpha,
-            frosted_threshold=self._frosted_glow_threshold,
-            frosted_lod=self._frosted_glow_lod,
-            frosted_blend=self._frosted_glow_blend,
-            frosted_thickness=self._frosted_glow_thickness,
-            frosted_diffuse=self._frosted_glow_diffuse,
-            frosted_inset=self._frosted_glow_inset,
-            veil_intensity=self._frosted_veil_intensity,
-            veil_alpha=self._frosted_veil_alpha,
-            glow_shell_intensity_multiplier=(
-                self._filament_glow_shell_intensity_multiplier
-                if environment_enabled
-                else 0.0
-            ),
-            glow_shell_radius=self._filament_glow_shell_radius,
-            glow_shell_height=self._filament_glow_shell_height,
-        )
-        # A reuse XR tick legitimately has no new output-frame metadata. Keep
-        # the already-bound texture and report only real source transitions.
-        if source_status is not None and source_status != self._last_filament_glow_status:
-            print(
-                "[OpenXRViewer] Glow reference path: "
-                f"mode={source_status[0]} source={source_status[1]} "
-                f"texture={source_status[2]}x{source_status[3]} "
-                f"submit_ms={float(metadata.get('glow_gpu_submit_ms', 0.0) or 0.0):.3f} "
-                f"reuse={int(metadata.get('glow_reuse', 0) or 0)} "
-                f"budget_skip={int(metadata.get('glow_budget_skip', 0) or 0)} "
-                "screen_zero_copy_unchanged=True",
-                flush=True,
-            )
-            self._last_filament_glow_status = source_status
 
     def _handle_vulkan_pointer_input(self) -> None:
         """Reuse legacy trigger hold/drag semantics for the Vulkan screen."""
@@ -3418,8 +3116,6 @@ class OpenXrVulkanPresenter(
         self._tool_quad_swapchain_format = None
         self._graphics_binding = None
         self._initialized = False
-        self._screen_ready_semaphore_abi_available = False
-        self._last_filament_screen_image_status = None
         self._last_screen_resolution_status = None
         self._last_screen_resolution_log_t = 0.0
         self._clear_presenter_commands()
@@ -4084,40 +3780,6 @@ class OpenXrVulkanPresenter(
                     "Filament controller guide loaded: projection_layer=True",
                     flush=True,
                 )
-            if self._filament_screen is not None:
-                position, width, height, rotation = self._filament_screen
-                bridge.create_screen()
-                if (
-                    getattr(bridge, "screen_sampling_mode_abi_available", False)
-                    and hasattr(bridge, "set_screen_sampling_mode")
-                ):
-                    bridge.set_screen_sampling_mode(self._filament_screen_sampling_mode)
-                elif self._filament_screen_sampling_mode == "legacy":
-                    raise RuntimeError(
-                        "legacy screen sampling A/B capture requires a rebuilt Filament Bridge"
-                    )
-                bridge.set_screen(position, width, height, rotation)
-                if hasattr(bridge, "set_screen_light"):
-                    bridge.set_screen_light(
-                        self._filament_screen_light_color,
-                        self._filament_screen_light_intensity,
-                    )
-                print(
-                    "Filament screen loaded: "
-                    f"position={position} size={width:.3f}x{height:.3f} "
-                    f"rotation={rotation} sampling={self._filament_screen_sampling_mode}",
-                    flush=True,
-                )
-                print(
-                    "Filament screen image capability: "
-                    f"requested={self._filament_screen_image_enabled} "
-                    f"screen_image_abi={getattr(bridge, 'screen_image_abi_available', False)} "
-                    f"vulkan_external_image_abi={getattr(bridge, 'vulkan_external_image_abi_available', False)} "
-                    f"ready_semaphore_abi={getattr(bridge, 'screen_ready_semaphore_abi_available', False)} "
-                    f"finished_semaphore_abi={getattr(bridge, 'finished_drawing_semaphore_abi_available', False)} "
-                    f"async_submit_abi={getattr(bridge, 'async_submit_abi_available', False)}",
-                    flush=True,
-                )
             bridge.set_scene_exposure(self._filament_scene_exposure)
             bridge.set_skybox_brightness(self._filament_skybox_brightness)
             if hasattr(bridge, "set_ambient_light"):
@@ -4131,9 +3793,6 @@ class OpenXrVulkanPresenter(
                 self._filament_fill_light_color,
                 self._filament_fill_light_intensity,
                 self._filament_fill_light_direction,
-            )
-            self._screen_ready_semaphore_abi_available = bool(
-                getattr(bridge, "screen_ready_semaphore_abi_available", False)
             )
             self.filament_bridge = bridge
         except Exception:
@@ -4319,6 +3978,7 @@ class OpenXrVulkanPresenter(
             self._vulkan_projection_quality_chain_requested and plan is not None
         )
         projection_draws = []
+        glow_source = (frame.metadata or {}).get("glow_vulkan_image")
         for eye_index, source in enumerate(source_inputs):
             source_prepare_started = time.perf_counter()
             wait_semaphore = prepare_source(frame.frame_id, eye_index)
@@ -4346,6 +4006,7 @@ class OpenXrVulkanPresenter(
                     ),
                     "clear_color": self.config.clear_color,
                     "wait_semaphore": wait_semaphore,
+                    "glow_source": glow_source,
                 }
             )
             if self._on_breakdown_add_time is not None:
@@ -4376,6 +4037,12 @@ class OpenXrVulkanPresenter(
                 self._on_breakdown_inc("openxr_vulkan_composer_quality_skip", 1)
         if timeline is None:
             timeline = self._vulkan_projection_screen_pass.submit_stereo(projection_draws)
+        if glow_source is not None and self._filament_glow_environment_enabled:
+            timeline = self._vulkan_projection_screen_pass.submit_stereo_glow(
+                projection_draws, wait_for_timeline=int(timeline)
+            )
+            if self._on_breakdown_inc is not None:
+                self._on_breakdown_inc("openxr_vulkan_composer_glow", 1)
         if self._on_breakdown_add_time is not None:
             self._on_breakdown_add_time(
                 "openxr_vulkan_composer_submit",
@@ -4532,34 +4199,11 @@ class OpenXrVulkanPresenter(
                 f"upscale_scale={plan.upscale_scale:.2f} "
                 "sampling_owner="
                 + (
-                    "vulkan_baseline_linear"
-                    if self._vulkan_projection_composer_requested
-                    else (
-                        "filament_bridge"
-                        if bool(
-                            getattr(
-                                self.filament_bridge,
-                                "screen_sampling_abi_available",
-                                False,
-                            )
-                        )
-                        else "filament_bridge_unavailable"
-                    )
+                    "vulkan_projection_composer"
                 ),
                 flush=True,
             )
         self._active_screen_sampling_plan = plan
-        if (
-            status_changed
-            and not self._vulkan_projection_composer_requested
-            and self.filament_bridge is not None
-            and hasattr(
-            self.filament_bridge, "set_screen_sampling"
-            )
-        ):
-            self.filament_bridge.set_screen_sampling(plan.filter_scale)
-            if hasattr(self.filament_bridge, "set_screen_upscale"):
-                self.filament_bridge.set_screen_upscale(plan.upscale_scale)
         return plan
 
     def _initialize_msdf_quad_renderer(self) -> None:
@@ -4884,15 +4528,6 @@ class OpenXrVulkanPresenter(
         self._controller_hdr_lighting = bool(
             profile.get("controller_hdr_lighting", False)
         )
-        self._filament_screen_light_intensity = max(
-            0.0,
-            float(
-                profile.get(
-                    "screen_light_intensity",
-                    self._filament_screen_light_intensity,
-                )
-            ),
-        )
         if self._filament_lighting_presets:
             self._apply_filament_lighting_preset(
                 self._filament_lighting_presets[
@@ -4944,7 +4579,7 @@ class OpenXrVulkanPresenter(
         print(
             "Filament controller lighting: "
             f"environment={environment_lighting} "
-            f"screen_light=always intensity={self._filament_screen_light_intensity:.3f}",
+            "screen_light=disabled",
             flush=True,
         )
 
@@ -5014,7 +4649,6 @@ class OpenXrVulkanPresenter(
         self,
         render_views: list[Any],
         presentation_frame: VulkanStereoOutputFrame | None,
-        screen_image_projection: bool,
         acquired_image: tuple[_EyeSwapchain, int],
         finished_semaphore_available: bool,
         record_time: Callable[[str, float], None],
@@ -5029,48 +4663,6 @@ class OpenXrVulkanPresenter(
             near_plane=self._profile_near_plane,
             far_plane=self._profile_far_plane,
         )
-        if (
-            presentation_frame is not None
-            and screen_image_projection
-            and self._filament_screen is not None
-        ):
-            prepare_source = (presentation_frame.metadata or {}).get(
-                "_vulkan_source_prepare_for_sampling"
-            )
-            visible_semaphores = []
-            try:
-                source_prepare_started = time.perf_counter()
-                for eye_index, source in enumerate(
-                    (presentation_frame.left_eye, presentation_frame.right_eye)
-                ):
-                    bridge.set_active_eye(eye_index)
-                    visible = prepare_source(presentation_frame.frame_id, eye_index)
-                    bridge.set_screen_image(
-                        source.image,
-                        width=source.width,
-                        height=source.height,
-                        format=source.format,
-                    )
-                    if hasattr(bridge, "set_screen_source_version"):
-                        bridge.set_screen_source_version(int(presentation_frame.frame_id))
-                    if visible is not None:
-                        visible_semaphores.append(visible)
-                record_time(
-                    "openxr_filament_multiview_source_prepare",
-                    source_prepare_started,
-                )
-            finally:
-                bridge.set_active_eye(0)
-            if visible_semaphores:
-                source_wait_started = time.perf_counter()
-                self.vulkan.submit_on(
-                    "graphics",
-                    lambda _command_buffer: None,
-                    wait_semaphore=tuple(visible_semaphores),
-                )
-                record_time(
-                    "openxr_filament_multiview_source_wait", source_wait_started
-                )
         record_time("openxr_filament_multiview_state", state_started)
         bridge.set_active_eye(0)
         bridge.set_acquired_image(image_index)
@@ -5080,32 +4672,6 @@ class OpenXrVulkanPresenter(
         finish_started = time.perf_counter()
         bridge.end_frame()
         record_time("openxr_filament_multiview_finish_wait", finish_started)
-        if (
-            isinstance(presentation_frame, VulkanStereoOutputFrame)
-            and str(
-                (presentation_frame.metadata or {}).get("visual_regression_dir", "")
-            ).strip()
-        ):
-            for eye_index, source in enumerate(
-                (presentation_frame.left_eye, presentation_frame.right_eye)
-            ):
-                self._maybe_capture_visual_regression_frame(
-                    presentation_frame,
-                    eye_index=eye_index,
-                    source_resource=(
-                        source
-                        if isinstance(source, VulkanImageResource)
-                        else getattr(source, "resource", None)
-                    ),
-                    projection_resource=eye.resources[image_index],
-                    projection_array_layer=eye_index,
-                    source_layout=self.vulkan.vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    source_access_mask=self.vulkan.vk.VK_ACCESS_SHADER_READ_BIT,
-                    source_stage_mask=(
-                        self.vulkan.vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
-                        | self.vulkan.vk.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
-                    ),
-                )
         return (
             bridge.get_finished_drawing_semaphore()
             if finished_semaphore_available
@@ -5149,7 +4715,6 @@ class OpenXrVulkanPresenter(
         completion_drain_attempted = False
         finished_semaphore_available = False
         render_succeeded = False
-        screen_image_projection = False
         self._vulkan_projection_composer_active = False
         self._screen_quad_reprojection_active = False
         composer_frame = (
@@ -5165,7 +4730,6 @@ class OpenXrVulkanPresenter(
         use_vulkan_projection_composer = bool(
             self._vulkan_projection_composer_requested
             and isinstance(composer_frame, VulkanStereoOutputFrame)
-            and self._filament_screen is not None
         )
         use_screen_quad_reprojection = bool(
             self._screen_quad_reprojection_requested
@@ -5198,14 +4762,8 @@ class OpenXrVulkanPresenter(
                 record_time("openxr_filament_lock_wait", filament_lock_started)
             if self.filament_bridge is None:
                 return
-            self._update_filament_screen_light(
-                self.filament_bridge,
-                presentation_frame,
-            )
-            self._update_filament_glow(
-                self.filament_bridge,
-                presentation_frame,
-            )
+            # Glow is composed by VulkanProjectionScreenPass after the SBS
+            # draw. Filament only owns environment/controller renderables.
             # Controller transforms and GLB animation state are shared by
             # both eye Views. Updating them twice adds owner-thread work
             # without changing either eye's scene state.
@@ -5243,21 +4801,11 @@ class OpenXrVulkanPresenter(
             record_time("openxr_swapchain_wait", wait_pair_started)
 
             shared_prepare_started = time.perf_counter()
-            screen_image_projection = (
-                use_vulkan_projection_composer
-                or use_screen_quad_reprojection
-                or self._can_use_filament_screen_image(presentation_frame)
-            )
-            if screen_image_projection and presentation_frame is not None:
+            if use_vulkan_projection_composer and presentation_frame is not None:
                 sampling_frame = presentation_frame
             self._report_screen_resolution(views, presentation_frame)
             self._apply_screen_sampling_policy(
                 presentation_frame
-            )
-            self._report_filament_screen_image_status(
-                presentation_frame,
-                screen_image_projection,
-                self._filament_screen_image_gate_reason(presentation_frame),
             )
             if (
                 self.filament_bridge is not None
@@ -5288,7 +4836,6 @@ class OpenXrVulkanPresenter(
                     use_vulkan_projection_composer = bool(
                         self._vulkan_projection_composer_requested
                         and isinstance(composer_frame, VulkanStereoOutputFrame)
-                        and self._filament_screen is not None
                     )
             if not render_succeeded and use_vulkan_projection_composer:
                 try:
@@ -5308,6 +4855,8 @@ class OpenXrVulkanPresenter(
                     render_succeeded = True
                 except Exception as exc:
                     use_vulkan_projection_composer = False
+                    # The fallback renders only the Filament environment and
+                    # controllers. The SBS image stays Composer-only.
                     self._vulkan_projection_composer_active = False
                     fallback_status = (type(exc).__name__, str(exc))
                     if fallback_status != self._last_vulkan_projection_composer_fallback:
@@ -5335,7 +4884,6 @@ class OpenXrVulkanPresenter(
                 consumer_release_semaphores[0] = self._render_filament_multiview(
                     render_views,
                     presentation_frame,
-                    screen_image_projection,
                     acquired_images[0],
                     finished_semaphore_available,
                     record_time,
@@ -5344,7 +4892,6 @@ class OpenXrVulkanPresenter(
                 render_succeeded = True
             if not render_succeeded:
                 for eye_index, (eye, image_index) in enumerate(acquired_images):
-                    screen_source = None
                     if self.filament_bridge is not None:
                         bridge = self.filament_bridge
                         state_started = time.perf_counter()
@@ -5355,39 +4902,6 @@ class OpenXrVulkanPresenter(
                             near_plane=self._profile_near_plane,
                             far_plane=self._profile_far_plane,
                         )
-                        if (
-                            presentation_frame is not None
-                            and screen_image_projection
-                            and self._filament_screen is not None
-                        ):
-                            screen_source = (
-                                presentation_frame.left_eye
-                                if eye_index == 0
-                                else presentation_frame.right_eye
-                            )
-                            prepare_source = (presentation_frame.metadata or {}).get(
-                                "_vulkan_source_prepare_for_sampling"
-                            )
-                            source_prepare_started = time.perf_counter()
-                            visible_semaphore = prepare_source(
-                                presentation_frame.frame_id, eye_index
-                            )
-                            record_time(
-                                f"openxr_filament_eye{eye_index}_source_prepare",
-                                source_prepare_started,
-                            )
-                            bridge.set_screen_image(
-                                screen_source.image,
-                                width=screen_source.width,
-                                height=screen_source.height,
-                                format=screen_source.format,
-                            )
-                            if hasattr(bridge, "set_screen_source_version"):
-                                bridge.set_screen_source_version(
-                                    int(presentation_frame.frame_id)
-                                )
-                            if visible_semaphore is not None:
-                                bridge.set_screen_ready_semaphore(visible_semaphore)
                         record_time(
                             f"openxr_filament_eye{eye_index}_state", state_started
                         )
@@ -5404,61 +4918,14 @@ class OpenXrVulkanPresenter(
                             finish_started,
                         )
                         submitted_filament_eyes.append(eye_index)
-                        if isinstance(output_frame, VulkanStereoOutputFrame):
-                            source_resource = (
-                                screen_source
-                                if isinstance(screen_source, VulkanImageResource)
-                                else getattr(screen_source, "resource", None)
-                            )
-                            self._maybe_capture_visual_regression_frame(
-                                presentation_frame,
-                                eye_index=eye_index,
-                                source_resource=source_resource,
-                                projection_resource=eye.resources[image_index],
-                                source_layout=self.vulkan.vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                source_access_mask=self.vulkan.vk.VK_ACCESS_SHADER_READ_BIT,
-                                source_stage_mask=(
-                                    self.vulkan.vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
-                                    | self.vulkan.vk.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
-                                ),
-                            )
                         if finished_semaphore_available:
                             consumer_release_semaphores[eye_index] = (
                                 bridge.get_finished_drawing_semaphore()
                             )
                     else:
-                        if presentation_frame is not None:
-                            source = (
-                                presentation_frame.left_eye
-                                if eye_index == 0
-                                else presentation_frame.right_eye
-                            )
-                            copy_timeline = self.vulkan.copy_image(
-                                source,
-                                eye.resources[image_index],
-                                wait_for_timeline=presentation_frame.ready_timeline,
-                            )
-                            presentation_frame.metadata["_vulkan_fallback_copy_timeline"] = max(
-                                int(presentation_frame.metadata.get("_vulkan_fallback_copy_timeline", 0)),
-                                int(copy_timeline),
-                            )
-                            self._maybe_capture_visual_regression_frame(
-                                presentation_frame,
-                                eye_index=eye_index,
-                                source_resource=(
-                                    source
-                                    if isinstance(source, VulkanImageResource)
-                                    else getattr(source, "resource", None)
-                                ),
-                                projection_resource=eye.resources[image_index],
-                                source_layout=self.vulkan.vk.VK_IMAGE_LAYOUT_GENERAL,
-                                source_access_mask=self.vulkan.vk.VK_ACCESS_MEMORY_WRITE_BIT,
-                                source_stage_mask=self.vulkan.vk.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                            )
-                        else:
-                            image_address = _ctypes_handle_address(eye.images[image_index].image)
-                            image = self.vulkan.image_handle_from_address(image_address)
-                            self.vulkan.clear_color_image(image, self.config.clear_color)
+                        image_address = _ctypes_handle_address(eye.images[image_index].image)
+                        image = self.vulkan.image_handle_from_address(image_address)
+                        self.vulkan.clear_color_image(image, self.config.clear_color)
             published_semaphores = tuple(
                 semaphore
                 for semaphore in consumer_release_semaphores
@@ -5493,7 +4960,6 @@ class OpenXrVulkanPresenter(
             if presentation_frame is not None and (
                 use_vulkan_projection_composer
                 or use_screen_quad_reprojection
-                or screen_image_projection
                 or self.filament_bridge is None
             ):
                 if self._on_breakdown_inc is not None:
@@ -5552,7 +5018,7 @@ class OpenXrVulkanPresenter(
             if (
                 not render_succeeded
                 and self.filament_bridge is not None
-                and (submitted_filament_eyes or screen_image_projection)
+                and submitted_filament_eyes
             ):
                 try:
                     if not any(consumer_release_semaphores):
@@ -5607,17 +5073,6 @@ class OpenXrVulkanPresenter(
                 isinstance(output_frame, VulkanStereoOutputFrame)
                 and not render_succeeded
             ):
-                if screen_image_projection:
-                    if consumer_completion_timeline is not None:
-                        output_frame.metadata[
-                            "_vulkan_consumer_release_timeline"
-                        ] = int(consumer_completion_timeline)
-                    else:
-                        output_frame.metadata[
-                            "_vulkan_consumer_release_semaphores"
-                        ] = (
-                            tuple(consumer_release_semaphores)
-                        )
                 self._abort_output_frame(output_frame)
             record_time("openxr_projection_total", projection_started)
         return OpenXrCompositionBuilder(xr, self.reference_space).projection_layer(
@@ -5781,7 +5236,9 @@ class OpenXrVulkanPresenter(
                     "readback": "temporary_host_image",
                     "color_space": str(output_frame.color_space),
                     "image_origin": str(output_frame.image_origin),
-                    "screen_sampling_mode": self._filament_screen_sampling_mode,
+                    "vulkan_projection_quality_chain_requested": bool(
+                        self._vulkan_projection_quality_chain_requested
+                    ),
                     "source_size": [int(source_resource.width), int(source_resource.height)],
                     "projection_size": [int(projection_resource.width), int(projection_resource.height)],
                 }
@@ -6014,64 +5471,9 @@ class OpenXrVulkanPresenter(
         return vr_res, sbs_res
 
     def _render_quad_layers(self, output_frame: VulkanStereoOutputFrame | None) -> list[Any]:
-        # The main virtual screen is rendered in the Projection Layer when
-        # the per-eye Filament image path is enabled. Keep this function for
-        # controller tools and other 2D overlays only.
-        layers = self._render_tool_quad_layers(output_frame)
-        if self._screen_quad_reprojection_active:
-            if (
-                output_frame is None
-                and self._last_screen_quad_layers
-                and self._on_breakdown_inc is not None
-            ):
-                self._on_breakdown_inc("openxr_screen_quad_reuse", 1)
-            return list(self._last_screen_quad_layers) + layers
-        if output_frame is None:
-            # OpenXR composition layers are ordered back to front. The virtual
-            # screen must be submitted before controller tools so the latter
-            # remain visible in front of it.
-            if self._last_screen_quad_layers and self._on_breakdown_inc is not None:
-                self._on_breakdown_inc("openxr_reused_screen_frame", 1)
-            return list(self._last_screen_quad_layers) + layers
-        if self._filament_screen is None:
-            self._last_screen_quad_layers = []
-            return layers
-        screen_in_projection = (
-            self._vulkan_projection_composer_active
-            or self._can_use_filament_screen_image(output_frame)
-        )
-        if screen_in_projection:
-            self._last_screen_quad_layers = []
-            return layers
-        width = int(output_frame.left_eye.width)
-        height = int(output_frame.left_eye.height)
-        self._ensure_quad_swapchains(width, height)
-        if len(self._quad_swapchains) != 1:
-            return layers
-        position, screen_width, screen_height, rotation = self._filament_screen
-        quad_swapchain = self._quad_swapchains[0]
-        screen_layers = []
-        with _acquired_swapchain_image(self.xr, quad_swapchain) as image_index:
-            for eye_index, source in enumerate((output_frame.left_eye, output_frame.right_eye)):
-                # The output contract is top-left and the Vulkan swapchain
-                # image uses the same row order. Do not apply a second Y
-                # transform here; screen pose is handled independently below.
-                self.vulkan.copy_image(
-                    source,
-                    quad_swapchain.resources[image_index],
-                    destination_array_layer=eye_index,
-                    flip_y=False,
-                )
-                screen_layers.append(OpenXrCompositionBuilder(
-                    self.xr, self.reference_space
-                ).quad_layer(
-                    quad_swapchain, position, screen_width, screen_height, rotation, eye_index
-                ))
-        self._last_screen_quad_layers = screen_layers
-        if screen_layers and self._on_breakdown_inc is not None:
-            self._on_breakdown_inc("openxr_new_screen_frame", 1)
-        # Submit the virtual screen behind controller/laser tool layers.
-        return screen_layers + layers
+        # The main SBS screen is Projection Composer-only. Quad layers carry
+        # controller tools and 2D overlays; they never replace the screen.
+        return self._render_tool_quad_layers(output_frame)
 
     def _can_use_screen_quad_reprojection(
         self, frame: VulkanStereoOutputFrame | None

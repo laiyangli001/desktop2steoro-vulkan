@@ -1,7 +1,7 @@
 # Filament/Vulkan Projection Composition 迁移方案
 
 **文档状态**：进行中
-**更新时间**：2026-08-06
+**更新时间**：2026-08-07
 **适用范围**：OpenXR Vulkan Projection/Quad Layer、Filament Bridge、屏幕采样、激光、Glow 和线程调度
 
 ## 1. 目标
@@ -73,14 +73,14 @@ Virtual Desktop 实机验证不接受此 swapchain，因此该环境变量现在
 
 ### 阶段 0：冻结边界和回退（已完成）
 
-- `D2S_VULKAN_PROJECTION_COMPOSER` 默认开启；仅在定位问题时设置为 `0` 回退旧路径。
+- `D2S_VULKAN_PROJECTION_COMPOSER` 默认开启，也是唯一的 SBS 屏幕路径。设置为 `0` 仅用于诊断环境/手柄渲染，不能重新启用 Filament 或 Quad 主屏幕。
 - `D2S_VULKAN_PROJECTION_QUALITY_CHAIN` 默认开启；设置为 `0` 时保留 Vulkan Projection Composer，但跳过 EASU/Lanczos、RCAS 和 MIP 质量链，直接对原始 LOD0 源图进行投影。该开关用于低端 GPU 性能 A/B 验证，不降低源图或 Projection swapchain 分辨率。
-- 保留旧 Filament 屏幕路径作为临时回退，不再向旧路径添加功能。Composer 创建、记录或提交异常时，Presenter 在已 acquire 的同一对 Projection image 上补齐 Filament 状态和 queue lock，并在同一 XR 帧回退，不能中断 `xrEndFrame`。
-- 日志只在异常种类或消息变化时输出 `Vulkan projection composer fallback`；`vk_composer_fallback` 和 `vk_composer_fallback_prepare` 用于确认回退频率与准备开销。
+- 删除旧 Filament 屏幕 Renderable、纹理导入、MIP、RCAS、屏幕光和 `filament_bridge_set_screen_*` ABI。Composer 创建、记录或提交异常时，Presenter 仅渲染 Filament 环境/手柄或清屏，并在同一 XR 帧完成 acquire/release 和 `xrEndFrame`；不得重新绑定 SBS 图像。
+- 日志只在异常种类或消息变化时输出 `Vulkan projection composer fallback`；`vk_composer_fallback` 和 `vk_composer_fallback_prepare` 用于确认环境/手柄降级频率与准备开销。
 - 固定颜色空间、左右眼顺序、latest-frame 和资源租约契约。
 - 建立 Projection/Quad Layer 数量、顺序和 image release 日志。
 
-完成条件：默认 Projection 路径可启动；显式关闭 Composer 或 Composer 异常时，旧路径均可安全回退且不泄漏已 acquire 的 swapchain image。
+完成条件：默认 Projection 路径可启动；显式关闭 Composer 或 Composer 异常时，不会重新激活旧屏幕路径，且不泄漏已 acquire 的 swapchain image。
 
 ### 阶段 1：Vulkan 屏幕 Projection
 
@@ -136,6 +136,11 @@ Lanczos2 或 RCAS。最终 Projection shader 保持直接采样，避免把清�
 - 基础环境光和头顶光保留为唯一手柄照明来源。
 - 删除屏幕放射光实体、平均色到手柄照明的路径和对应 ABI。
 
+当前进度：已删除 `bridge_screen.cpp/.h`、屏幕 C ABI、Python ctypes wrapper 和 Presenter 的
+Filament SBS 图像交接。`_filament_screen` 名称暂时保留为 Presenter-owned 屏幕几何状态，供
+Vulkan Composer、曲面屏控制和交互命中使用，不代表 Filament Renderable。`bridge_glow.cpp/.h`
+已删除；Glow 不再由 Filament Bridge 持有。
+
 完成条件：环境、手柄模型、按键动画和深度遮挡正确；屏幕光关闭后画面仍符合基准。
 
 ### 阶段 4：迁移激光和 Glow
@@ -152,6 +157,13 @@ Glow：
 - 删除 Glow 外部图像导入 Filament 的步骤。
 - Vulkan Projection Composer 直接采样 Glow 图像并完成合成。
 - Glow 不参与手柄照明，不改变基础环境光或头顶光。
+
+当前进度：Glow Compute 输出已标记为 `vulkan_projection_composer` 所有的
+latest-frame 资源，Presenter 不再用 Filament Glow 外部图像 ABI 判断该资源是否可用。
+Composer 已使用独立 `LOAD` RenderPass、Glow descriptor 和 graphics timeline
+提交透明 overlay；主 SBS RenderPass 仍负责 `CLEAR` 和屏幕绘制。Presenter 已不再调用
+Filament Glow 更新函数，旧 `filament_bridge_set_glow_*` ABI、native Glow 模块和 Python
+ctypes 绑定均已删除。`openxr_vulkan_composer_glow` 用于确认 Vulkan Glow 合成路径。
 
 完成条件：激光遮挡、Glow 五态和 latest-frame 复用正确；Glow 线程不阻塞主屏幕。
 
@@ -179,17 +191,13 @@ Quad Right -> imageArrayIndex=1, eyeVisibility=RIGHT
 完成条件：Tool Quad 不影响 Projection 主路径；Virtual Desktop 主屏幕始终通过 Projection
 array/per-eye swapchain 正确显示。
 
-### 阶段 6：删除旧 Filament 显示代码
+### 阶段 6：删除剩余 Filament 显示代码
 
-所有新路径通过验收后，删除或停用：
+阶段 3 已删除 Filament 虚拟屏幕，阶段 4 已删除 Filament Glow 显示代码。剩余效果迁移完成后，删除或停用：
 
-- `native/filament/bridge/bridge_screen.cpp/.h`
 - `native/filament/bridge/bridge_laser.cpp/.h`
-- `native/filament/bridge/bridge_glow.cpp/.h`
-- `filament_bridge_set_screen_*`
 - `filament_bridge_set_controller_laser`
-- `filament_bridge_set_glow_*`
-- 屏幕放射光和平均色驱动手柄照明的 C ABI、Python wrapper、配置项和测试
+- Glow 相关 ABI、字段和测试已删除；激光迁移完成后再删除 `bridge_laser.cpp/.h`
 
 保留环境光、头顶光、环境/手柄 GLB 和必要的颜色/深度输出 ABI。
 
@@ -227,7 +235,7 @@ array/per-eye swapchain 正确显示。
 ## 8. 回退原则
 
 - 每个阶段单独提交和实机验证。
-- 新 Vulkan Composer 失败时回退旧路径，但禁止继续扩展旧 Filament 屏幕功能。
+- 新 Vulkan Composer 失败时只回退环境/手柄或清屏，禁止重新引入 Filament 或 Quad 主屏幕。
 - Projection array 失败只回退 per-eye，不回退到 Quad Layer。
 - Screen Quad Reprojection 已停用；其环境变量不得影响 Projection。
 - 任何同步能力不足优先丢弃新帧，禁止阻塞或回读 CPU。

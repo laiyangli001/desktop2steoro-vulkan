@@ -209,7 +209,7 @@ def test_cuda_tensor_reaches_vulkan_output_slot_without_cpu_roundtrip() -> None:
         presenter = SimpleNamespace(
             initialized=True,
             vulkan=context,
-            screen_ready_semaphore_available=True,
+            source_ready_semaphore_available=True,
         )
         adapter = CudaVulkanOutputAdapter(presenter)
         result = SimpleNamespace(
