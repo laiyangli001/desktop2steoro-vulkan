@@ -240,6 +240,12 @@ def _openxr_filament_config(settings: dict) -> dict[str, object]:
         "filament_controller_screen_light_cast_shadows": bool(
             common_filament.get("controller_screen_light_cast_shadows", False)
         ),
+        "filament_glow_sample_hz": float(
+            common_filament.get("glow_sample_hz", 30.0)
+        ),
+        "filament_glow_smoothing_seconds": float(
+            common_filament.get("glow_smoothing_seconds", 0.10)
+        ),
         # These values are resolved by the legacy viewer-settings path and
         # exported through utils; keep the Vulkan entrypoint as a consumer.
         "filament_screen_width": float(OPENXR_SCREEN_WIDTH),
@@ -324,6 +330,7 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
         on_tick=callbacks.log_source_health,
     )
 
+    presenter = None
     pipeline_context = build_runtime_pipeline_context(
         shutdown_event=shutdown_event,
         app_context=context,
@@ -348,6 +355,9 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
         warmup_stereo_once_for_frame=callbacks.warmup_stereo_once_for_frame,
         log_fast_plus_fused_runtime_state=callbacks.log_fast_plus_fused_runtime_state,
         runtime_ready_event=runtime_ready_event,
+        openxr_presenter_pressure=lambda: bool(
+            presenter is not None and presenter.inference_backpressure_active()
+        ),
     )
 
     capture_thread = threading.Thread(
@@ -365,7 +375,6 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
         name="VulkanStereoPipeline",
         daemon=True,
     )
-    presenter = None
     presenter_thread = None
     output_consumer = None
     output_thread = None

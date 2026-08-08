@@ -118,6 +118,67 @@ def _env_flag(name: str, default: bool = False) -> bool:
     }
 
 
+def _env_number(name: str, default: float, *, minimum: float) -> float:
+    try:
+        value = float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        value = float(default)
+    if not math.isfinite(value):
+        value = float(default)
+    return max(float(minimum), value)
+
+
+def _sbs_capture_options() -> dict[str, Any] | None:
+    output_dir = str(os.environ.get("D2S_SBS_CAPTURE_DIR", "")).strip()
+    if not output_dir:
+        return None
+    return {
+        "output_dir": Path(output_dir),
+        "delay_seconds": _env_number(
+            "D2S_SBS_CAPTURE_DELAY_SECONDS", 15.0, minimum=0.0
+        ),
+        "sample_count": int(
+            _env_number("D2S_SBS_CAPTURE_SAMPLE_COUNT", 300, minimum=1.0)
+        ),
+        "image_count": int(
+            _env_number("D2S_SBS_CAPTURE_IMAGE_COUNT", 6, minimum=1.0)
+        ),
+        "eye_width": int(
+            _env_number("D2S_SBS_CAPTURE_EYE_WIDTH", 640, minimum=64.0)
+        ),
+    }
+
+
+def _vulkan_rgba_to_rgb(
+    pixels: np.ndarray,
+    *,
+    format_value: int,
+    vk: Any,
+    image_origin: str,
+) -> np.ndarray:
+    rgba = pixels
+    if int(format_value) in {
+        int(vk.VK_FORMAT_B8G8R8A8_UNORM),
+        int(vk.VK_FORMAT_B8G8R8A8_SRGB),
+    }:
+        rgba = rgba[..., [2, 1, 0, 3]]
+    rgb = np.ascontiguousarray(rgba[..., :3])
+    if str(image_origin).strip().lower() == "bottom_left":
+        rgb = np.ascontiguousarray(rgb[::-1])
+    return rgb
+
+
+def _write_sbs_capture_png(
+    output_path: Path,
+    left_rgb: np.ndarray,
+    right_rgb: np.ndarray,
+) -> None:
+    from PIL import Image
+
+    sbs = np.concatenate((left_rgb, right_rgb), axis=1)
+    Image.fromarray(sbs, mode="RGB").save(output_path, compress_level=1)
+
+
 def _layout_msdf_osd_runs(
     atlas: MsdfFontAtlas,
     runs: tuple[tuple[str, tuple[int, int, int, int]], ...]
@@ -470,6 +531,8 @@ class OpenXrVulkanConfig:
     filament_controller_screen_light_smoothing_seconds: float = 0.18
     filament_controller_screen_light_sample_hz: float = 12.0
     filament_controller_screen_light_cast_shadows: bool = False
+    filament_glow_sample_hz: float = 30.0
+    filament_glow_smoothing_seconds: float = 0.10
     openxr_no_headset_retry_interval: float = 3.0
     openxr_standby_retry_interval: float = 3.0
     openxr_standby_retry_max_interval: float = 30.0
@@ -617,7 +680,7 @@ class OpenXrVulkanPresenter(
             "D2S_FILAMENT_PROJECTION_ONLY", default=False
         )
         self._filament_controller_overlay_after_composer = _env_flag(
-            "D2S_FILAMENT_CONTROLLER_OVERLAY_AFTER_COMPOSER", default=False
+            "D2S_FILAMENT_CONTROLLER_OVERLAY_AFTER_COMPOSER", default=True
         )
         self._vulkan_projection_composer_active = False
         self._vulkan_projection_composer_frame_id: int | None = None
@@ -759,6 +822,10 @@ class OpenXrVulkanPresenter(
         self._controller_screen_light_cast_shadows = (
             self.config.filament_controller_screen_light_cast_shadows
         )
+        self._filament_glow_sample_hz = self.config.filament_glow_sample_hz
+        self._filament_glow_smoothing_seconds = (
+            self.config.filament_glow_smoothing_seconds
+        )
         self._controller_screen_light_smoothed_color = np.zeros(3, dtype=np.float64)
         self._controller_screen_light_smoothed_intensity = 0.0
         self._controller_screen_light_status = None
@@ -863,6 +930,7 @@ class OpenXrVulkanPresenter(
         self._pending_output: VulkanStereoOutputFrame | None = None
         self._displayed_output: VulkanStereoOutputFrame | None = None
         self._rendering_output: VulkanStereoOutputFrame | None = None
+        self._projection_busy = threading.Event()
         self._output_lock = threading.Lock()
         self._headset_wait_started = 0.0
         self._headset_hard_idle_notified = False
@@ -880,6 +948,21 @@ class OpenXrVulkanPresenter(
         self._visual_regression_capture_failed = False
         self._visual_regression_source_host_images: dict[int, VulkanHostImage] = {}
         self._visual_regression_projection_host_images: dict[int, VulkanHostImage] = {}
+        self._sbs_capture_options = _sbs_capture_options()
+        self._sbs_capture_origin: float | None = None
+        self._sbs_capture_slots: list[dict[str, Any]] = []
+        self._sbs_capture_write_futures: list[tuple[Future, dict[str, Any]]] = []
+        self._sbs_capture_records: list[dict[str, Any]] = []
+        self._sbs_capture_seen_frame_id: int | None = None
+        self._sbs_capture_observed = 0
+        self._sbs_capture_scheduled = 0
+        self._sbs_capture_skipped = 0
+        self._sbs_capture_finished = False
+        self._sbs_capture_executor = (
+            ThreadPoolExecutor(max_workers=1, thread_name_prefix="d2s-sbs-capture")
+            if self._sbs_capture_options is not None
+            else None
+        )
         self._overlay_quad_entries: dict[str, dict[str, Any]] = {}
         # Keep rasterized tool textures and their released swapchain image
         # alive. Static Quad layers must not perform a host upload every XR
@@ -1009,6 +1092,15 @@ class OpenXrVulkanPresenter(
     def output_ready(self) -> bool:
         """Report readiness after the presenter-owned Filament Engine is ready."""
         return self._initialized
+
+    def inference_backpressure_active(self) -> bool:
+        """Whether an extra inference would compete with queued XR presentation."""
+        if not self._initialized or not self.session_running:
+            return False
+        if self._projection_busy.is_set() or not self._presenter_commands.empty():
+            return True
+        with self._output_lock:
+            return self._pending_output is not None or self._rendering_output is not None
 
     @property
     def source_ready_semaphore_available(self) -> bool:
@@ -1710,6 +1802,8 @@ class OpenXrVulkanPresenter(
             ("controller_screen_light_max_luminance", "_controller_screen_light_max_luminance"),
             ("controller_screen_light_smoothing_seconds", "_controller_screen_light_smoothing_seconds"),
             ("controller_screen_light_sample_hz", "_controller_screen_light_sample_hz"),
+            ("glow_sample_hz", "_filament_glow_sample_hz"),
+            ("glow_smoothing_seconds", "_filament_glow_smoothing_seconds"),
         ):
             if key in preset:
                 try:
@@ -1778,6 +1872,12 @@ class OpenXrVulkanPresenter(
         )
         self._controller_screen_light_sample_hz = max(
             1.0, float(self._controller_screen_light_sample_hz)
+        )
+        self._filament_glow_sample_hz = max(
+            1.0, float(self._filament_glow_sample_hz)
+        )
+        self._filament_glow_smoothing_seconds = max(
+            0.0, float(self._filament_glow_smoothing_seconds)
         )
         self._apply_filament_glow_profile_fields(preset)
         if not apply_bridge or self.filament_bridge is None:
@@ -3294,6 +3394,8 @@ class OpenXrVulkanPresenter(
             except Exception:
                 pass
 
+        self._close_sbs_sequence_capture()
+
         # Release output-frame leases while their adapters and synchronization
         # objects are still alive.
         self._drop_output_frames()
@@ -3556,6 +3658,9 @@ class OpenXrVulkanPresenter(
         _check_vulkan_result(vulkan_result, "xrCreateVulkanDeviceKHR")
         vk_device = _ctypes_handle_to_cffi(vk, "VkDevice", xr_device)
         self._provisional_vk_device = vk_device
+        frame_context_count = int(
+            _env_number("D2S_OPENXR_VULKAN_FRAME_CONTEXTS", 9, minimum=3.0)
+        )
         self.vulkan = VulkanContext.adopt(
             instance=vk_instance,
             physical_device=vk_physical_device,
@@ -3566,13 +3671,19 @@ class OpenXrVulkanPresenter(
             timeline_semaphore_enabled=True,
             synchronization2_enabled=synchronization2_enabled,
             compute_queue_index=1 if requested_queue_count >= 2 else 0,
+            # Projection may submit screen, Glow and controller-depth work in
+            # one XR frame. Keep enough command slots for all three swapchain
+            # images so a later pass does not immediately wait on an earlier
+            # pass from the preceding frame.
+            frame_context_count=frame_context_count,
         )
         print(
             "[OpenXRViewer] Vulkan queue topology: "
             f"graphics=family{queue_family_index}/queue0 "
             f"glow_compute=family{queue_family_index}/queue"
             f"{1 if requested_queue_count >= 2 else 0} "
-            f"async={requested_queue_count >= 2}",
+            f"async={requested_queue_count >= 2} "
+            f"frame_contexts={frame_context_count}",
             flush=True,
         )
         self._provisional_vk_device = None
@@ -5272,6 +5383,8 @@ class OpenXrVulkanPresenter(
             ("controller_screen_light_max_luminance", "_controller_screen_light_max_luminance"),
             ("controller_screen_light_smoothing_seconds", "_controller_screen_light_smoothing_seconds"),
             ("controller_screen_light_sample_hz", "_controller_screen_light_sample_hz"),
+            ("glow_sample_hz", "_filament_glow_sample_hz"),
+            ("glow_smoothing_seconds", "_filament_glow_smoothing_seconds"),
         ):
             if key in profile:
                 minimum = 0.001 if key.endswith("_falloff") else 0.0
@@ -5607,6 +5720,7 @@ class OpenXrVulkanPresenter(
         filament_queue_lock = getattr(self.vulkan, "_lock", None)
         filament_queue_locked = False
         projection_started = time.perf_counter()
+        self._projection_busy.set()
 
         def record_time(name: str, started: float) -> None:
             callback = self._on_breakdown_add_time
@@ -5925,6 +6039,7 @@ class OpenXrVulkanPresenter(
                         )
                     ),
                 )
+            self._maybe_capture_sbs_sequence(presentation_frame)
         finally:
             if (
                 not render_succeeded
@@ -5986,8 +6101,305 @@ class OpenXrVulkanPresenter(
             ):
                 self._abort_output_frame(output_frame)
             record_time("openxr_projection_total", projection_started)
+            self._projection_busy.clear()
         return OpenXrCompositionBuilder(xr, self.reference_space).projection_layer(
             composition_views, self.swapchains
+        )
+
+    def _ensure_sbs_capture_slots(self, frame: VulkanStereoOutputFrame) -> bool:
+        if self._sbs_capture_slots:
+            return True
+        if self.vulkan is None:
+            return False
+        options = self._sbs_capture_options
+        if options is None:
+            return False
+        left = frame.left_eye
+        right = frame.right_eye
+        if not isinstance(left, VulkanImageResource) or not isinstance(
+            right, VulkanImageResource
+        ):
+            return False
+        source_width = int(left.width)
+        source_height = int(left.height)
+        if source_width <= 0 or source_height <= 0:
+            return False
+        target_width = min(source_width, int(options["eye_width"]))
+        target_height = max(1, round(source_height * target_width / source_width))
+        for slot_index in range(3):
+            self._sbs_capture_slots.append(
+                {
+                    "left": VulkanHostImage(
+                        self.vulkan,
+                        target_width,
+                        target_height,
+                        format=int(left.format),
+                        label=f"sbs-capture-left-{slot_index}",
+                        readback=True,
+                    ),
+                    "right": VulkanHostImage(
+                        self.vulkan,
+                        target_width,
+                        target_height,
+                        format=int(right.format),
+                        label=f"sbs-capture-right-{slot_index}",
+                        readback=True,
+                    ),
+                    "timeline": 0,
+                    "record": None,
+                }
+            )
+        output_dir = Path(options["output_dir"])
+        output_dir.mkdir(parents=True, exist_ok=True)
+        print(
+            "[OpenXRViewer] SBS sequence capture armed: "
+            f"delay={float(options['delay_seconds']):.1f}s "
+            f"metadata_samples={int(options['sample_count'])} "
+            f"images={min(int(options['image_count']), int(options['sample_count']))} "
+            f"size={target_width * 2}x{target_height} dir={output_dir}",
+            flush=True,
+        )
+        return True
+
+    def _prune_sbs_capture_writes(self) -> None:
+        pending: list[tuple[Future, dict[str, Any]]] = []
+        for future, record in self._sbs_capture_write_futures:
+            if not future.done():
+                pending.append((future, record))
+                continue
+            try:
+                future.result()
+            except Exception as exc:
+                record["status"] = "write_failed"
+                record["error"] = f"{type(exc).__name__}: {exc}"
+            else:
+                record["status"] = "saved"
+        self._sbs_capture_write_futures = pending
+
+    def _drain_sbs_capture_readbacks(self, *, force: bool = False) -> None:
+        if not self._sbs_capture_slots or self.vulkan is None:
+            return
+        self._prune_sbs_capture_writes()
+        completed = self.vulkan.completed_timeline_value()
+        if force:
+            completed = self.vulkan.last_submitted_timeline_value
+        if completed is None:
+            return
+        executor = self._sbs_capture_executor
+        for slot in self._sbs_capture_slots:
+            timeline = int(slot.get("timeline", 0))
+            record = slot.get("record")
+            if timeline <= 0 or timeline > int(completed):
+                continue
+            if record is None:
+                slot["timeline"] = 0
+                continue
+            try:
+                left_host = slot["left"]
+                right_host = slot["right"]
+                left_rgb = _vulkan_rgba_to_rgb(
+                    left_host.read_rgba(),
+                    format_value=int(left_host.format),
+                    vk=left_host.vk,
+                    image_origin=str(record["image_origin"]),
+                )
+                right_rgb = _vulkan_rgba_to_rgb(
+                    right_host.read_rgba(),
+                    format_value=int(right_host.format),
+                    vk=right_host.vk,
+                    image_origin=str(record["image_origin"]),
+                )
+                if executor is None:
+                    raise RuntimeError("SBS capture writer is unavailable")
+                future = executor.submit(
+                    _write_sbs_capture_png,
+                    Path(record["path"]),
+                    left_rgb,
+                    right_rgb,
+                )
+                record["status"] = "writing"
+                record["gpu_timeline"] = timeline
+                self._sbs_capture_write_futures.append((future, record))
+            except Exception as exc:
+                record["status"] = "readback_failed"
+                record["error"] = f"{type(exc).__name__}: {exc}"
+            finally:
+                slot["timeline"] = 0
+                slot["record"] = None
+
+    def _write_sbs_capture_manifest(self) -> None:
+        options = self._sbs_capture_options
+        if options is None:
+            return
+        output_dir = Path(options["output_dir"])
+        output_dir.mkdir(parents=True, exist_ok=True)
+        manifest = {
+            "stage": "vulkan_stereo_eye_images_before_projection_composition",
+            "contains_projection": False,
+            "delay_seconds": float(options["delay_seconds"]),
+            "requested_samples": int(options["sample_count"]),
+            "observed_samples": int(self._sbs_capture_observed),
+            "requested_images": min(
+                int(options["image_count"]), int(options["sample_count"])
+            ),
+            "scheduled_images": int(self._sbs_capture_scheduled),
+            "skipped_images": int(self._sbs_capture_skipped),
+            "records": self._sbs_capture_records,
+        }
+        (output_dir / "sbs_capture_manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def _maybe_capture_sbs_sequence(
+        self, frame: VulkanStereoOutputFrame | None
+    ) -> None:
+        options = self._sbs_capture_options
+        if options is None or self._sbs_capture_finished:
+            return
+        self._drain_sbs_capture_readbacks()
+        if (
+            self._sbs_capture_observed >= int(options["sample_count"])
+            and not self._sbs_capture_write_futures
+            and not any(int(slot.get("timeline", 0)) for slot in self._sbs_capture_slots)
+        ):
+            self._close_sbs_sequence_capture()
+            return
+        if frame is None:
+            return
+        if bool(frame.metadata.get("_vulkan_release_attempted")):
+            return
+        frame_id = int(frame.frame_id)
+        if self._sbs_capture_seen_frame_id == frame_id:
+            return
+        self._sbs_capture_seen_frame_id = frame_id
+        now = time.perf_counter()
+        if self._sbs_capture_origin is None:
+            self._sbs_capture_origin = now
+            return
+        if now - self._sbs_capture_origin < float(options["delay_seconds"]):
+            return
+        if self._sbs_capture_observed >= int(options["sample_count"]):
+            return
+        sample_index = int(self._sbs_capture_observed)
+        self._sbs_capture_observed += 1
+        record = {
+            "sample_index": sample_index,
+            "frame_id": frame_id,
+            "source_timestamp": float(frame.timestamp),
+            "capture_monotonic": now,
+            "image_origin": str(frame.image_origin),
+            "status": "metadata_only",
+        }
+        self._sbs_capture_records.append(record)
+        sample_count = int(options["sample_count"])
+        image_count = min(int(options["image_count"]), sample_count)
+        if image_count <= 1:
+            image_indices = {0}
+        else:
+            image_indices = {
+                round(index * (sample_count - 1) / (image_count - 1))
+                for index in range(image_count)
+            }
+        if sample_index not in image_indices:
+            return
+        if not self._ensure_sbs_capture_slots(frame):
+            record["status"] = "capture_unavailable"
+            self._sbs_capture_skipped += 1
+            return
+        self._prune_sbs_capture_writes()
+        if len(self._sbs_capture_write_futures) >= 6:
+            record["status"] = "capture_skipped_writer_busy"
+            self._sbs_capture_skipped += 1
+            return
+        slot = next(
+            (item for item in self._sbs_capture_slots if not item["timeline"]),
+            None,
+        )
+        if slot is None:
+            record["status"] = "capture_skipped_gpu_busy"
+            self._sbs_capture_skipped += 1
+            return
+        output_path = Path(options["output_dir"]) / f"sbs_sample_{sample_index:04d}.png"
+        record["path"] = str(output_path)
+        record["file"] = output_path.name
+        record["status"] = "gpu_pending"
+        wait_timeline = max(
+            int(frame.ready_timeline or 0),
+            int(frame.metadata.get("_vulkan_consumer_release_timeline", 0)),
+        )
+        submitted_timeline = 0
+        try:
+            left_timeline = self.vulkan.copy_image(
+                frame.left_eye,
+                slot["left"].resource,
+                wait_for_timeline=(wait_timeline or None),
+                resize=True,
+                filter_mode=self.vulkan.vk.VK_FILTER_LINEAR,
+                destination_host_readable=True,
+            )
+            submitted_timeline = int(left_timeline)
+            right_timeline = self.vulkan.copy_image(
+                frame.right_eye,
+                slot["right"].resource,
+                wait_for_timeline=left_timeline,
+                resize=True,
+                filter_mode=self.vulkan.vk.VK_FILTER_LINEAR,
+                destination_host_readable=True,
+            )
+            submitted_timeline = int(right_timeline)
+        except Exception as exc:
+            record["status"] = "submit_failed"
+            record["error"] = f"{type(exc).__name__}: {exc}"
+            self._sbs_capture_skipped += 1
+            if submitted_timeline > 0:
+                slot["timeline"] = submitted_timeline
+                slot["record"] = None
+                frame.metadata["_vulkan_consumer_release_timeline"] = max(
+                    int(
+                        frame.metadata.get(
+                            "_vulkan_consumer_release_timeline", 0
+                        )
+                    ),
+                    submitted_timeline,
+                )
+            return
+        slot["timeline"] = int(right_timeline)
+        slot["record"] = record
+        self._sbs_capture_scheduled += 1
+        frame.metadata["_vulkan_consumer_release_timeline"] = max(
+            int(frame.metadata.get("_vulkan_consumer_release_timeline", 0)),
+            int(right_timeline),
+        )
+        if self._sbs_capture_observed >= int(options["sample_count"]):
+            print(
+                "[OpenXRViewer] SBS pacing metadata collection complete; "
+                "finishing sparse asynchronous image writes",
+                flush=True,
+            )
+
+    def _close_sbs_sequence_capture(self) -> None:
+        if self._sbs_capture_options is None or self._sbs_capture_finished:
+            return
+        self._drain_sbs_capture_readbacks(force=True)
+        executor = self._sbs_capture_executor
+        if executor is not None:
+            executor.shutdown(wait=True, cancel_futures=False)
+        self._sbs_capture_executor = None
+        self._prune_sbs_capture_writes()
+        self._write_sbs_capture_manifest()
+        for slot in self._sbs_capture_slots:
+            for key in ("left", "right"):
+                try:
+                    slot[key].close()
+                except Exception:
+                    pass
+        self._sbs_capture_slots.clear()
+        self._sbs_capture_finished = True
+        print(
+            "[OpenXRViewer] SBS sequence capture saved: "
+            f"{self._sbs_capture_options['output_dir']}",
+            flush=True,
         )
 
     @staticmethod
@@ -6055,6 +6467,7 @@ class OpenXrVulkanPresenter(
                     int(source_resource.height),
                     format=int(source_resource.format),
                     label=f"visual-regression-live-source-eye-{eye}",
+                    readback=True,
                 )
                 self._visual_regression_source_host_images[eye] = source_host_image
             projection_host_image = self._visual_regression_projection_host_images.get(eye)
@@ -6065,6 +6478,7 @@ class OpenXrVulkanPresenter(
                     int(projection_resource.height),
                     format=int(projection_resource.format),
                     label=f"visual-regression-live-projection-eye-{eye}",
+                    readback=True,
                 )
                 self._visual_regression_projection_host_images[eye] = projection_host_image
 
@@ -6095,6 +6509,7 @@ class OpenXrVulkanPresenter(
             source_timeline = self.vulkan.copy_image(
                 source_resource,
                 source_host_image.resource,
+                destination_host_readable=True,
             )
             self.vulkan.wait_for_timeline(source_timeline)
             self._save_visual_regression_host_image(
@@ -6107,6 +6522,7 @@ class OpenXrVulkanPresenter(
                     projection_resource,
                     projection_host_image.resource,
                     source_array_layer=projection_array_layer,
+                    destination_host_readable=True,
                 )
             except VulkanCapabilityError as first_exc:
                 # Some OpenXR runtimes leave the Python-side swapchain state
@@ -6126,6 +6542,7 @@ class OpenXrVulkanPresenter(
                         projection_resource,
                         projection_host_image.resource,
                         source_array_layer=projection_array_layer,
+                        destination_host_readable=True,
                     )
                 except Exception as retry_exc:
                     raise VulkanCapabilityError(
@@ -6329,13 +6746,6 @@ class OpenXrVulkanPresenter(
             )
             self._tool_overlay_sbs_window_started = now
             self._tool_overlay_sbs_window_frames = 0
-        if callable(self._on_runtime_fps):
-            try:
-                runtime_fps = float(self._on_runtime_fps())
-            except (TypeError, ValueError):
-                runtime_fps = 0.0
-            if math.isfinite(runtime_fps) and runtime_fps > 0.0:
-                self._tool_overlay_sbs_fps = runtime_fps
 
     def _record_xr_presented_frame(self) -> None:
         timestamp = time.perf_counter()

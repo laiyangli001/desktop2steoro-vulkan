@@ -21,8 +21,11 @@ layout(location = 0) out vec2 texture_uv;
 layout(location = 1) out vec2 effect_uv;
 
 const int GLOW_SEGMENTS = 64;
-const int GLOW_SHELL_SEGMENTS = 96;
-const int SHELL_RADIAL_SEGMENTS = 48;
+// Surround is a low-frequency blurred field. A 48 x 24 grid per edge keeps
+// curvature smooth while reducing its geometry to one quarter of the legacy
+// migration density.
+const int GLOW_SHELL_SEGMENTS = 48;
+const int SHELL_RADIAL_SEGMENTS = 24;
 const int FLAT_DEPTH_STEPS = 8;
 const int FLAT_EDGE_STEPS = 8;
 

@@ -65,6 +65,8 @@ def test_openxr_filament_color_defaults_come_from_common_json() -> None:
     assert config["filament_controller_screen_light_enabled"] is True
     assert config["filament_controller_screen_light_intensity_lux"] == 500.0
     assert config["filament_controller_screen_light_sample_hz"] == 12.0
+    assert config["filament_glow_sample_hz"] == 30.0
+    assert config["filament_glow_smoothing_seconds"] == 0.10
 
 
 def test_openxr_environment_uses_selected_folder_and_profile_glb(tmp_path: Path) -> None:

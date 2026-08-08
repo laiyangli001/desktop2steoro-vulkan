@@ -16,7 +16,7 @@ class VulkanGlowSourcePass:
     """Prefilter planar sRGB RGB into a small linear RGBA Vulkan image."""
 
     WORKGROUP_SIZE = 8
-    PUSH_CONSTANTS_SIZE = 24
+    PUSH_CONSTANTS_SIZE = 32
 
     def __init__(
         self,
@@ -50,6 +50,9 @@ class VulkanGlowSourcePass:
                 DescriptorBinding(
                     binding=2, descriptor_type=vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
                 ),
+                DescriptorBinding(
+                    binding=3, descriptor_type=vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
+                ),
             ],
             push_constants_size=self.PUSH_CONSTANTS_SIZE,
         )
@@ -57,7 +60,7 @@ class VulkanGlowSourcePass:
             context,
             DescriptorBudget(
                 max_sets=self.slot_count,
-                storage_buffers_per_set=2,
+                storage_buffers_per_set=3,
                 storage_images_per_set=1,
             ),
         )
@@ -86,11 +89,13 @@ class VulkanGlowSourcePass:
         source_buffer: Any,
         output_image: Any,
         screen_light_buffer: Any,
+        history_buffer: Any,
         source_width: int,
         source_height: int,
         prefilter_scale: float,
         surround_region_average: bool = False,
         screen_light_only: bool = False,
+        temporal_alpha: float = 1.0,
     ) -> None:
         if source_buffer.context is not self.context or output_image.context is not self.context:
             raise ValueError("Glow resources belong to a different Vulkan context")
@@ -98,6 +103,10 @@ class VulkanGlowSourcePass:
             raise ValueError("screen-light buffer belongs to a different Vulkan context")
         if int(screen_light_buffer.size) < 16:
             raise ValueError("screen-light buffer must contain one vec4")
+        if history_buffer.context is not self.context:
+            raise ValueError("Glow history buffer belongs to a different Vulkan context")
+        if int(history_buffer.size) < self.target_width * self.target_height * 16:
+            raise ValueError("Glow history buffer must contain one vec4 per output pixel")
         if int(source_buffer.size) < self.input_buffer_size(source_width, source_height):
             raise ValueError("Glow source buffer is too small")
         if (
@@ -114,14 +123,17 @@ class VulkanGlowSourcePass:
         self.descriptor_arena.update_storage_buffer(
             descriptor_set, 2, screen_light_buffer
         )
+        self.descriptor_arena.update_storage_buffer(descriptor_set, 3, history_buffer)
         push_constants = struct.pack(
-            "<IIIIfI",
+            "<IIIIfIfI",
             int(source_width),
             int(source_height),
             self.target_width,
             self.target_height,
             max(1.0, float(prefilter_scale)),
             int(bool(surround_region_average)),
+            max(0.0, min(1.0, float(temporal_alpha))),
+            int(not screen_light_only),
         )
         group_counts = (1, 1, 1) if screen_light_only else self.group_counts
         self.pipeline.record_dispatch(

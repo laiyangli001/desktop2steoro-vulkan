@@ -21,7 +21,7 @@ def test_glow_pass_contract_is_fixed_rgba_target() -> None:
 
     assert effect_pass.group_counts == (40, 23, 1)
     assert effect_pass.input_buffer_size(3840, 2160) == 3840 * 2160 * 12
-    assert effect_pass.PUSH_CONSTANTS_SIZE == 24
+    assert effect_pass.PUSH_CONSTANTS_SIZE == 32
 
 
 def test_glow_fence_poll_handles_pyvulkan_not_ready_exception() -> None:
@@ -144,4 +144,9 @@ def test_glow_shader_and_spirv_are_checked_in_together() -> None:
     assert "average = srgb_to_linear(average);" in source
     assert "ScreenLightBuffer" in source
     assert "reduce_screen_light_linear" in source
+    assert "GlowHistoryBuffer" in source
+    assert "float temporal_alpha;" in source
+    assert "uint write_glow;" in source
+    assert "params.write_glow == 0u" in source
+    assert "glow_history[history_index]" in source
     assert spirv[:4] == b"\x03\x02#\x07"

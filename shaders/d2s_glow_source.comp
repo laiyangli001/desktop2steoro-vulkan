@@ -7,6 +7,9 @@ layout(set = 0, binding = 1, rgba8) uniform writeonly image2D glow_image;
 layout(set = 0, binding = 2, std430) writeonly buffer ScreenLightBuffer {
     vec4 screen_light_linear;
 };
+layout(set = 0, binding = 3, std430) buffer GlowHistoryBuffer {
+    vec4 glow_history[];
+};
 
 layout(push_constant) uniform GlowSourceParams {
     uint source_width;
@@ -15,6 +18,8 @@ layout(push_constant) uniform GlowSourceParams {
     uint target_height;
     float prefilter_scale;
     uint surround_region_average;
+    float temporal_alpha;
+    uint write_glow;
 } params;
 
 uint source_pixel_count() {
@@ -61,6 +66,9 @@ void main() {
 
     if (all(equal(output_pixel, uvec2(0u)))) {
         screen_light_linear = vec4(reduce_screen_light_linear(), 1.0);
+    }
+    if (params.write_glow == 0u) {
+        return;
     }
 
     vec2 output_uv = (vec2(output_pixel) + vec2(0.5)) /
@@ -132,5 +140,15 @@ void main() {
     if (params.surround_region_average != 0u) {
         average = srgb_to_linear(average);
     }
-    imageStore(glow_image, ivec2(output_pixel), vec4(average, 1.0));
+    uint history_index = output_pixel.y * params.target_width + output_pixel.x;
+    vec3 smoothed = average;
+    if (params.temporal_alpha < 0.9999) {
+        smoothed = mix(
+            glow_history[history_index].rgb,
+            average,
+            clamp(params.temporal_alpha, 0.0, 1.0)
+        );
+    }
+    glow_history[history_index] = vec4(smoothed, 1.0);
+    imageStore(glow_image, ivec2(output_pixel), vec4(smoothed, 1.0));
 }

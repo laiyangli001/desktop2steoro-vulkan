@@ -200,13 +200,26 @@ Filament semaphore 会先经过 graphics queue drain，再走环境/手柄安全
 未消费的 producer 完成点。Filament multiview 暂不进入这条 per-eye LOAD 实验路径，
 保持原有 multiview 行为，待 array-image 的 producer/consumer 同步契约单独验证。
 
-手柄优先级隔离新增可选的 post-Composer 前景 pass：环境仍在 Composer 前由主 View
+手柄优先级隔离使用 post-Composer 前景 pass：环境仍在 Composer 前由主 View
 输出；屏幕和 Glow 完成后，Bridge 仅复用现有 `controller_view` 与
 `controller_guide_view`，保留当前颜色并清理前景深度，再绘制手柄、激光和指南。
-该实验由 `D2S_FILAMENT_CONTROLLER_OVERLAY_AFTER_COMPOSER=1` 启用，需重编译 native
-Bridge 后进行头显验收；验证完成前默认路径不变。
+该路径已经通过头显验收并成为普通 OpenXR Vulkan Composer 的默认行为；如需回退诊断，
+可显式设置 `D2S_FILAMENT_CONTROLLER_OVERLAY_AFTER_COMPOSER=0`，恢复 Composer 前绘制。
 
 ### 阶段 4：迁移激光和 Glow
+
+Surround Glow 的四条完整 shell 边共享角点，但不再使用加法混合重复累计角区亮度；重叠区改为逐通道最大值混合，
+既不会由后绘制边覆盖前一条边，也不会因端点透明而露出清屏背景形成黑边；
+每边网格由迁移初期的 96 x 48 精简为 48 x 24，使双眼每帧顶点数由 221184
+降为 55296，同时保留低频模糊光场所需的曲面平滑度，并避免头部移动时因角点
+覆盖变化产生高亮闪烁。
+
+Glow 纹理更新频率由独立 Profile 字段 `glow_sample_hz` 控制，默认 30 Hz；手柄
+屏幕补光继续使用 `controller_screen_light_sample_hz=12`。两条路径不再共用节流
+参数，避免 Surround 在约 30 FPS 的显示中每 2 至 3 帧阶梯式更换整块边缘颜色。
+`glow_smoothing_seconds` 默认 0.10 秒；Glow compute pass 在 GPU 持久历史缓冲中
+对新旧线性颜色执行指数时间融合，再写入当前外部纹理。首帧和效果模式切换会重置
+历史，屏幕补光的只读采样不会修改 Glow 历史。
 
 激光：
 

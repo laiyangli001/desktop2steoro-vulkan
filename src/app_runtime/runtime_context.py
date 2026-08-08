@@ -250,6 +250,7 @@ def build_runtime_pipeline_context(
     warmup_stereo_once_for_frame,
     log_fast_plus_fused_runtime_state,
     runtime_ready_event=None,
+    openxr_presenter_pressure=None,
 ):
     return RuntimePipelineContext(
         shutdown_event=shutdown_event,
@@ -283,6 +284,7 @@ def build_runtime_pipeline_context(
         warmup_stereo_once_for_frame=warmup_stereo_once_for_frame,
         log_fast_plus_fused_runtime_state=log_fast_plus_fused_runtime_state,
         runtime_ready_event=runtime_ready_event,
+        openxr_presenter_pressure=openxr_presenter_pressure,
         application_runtime_target=getattr(app_context, "application_runtime_target", None),
         output_transport=getattr(app_context, "output_transport", None),
         settings_update_q=app_context.settings_update_q,

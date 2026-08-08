@@ -79,6 +79,7 @@ def test_load_windows_capture_selects_cuda_and_rocm_modules(monkeypatch):
 
 def test_windows_capture_runner_uses_copy_or_clone_buffers(monkeypatch):
     module = _install_capture_module(monkeypatch, "wc_cuda")
+    monkeypatch.setenv("D2S_WGC_SOFTWARE_THROTTLE", "0")
     monkeypatch.setattr(windows_capture_event, "_setup_dpi_awareness", lambda: None)
     monkeypatch.setattr(windows_capture_event.WindowsCaptureEventRunner, "_start_keyboard_worker", lambda self, event: None)
 
@@ -128,6 +129,65 @@ def test_windows_capture_runner_uses_copy_or_clone_buffers(monkeypatch):
     assert clone_buffer.cloned is False
     assert received[-1].frame is clone_buffer
     assert received[-1].copy_mode is FrameCopyMode.GPU_TENSOR
+
+
+def test_windows_capture_cuda_software_limiter_maps_120hz_callbacks_to_60fps(monkeypatch):
+    monkeypatch.delenv("D2S_WGC_SOFTWARE_THROTTLE", raising=False)
+    runner = windows_capture_event.WindowsCaptureEventRunner(
+        CaptureConfig(capture_tool="WindowsCaptureCUDA", capture_mode="Monitor", monitor_index=1, fps=60)
+    )
+
+    accepted = [
+        runner._accept_software_paced_frame(now)
+        for now in (10.0, 10.0083, 10.0166, 10.0250, 10.0333)
+    ]
+
+    assert accepted == [True, False, True, False, True]
+    assert runner._software_limited_frames == 2
+
+
+def test_windows_capture_cuda_software_limiter_can_be_disabled(monkeypatch):
+    monkeypatch.setenv("D2S_WGC_SOFTWARE_THROTTLE", "0")
+    runner = windows_capture_event.WindowsCaptureEventRunner(
+        CaptureConfig(capture_tool="WindowsCaptureCUDA", capture_mode="Monitor", monitor_index=1, fps=60)
+    )
+
+    assert all(runner._accept_software_paced_frame(now) for now in (10.0, 10.001, 10.002))
+
+
+def test_windows_capture_cuda_limiter_runs_before_gpu_buffer_delivery(monkeypatch):
+    module = _install_capture_module(monkeypatch, "wc_cuda")
+    monkeypatch.setattr(windows_capture_event, "_setup_dpi_awareness", lambda: None)
+    monkeypatch.setattr(windows_capture_event.WindowsCaptureEventRunner, "_start_keyboard_worker", lambda self, event: None)
+    runner = windows_capture_event.WindowsCaptureEventRunner(
+        CaptureConfig(capture_tool="WindowsCaptureCUDA", capture_mode="Monitor", monitor_index=1, fps=60)
+    )
+    shutdown_event = threading.Event()
+    received = []
+    runner.run(
+        shutdown_event=shutdown_event,
+        on_frame=received.append,
+        on_error=lambda exc: shutdown_event.set(),
+    )
+
+    decisions = iter((True, False))
+    monkeypatch.setattr(runner, "_accept_software_paced_frame", lambda now: next(decisions))
+    copied = []
+
+    def record_copy(frame_buffer, capture_tool):
+        copied.append(frame_buffer)
+        return frame_buffer, FrameCopyMode.GPU_TENSOR, "cuda"
+
+    monkeypatch.setattr(windows_capture_event, "_copy_frame_buffer", record_copy)
+    shutdown_event.clear()
+    first = CopyBuffer()
+    second = CopyBuffer()
+    handler = module.WindowsCapture.last_instance.handlers[0]
+    handler(FakeFrame(first), FakeControl())
+    handler(FakeFrame(second), FakeControl())
+
+    assert copied == [first]
+    assert len(received) == 1
 
 
 def test_windows_capture_cuda_can_force_frame_copy(monkeypatch):

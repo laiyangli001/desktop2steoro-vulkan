@@ -319,9 +319,12 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
             backend.poll()
             now = time.monotonic()
             sample_hz = max(1.0, float(getattr(
-                self.presenter, "_controller_screen_light_sample_hz", 12.0
+                self.presenter,
+                "_filament_glow_sample_hz" if gpu_glow_active
+                else "_controller_screen_light_sample_hz",
+                30.0 if gpu_glow_active else 12.0,
             )))
-            submit_interval = 1.0 / max(12.0 if gpu_glow_active else 1.0, sample_hz)
+            submit_interval = 1.0 / sample_hz
             if (
                 not self._glow_gpu_submission_disabled
                 and now - self._glow_gpu_last_submit >= submit_interval
@@ -332,6 +335,15 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
                         getattr(self.presenter, "_frosted_glow_lod", 5.4)
                     ),
                 }
+                if gpu_glow_active:
+                    submit_kwargs["temporal_smoothing_seconds"] = max(
+                        0.0,
+                        float(getattr(
+                            self.presenter,
+                            "_filament_glow_smoothing_seconds",
+                            0.10,
+                        )),
+                    )
                 if not gpu_glow_active:
                     submit_kwargs["screen_light_only"] = True
                 submitted = backend.submit(source, **submit_kwargs)

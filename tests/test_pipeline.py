@@ -91,6 +91,36 @@ def test_parallel_adaptive_backoff_can_be_disabled(monkeypatch):
     assert events == []
 
 
+def test_presenter_pressure_temporarily_limits_parallel_depth_and_recovers(monkeypatch):
+    monkeypatch.delenv("D2S_RUNTIME_PRESENTER_BACKPRESSURE", raising=False)
+    pressure = {"active": True}
+    loop = object.__new__(RuntimePipelineLoop)
+    loop.context = _dual_pending_context()
+    loop.context.openxr_presenter_pressure = lambda: pressure["active"]
+    loop._parallel_depth_scheduler = SimpleNamespace(effective_limit=2)
+    loop._dual_pending_cooldown_until = 0.0
+    loop._presenter_backpressure_active = False
+
+    assert loop._pending_depth_limit() == 1
+    assert loop._presenter_backpressure_active is True
+
+    pressure["active"] = False
+    assert loop._pending_depth_limit() == 2
+    assert loop._presenter_backpressure_active is False
+
+
+def test_output_queue_cooldown_applies_with_parallel_scheduler(monkeypatch):
+    loop = object.__new__(RuntimePipelineLoop)
+    loop.context = _dual_pending_context()
+    loop.context.openxr_presenter_pressure = lambda: False
+    loop._parallel_depth_scheduler = SimpleNamespace(effective_limit=2)
+    loop._dual_pending_cooldown_until = 11.0
+    loop._presenter_backpressure_active = False
+    monkeypatch.setattr("stereo_runtime.pipeline.time.perf_counter", lambda: 10.0)
+
+    assert loop._pending_depth_limit() == 1
+
+
 def test_openxr_motion_gate_matches_legacy_default(monkeypatch):
     monkeypatch.delenv("D2S_RUNTIME_MOTION_GATE", raising=False)
 

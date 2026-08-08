@@ -284,14 +284,34 @@ class VulkanExternalImageRegistry:
 class VulkanHostImage:
     """Host-visible linear image used to upload small Vulkan overlay textures."""
 
-    def __init__(self, context: Any, width: int, height: int, *, format: int, label: str):
+    def __init__(
+        self,
+        context: Any,
+        width: int,
+        height: int,
+        *,
+        format: int,
+        label: str,
+        readback: bool = False,
+    ):
         self.context = context
         self.vk = context.vk
         self.width = int(width)
         self.height = int(height)
         self.format = int(format)
         self.label = str(label)
+        self.readback = bool(readback)
         vk = self.vk
+        usage = (
+            vk.VK_IMAGE_USAGE_TRANSFER_DST_BIT
+            if self.readback
+            else vk.VK_IMAGE_USAGE_TRANSFER_SRC_BIT
+        )
+        initial_layout = (
+            vk.VK_IMAGE_LAYOUT_UNDEFINED
+            if self.readback
+            else vk.VK_IMAGE_LAYOUT_PREINITIALIZED
+        )
         self.image = vk.vkCreateImage(
             context.device,
             vk.VkImageCreateInfo(
@@ -303,9 +323,9 @@ class VulkanHostImage:
                 arrayLayers=1,
                 samples=vk.VK_SAMPLE_COUNT_1_BIT,
                 tiling=vk.VK_IMAGE_TILING_LINEAR,
-                usage=vk.VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                usage=usage,
                 sharingMode=vk.VK_SHARING_MODE_EXCLUSIVE,
-                initialLayout=vk.VK_IMAGE_LAYOUT_PREINITIALIZED,
+                initialLayout=initial_layout,
             ),
             None,
         )
@@ -342,9 +362,13 @@ class VulkanHostImage:
             width=self.width,
             height=self.height,
             format=self.format,
-            layout=vk.VK_IMAGE_LAYOUT_PREINITIALIZED,
-            access_mask=vk.VK_ACCESS_HOST_WRITE_BIT,
-            stage_mask=vk.VK_PIPELINE_STAGE_HOST_BIT,
+            layout=initial_layout,
+            access_mask=(0 if self.readback else vk.VK_ACCESS_HOST_WRITE_BIT),
+            stage_mask=(
+                vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
+                if self.readback
+                else vk.VK_PIPELINE_STAGE_HOST_BIT
+            ),
             queue_family_index=context.queue_family_index,
             external=True,
             label=self.label,
@@ -380,13 +404,14 @@ class VulkanHostImage:
         try:
             row_pitch = int(self._layout.rowPitch)
             row_bytes = self.width * 4
-            pixels = np.empty((self.height, self.width, 4), dtype=np.uint8)
-            for row in range(self.height):
-                start = int(self._layout.offset) + row * row_pitch
-                pixels[row] = np.frombuffer(
-                    bytes(mapped[start:start + row_bytes]), dtype=np.uint8
-                ).reshape(self.width, 4)
-            return pixels
+            start = int(self._layout.offset)
+            span = row_pitch * self.height
+            rows = np.frombuffer(
+                bytes(mapped[start:start + span]), dtype=np.uint8
+            ).reshape(self.height, row_pitch)
+            return np.ascontiguousarray(
+                rows[:, :row_bytes].reshape(self.height, self.width, 4)
+            )
         finally:
             vk.vkUnmapMemory(self.context.device, self.memory)
 

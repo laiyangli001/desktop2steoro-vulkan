@@ -22,11 +22,14 @@ class VulkanProjectionScreenPass:
     _SEGMENTS = 48
     _VERTEX_COUNT = (_SEGMENTS + 1) * 2
     _GLOW_SEGMENTS = 64
-    _GLOW_SHELL_SEGMENTS = 96
+    _GLOW_SHELL_SEGMENTS = 48
+    _GLOW_SHELL_RADIAL_SEGMENTS = 24
     _GLOW_VERTEX_COUNT = (_GLOW_SEGMENTS + 1) * 2
     _FROST_FLAT_VERTEX_COUNT = 4 * 8 * 8 * 6
     _FROST_CURVED_VERTEX_COUNT = (_GLOW_SEGMENTS * 2 + 2) * 6
-    _SURROUND_VERTEX_COUNT = 4 * 48 * _GLOW_SHELL_SEGMENTS * 6
+    _SURROUND_VERTEX_COUNT = (
+        4 * _GLOW_SHELL_RADIAL_SEGMENTS * _GLOW_SHELL_SEGMENTS * 6
+    )
     _LASER_VERTEX_COUNT = 12
     _LASER_PARAM_SIZE = 80
     _PUSH_CONSTANT_SIZE = 128
@@ -636,20 +639,24 @@ class VulkanProjectionScreenPass:
                 pName="main",
             ),
         ]
-        def create_glow_pipeline(topology: int, *, additive: bool) -> Any:
+        def create_glow_pipeline(
+            topology: int, *, additive: bool, maximum: bool = False
+        ) -> Any:
             blend = vk.VkPipelineColorBlendAttachmentState(
                 blendEnable=vk.VK_TRUE,
                 srcColorBlendFactor=(
                     vk.VK_BLEND_FACTOR_ONE
-                    if additive
+                    if additive or maximum
                     else vk.VK_BLEND_FACTOR_SRC_ALPHA
                 ),
                 dstColorBlendFactor=(
                     vk.VK_BLEND_FACTOR_ONE
-                    if additive
+                    if additive or maximum
                     else vk.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA
                 ),
-                colorBlendOp=vk.VK_BLEND_OP_ADD,
+                colorBlendOp=(
+                    vk.VK_BLEND_OP_MAX if maximum else vk.VK_BLEND_OP_ADD
+                ),
                 srcAlphaBlendFactor=(
                     vk.VK_BLEND_FACTOR_ZERO
                     if additive
@@ -660,7 +667,9 @@ class VulkanProjectionScreenPass:
                     if additive
                     else vk.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA
                 ),
-                alphaBlendOp=vk.VK_BLEND_OP_ADD,
+                alphaBlendOp=(
+                    vk.VK_BLEND_OP_MAX if maximum else vk.VK_BLEND_OP_ADD
+                ),
                 colorWriteMask=(
                     vk.VK_COLOR_COMPONENT_R_BIT
                     | vk.VK_COLOR_COMPONENT_G_BIT
@@ -729,7 +738,15 @@ class VulkanProjectionScreenPass:
             vk.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, additive=False
         )
         self.surround_pipeline = create_glow_pipeline(
-            vk.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, additive=True
+            # The four shell patches share their corner boundaries. Additive
+            # blending counts those pixels twice and turns tiny coverage
+            # changes into bright corner flashes as the head moves, while
+            # normal replacement makes the last edge overwrite the others.
+            # MAX keeps every shell opaque and selects the brighter component
+            # in overlaps, avoiding both double brightness and exposed clear.
+            vk.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+            additive=False,
+            maximum=True,
         )
         self.laser_pipeline_layout = vk.vkCreatePipelineLayout(
             self.context.device,

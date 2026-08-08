@@ -145,6 +145,7 @@ class RuntimePipelineContext:
     settings_update_q: object | None = None
     render_size_config: RenderSizeConfig | None = None
     runtime_config: object | None = None
+    openxr_presenter_pressure: Callable[[], bool] | None = None
 
 
 def _drain_latest_nowait(q: object | None):
@@ -547,6 +548,17 @@ def _runtime_parallel_adaptive_backoff_enabled() -> bool:
     return value in {"1", "true", "yes", "on"}
 
 
+def _runtime_presenter_backpressure_enabled(ctx: RuntimePipelineContext) -> bool:
+    if ctx.run_mode != "OpenXR" or not callable(
+        getattr(ctx, "openxr_presenter_pressure", None)
+    ):
+        return False
+    value = str(
+        os.environ.get("D2S_RUNTIME_PRESENTER_BACKPRESSURE", "1") or "1"
+    ).strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
 def _runtime_motion_threshold(name: str, default: float) -> float:
     try:
         return max(0.0, float(str(os.environ.get(name, default)).strip()))
@@ -692,14 +704,28 @@ class RuntimePipelineLoop:
         self._parallel_depth_scheduler = None
         self._parallel_backoff_until = 0.0
         self._parallel_recovery_after = 0.0
+        self._presenter_backpressure_active = False
+
+    def _presenter_pressure_active(self) -> bool:
+        ctx = self.context
+        active = False
+        if _runtime_presenter_backpressure_enabled(ctx):
+            try:
+                active = bool(ctx.openxr_presenter_pressure())
+            except Exception:
+                active = False
+        self._presenter_backpressure_active = active
+        return active
 
     def _pending_depth_limit(self) -> int:
         limit = _runtime_pending_depth_limit(self.context)
+        if limit > 1 and time.perf_counter() < self._dual_pending_cooldown_until:
+            return 1
+        if limit > 1 and self._presenter_pressure_active():
+            return 1
         scheduler = getattr(self, "_parallel_depth_scheduler", None)
         if limit > 1 and scheduler is not None:
             return min(limit, scheduler.effective_limit)
-        if limit > 1 and time.perf_counter() < self._dual_pending_cooldown_until:
-            return 1
         return limit
 
     @staticmethod
@@ -1080,7 +1106,8 @@ class RuntimePipelineLoop:
                 if ctx.run_mode == "OpenXR" and self._parallel_depth_scheduler is not None:
                     scheduler = self._parallel_depth_scheduler
                     self._parallel_recover_if_ready()
-                    if scheduler.can_submit():
+                    admission_limit = self._pending_depth_limit()
+                    if scheduler.can_submit() and len(scheduler.pending) < admission_limit:
                         scheduler.submit(
                             runtime_rgb,
                             frame_rgb=frame_rgb,
@@ -1093,6 +1120,12 @@ class RuntimePipelineLoop:
                             source_target_changed=source_target_changed,
                             render_size_changed=render_size_changed,
                         )
+                    elif (
+                        scheduler.can_submit()
+                        and admission_limit < scheduler.effective_limit
+                    ):
+                        ctx.source_stat_inc("runtime_presenter_backpressure")
+                        ctx.breakdown_inc("runtime_presenter_backpressure")
                     scheduler.trim(self._pending_depth_limit())
                     job = scheduler.pop_ready(block=False)
                     if job is None:
@@ -1184,6 +1217,9 @@ class RuntimePipelineLoop:
                         )
                         debug_info["parallel_inference_adaptive_backoff"] = int(
                             _runtime_parallel_adaptive_backoff_enabled()
+                        )
+                        debug_info["parallel_inference_presenter_backpressure"] = int(
+                            self._presenter_backpressure_active
                         )
                         debug_info["parallel_inference_frame_id"] = parallel_frame_id
                         debug_info["parallel_inference_pending"] = int(

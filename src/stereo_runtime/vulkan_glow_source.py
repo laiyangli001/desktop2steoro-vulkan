@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 import struct
 import time
 from typing import Any
@@ -77,6 +78,9 @@ class VulkanGlowSourceComputeBackend:
             target_height=self.TARGET_HEIGHT,
             slot_count=self.slot_count,
         )
+        self.history_buffer = VulkanStorageBuffer(
+            context, self.TARGET_WIDTH * self.TARGET_HEIGHT * 16
+        )
         self.command_pool = self._create_command_pool()
         commands = self._allocate_commands(self.slot_count * 2)
         self.slots: list[_GlowSlot] = []
@@ -117,6 +121,8 @@ class VulkanGlowSourceComputeBackend:
         self._reuse_count = 0
         self._budget_skip_count = 0
         self._screen_light_rgb = (0.18, 0.18, 0.18)
+        self._history_key: tuple[object, ...] | None = None
+        self._history_last_submit = 0.0
         self._closed = False
 
     def _create_command_pool(self):
@@ -257,6 +263,7 @@ class VulkanGlowSourceComputeBackend:
         mode: str,
         frosted_lod: float,
         screen_light_only: bool = False,
+        temporal_smoothing_seconds: float = 0.10,
     ) -> bool:
         if self._closed:
             return False
@@ -273,23 +280,36 @@ class VulkanGlowSourceComputeBackend:
         if slot.input_buffer is None or slot.input_ready is None:
             raise VulkanGlowSourceUnavailable("Glow input slot is unavailable")
         start = time.perf_counter()
+        prefilter_scale = self.prefilter_scale(mode, frosted_lod)
+        surround_region_average = str(mode or "").strip().lower() == "surround"
+        history_key = (
+            str(mode or "").strip().lower(), source_width, source_height,
+            round(prefilter_scale, 4), surround_region_average,
+        )
+        temporal_alpha = 1.0
+        if not screen_light_only and history_key == self._history_key:
+            elapsed = max(0.0, start - self._history_last_submit)
+            smoothing = max(0.0, float(temporal_smoothing_seconds))
+            if smoothing > 0.0:
+                temporal_alpha = 1.0 - math.exp(-elapsed / smoothing)
         self._reset_command(slot.compute_command, slot.compute_fence)
         self.importer.copy_tensor_to_buffer(value, slot.input_buffer)
         self.importer.signal_semaphore(slot.input_ready)
         self._begin_command(slot.compute_command)
+        self._record_history_barrier(slot.compute_command)
         self.effect_pass.record(
             slot.compute_command,
             slot_index=slot.index,
             source_buffer=slot.input_buffer,
             output_image=slot.image.resource,
             screen_light_buffer=slot.screen_light_buffer,
+            history_buffer=self.history_buffer,
             source_width=source_width,
             source_height=source_height,
-            prefilter_scale=self.prefilter_scale(mode, frosted_lod),
-            surround_region_average=(
-                str(mode or "").strip().lower() == "surround"
-            ),
+            prefilter_scale=prefilter_scale,
+            surround_region_average=surround_region_average,
             screen_light_only=screen_light_only,
+            temporal_alpha=temporal_alpha,
         )
         self._record_screen_light_host_barrier(
             slot.compute_command, slot.screen_light_buffer
@@ -315,8 +335,32 @@ class VulkanGlowSourceComputeBackend:
         self._generation += 1
         slot.generation = self._generation
         slot.state = "computing"
+        if not screen_light_only:
+            self._history_key = history_key
+            self._history_last_submit = start
         self._last_submit_ms = (time.perf_counter() - start) * 1000.0
         return True
+
+    def _record_history_barrier(self, command: Any) -> None:
+        vk = self.vk
+        barrier = vk.VkBufferMemoryBarrier(
+            sType=vk.VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+            srcAccessMask=vk.VK_ACCESS_SHADER_WRITE_BIT,
+            dstAccessMask=(
+                vk.VK_ACCESS_SHADER_READ_BIT | vk.VK_ACCESS_SHADER_WRITE_BIT
+            ),
+            srcQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+            dstQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+            buffer=self.history_buffer.buffer,
+            offset=0,
+            size=self.history_buffer.size,
+        )
+        vk.vkCmdPipelineBarrier(
+            command,
+            vk.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            vk.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0, 0, None, 1, [barrier], 0, None,
+        )
 
     def _record_screen_light_host_barrier(
         self, command: Any, buffer: VulkanStorageBuffer
@@ -555,6 +599,9 @@ class VulkanGlowSourceComputeBackend:
             effect_pass = getattr(self, "effect_pass", None)
             if effect_pass is not None:
                 effect_pass.close()
+            history_buffer = getattr(self, "history_buffer", None)
+            if history_buffer is not None:
+                history_buffer.close()
             command_pool = getattr(self, "command_pool", None)
             if command_pool is not None:
                 self.vk.vkDestroyCommandPool(self.context.device, command_pool, None)

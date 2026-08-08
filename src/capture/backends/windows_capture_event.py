@@ -64,6 +64,13 @@ def _fps_to_minimum_update_interval_ms(fps):
     return max(1, int(round(1000.0 / fps_value)))
 
 
+def _software_throttle_enabled(capture_tool):
+    override = _env_bool("D2S_WGC_SOFTWARE_THROTTLE")
+    if override is not None:
+        return bool(override)
+    return capture_tool == "WindowsCaptureCUDA"
+
+
 def _windows_capture_kwargs(config, capture_tool):
     if config.capture_mode == "Window":
         kwargs = {"window_name": config.window_title}
@@ -132,6 +139,8 @@ class WindowsCaptureEventRunner:
         self._fps_handler_seconds = 0.0
         self._last_frame_ts = 0.0
         self._capture_gap_logs = 0
+        self._software_frame_due = 0.0
+        self._software_limited_frames = 0
 
     @property
     def session(self):
@@ -146,6 +155,35 @@ class WindowsCaptureEventRunner:
             self._control.stop()
         elif self._session is not None and hasattr(self._session, "stop"):
             self._session.stop()
+
+    def _accept_software_paced_frame(self, now: float) -> bool:
+        if not _software_throttle_enabled(self.capture_tool):
+            return True
+        try:
+            fps = int(self.config.fps)
+        except (TypeError, ValueError):
+            return True
+        if fps <= 0:
+            return True
+
+        interval = 1.0 / float(fps)
+        if self._software_frame_due <= 0.0:
+            self._software_frame_due = now + interval
+            return True
+
+        # Accept callbacks that land slightly before the ideal grid point. This
+        # keeps a nominal 120 Hz source at 60 Hz instead of occasionally
+        # rejecting both neighboring callbacks because of timer jitter.
+        tolerance = min(0.001, interval * 0.1)
+        if now < self._software_frame_due - tolerance:
+            self._software_limited_frames += 1
+            return False
+
+        if now - self._software_frame_due > interval:
+            self._software_frame_due = now + interval
+        else:
+            self._software_frame_due += interval
+        return True
 
     def _log_capture_fps(self, now: float) -> None:
         if self.capture_tool != "WindowsCaptureCUDA":
@@ -167,7 +205,8 @@ class WindowsCaptureEventRunner:
         print(
             f"[WindowsCaptureCUDA] capture_fps={fps:.1f} frames={self._fps_frames} "
             f"monitor={self.config.monitor_index} mode={self.config.capture_mode} "
-            f"copy_ms={copy_ms:.2f} enqueue_ms={enqueue_ms:.2f} handler_ms={handler_ms:.2f}",
+            f"copy_ms={copy_ms:.2f} enqueue_ms={enqueue_ms:.2f} handler_ms={handler_ms:.2f} "
+            f"software_limited={self._software_limited_frames}",
             flush=True,
         )
         self._fps_last_log = now
@@ -175,6 +214,7 @@ class WindowsCaptureEventRunner:
         self._fps_copy_seconds = 0.0
         self._fps_enqueue_seconds = 0.0
         self._fps_handler_seconds = 0.0
+        self._software_limited_frames = 0
 
     def _record_capture_timing(self, *, copy_seconds: float, enqueue_seconds: float, handler_seconds: float) -> None:
         if self.capture_tool != "WindowsCaptureCUDA":
@@ -280,6 +320,8 @@ class WindowsCaptureEventRunner:
             cap = WindowsCapture(**capture_kwargs)
             self._session = cap
             self._control = None
+            self._software_frame_due = 0.0
+            self._software_limited_frames = 0
             if on_session_update is not None:
                 on_session_update(self._session, self._control)
 
@@ -294,6 +336,8 @@ class WindowsCaptureEventRunner:
                 if (is_hard_idle is not None and is_hard_idle()) or (is_paused is not None and is_paused()):
                     if on_paused is not None:
                         on_paused("paused")
+                    return
+                if not self._accept_software_paced_frame(capture_start_time):
                     return
                 self._log_capture_gap(capture_start_time, capture_kwargs)
                 self._log_capture_fps(capture_start_time)

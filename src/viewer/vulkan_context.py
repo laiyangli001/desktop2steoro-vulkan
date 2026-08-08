@@ -393,6 +393,7 @@ class VulkanContext:
         synchronization2_enabled: bool = False,
         compute_queue_index: int = 0,
         transfer_queue_index: int = 0,
+        frame_context_count: int = 3,
     ) -> "VulkanContext":
         vk = _import_vulkan()
         queue = vk.vkGetDeviceQueue(device, int(queue_family_index), 0)
@@ -428,6 +429,7 @@ class VulkanContext:
             transfer_queue_family_index=int(queue_family_index),
             compute_queue_index=int(compute_queue_index),
             transfer_queue_index=int(transfer_queue_index),
+            frame_context_count=int(frame_context_count),
         )
 
     @property
@@ -1026,6 +1028,7 @@ class VulkanContext:
         destination_array_layer: int = 0,
         source_rect: tuple[int, int, int, int] | None = None,
         destination_rect: tuple[int, int, int, int] | None = None,
+        destination_host_readable: bool = False,
     ) -> int:
         """Copy one registered Vulkan image layer with optional scaling."""
 
@@ -1106,7 +1109,21 @@ class VulkanContext:
 
         source_stage = source_state.stage_mask or vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
         destination_stage = destination_state.stage_mask or vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
-        final_destination_layout = vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+        final_destination_layout = (
+            vk.VK_IMAGE_LAYOUT_GENERAL
+            if destination_host_readable
+            else vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+        )
+        final_destination_access = (
+            vk.VK_ACCESS_HOST_READ_BIT
+            if destination_host_readable
+            else vk.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
+        )
+        final_destination_stage = (
+            vk.VK_PIPELINE_STAGE_HOST_BIT
+            if destination_host_readable
+            else vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
+        )
 
         def record(command_buffer: Any) -> None:
             to_transfer = [
@@ -1230,7 +1247,7 @@ class VulkanContext:
                 vk.VkImageMemoryBarrier(
                 sType=vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
                 srcAccessMask=vk.VK_ACCESS_TRANSFER_WRITE_BIT,
-                dstAccessMask=vk.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                dstAccessMask=final_destination_access,
                 oldLayout=vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 newLayout=final_destination_layout,
                 srcQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
@@ -1244,7 +1261,7 @@ class VulkanContext:
             vk.vkCmdPipelineBarrier(
                 command_buffer,
                 vk.VK_PIPELINE_STAGE_TRANSFER_BIT,
-                vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | destination_stage,
+                final_destination_stage | destination_stage,
                 0,
                 0,
                 None,
@@ -1265,8 +1282,8 @@ class VulkanContext:
             destination_key,
             ImageState(
                 layout=final_destination_layout,
-                access_mask=vk.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-                stage_mask=vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                access_mask=final_destination_access,
+                stage_mask=final_destination_stage,
                 queue_family_index=self.queue_family_index,
             ),
         )

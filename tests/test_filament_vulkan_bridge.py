@@ -169,6 +169,8 @@ def test_artemis_controller_lighting_matches_legacy_head_light() -> None:
     assert common["controller_screen_light_enabled"] is True
     assert common["controller_screen_light_intensity_lux"] == pytest.approx(500.0)
     assert common["controller_screen_light_sample_hz"] == pytest.approx(12.0)
+    assert common["glow_sample_hz"] == pytest.approx(30.0)
+    assert common["glow_smoothing_seconds"] == pytest.approx(0.10)
 
 
 @pytest.mark.parametrize("brand", ("HP", "INDEX", "PICO", "QUEST", "VIVE", "YVR"))

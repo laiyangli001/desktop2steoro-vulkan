@@ -42,8 +42,10 @@ from xr_viewer.core_openxr_vulkan import (
     _scaled_dimension,
     _select_swapchain_format,
     _select_vulkan_api_version,
+    _sbs_capture_options,
     _update_filament_camera,
     _update_filament_stereo_camera,
+    _vulkan_rgba_to_rgb,
 )
 from xr_viewer.controller_models import controller_button_local_position
 from xr_viewer.overlay_textures import build_controller_callout_rgba, build_keyboard_rgba
@@ -754,14 +756,39 @@ def test_tool_overlay_snapshots_present_fps_before_invalidating_quad_texture(
     assert presenter._tool_overlay_pending_xr_fps == pytest.approx(10.0)
 
 
-def test_tool_overlay_uses_runtime_producer_fps_for_sbs() -> None:
+def test_tool_overlay_does_not_report_runtime_producer_fps_as_presented_sbs() -> None:
     presenter = OpenXrVulkanPresenter(on_runtime_fps=lambda: 59.3)
     presenter._frame_now = 2.0
 
     presenter._update_tool_overlay_metrics(None)
 
     assert presenter._tool_overlay_xr_fps == 0.0
-    assert presenter._tool_overlay_sbs_fps == pytest.approx(59.3)
+    assert presenter._tool_overlay_sbs_fps == 0.0
+
+
+def test_presenter_inference_pressure_tracks_projection_and_queued_output() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._initialized = True
+    presenter.session_running = True
+
+    assert presenter.inference_backpressure_active() is False
+    presenter._projection_busy.set()
+    assert presenter.inference_backpressure_active() is True
+    presenter._projection_busy.clear()
+
+    presenter._pending_output = object()
+    assert presenter.inference_backpressure_active() is True
+    presenter._pending_output = None
+    presenter._presenter_commands.put_nowait(("submit_runtime_result", object()))
+    assert presenter.inference_backpressure_active() is True
+
+
+def test_openxr_vulkan_uses_deeper_command_ring_for_multi_pass_projection() -> None:
+    source = (Path(__file__).resolve().parents[1] /
+              "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
+
+    assert '"D2S_OPENXR_VULKAN_FRAME_CONTEXTS", 9, minimum=3.0' in source
+    assert "frame_context_count=frame_context_count" in source
 
 
 def test_depth_shortcut_triggers_quad_osd_with_runtime_value() -> None:
@@ -901,6 +928,20 @@ def test_presenter_defaults_to_composer_only_screen_path(monkeypatch) -> None:
     presenter = OpenXrVulkanPresenter()
     assert presenter._vulkan_projection_composer_requested is True
     assert not hasattr(presenter, "_filament_screen_image_enabled")
+
+
+def test_presenter_defaults_to_controller_overlay_after_composer(monkeypatch) -> None:
+    monkeypatch.delenv(
+        "D2S_FILAMENT_CONTROLLER_OVERLAY_AFTER_COMPOSER", raising=False
+    )
+    presenter = OpenXrVulkanPresenter()
+    assert presenter._filament_controller_overlay_after_composer is True
+
+
+def test_controller_overlay_after_composer_can_be_disabled(monkeypatch) -> None:
+    monkeypatch.setenv("D2S_FILAMENT_CONTROLLER_OVERLAY_AFTER_COMPOSER", "0")
+    presenter = OpenXrVulkanPresenter()
+    assert presenter._filament_controller_overlay_after_composer is False
 
 
 def test_projection_composer_defaults_on_and_can_be_explicitly_disabled(monkeypatch) -> None:
@@ -1373,6 +1414,60 @@ def test_host_image_upload_writes_padded_rows_without_pointer_cast() -> None:
     image.upload(np.arange(16, dtype=np.uint8).reshape(2, 2, 4))
     assert mapped[2:10] == bytes(range(8))
     assert mapped[14:22] == bytes(range(8, 16))
+
+
+def test_sbs_capture_options_are_explicit_and_delayed(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("D2S_SBS_CAPTURE_DIR", raising=False)
+    assert _sbs_capture_options() is None
+
+    monkeypatch.setenv("D2S_SBS_CAPTURE_DIR", str(tmp_path))
+    options = _sbs_capture_options()
+
+    assert options is not None
+    assert options["output_dir"] == tmp_path
+    assert options["delay_seconds"] == 15.0
+    assert options["sample_count"] == 300
+    assert options["image_count"] == 6
+    assert options["eye_width"] == 640
+
+
+def test_sbs_capture_converts_bgra_and_bottom_left_origin() -> None:
+    pixels = np.array(
+        [
+            [[[1, 2, 3, 255]]],
+            [[[4, 5, 6, 255]]],
+        ],
+        dtype=np.uint8,
+    ).reshape(2, 1, 4)
+
+    rgb = _vulkan_rgba_to_rgb(
+        pixels,
+        format_value=vk.VK_FORMAT_B8G8R8A8_UNORM,
+        vk=vk,
+        image_origin="bottom_left",
+    )
+
+    assert rgb.tolist() == [[[6, 5, 4]], [[3, 2, 1]]]
+
+
+def test_host_image_readback_reads_padded_rows_in_one_mapping() -> None:
+    from viewer.vulkan_resources import VulkanHostImage
+
+    image = VulkanHostImage.__new__(VulkanHostImage)
+    image.width = 2
+    image.height = 2
+    image._layout = SimpleNamespace(offset=2, rowPitch=12, size=26)
+    mapped = bytearray(26)
+    mapped[2:10] = bytes(range(8))
+    mapped[14:22] = bytes(range(8, 16))
+    image.vk = SimpleNamespace(
+        vkMapMemory=lambda *args: mapped,
+        vkUnmapMemory=lambda *args: None,
+    )
+    image.context = SimpleNamespace(device=object())
+    image.memory = object()
+
+    assert image.read_rgba().reshape(-1).tolist() == list(range(16))
 
 
 def test_presenter_uses_controller_action_mixin_initializer() -> None:
@@ -2603,10 +2698,22 @@ def test_projection_glow_maps_all_legacy_modes(mode: str, mode_value: int) -> No
     assert np.frombuffer(state[1], dtype="<f4")[3] == pytest.approx(mode_value)
 
 
-def test_projection_glow_keeps_legacy_geometry_density_and_surround_order() -> None:
+def test_projection_glow_uses_reduced_surround_density_and_stable_order() -> None:
     assert VulkanProjectionScreenPass._GLOW_SEGMENTS == 64
-    assert VulkanProjectionScreenPass._GLOW_SHELL_SEGMENTS == 96
-    assert VulkanProjectionScreenPass._SURROUND_VERTEX_COUNT == 4 * 48 * 96 * 6
+    assert VulkanProjectionScreenPass._GLOW_SHELL_SEGMENTS == 48
+    assert VulkanProjectionScreenPass._GLOW_SHELL_RADIAL_SEGMENTS == 24
+    assert VulkanProjectionScreenPass._SURROUND_VERTEX_COUNT == 4 * 24 * 48 * 6
+
+    pipeline_source = inspect.getsource(VulkanProjectionScreenPass._create)
+    surround_setup = pipeline_source.split("self.surround_pipeline", 1)[1]
+    assert "maximum=True" in surround_setup
+    assert "vk.VK_BLEND_OP_MAX if maximum else vk.VK_BLEND_OP_ADD" in pipeline_source
+
+    shader = (
+        Path(__file__).parents[1] / "shaders" / "d2s_projection_glow_vert.vert"
+    ).read_text(encoding="utf-8")
+    assert "const int GLOW_SHELL_SEGMENTS = 48;" in shader
+    assert "const int SHELL_RADIAL_SEGMENTS = 24;" in shader
 
     source = inspect.getsource(
         OpenXrVulkanPresenter._render_vulkan_projection_composer
@@ -4021,6 +4128,56 @@ def test_copy_image_reads_selected_source_layer_into_destination_layer_zero() ->
     assert copies[0].dstSubresource.baseArrayLayer == 0
     assert barriers[1][0].subresourceRange.baseArrayLayer == 1
     assert barriers[1][1].subresourceRange.baseArrayLayer == 0
+
+
+def test_copy_image_can_leave_destination_host_readable() -> None:
+    barriers = []
+
+    class RecordingVk:
+        def __getattr__(self, name):
+            return getattr(vk, name)
+
+        def vkCmdPipelineBarrier(self, *args):
+            barriers.append(args[-1])
+
+        def vkCmdCopyImage(self, *_args):
+            return None
+
+    context = object.__new__(VulkanContext)
+    context.vk = RecordingVk()
+    context.queue_family_index = 0
+    context._closed = False
+    context._device_lost = False
+    context._image_states = ImageStateTracker(default_queue_family_index=0)
+    context.submit_on = lambda _role, record, **_kwargs: (record("commands"), 9)[1]
+    source = SimpleNamespace(
+        context=context,
+        image=vk.ffi.cast("VkImage", 3),
+        width=8,
+        height=4,
+        format=vk.VK_FORMAT_R8G8B8A8_UNORM,
+    )
+    destination = SimpleNamespace(
+        context=context,
+        image=vk.ffi.cast("VkImage", 4),
+        width=8,
+        height=4,
+        format=vk.VK_FORMAT_R8G8B8A8_UNORM,
+    )
+    context._image_states.update(3, ImageState(10, 11, 12, 0))
+    context._image_states.update(4, ImageState(20, 21, 22, 0))
+
+    assert context.copy_image(
+        source, destination, destination_host_readable=True
+    ) == 9
+    final_barrier = barriers[1][1]
+    assert final_barrier.newLayout == vk.VK_IMAGE_LAYOUT_GENERAL
+    assert final_barrier.dstAccessMask == vk.VK_ACCESS_HOST_READ_BIT
+    destination_state = context._image_states.get(
+        4, undefined_layout=vk.VK_IMAGE_LAYOUT_UNDEFINED
+    )
+    assert destination_state.layout == vk.VK_IMAGE_LAYOUT_GENERAL
+    assert destination_state.access_mask == vk.VK_ACCESS_HOST_READ_BIT
 
 
 def test_standalone_vulkan_context_smoke() -> None:
