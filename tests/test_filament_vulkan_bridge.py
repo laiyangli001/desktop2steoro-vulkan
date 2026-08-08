@@ -154,6 +154,10 @@ def test_artemis_controller_lighting_matches_legacy_head_light() -> None:
     assert "config->top_light_intensity_candela" in native_lighting
     assert "bridge_material_set_controller_screen_light" in native_lighting
     assert ".lightChannel(0, false).lightChannel(1, true)" in native_lighting
+    material_header = (root / "native/filament/bridge/bridge_material.h").read_text(
+        encoding="utf-8"
+    )
+    assert "struct FilamentBridgeLightingConfig;" in material_header
 
     common = json.loads(
         (root / "src/xr_viewer/environments/common.json").read_text(encoding="utf-8")

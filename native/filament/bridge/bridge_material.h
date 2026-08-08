@@ -1,6 +1,7 @@
 #pragma once
 
 struct FilamentBridge;
+struct FilamentBridgeLightingConfig;
 struct FilamentPreview;
 
 bool bridge_material_configure_color_pipeline(FilamentBridge* bridge);
