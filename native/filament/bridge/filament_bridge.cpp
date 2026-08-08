@@ -203,6 +203,20 @@ int filament_bridge_set_controller_ambient_light(
             bridge, red, green, blue, enabled);
 }
 
+int filament_bridge_set_lighting_config(
+        FilamentBridge* bridge, const FilamentBridgeLightingConfig* config) {
+    return bridge_material_set_lighting_config(bridge, config);
+}
+
+int filament_bridge_set_controller_screen_light(
+        FilamentBridge* bridge, float red, float green, float blue,
+        float intensity_lux, float direction_x, float direction_y,
+        float direction_z, int cast_shadows, int enabled) {
+    return bridge_material_set_controller_screen_light(
+            bridge, red, green, blue, intensity_lux,
+            direction_x, direction_y, direction_z, cast_shadows, enabled);
+}
+
 int filament_bridge_set_fill_light(
         FilamentBridge* bridge,
         float red, float green, float blue,
@@ -340,6 +354,13 @@ int filament_preview_set_scene_exposure(
 int filament_preview_set_ambient_light(
         FilamentPreview* preview, float red, float green, float blue) {
     return preview_material_set_ambient_light(preview, red, green, blue);
+}
+
+int filament_preview_set_ambient_light_with_intensity(
+        FilamentPreview* preview, float red, float green, float blue,
+        float intensity_lux) {
+    return preview_material_set_ambient_light_with_intensity(
+            preview, red, green, blue, intensity_lux);
 }
 
 int filament_preview_set_fill_light(

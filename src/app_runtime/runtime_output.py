@@ -103,7 +103,11 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
         now = time.monotonic()
         if (
             self._screen_light_pending is not None
-            or now - self._screen_light_last_submit < 0.25
+            or now - self._screen_light_last_submit < (
+                1.0 / max(1.0, float(getattr(
+                    self.presenter, "_controller_screen_light_sample_hz", 12.0
+                )))
+            )
         ):
             return
         try:
@@ -314,7 +318,10 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
             backend = self._glow_gpu_backend
             backend.poll()
             now = time.monotonic()
-            submit_interval = (1.0 / 12.0) if gpu_glow_active else 0.25
+            sample_hz = max(1.0, float(getattr(
+                self.presenter, "_controller_screen_light_sample_hz", 12.0
+            )))
+            submit_interval = 1.0 / max(12.0 if gpu_glow_active else 1.0, sample_hz)
             if (
                 not self._glow_gpu_submission_disabled
                 and now - self._glow_gpu_last_submit >= submit_interval

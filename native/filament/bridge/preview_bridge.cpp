@@ -227,16 +227,6 @@ FilamentPreview* preview_bridge_create(void* native_window, uint32_t width, uint
         return preview.release();
     }
     preview->view->setViewport(filament::Viewport{0, 0, width, height});
-    preview->fill_light = utils::EntityManager::get().create();
-    filament::LightManager::Builder(filament::LightManager::Type::DIRECTIONAL)
-            .color(filament::LinearColor{1.0f, 0.88f, 0.78f})
-            .intensity(100000.0f)
-            .direction({-0.35f, -1.0f, -0.55f})
-            .lightChannel(0, false)
-            .lightChannel(1, true)
-            .castShadows(false)
-            .build(*preview->engine, preview->fill_light);
-    preview->scene->addEntity(preview->fill_light);
     filament::gltfio::AssetConfiguration config{preview->engine, preview->materials};
     preview->asset_loader = filament::gltfio::AssetLoader::create(config);
     if (!preview->asset_loader) {

@@ -421,6 +421,72 @@ def test_controller_brand_switch_refreshes_ambient_light() -> None:
     ]
 
 
+def test_controller_lighting_config_is_resolved_outside_native_bridge() -> None:
+    class Bridge:
+        def __init__(self) -> None:
+            self.config = None
+
+        def set_lighting_config(self, **config) -> bool:
+            self.config = config
+            return True
+
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_ambient_light_color = (0.06, 0.05, 0.05)
+    presenter._controller_hdr_lighting = True
+    presenter._controller_brand = presenter._controller_brands["PICO"]
+    presenter._controller_hdr_ambient_light_color_override = (0.2, 0.3, 0.4)
+    bridge = Bridge()
+
+    presenter._apply_filament_bridge_lighting(bridge)
+
+    assert bridge.config["environment_ambient_intensity_lux"] == pytest.approx(30000.0)
+    assert bridge.config["controller_ambient_intensity_lux"] == pytest.approx(6000.0)
+    assert bridge.config["controller_ambient_color"] == pytest.approx((0.2, 0.3, 0.4))
+    assert bridge.config["head_light_intensity_candela"] == pytest.approx(1400.0)
+    assert bridge.config["top_light_intensity_candela"] == pytest.approx(2000.0)
+    assert bridge.config["head_light_offset"] == pytest.approx((0.0, 0.05, 0.0))
+    assert bridge.config["top_light_offset"] == pytest.approx((0.0, 0.45, -0.18))
+
+
+def test_controller_screen_light_tracks_linear_screen_color_in_foreground() -> None:
+    class Bridge:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def set_controller_screen_light(self, *args) -> bool:
+            self.calls.append(args)
+            return True
+
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_screen = (
+        (1.0, 2.0, -3.0), 2.4, 1.35, (0.0, 0.0, 0.0)
+    )
+    presenter._controller_screen_light_smoothing_seconds = 0.0
+    bridge = Bridge()
+    frame = SimpleNamespace(metadata={
+        "screen_light_linear_rgb": (0.0, 0.0, 1.0),
+        "screen_light_sample_path": "vulkan_compute_reduction",
+    })
+
+    presenter._update_controller_screen_light(frame, bridge)
+
+    color, intensity, direction, shadows, enabled = bridge.calls[-1]
+    assert color == pytest.approx((0.35, 0.35, 1.0))
+    assert intensity == pytest.approx(500.0 * 0.0722)
+    assert direction == pytest.approx((0.0, 0.0, 1.0))
+    assert shadows is False
+    assert enabled is True
+
+    presenter._filament_screen = (
+        (0.0, 0.0, -20.0), 23.0, 13.0, (0.0, 0.0, 0.0)
+    )
+    presenter._grip_mat_l = np.eye(4, dtype=np.float64)
+    presenter._update_controller_screen_light(frame, bridge)
+    _color, distant_intensity, distant_direction, *_rest = bridge.calls[-1]
+    assert distant_intensity == pytest.approx(500.0 * 0.0722)
+    assert distant_direction == pytest.approx((0.0, 0.0, 1.0))
+
+
 def test_controller_button_position_does_not_require_opengl_renderer(
     monkeypatch,
 ) -> None:

@@ -447,9 +447,29 @@ class OpenXrVulkanConfig:
     filament_screen_width: float = _DEFAULT_XR_HEADSET_PRESET.width_m
     filament_screen_distance: float = _DEFAULT_XR_HEADSET_PRESET.distance_m
     filament_ambient_light_color: tuple[float, float, float] = (0.14, 0.13, 0.15)
+    filament_ambient_light_intensity_lux: float = 30000.0
+    filament_controller_ambient_light_intensity_lux: float = 6000.0
+    filament_controller_hdr_ambient_light_intensity_lux: float = 6000.0
+    filament_controller_light_intensity_candela: float = 2000.0
     filament_fill_light_color: tuple[float, float, float] = (0.55, 0.55, 0.58)
     filament_fill_light_intensity: float = 1.0
     filament_fill_light_direction: tuple[float, float, float] = (-0.35, -1.0, -0.55)
+    filament_controller_head_light_weight: float = 0.70
+    filament_controller_top_light_weight: float = 1.00
+    filament_controller_top_light_color: tuple[float, float, float] = (0.95, 0.97, 1.0)
+    filament_controller_head_light_offset: tuple[float, float, float] = (0.0, 0.05, 0.0)
+    filament_controller_top_light_offset: tuple[float, float, float] = (0.0, 0.45, -0.18)
+    filament_controller_head_light_falloff: float = 2.0
+    filament_controller_top_light_falloff: float = 2.0
+    filament_controller_head_light_cast_shadows: bool = False
+    filament_controller_top_light_cast_shadows: bool = False
+    filament_controller_screen_light_enabled: bool = True
+    filament_controller_screen_light_intensity_lux: float = 500.0
+    filament_controller_screen_light_saturation: float = 0.65
+    filament_controller_screen_light_max_luminance: float = 0.40
+    filament_controller_screen_light_smoothing_seconds: float = 0.18
+    filament_controller_screen_light_sample_hz: float = 12.0
+    filament_controller_screen_light_cast_shadows: bool = False
     openxr_no_headset_retry_interval: float = 3.0
     openxr_standby_retry_interval: float = 3.0
     openxr_standby_retry_max_interval: float = 30.0
@@ -684,6 +704,20 @@ class OpenXrVulkanPresenter(
         self._filament_scene_exposure = self.config.filament_scene_exposure_ev
         self._filament_skybox_brightness = self.config.filament_skybox_brightness
         self._filament_ambient_light_color = self.config.filament_ambient_light_color
+        self._controller_ambient_light_color_override = None
+        self._controller_hdr_ambient_light_color_override = None
+        self._filament_ambient_light_intensity_lux = (
+            self.config.filament_ambient_light_intensity_lux
+        )
+        self._controller_ambient_light_intensity_lux = (
+            self.config.filament_controller_ambient_light_intensity_lux
+        )
+        self._controller_hdr_ambient_light_intensity_lux = (
+            self.config.filament_controller_hdr_ambient_light_intensity_lux
+        )
+        self._controller_light_intensity_candela = (
+            self.config.filament_controller_light_intensity_candela
+        )
         self._last_screen_resolution_status = None
         self._last_screen_sampling_status = None
         self._active_screen_sampling_plan: ScreenSamplingPlan | None = None
@@ -691,6 +725,44 @@ class OpenXrVulkanPresenter(
         self._filament_fill_light_color = self.config.filament_fill_light_color
         self._filament_fill_light_intensity = self.config.filament_fill_light_intensity
         self._filament_fill_light_direction = self.config.filament_fill_light_direction
+        self._controller_head_light_weight = self.config.filament_controller_head_light_weight
+        self._controller_top_light_weight = self.config.filament_controller_top_light_weight
+        self._controller_top_light_color = self.config.filament_controller_top_light_color
+        self._controller_head_light_offset = self.config.filament_controller_head_light_offset
+        self._controller_top_light_offset = self.config.filament_controller_top_light_offset
+        self._controller_head_light_falloff = self.config.filament_controller_head_light_falloff
+        self._controller_top_light_falloff = self.config.filament_controller_top_light_falloff
+        self._controller_head_light_cast_shadows = (
+            self.config.filament_controller_head_light_cast_shadows
+        )
+        self._controller_top_light_cast_shadows = (
+            self.config.filament_controller_top_light_cast_shadows
+        )
+        self._controller_screen_light_enabled = (
+            self.config.filament_controller_screen_light_enabled
+        )
+        self._controller_screen_light_intensity_lux = (
+            self.config.filament_controller_screen_light_intensity_lux
+        )
+        self._controller_screen_light_saturation = (
+            self.config.filament_controller_screen_light_saturation
+        )
+        self._controller_screen_light_max_luminance = (
+            self.config.filament_controller_screen_light_max_luminance
+        )
+        self._controller_screen_light_smoothing_seconds = (
+            self.config.filament_controller_screen_light_smoothing_seconds
+        )
+        self._controller_screen_light_sample_hz = (
+            self.config.filament_controller_screen_light_sample_hz
+        )
+        self._controller_screen_light_cast_shadows = (
+            self.config.filament_controller_screen_light_cast_shadows
+        )
+        self._controller_screen_light_smoothed_color = np.zeros(3, dtype=np.float64)
+        self._controller_screen_light_smoothed_intensity = 0.0
+        self._controller_screen_light_status = None
+        self._controller_screen_light_applied = False
         self._filament_lighting_presets: tuple[dict[str, Any], ...] = ()
         self._filament_lighting_preset_index = 0
         self._filament_glow_mode = "off"
@@ -945,6 +1017,8 @@ class OpenXrVulkanPresenter(
 
     def _controller_ambient_light_color(self) -> tuple[float, float, float]:
         """Return the room ambient color without controller compensation."""
+        if self._controller_ambient_light_color_override is not None:
+            return tuple(self._controller_ambient_light_color_override)
         return tuple(float(component) for component in self._filament_ambient_light_color)
 
     def _controller_hdr_ambient_light_color(self) -> tuple[float, float, float]:
@@ -953,10 +1027,157 @@ class OpenXrVulkanPresenter(
             0.0,
             float(getattr(self._controller_brand, "ambient_light_multiplier", 1.0)),
         )
+        base_color = (
+            self._controller_hdr_ambient_light_color_override
+            if self._controller_hdr_ambient_light_color_override is not None
+            else self._filament_ambient_light_color
+        )
         return tuple(
             float(component) * multiplier
-            for component in self._filament_ambient_light_color
+            for component in base_color
         )
+
+    def _apply_filament_bridge_lighting(self, bridge=None) -> None:
+        bridge = bridge or self.filament_bridge
+        if bridge is None:
+            return
+        controller_ambient_intensity = (
+            self._controller_hdr_ambient_light_intensity_lux
+            if self._controller_hdr_lighting
+            else self._controller_ambient_light_intensity_lux
+        )
+        if hasattr(bridge, "set_lighting_config") and bridge.set_lighting_config(
+            environment_ambient_color=self._controller_ambient_light_color(),
+            environment_ambient_intensity_lux=self._filament_ambient_light_intensity_lux,
+            controller_ambient_color=self._controller_hdr_ambient_light_color(),
+            controller_ambient_intensity_lux=controller_ambient_intensity,
+            controller_ambient_enabled=True,
+            head_light_color=self._filament_fill_light_color,
+            head_light_intensity_candela=(
+                self._controller_light_intensity_candela
+                * self._filament_fill_light_intensity
+                * self._controller_head_light_weight
+            ),
+            head_light_offset=self._controller_head_light_offset,
+            head_light_falloff=self._controller_head_light_falloff,
+            head_light_cast_shadows=self._controller_head_light_cast_shadows,
+            top_light_color=self._controller_top_light_color,
+            top_light_intensity_candela=(
+                self._controller_light_intensity_candela
+                * self._filament_fill_light_intensity
+                * self._controller_top_light_weight
+            ),
+            top_light_offset=self._controller_top_light_offset,
+            top_light_falloff=self._controller_top_light_falloff,
+            top_light_cast_shadows=self._controller_top_light_cast_shadows,
+        ):
+            return
+        if hasattr(bridge, "set_ambient_light"):
+            bridge.set_ambient_light(self._controller_ambient_light_color())
+        if hasattr(bridge, "set_controller_ambient_light"):
+            bridge.set_controller_ambient_light(
+                self._controller_hdr_ambient_light_color(), True
+            )
+        if hasattr(bridge, "set_fill_light"):
+            bridge.set_fill_light(
+                self._filament_fill_light_color,
+                self._filament_fill_light_intensity,
+                self._filament_fill_light_direction,
+            )
+
+    def _update_controller_screen_light(
+        self, frame: VulkanStereoOutputFrame | None, bridge: Any
+    ) -> None:
+        setter = getattr(bridge, "set_controller_screen_light", None)
+        metadata = dict(getattr(frame, "metadata", None) or {})
+        sample = metadata.get("screen_light_linear_rgb")
+        active = bool(
+            callable(setter)
+            and self._controller_screen_light_enabled
+            and self._filament_screen is not None
+            and isinstance(sample, (list, tuple))
+            and len(sample) >= 3
+        )
+        if not callable(setter):
+            return
+        if not active:
+            if self._controller_screen_light_applied:
+                setter(
+                    (0.0, 0.0, 0.0), 0.0, (0.0, 0.0, 1.0),
+                    False, False,
+                )
+            self._controller_screen_light_applied = False
+            self._controller_screen_light_smoothed_color.fill(0.0)
+            self._controller_screen_light_smoothed_intensity = 0.0
+            return
+
+        rgb = np.maximum(0.0, np.asarray(sample[:3], dtype=np.float64))
+        luminance = float(np.dot(rgb, np.asarray((0.2126, 0.7152, 0.0722))))
+        max_luminance = max(0.0, float(self._controller_screen_light_max_luminance))
+        target_luminance = min(luminance, max_luminance)
+        maximum = float(np.max(rgb))
+        if maximum > 1e-6 and target_luminance > 0.0:
+            chroma = rgb / maximum
+            saturation = max(0.0, min(1.0, float(
+                self._controller_screen_light_saturation
+            )))
+            target_color = (1.0 - saturation) + saturation * chroma
+        else:
+            target_color = np.zeros(3, dtype=np.float64)
+        screen_pose = self._filament_screen_pose_mat4().astype(np.float64)
+        screen_position = screen_pose[:3, 3]
+        controller_positions = [
+            np.asarray(matrix[:3, 3], dtype=np.float64)
+            for matrix in (self._grip_mat_l, self._grip_mat_r)
+            if matrix is not None
+        ]
+        if controller_positions:
+            light_target = np.mean(controller_positions, axis=0)
+        elif self._head_position_w is not None:
+            light_target = np.asarray(self._head_position_w, dtype=np.float64)
+        else:
+            light_target = screen_position + screen_pose[:3, 2]
+        light_direction = light_target - screen_position
+        direction_length = float(np.linalg.norm(light_direction))
+        if direction_length > 1e-6:
+            light_direction /= direction_length
+        else:
+            light_direction = screen_pose[:3, 2]
+        target_intensity = (
+            max(0.0, float(self._controller_screen_light_intensity_lux))
+            * target_luminance
+        )
+        smoothing_seconds = max(
+            0.0, float(self._controller_screen_light_smoothing_seconds)
+        )
+        dt = max(0.0, min(0.25, float(self._last_frame_dt)))
+        alpha = 1.0 if smoothing_seconds <= 0.0 else (
+            1.0 - math.exp(-dt / smoothing_seconds)
+        )
+        self._controller_screen_light_smoothed_color += alpha * (
+            target_color - self._controller_screen_light_smoothed_color
+        )
+        self._controller_screen_light_smoothed_intensity += alpha * (
+            target_intensity - self._controller_screen_light_smoothed_intensity
+        )
+        applied = setter(
+            tuple(float(value) for value in self._controller_screen_light_smoothed_color),
+            float(self._controller_screen_light_smoothed_intensity),
+            tuple(float(value) for value in light_direction),
+            bool(self._controller_screen_light_cast_shadows),
+            True,
+        )
+        if not applied:
+            return
+        self._controller_screen_light_applied = True
+        status = str(metadata.get("screen_light_sample_path", "unknown"))
+        if status != self._controller_screen_light_status:
+            self._controller_screen_light_status = status
+            print(
+                "Filament controller screen light active: "
+                f"sample={status} foreground_only=True",
+                flush=True,
+            )
 
     def initialize(self) -> None:
         if self._initialized:
@@ -1476,6 +1697,19 @@ class OpenXrVulkanPresenter(
             ("env_exposure", "_filament_scene_exposure"),
             ("preview_skybox_brightness", "_filament_skybox_brightness"),
             ("controller_head_light_intensity", "_filament_fill_light_intensity"),
+            ("env_ambient_light_intensity_lux", "_filament_ambient_light_intensity_lux"),
+            ("controller_ambient_light_intensity_lux", "_controller_ambient_light_intensity_lux"),
+            ("controller_hdr_ambient_light_intensity_lux", "_controller_hdr_ambient_light_intensity_lux"),
+            ("controller_light_intensity_candela", "_controller_light_intensity_candela"),
+            ("controller_head_light_weight", "_controller_head_light_weight"),
+            ("controller_top_light_weight", "_controller_top_light_weight"),
+            ("controller_head_light_falloff", "_controller_head_light_falloff"),
+            ("controller_top_light_falloff", "_controller_top_light_falloff"),
+            ("controller_screen_light_intensity_lux", "_controller_screen_light_intensity_lux"),
+            ("controller_screen_light_saturation", "_controller_screen_light_saturation"),
+            ("controller_screen_light_max_luminance", "_controller_screen_light_max_luminance"),
+            ("controller_screen_light_smoothing_seconds", "_controller_screen_light_smoothing_seconds"),
+            ("controller_screen_light_sample_hz", "_controller_screen_light_sample_hz"),
         ):
             if key in preset:
                 try:
@@ -1484,7 +1718,12 @@ class OpenXrVulkanPresenter(
                     pass
         for keys, attribute in (
             (("env_ambient_color", "ambient_color"), "_filament_ambient_light_color"),
-            (("env_head_light_color", "head_light_color"), "_filament_fill_light_color"),
+            (("controller_head_light_color", "env_head_light_color", "head_light_color"), "_filament_fill_light_color"),
+            (("controller_ambient_light_color",), "_controller_ambient_light_color_override"),
+            (("controller_hdr_ambient_light_color",), "_controller_hdr_ambient_light_color_override"),
+            (("controller_top_light_color",), "_controller_top_light_color"),
+            (("controller_head_light_offset",), "_controller_head_light_offset"),
+            (("controller_top_light_offset",), "_controller_top_light_offset"),
         ):
             for key in keys:
                 value = preset.get(key)
@@ -1494,6 +1733,14 @@ class OpenXrVulkanPresenter(
                     except (TypeError, ValueError):
                         pass
                     break
+        for key, attribute in (
+            ("controller_head_light_cast_shadows", "_controller_head_light_cast_shadows"),
+            ("controller_top_light_cast_shadows", "_controller_top_light_cast_shadows"),
+            ("controller_screen_light_enabled", "_controller_screen_light_enabled"),
+            ("controller_screen_light_cast_shadows", "_controller_screen_light_cast_shadows"),
+        ):
+            if key in preset:
+                setattr(self, attribute, bool(preset[key]))
         direction = preset.get("env_fill_light_direction", preset.get("fill_light_direction"))
         if isinstance(direction, (list, tuple)) and len(direction) >= 3:
             try:
@@ -1502,24 +1749,43 @@ class OpenXrVulkanPresenter(
                 )
             except (TypeError, ValueError):
                 pass
+        for attribute in (
+            "_filament_ambient_light_intensity_lux",
+            "_controller_ambient_light_intensity_lux",
+            "_controller_hdr_ambient_light_intensity_lux",
+            "_controller_light_intensity_candela",
+            "_controller_head_light_weight",
+            "_controller_top_light_weight",
+        ):
+            setattr(self, attribute, max(0.0, float(getattr(self, attribute))))
+        self._controller_head_light_falloff = max(
+            0.001, float(self._controller_head_light_falloff)
+        )
+        self._controller_top_light_falloff = max(
+            0.001, float(self._controller_top_light_falloff)
+        )
+        self._controller_screen_light_intensity_lux = max(
+            0.0, float(self._controller_screen_light_intensity_lux)
+        )
+        self._controller_screen_light_saturation = max(
+            0.0, min(1.0, float(self._controller_screen_light_saturation))
+        )
+        self._controller_screen_light_max_luminance = max(
+            0.0, float(self._controller_screen_light_max_luminance)
+        )
+        self._controller_screen_light_smoothing_seconds = max(
+            0.0, float(self._controller_screen_light_smoothing_seconds)
+        )
+        self._controller_screen_light_sample_hz = max(
+            1.0, float(self._controller_screen_light_sample_hz)
+        )
         self._apply_filament_glow_profile_fields(preset)
         if not apply_bridge or self.filament_bridge is None:
             return
         bridge = self.filament_bridge
         bridge.set_scene_exposure(self._filament_scene_exposure)
         bridge.set_skybox_brightness(self._filament_skybox_brightness)
-        if hasattr(bridge, "set_ambient_light"):
-            bridge.set_ambient_light(self._controller_ambient_light_color())
-        if hasattr(bridge, "set_controller_ambient_light"):
-            bridge.set_controller_ambient_light(
-                self._controller_hdr_ambient_light_color(),
-                True,
-            )
-        bridge.set_fill_light(
-            self._filament_fill_light_color,
-            self._filament_fill_light_intensity,
-            self._filament_fill_light_direction,
-        )
+        self._apply_filament_bridge_lighting(bridge)
 
     def _cycle_shortcut_screen_preset(self) -> None:
         if self._filament_screen is None:
@@ -1842,13 +2108,8 @@ class OpenXrVulkanPresenter(
         ambient_multiplier = float(
             getattr(next_brand, "ambient_light_multiplier", 1.0)
         )
-        if bridge is not None and hasattr(bridge, "set_ambient_light"):
-            bridge.set_ambient_light(self._controller_ambient_light_color())
-        if bridge is not None and hasattr(bridge, "set_controller_ambient_light"):
-            bridge.set_controller_ambient_light(
-                self._controller_hdr_ambient_light_color(),
-                True,
-            )
+        if bridge is not None:
+            self._apply_filament_bridge_lighting(bridge)
         anchor = self._resolve_controller_b_button_local(force=True)
         anchor_text = (
             "unresolved"
@@ -3935,18 +4196,7 @@ class OpenXrVulkanPresenter(
                 )
             bridge.set_scene_exposure(self._filament_scene_exposure)
             bridge.set_skybox_brightness(self._filament_skybox_brightness)
-            if hasattr(bridge, "set_ambient_light"):
-                bridge.set_ambient_light(self._controller_ambient_light_color())
-            if hasattr(bridge, "set_controller_ambient_light"):
-                bridge.set_controller_ambient_light(
-                    self._controller_hdr_ambient_light_color(),
-                    True,
-                )
-            bridge.set_fill_light(
-                self._filament_fill_light_color,
-                self._filament_fill_light_intensity,
-                self._filament_fill_light_direction,
-            )
+            self._apply_filament_bridge_lighting(bridge)
             self.filament_bridge = bridge
         except Exception:
             bridge.close()
@@ -4983,9 +5233,12 @@ class OpenXrVulkanPresenter(
             self._filament_ambient_light_color = tuple(
                 max(0.0, float(value)) for value in ambient_color[:3]
             )
-        # Match the legacy controller renderer: a unit-less head light follows
-        # the eye, while the Filament bridge supplies the fixed top fill.
-        fill_color = profile.get("env_head_light_color", self._filament_fill_light_color)
+        # Resolve host-authored controller lights; the native bridge owns no
+        # color, intensity, or placement defaults.
+        fill_color = profile.get(
+            "controller_head_light_color",
+            profile.get("env_head_light_color", self._filament_fill_light_color),
+        )
         fill_direction = self._filament_fill_light_direction
         if isinstance(fill_color, (list, tuple)) and len(fill_color) >= 3:
             self._filament_fill_light_color = tuple(
@@ -4995,9 +5248,58 @@ class OpenXrVulkanPresenter(
             self._filament_fill_light_direction = tuple(
                 float(value) for value in fill_direction[:3]
             )
+        for key, attribute in (
+            ("controller_ambient_light_color", "_controller_ambient_light_color_override"),
+            ("controller_hdr_ambient_light_color", "_controller_hdr_ambient_light_color_override"),
+        ):
+            value = profile.get(key)
+            if isinstance(value, (list, tuple)) and len(value) >= 3:
+                setattr(self, attribute, tuple(max(0.0, float(item)) for item in value[:3]))
         self._filament_fill_light_intensity = float(
             profile.get("controller_head_light_intensity", 1.0)
         )
+        for key, attribute in (
+            ("env_ambient_light_intensity_lux", "_filament_ambient_light_intensity_lux"),
+            ("controller_ambient_light_intensity_lux", "_controller_ambient_light_intensity_lux"),
+            ("controller_hdr_ambient_light_intensity_lux", "_controller_hdr_ambient_light_intensity_lux"),
+            ("controller_light_intensity_candela", "_controller_light_intensity_candela"),
+            ("controller_head_light_weight", "_controller_head_light_weight"),
+            ("controller_top_light_weight", "_controller_top_light_weight"),
+            ("controller_head_light_falloff", "_controller_head_light_falloff"),
+            ("controller_top_light_falloff", "_controller_top_light_falloff"),
+            ("controller_screen_light_intensity_lux", "_controller_screen_light_intensity_lux"),
+            ("controller_screen_light_saturation", "_controller_screen_light_saturation"),
+            ("controller_screen_light_max_luminance", "_controller_screen_light_max_luminance"),
+            ("controller_screen_light_smoothing_seconds", "_controller_screen_light_smoothing_seconds"),
+            ("controller_screen_light_sample_hz", "_controller_screen_light_sample_hz"),
+        ):
+            if key in profile:
+                minimum = 0.001 if key.endswith("_falloff") else 0.0
+                setattr(self, attribute, max(minimum, float(profile[key])))
+        for key, attribute in (
+            ("controller_top_light_color", "_controller_top_light_color"),
+            ("controller_head_light_offset", "_controller_head_light_offset"),
+            ("controller_top_light_offset", "_controller_top_light_offset"),
+        ):
+            value = profile.get(key)
+            if isinstance(value, (list, tuple)) and len(value) >= 3:
+                setattr(self, attribute, tuple(float(item) for item in value[:3]))
+        self._controller_head_light_cast_shadows = bool(profile.get(
+            "controller_head_light_cast_shadows",
+            self._controller_head_light_cast_shadows,
+        ))
+        self._controller_top_light_cast_shadows = bool(profile.get(
+            "controller_top_light_cast_shadows",
+            self._controller_top_light_cast_shadows,
+        ))
+        self._controller_screen_light_enabled = bool(profile.get(
+            "controller_screen_light_enabled",
+            self._controller_screen_light_enabled,
+        ))
+        self._controller_screen_light_cast_shadows = bool(profile.get(
+            "controller_screen_light_cast_shadows",
+            self._controller_screen_light_cast_shadows,
+        ))
         self._controller_hdr_lighting = bool(
             profile.get("controller_hdr_lighting", False)
         )
@@ -5329,6 +5631,9 @@ class OpenXrVulkanPresenter(
             # Controller transforms and GLB animation state are shared by
             # both eye Views. Updating them twice adds owner-thread work
             # without changing either eye's scene state.
+            self._update_controller_screen_light(
+                presentation_frame, self.filament_bridge
+            )
             self._update_filament_controllers(self.filament_bridge)
             if hasattr(self.filament_bridge, "apply_animations"):
                 self.filament_bridge.apply_animations(animation_time)

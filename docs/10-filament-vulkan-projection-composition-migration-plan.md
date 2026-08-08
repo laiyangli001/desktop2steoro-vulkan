@@ -22,16 +22,17 @@
 
 ## 2. 明确删减的照明范围
 
-手柄照明只保留两类显式参数：
+手柄照明保留三类显式参数：
 
 1. 项目设置的基础环境光。
 2. 项目设置的头顶光。
+3. Vulkan 屏幕平均色驱动的低强度动态补光。
 
-删除屏幕放射光/屏幕中心聚光灯及其所有派生状态：
+删除依赖 Filament 屏幕 Renderable 和屏幕纹理交接的旧放射光路径：
 
-- 不再从屏幕图像计算平均色来驱动手柄光照。
-- 不再创建 Filament 屏幕光实体。
-- 不再保留 `screen_light_color`、`screen_light_intensity`、屏幕法线衰减和屏幕光更新 ABI。
+- 不将屏幕纹理重新导入 Filament，也不恢复 Filament 屏幕几何。
+- 复用 Vulkan/CUDA 异步 reduction 的线性平均色，由 Python 完成平滑、限幅和 Profile 参数换算。
+- Bridge 只维护一盏朝屏幕到手柄方向照射、仅开启手柄 light channel 的动态方向光。
 - Glow 仍作为视觉效果处理，但不参与手柄照明。
 
 ## 3. 目标架构
@@ -140,13 +141,26 @@ Lanczos2 或 RCAS。最终 Projection shader 保持直接采样，避免把清�
 - 颜色/深度以 timeline 或等价完成点交给 Vulkan Composer。
 - `VulkanStereoOutputFrame` 预留成对的 `left_depth`/`right_depth` 资源字段；两眼必须
   同时提供，禁止把颜色图或 CPU 深度替代真实 GPU 深度附件。
-- 基础环境光和头顶光保留为唯一手柄照明来源。
-- 删除屏幕放射光实体、平均色到手柄照明的路径和对应 ABI。
+- 基础环境光和头顶光为稳定照明，屏幕平均色只提供有界的动态手柄补光。
+- 删除旧 Filament 屏幕纹理放射光实体和对应纹理交接 ABI。
 
 当前进度：已删除 `bridge_screen.cpp/.h`、屏幕 C ABI、Python ctypes wrapper 和 Presenter 的
 Filament SBS 图像交接。`_filament_screen` 名称暂时保留为 Presenter-owned 屏幕几何状态，供
 Vulkan Composer、曲面屏控制和交互命中使用，不代表 Filament Renderable。`bridge_glow.cpp/.h`
 已删除；Glow 不再由 Filament Bridge 持有。
+
+手柄和环境照明参数也已移出 DLL：`environments/common.json` 提供共享默认值，3D/HDR
+`profile.json` 和 lighting preset 可覆盖环境 ambient 的颜色/lux、手柄 ambient 的普通/HDR
+lux、Head/Top 灯的颜色、权重、相对头显偏移、falloff 和 shadow。Python 将易调的比例换算为
+最终 lux/candela，通过版本化 `FilamentBridgeLightingConfig` 一次传入；DLL 只校验、保存并
+应用物理参数，不再包含手柄灯位、颜色或强度比例等画面风格默认值。环境曝光、天空盒亮度
+和 HDR 背景曝光仍由现有 Profile/Vulkan 路径动态加载。
+
+动态屏幕补光现复用输出帧已有的 `screen_light_linear_rgb`：默认以 12 Hz 异步采样并在
+Presenter 每帧指数平滑，按亮度上限和饱和度生成方向光颜色/lux。屏幕与手柄位置仅用于
+归一化入射方向，距离不参与强度或衰减计算。光源仅加入 `foreground_scene` 的手柄 light channel，因此环境和
+Glow 不受影响。开关、lux、采样率、平滑时间、最大亮度、饱和度和 shadow 全部由
+`common.json`、环境 profile 或 lighting preset 提供。
 
 完成条件：环境、手柄模型、按键动画和深度遮挡正确；屏幕光关闭后画面仍符合基准。
 
@@ -205,7 +219,7 @@ Glow：
 - 保留 `src/stereo_runtime/vulkan_glow_source_pass.py` 的 Vulkan Compute 预处理。
 - 删除 Glow 外部图像导入 Filament 的步骤。
 - Vulkan Projection Composer 直接采样 Glow 图像并完成合成。
-- Glow 不参与手柄照明，不改变基础环境光或头顶光。
+- Glow 不参与手柄照明，也不改变基础环境光、头顶光或独立的屏幕补光。
 
 当前进度：Glow Compute 输出已标记为 `vulkan_projection_composer` 所有的
 latest-frame 资源，Presenter 不再用 Filament Glow 外部图像 ABI 判断该资源是否可用。
@@ -280,7 +294,7 @@ array/per-eye swapchain 正确显示。
 - 激光被手柄几何自然遮挡。
 - Glow 不阻塞视频帧率，资源租约无覆盖和泄漏。
 - 两处 2D 光圈和虚拟键盘在 Quad Layer 正确显示。
-- 手柄只受基础环境光和头顶光影响，不再受屏幕放射光影响。
+- 手柄接受基础环境光、Head/Top 灯和有界屏幕平均色补光；环境与 Glow 不得接收屏幕补光。
 - `D2S_OPENXR_SCREEN_QUAD_REPROJECTION=1` 不会激活主屏幕 Quad；日志明确说明继续使用 Projection。
 - 连续运行至少 10 分钟，无 `VK_ERROR_DEVICE_LOST`、validation error 或持续帧率下降。
 

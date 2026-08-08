@@ -21,6 +21,12 @@ int bridge_material_set_ambient_light(
         FilamentBridge* bridge, float red, float green, float blue);
 int bridge_material_set_controller_ambient_light(
         FilamentBridge* bridge, float red, float green, float blue, int enabled);
+int bridge_material_set_lighting_config(
+        FilamentBridge* bridge, const FilamentBridgeLightingConfig* config);
+int bridge_material_set_controller_screen_light(
+        FilamentBridge* bridge, float red, float green, float blue,
+        float intensity_lux, float direction_x, float direction_y,
+        float direction_z, int cast_shadows, int enabled);
 int bridge_material_set_fill_light(
         FilamentBridge* bridge,
         float red, float green, float blue, float intensity,
@@ -31,6 +37,9 @@ int preview_material_set_scene_exposure(
         FilamentPreview* preview, float exposure_ev);
 int preview_material_set_ambient_light(
         FilamentPreview* preview, float red, float green, float blue);
+int preview_material_set_ambient_light_with_intensity(
+        FilamentPreview* preview, float red, float green, float blue,
+        float intensity_lux);
 int preview_material_set_skybox_brightness(
         FilamentPreview* preview, float brightness);
 int preview_material_set_fill_light(

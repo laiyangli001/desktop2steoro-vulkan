@@ -304,12 +304,15 @@ struct FilamentBridge {
     OpenXrVulkanPlatform* platform = nullptr;
     utils::Entity fill_light;
     utils::Entity controller_top_light;
+    utils::Entity controller_screen_light;
+    bool controller_screen_light_cast_shadows = false;
     filament::IndirectLight* indirect_light = nullptr;
     filament::IndirectLight* controller_indirect_light = nullptr;
     filament::Scene* foreground_scene = nullptr;
     bool passthrough_backdrop = false;
     filament::backend::VulkanPlatform::VulkanSharedContext shared_context{};
     MaterialBrightnessState brightness;
+    FilamentBridgeLightingConfig lighting{};
     std::array<ControllerAsset, 2> controllers;
     filament::Material* laser_material = nullptr;
     filament::MaterialInstance* laser_material_instance = nullptr;
@@ -357,6 +360,7 @@ struct FilamentPreview {
     filament::SwapChain* swapchain = nullptr;
     utils::Entity fill_light;
     filament::IndirectLight* indirect_light = nullptr;
+    float ambient_intensity_lux = 0.0f;
     utils::Entity screen_entity;
     filament::VertexBuffer* screen_vertex_buffer = nullptr;
     filament::IndexBuffer* screen_index_buffer = nullptr;

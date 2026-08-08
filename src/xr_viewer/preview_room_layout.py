@@ -283,7 +283,8 @@ def main():
     )
     preview.set_exposure(preview_exposure)
     preview.set_ambient_light(
-        _vec3(profile.get("env_ambient_color"), [0.08, 0.08, 0.09])
+        _vec3(profile.get("env_ambient_color"), [0.08, 0.08, 0.09]),
+        float(profile.get("env_ambient_light_intensity_lux", 30000.0)),
     )
     preview.set_fill_light(fill_light_color, fill_light_intensity, fill_light_direction)
     preview.set_skybox_brightness(skybox_brightness)

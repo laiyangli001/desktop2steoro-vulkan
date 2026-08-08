@@ -197,7 +197,20 @@ class FilamentDesktopPreview:
             "set_fill_light",
         )
 
-    def set_ambient_light(self, color) -> None:
+    def set_ambient_light(self, color, intensity_lux: float = 30000.0) -> None:
+        physical_setter = getattr(
+            self._library, "filament_preview_set_ambient_light_with_intensity", None
+        )
+        if physical_setter is not None:
+            self._check(
+                physical_setter(
+                    self._handle,
+                    *(float(value) for value in color),
+                    float(intensity_lux),
+                ),
+                "set_ambient_light_with_intensity",
+            )
+            return
         setter = getattr(self._library, "filament_preview_set_ambient_light", None)
         if setter is None:
             return
@@ -272,6 +285,15 @@ class FilamentDesktopPreview:
                 ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_float
             ]
             set_ambient_light.restype = ctypes.c_int
+        set_ambient_light_with_intensity = getattr(
+            library, "filament_preview_set_ambient_light_with_intensity", None
+        )
+        if set_ambient_light_with_intensity is not None:
+            set_ambient_light_with_intensity.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float,
+            ]
+            set_ambient_light_with_intensity.restype = ctypes.c_int
         library.filament_preview_set_fill_light.argtypes = [
             ctypes.c_void_p, *([ctypes.c_float] * 7)
         ]

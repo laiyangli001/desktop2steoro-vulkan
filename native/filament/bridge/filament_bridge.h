@@ -28,6 +28,27 @@ struct FilamentBridgeVulkanCreateInfo {
     uint32_t graphics_queue_index;
 };
 
+// All appearance values are supplied by the host profile. The bridge only
+// validates and applies physical light parameters; it owns no visual defaults.
+struct FilamentBridgeLightingConfig {
+    uint32_t struct_size;
+    float environment_ambient_color[3];
+    float environment_ambient_intensity_lux;
+    float controller_ambient_color[3];
+    float controller_ambient_intensity_lux;
+    int32_t controller_ambient_enabled;
+    float head_light_color[3];
+    float head_light_intensity_candela;
+    float head_light_offset[3];
+    float head_light_falloff;
+    int32_t head_light_cast_shadows;
+    float top_light_color[3];
+    float top_light_intensity_candela;
+    float top_light_offset[3];
+    float top_light_falloff;
+    int32_t top_light_cast_shadows;
+};
+
 FILAMENT_BRIDGE_API FilamentBridge* filament_bridge_create_vulkan(
         const FilamentBridgeVulkanCreateInfo* info);
 FILAMENT_BRIDGE_API void filament_bridge_destroy(FilamentBridge* bridge);
@@ -131,6 +152,12 @@ FILAMENT_BRIDGE_API int filament_bridge_set_ambient_light(
         FilamentBridge* bridge, float red, float green, float blue);
 FILAMENT_BRIDGE_API int filament_bridge_set_controller_ambient_light(
         FilamentBridge* bridge, float red, float green, float blue, int enabled);
+FILAMENT_BRIDGE_API int filament_bridge_set_lighting_config(
+        FilamentBridge* bridge, const FilamentBridgeLightingConfig* config);
+FILAMENT_BRIDGE_API int filament_bridge_set_controller_screen_light(
+        FilamentBridge* bridge, float red, float green, float blue,
+        float intensity_lux, float direction_x, float direction_y,
+        float direction_z, int cast_shadows, int enabled);
 FILAMENT_BRIDGE_API int filament_bridge_set_fill_light(
         FilamentBridge* bridge,
         float red, float green, float blue,
@@ -182,6 +209,9 @@ FILAMENT_BRIDGE_API int filament_preview_set_scene_exposure(
         FilamentPreview* preview, float exposure_ev);
 FILAMENT_BRIDGE_API int filament_preview_set_ambient_light(
         FilamentPreview* preview, float red, float green, float blue);
+FILAMENT_BRIDGE_API int filament_preview_set_ambient_light_with_intensity(
+        FilamentPreview* preview, float red, float green, float blue,
+        float intensity_lux);
 FILAMENT_BRIDGE_API int filament_preview_set_fill_light(
         FilamentPreview* preview,
         float red, float green, float blue,

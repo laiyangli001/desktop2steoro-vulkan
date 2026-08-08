@@ -3,6 +3,8 @@
 本文件只记录用户可感知的功能、行为变化、重要修复和架构里程碑，不记录逐次调试过程。新记录按日期倒序追加，并将同一目标的连续修改归纳为一条有效结果。
 
 ## 2026-08-08
+- Added profile-driven controller screen reflection light: the existing asynchronous Vulkan/CUDA linear screen-color reduction now drives a smoothed, luminance-limited directional light toward the controllers. Brightness depends only on screen luminance—not screen distance—and affects only the controller foreground light channel, never the room or Glow; all sampling, lux, saturation, smoothing, and shadow settings remain outside the DLL.
+- Moved Filament environment, HDR-controller ambient, and Head/Top controller-light appearance parameters out of the native DLL into shared/environment profiles. A versioned runtime lighting ABI now receives final lux/candela, colors, headset-relative offsets, falloff, and shadow flags, so lighting tuning no longer requires rebuilding the bridge.
 - Rebalanced controller lighting so the overhead light is the 100% key light and the headset-following front light is a 70% fill, improving top-surface and button definition while preserving natural shading and foreground composition order.
 - Added an opt-in post-Composer Filament foreground pass and minimal LOD0 launcher: environment renders first, Vulkan draws screen/Glow next, then the existing controller/laser/guide Views render last so foreground priority can be validated without reloading models.
 

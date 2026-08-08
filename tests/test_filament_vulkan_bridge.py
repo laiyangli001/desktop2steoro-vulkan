@@ -13,6 +13,7 @@ import pytest
 from xr_viewer.filament_vulkan_bridge import (
     FilamentBridgeError,
     FilamentVulkanBridge,
+    _FilamentLightingConfig,
     _VulkanCreateInfo,
     _as_pointer_value,
     default_bridge_path,
@@ -21,6 +22,7 @@ from xr_viewer.filament_vulkan_bridge import (
 
 def test_vulkan_create_info_has_stable_c_layout() -> None:
     assert ctypes.sizeof(_VulkanCreateInfo) == ctypes.sizeof(ctypes.c_void_p) * 3 + 8
+    assert ctypes.sizeof(_FilamentLightingConfig) == 112
 
 
 def test_default_bridge_path_matches_platform() -> None:
@@ -110,7 +112,7 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
         bridge_dir / "bridge_internal.h"
     ).read_text(encoding="utf-8")
 
-def test_screen_light_is_removed_from_filament_bridge() -> None:
+def test_legacy_filament_screen_texture_light_path_stays_removed() -> None:
     root = Path(__file__).resolve().parents[1]
     source = (root / "src/xr_viewer/core_openxr_vulkan.py").read_text(
         encoding="utf-8"
@@ -120,6 +122,7 @@ def test_screen_light_is_removed_from_filament_bridge() -> None:
     )
     assert "def _update_filament_screen_light" not in source
     assert "filament_bridge_set_screen_light" not in facade
+    assert "filament_bridge_set_controller_screen_light" in facade
 
 
 def test_artemis_controller_lighting_matches_legacy_head_light() -> None:
@@ -144,10 +147,24 @@ def test_artemis_controller_lighting_matches_legacy_head_light() -> None:
     native_lighting = (root / "native/filament/bridge/bridge_material.cpp").read_text(
         encoding="utf-8"
     )
-    assert "constexpr float kControllerHeadLightWeight = 0.70f;" in native_lighting
-    assert "constexpr float kControllerTopLightWeight = 1.00f;" in native_lighting
-    assert "kControllerHeadLightWeight * intensity * kLegacyControllerCandelaScale" in native_lighting
-    assert "kControllerTopLightWeight * intensity * kLegacyControllerCandelaScale" in native_lighting
+    assert "kControllerHeadLightWeight" not in native_lighting
+    assert "kControllerTopLightWeight" not in native_lighting
+    assert "kLegacyControllerCandelaScale" not in native_lighting
+    assert "config->head_light_intensity_candela" in native_lighting
+    assert "config->top_light_intensity_candela" in native_lighting
+    assert "bridge_material_set_controller_screen_light" in native_lighting
+    assert ".lightChannel(0, false).lightChannel(1, true)" in native_lighting
+
+    common = json.loads(
+        (root / "src/xr_viewer/environments/common.json").read_text(encoding="utf-8")
+    )["filament"]
+    assert common["controller_head_light_weight"] == pytest.approx(0.70)
+    assert common["controller_top_light_weight"] == pytest.approx(1.0)
+    assert common["controller_head_light_offset"] == [0.0, 0.05, 0.0]
+    assert common["controller_top_light_offset"] == [0.0, 0.45, -0.18]
+    assert common["controller_screen_light_enabled"] is True
+    assert common["controller_screen_light_intensity_lux"] == pytest.approx(500.0)
+    assert common["controller_screen_light_sample_hz"] == pytest.approx(12.0)
 
 
 @pytest.mark.parametrize("brand", ("HP", "INDEX", "PICO", "QUEST", "VIVE", "YVR"))

@@ -174,6 +174,72 @@ def _openxr_filament_config(settings: dict) -> dict[str, object]:
                 common_filament.get("skybox_brightness", 1.0),
             )
         ),
+        "filament_ambient_light_color": tuple(
+            common_filament.get("ambient_light_color", (0.14, 0.13, 0.15))
+        ),
+        "filament_ambient_light_intensity_lux": float(
+            common_filament.get("ambient_light_intensity_lux", 30000.0)
+        ),
+        "filament_controller_ambient_light_intensity_lux": float(
+            common_filament.get("controller_ambient_light_intensity_lux", 6000.0)
+        ),
+        "filament_controller_hdr_ambient_light_intensity_lux": float(
+            common_filament.get("controller_hdr_ambient_light_intensity_lux", 6000.0)
+        ),
+        "filament_controller_light_intensity_candela": float(
+            common_filament.get("controller_light_intensity_candela", 2000.0)
+        ),
+        "filament_fill_light_color": tuple(
+            common_filament.get("controller_head_light_color", (0.55, 0.55, 0.58))
+        ),
+        "filament_controller_head_light_weight": float(
+            common_filament.get("controller_head_light_weight", 0.70)
+        ),
+        "filament_controller_top_light_weight": float(
+            common_filament.get("controller_top_light_weight", 1.0)
+        ),
+        "filament_controller_top_light_color": tuple(
+            common_filament.get("controller_top_light_color", (0.95, 0.97, 1.0))
+        ),
+        "filament_controller_head_light_offset": tuple(
+            common_filament.get("controller_head_light_offset", (0.0, 0.05, 0.0))
+        ),
+        "filament_controller_top_light_offset": tuple(
+            common_filament.get("controller_top_light_offset", (0.0, 0.45, -0.18))
+        ),
+        "filament_controller_head_light_falloff": float(
+            common_filament.get("controller_head_light_falloff", 2.0)
+        ),
+        "filament_controller_top_light_falloff": float(
+            common_filament.get("controller_top_light_falloff", 2.0)
+        ),
+        "filament_controller_head_light_cast_shadows": bool(
+            common_filament.get("controller_head_light_cast_shadows", False)
+        ),
+        "filament_controller_top_light_cast_shadows": bool(
+            common_filament.get("controller_top_light_cast_shadows", False)
+        ),
+        "filament_controller_screen_light_enabled": bool(
+            common_filament.get("controller_screen_light_enabled", True)
+        ),
+        "filament_controller_screen_light_intensity_lux": float(
+            common_filament.get("controller_screen_light_intensity_lux", 500.0)
+        ),
+        "filament_controller_screen_light_saturation": float(
+            common_filament.get("controller_screen_light_saturation", 0.65)
+        ),
+        "filament_controller_screen_light_max_luminance": float(
+            common_filament.get("controller_screen_light_max_luminance", 0.40)
+        ),
+        "filament_controller_screen_light_smoothing_seconds": float(
+            common_filament.get("controller_screen_light_smoothing_seconds", 0.18)
+        ),
+        "filament_controller_screen_light_sample_hz": float(
+            common_filament.get("controller_screen_light_sample_hz", 12.0)
+        ),
+        "filament_controller_screen_light_cast_shadows": bool(
+            common_filament.get("controller_screen_light_cast_shadows", False)
+        ),
         # These values are resolved by the legacy viewer-settings path and
         # exported through utils; keep the Vulkan entrypoint as a consumer.
         "filament_screen_width": float(OPENXR_SCREEN_WIDTH),

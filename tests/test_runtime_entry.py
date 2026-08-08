@@ -57,6 +57,14 @@ def test_openxr_filament_color_defaults_come_from_common_json() -> None:
 
     assert config["filament_scene_exposure_ev"] == 2.0
     assert config["filament_skybox_brightness"] == 1.0
+    assert config["filament_ambient_light_intensity_lux"] == 30000.0
+    assert config["filament_controller_ambient_light_intensity_lux"] == 6000.0
+    assert config["filament_controller_light_intensity_candela"] == 2000.0
+    assert config["filament_controller_head_light_weight"] == 0.70
+    assert config["filament_controller_top_light_weight"] == 1.0
+    assert config["filament_controller_screen_light_enabled"] is True
+    assert config["filament_controller_screen_light_intensity_lux"] == 500.0
+    assert config["filament_controller_screen_light_sample_hz"] == 12.0
 
 
 def test_openxr_environment_uses_selected_folder_and_profile_glb(tmp_path: Path) -> None:

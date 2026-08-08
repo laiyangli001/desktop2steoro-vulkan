@@ -21,6 +21,27 @@ class _VulkanCreateInfo(ctypes.Structure):
     ]
 
 
+class _FilamentLightingConfig(ctypes.Structure):
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32),
+        ("environment_ambient_color", ctypes.c_float * 3),
+        ("environment_ambient_intensity_lux", ctypes.c_float),
+        ("controller_ambient_color", ctypes.c_float * 3),
+        ("controller_ambient_intensity_lux", ctypes.c_float),
+        ("controller_ambient_enabled", ctypes.c_int32),
+        ("head_light_color", ctypes.c_float * 3),
+        ("head_light_intensity_candela", ctypes.c_float),
+        ("head_light_offset", ctypes.c_float * 3),
+        ("head_light_falloff", ctypes.c_float),
+        ("head_light_cast_shadows", ctypes.c_int32),
+        ("top_light_color", ctypes.c_float * 3),
+        ("top_light_intensity_candela", ctypes.c_float),
+        ("top_light_offset", ctypes.c_float * 3),
+        ("top_light_falloff", ctypes.c_float),
+        ("top_light_cast_shadows", ctypes.c_int32),
+    ]
+
+
 def default_bridge_path() -> Path:
     platforms = {
         "win32": ("windows", "filament_bridge.dll"),
@@ -56,6 +77,8 @@ class FilamentVulkanBridge:
         self._passthrough_backdrop_abi_available = False
         self._ambient_light_abi_available = False
         self._controller_ambient_light_abi_available = False
+        self._lighting_config_abi_available = False
+        self._controller_screen_light_abi_available = False
         self._finished_drawing_semaphore_abi_available = False
         self._controller_overlay_abi_available = False
         self._async_submit_abi_available = False
@@ -684,6 +707,80 @@ class FilamentVulkanBridge:
         )
 
     @property
+    def lighting_config_abi_available(self) -> bool:
+        return self._lighting_config_abi_available
+
+    def set_lighting_config(
+        self, *, environment_ambient_color, environment_ambient_intensity_lux,
+        controller_ambient_color, controller_ambient_intensity_lux,
+        controller_ambient_enabled, head_light_color,
+        head_light_intensity_candela, head_light_offset, head_light_falloff,
+        head_light_cast_shadows, top_light_color,
+        top_light_intensity_candela, top_light_offset, top_light_falloff,
+        top_light_cast_shadows,
+    ) -> bool:
+        self._ensure_loaded()
+        if not self._lighting_config_abi_available:
+            return False
+        config = _FilamentLightingConfig(
+            struct_size=ctypes.sizeof(_FilamentLightingConfig),
+            environment_ambient_color=(ctypes.c_float * 3)(
+                *(float(value) for value in environment_ambient_color)
+            ),
+            environment_ambient_intensity_lux=float(environment_ambient_intensity_lux),
+            controller_ambient_color=(ctypes.c_float * 3)(
+                *(float(value) for value in controller_ambient_color)
+            ),
+            controller_ambient_intensity_lux=float(controller_ambient_intensity_lux),
+            controller_ambient_enabled=int(bool(controller_ambient_enabled)),
+            head_light_color=(ctypes.c_float * 3)(
+                *(float(value) for value in head_light_color)
+            ),
+            head_light_intensity_candela=float(head_light_intensity_candela),
+            head_light_offset=(ctypes.c_float * 3)(
+                *(float(value) for value in head_light_offset)
+            ),
+            head_light_falloff=float(head_light_falloff),
+            head_light_cast_shadows=int(bool(head_light_cast_shadows)),
+            top_light_color=(ctypes.c_float * 3)(
+                *(float(value) for value in top_light_color)
+            ),
+            top_light_intensity_candela=float(top_light_intensity_candela),
+            top_light_offset=(ctypes.c_float * 3)(
+                *(float(value) for value in top_light_offset)
+            ),
+            top_light_falloff=float(top_light_falloff),
+            top_light_cast_shadows=int(bool(top_light_cast_shadows)),
+        )
+        self._check_result(
+            self._library.filament_bridge_set_lighting_config(
+                self._handle, ctypes.byref(config)
+            ),
+            "set_lighting_config",
+        )
+        return True
+
+    def set_controller_screen_light(
+        self, color, intensity_lux: float, direction,
+        cast_shadows: bool, enabled: bool,
+    ) -> bool:
+        self._ensure_loaded()
+        if not self._controller_screen_light_abi_available:
+            return False
+        self._check_result(
+            self._library.filament_bridge_set_controller_screen_light(
+                self._handle,
+                *(float(value) for value in color),
+                float(intensity_lux),
+                *(float(value) for value in direction),
+                int(bool(cast_shadows)),
+                int(bool(enabled)),
+            ),
+            "set_controller_screen_light",
+        )
+        return True
+
+    @property
     def finished_drawing_semaphore_abi_available(self) -> bool:
         return self._finished_drawing_semaphore_abi_available
 
@@ -975,6 +1072,28 @@ class FilamentVulkanBridge:
             ]
             set_controller_ambient_light.restype = ctypes.c_int
             self._controller_ambient_light_abi_available = True
+        set_lighting_config = getattr(
+            library, "filament_bridge_set_lighting_config", None
+        )
+        if set_lighting_config is not None:
+            set_lighting_config.argtypes = [
+                ctypes.c_void_p, ctypes.POINTER(_FilamentLightingConfig)
+            ]
+            set_lighting_config.restype = ctypes.c_int
+            self._lighting_config_abi_available = True
+        set_controller_screen_light = getattr(
+            library, "filament_bridge_set_controller_screen_light", None
+        )
+        if set_controller_screen_light is not None:
+            set_controller_screen_light.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_float, ctypes.c_float, ctypes.c_float,
+                ctypes.c_float,
+                ctypes.c_float, ctypes.c_float, ctypes.c_float,
+                ctypes.c_int, ctypes.c_int,
+            ]
+            set_controller_screen_light.restype = ctypes.c_int
+            self._controller_screen_light_abi_available = True
         library.filament_bridge_set_fill_light.argtypes = [
             ctypes.c_void_p,
             ctypes.c_float, ctypes.c_float, ctypes.c_float,
