@@ -1460,6 +1460,7 @@ class VulkanProjectionScreenPass:
         *,
         load_target: bool = False,
         wait_for_timeline: int = 0,
+        extra_wait_semaphores: list[Any] | tuple[Any, ...] = (),
     ) -> int | None:
         """Generate the final per-eye mip chain, with optional RCAS on mip zero."""
         use_rcas = self.rcas_sharpness > 0.0
@@ -1579,6 +1580,9 @@ class VulkanProjectionScreenPass:
             screen_draws.append(screen_draw)
         wait_semaphores = [item["wait_semaphore"] for item in draws]
         wait_semaphores = [item for item in wait_semaphores if item is not None]
+        wait_semaphores.extend(
+            item for item in extra_wait_semaphores if item is not None
+        )
         submit_profile: dict[str, float] = {}
         def record_stereo(command_buffer: Any) -> None:
             for index, copy_draw in enumerate(copy_draws):
@@ -1622,6 +1626,7 @@ class VulkanProjectionScreenPass:
         upscale_scale: float,
         load_target: bool = False,
         wait_for_timeline: int = 0,
+        extra_wait_semaphores: list[Any] | tuple[Any, ...] = (),
     ) -> int | None:
         """Match Filament's quality chain before the final curved-screen draw."""
         if mode == "native_mip":
@@ -1629,6 +1634,7 @@ class VulkanProjectionScreenPass:
                 draws,
                 load_target=load_target,
                 wait_for_timeline=wait_for_timeline,
+                extra_wait_semaphores=extra_wait_semaphores,
             )
         use_rcas = self.rcas_sharpness > 0.0
         if (
@@ -1726,6 +1732,9 @@ class VulkanProjectionScreenPass:
                 )
             screen_draws.append(screen_draw)
         wait_semaphores = [item["wait_semaphore"] for item in draws if item["wait_semaphore"] is not None]
+        wait_semaphores.extend(
+            item for item in extra_wait_semaphores if item is not None
+        )
         submit_profile: dict[str, float] = {}
         def record_stereo(command_buffer: Any) -> None:
             for index, quality_draw in enumerate(quality_draws):

@@ -57,6 +57,7 @@ class FilamentVulkanBridge:
         self._ambient_light_abi_available = False
         self._controller_ambient_light_abi_available = False
         self._finished_drawing_semaphore_abi_available = False
+        self._controller_overlay_abi_available = False
         self._async_submit_abi_available = False
         self._stereo_batch_submit_abi_available = False
         self._multiview_abi_version = 0
@@ -111,6 +112,10 @@ class FilamentVulkanBridge:
     @property
     def stereo_batch_submit_abi_available(self) -> bool:
         return self._stereo_batch_submit_abi_available
+
+    @property
+    def controller_overlay_abi_available(self) -> bool:
+        return self._controller_overlay_abi_available
 
     @property
     def multiview_abi_available(self) -> bool:
@@ -389,6 +394,15 @@ class FilamentVulkanBridge:
         self._ensure_loaded()
         self._check_result(
             self._library.filament_bridge_begin_frame(self._handle), "begin_frame"
+        )
+
+    def render_controller_overlay(self) -> None:
+        self._ensure_loaded()
+        if not self._controller_overlay_abi_available:
+            raise FilamentBridgeError("controller overlay ABI is unavailable")
+        self._check_result(
+            self._library.filament_bridge_render_controller_overlay(self._handle),
+            "render_controller_overlay",
         )
 
     def end_frame(self) -> None:
@@ -825,6 +839,13 @@ class FilamentVulkanBridge:
             function = getattr(library, name)
             function.argtypes = [ctypes.c_void_p]
             function.restype = ctypes.c_int
+        controller_overlay = getattr(
+            library, "filament_bridge_render_controller_overlay", None
+        )
+        if controller_overlay is not None:
+            controller_overlay.argtypes = [ctypes.c_void_p]
+            controller_overlay.restype = ctypes.c_int
+            self._controller_overlay_abi_available = True
         deferred_end_frame = getattr(
             library, "filament_bridge_end_frame_deferred", None
         )

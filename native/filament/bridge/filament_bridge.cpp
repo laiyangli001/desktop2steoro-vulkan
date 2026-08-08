@@ -102,6 +102,8 @@ int filament_bridge_set_stereo_camera(
 
 int filament_bridge_begin_frame(FilamentBridge* bridge) {
     return bridge_eye_begin_frame(bridge); }
+int filament_bridge_render_controller_overlay(FilamentBridge* bridge) {
+    return bridge_eye_render_controller_overlay(bridge); }
 int filament_bridge_end_frame(FilamentBridge* bridge) {
     return bridge_eye_end_frame(bridge); }
 

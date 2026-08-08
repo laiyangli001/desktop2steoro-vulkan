@@ -76,6 +76,8 @@ FILAMENT_BRIDGE_API int filament_bridge_set_stereo_camera(
         FilamentBridge* bridge, const float* eye_model_matrices32,
         const double* eye_frustums8, double near_plane, double far_plane);
 FILAMENT_BRIDGE_API int filament_bridge_begin_frame(FilamentBridge* bridge);
+FILAMENT_BRIDGE_API int filament_bridge_render_controller_overlay(
+        FilamentBridge* bridge);
 FILAMENT_BRIDGE_API int filament_bridge_end_frame(FilamentBridge* bridge);
 // Queue one eye without blocking, then wait once after both eyes are queued.
 FILAMENT_BRIDGE_API int filament_bridge_end_frame_deferred(FilamentBridge* bridge);

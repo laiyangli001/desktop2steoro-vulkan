@@ -214,6 +214,22 @@ def test_native_foreground_uses_one_view_for_multiview_stereo() -> None:
     assert "bridge->renderer->render(bridge->view);" in eye_source
 
 
+def test_native_controller_overlay_preserves_composer_color() -> None:
+    root = Path(__file__).resolve().parents[1]
+    eye_source = (root / "native/filament/bridge/bridge_eye.cpp").read_text(
+        encoding="utf-8"
+    )
+    overlay = eye_source[eye_source.index("int bridge_eye_render_controller_overlay"):]
+    overlay = overlay[:overlay.index("namespace {")]
+
+    assert "overlay_options.clear = false;" in overlay
+    assert "overlay_options.discard = false;" in overlay
+    assert "render(eye.controller_view)" in overlay
+    assert "render(eye.controller_guide_view)" in overlay
+    assert "render(bridge->view)" not in overlay
+    assert "render(eye.foreground_view)" not in overlay
+
+
 def test_native_screen_has_opt_in_multiview_eye_diagnostic() -> None:
     root = Path(__file__).resolve().parents[1]
     assert not (root / "native/filament/bridge/bridge_screen.cpp").exists()

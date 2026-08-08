@@ -308,6 +308,37 @@ int bridge_eye_begin_frame(FilamentBridge* bridge) {
     return bridge->frame_active ? 1 : 0;
 }
 
+int bridge_eye_render_controller_overlay(FilamentBridge* bridge) {
+    if (!bridge || !bridge->renderer || !bridge->engine || !bridge->swapchain ||
+            bridge->frame_active || bridge->multiview_active) return 0;
+    auto& eye = bridge->eyes[bridge->active_eye];
+    filament::Renderer::ClearOptions overlay_options;
+    overlay_options.clear = false;
+    overlay_options.discard = false;
+    bridge->renderer->setClearOptions(overlay_options);
+    bridge->frame_active = bridge->renderer->beginFrame(bridge->swapchain);
+    eye.frame_active = bridge->frame_active;
+    const bool rendered = bridge->frame_active;
+    if (!bridge->frame_active) {
+        bridge_set_error(bridge, "Filament controller overlay beginFrame failed");
+    } else {
+        bridge->renderer->render(eye.controller_view);
+        bridge->renderer->render(eye.controller_guide_view);
+        bridge->renderer->endFrame();
+        bridge->frame_active = false;
+        eye.frame_active = false;
+        bridge->engine->flushAndWait();
+    }
+    filament::Renderer::ClearOptions clear_options;
+    clear_options.clearColor = bridge->passthrough_backdrop
+            ? filament::math::double4{0.0, 0.6, 0.2, 1.0}
+            : filament::math::double4{0.0, 0.0, 0.0, 1.0};
+    clear_options.clear = true;
+    clear_options.discard = true;
+    bridge->renderer->setClearOptions(clear_options);
+    return rendered ? 1 : 0;
+}
+
 namespace {
 
 int bridge_eye_end_frame_impl(FilamentBridge* bridge, bool wait_for_idle) {

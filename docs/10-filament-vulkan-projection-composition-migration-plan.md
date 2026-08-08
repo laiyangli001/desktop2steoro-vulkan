@@ -1,7 +1,7 @@
 # Filament/Vulkan Projection Composition 迁移方案
 
 **文档状态**：进行中
-**更新时间**：2026-08-07
+**更新时间**：2026-08-08
 **适用范围**：OpenXR Vulkan Projection/Quad Layer、Filament Bridge、屏幕采样、激光、Glow 和线程调度
 
 ## 1. 目标
@@ -185,6 +185,12 @@ Projection Composer 前完成环境/手柄绘制，Composer 通过 render-finish
 Filament semaphore 会先经过 graphics queue drain，再走环境/手柄安全降级，避免遗留
 未消费的 producer 完成点。Filament multiview 暂不进入这条 per-eye LOAD 实验路径，
 保持原有 multiview 行为，待 array-image 的 producer/consumer 同步契约单独验证。
+
+手柄优先级隔离新增可选的 post-Composer 前景 pass：环境仍在 Composer 前由主 View
+输出；屏幕和 Glow 完成后，Bridge 仅复用现有 `controller_view` 与
+`controller_guide_view`，保留当前颜色并清理前景深度，再绘制手柄、激光和指南。
+该实验由 `D2S_FILAMENT_CONTROLLER_OVERLAY_AFTER_COMPOSER=1` 启用，需重编译 native
+Bridge 后进行头显验收；验证完成前默认路径不变。
 
 ### 阶段 4：迁移激光和 Glow
 

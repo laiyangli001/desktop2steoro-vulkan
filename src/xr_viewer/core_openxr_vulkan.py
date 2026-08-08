@@ -596,6 +596,9 @@ class OpenXrVulkanPresenter(
         self._filament_projection_only = _env_flag(
             "D2S_FILAMENT_PROJECTION_ONLY", default=False
         )
+        self._filament_controller_overlay_after_composer = _env_flag(
+            "D2S_FILAMENT_CONTROLLER_OVERLAY_AFTER_COMPOSER", default=False
+        )
         self._vulkan_projection_composer_active = False
         self._vulkan_projection_composer_frame_id: int | None = None
         self._last_vulkan_projection_composer_status: tuple[Any, ...] | None = None
@@ -4415,10 +4418,15 @@ class OpenXrVulkanPresenter(
                     mode=plan.mode,
                     filter_scale=plan.filter_scale,
                     upscale_scale=plan.upscale_scale,
-                    load_target=surround_active,
+                    load_target=bool(
+                        surround_active
+                        or filament_wait_semaphores
+                        or depth_sampling_timeline
+                    ),
                     wait_for_timeline=max(
                         int(surround_timeline), int(depth_sampling_timeline)
                     ),
+                    extra_wait_semaphores=filament_wait_semaphores,
                 )
             except Exception as exc:
                 print(
@@ -5195,6 +5203,41 @@ class OpenXrVulkanPresenter(
                     adopt_depth(self._filament_depth_attachments[eye_index].resource)
         return semaphores
 
+    def _render_filament_controller_overlay(
+        self,
+        acquired_images: list[tuple[_EyeSwapchain, int]],
+        record_time: Callable[[str, float], None],
+    ) -> None:
+        bridge = self.filament_bridge
+        if (
+            not self._filament_controller_overlay_after_composer
+            or bridge is None
+            or self._multiview_active
+        ):
+            return
+        if not bool(getattr(bridge, "controller_overlay_abi_available", False)):
+            if not getattr(self, "_filament_controller_overlay_unavailable_logged", False):
+                self._filament_controller_overlay_unavailable_logged = True
+                print(
+                    "[OpenXRViewer] Filament controller overlay unavailable: "
+                    "rebuild the native Bridge",
+                    flush=True,
+                )
+            return
+        for eye_index, (_eye, image_index) in enumerate(acquired_images):
+            started = time.perf_counter()
+            bridge.set_active_eye(eye_index)
+            bridge.set_acquired_image(image_index)
+            bridge.render_controller_overlay()
+            record_time(f"openxr_filament_controller_overlay_eye{eye_index}", started)
+        if not getattr(self, "_filament_controller_overlay_logged", False):
+            self._filament_controller_overlay_logged = True
+            print(
+                "[OpenXRViewer] Filament controller overlay active: "
+                "order=environment->screen/glow->controller/laser/guide",
+                flush=True,
+            )
+
     def _render_projection_layer(
         self,
         views: list[Any],
@@ -5382,6 +5425,9 @@ class OpenXrVulkanPresenter(
                         composer_timeline = self._render_vulkan_projection_composer(
                             composer_frame, acquired_images, composition_views
                         )
+                    self._render_filament_controller_overlay(
+                        acquired_images, record_time
+                    )
                     composer_frame.metadata["_vulkan_consumer_release_timeline"] = max(
                         int(
                             composer_frame.metadata.get(

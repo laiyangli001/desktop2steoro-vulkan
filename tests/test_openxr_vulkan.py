@@ -915,6 +915,8 @@ def test_projection_composer_routes_sampling_policy_to_quality_chain() -> None:
     assert "mode=plan.mode" in source
     assert "filter_scale=plan.filter_scale" in source
     assert "upscale_scale=plan.upscale_scale" in source
+    assert "extra_wait_semaphores=filament_wait_semaphores" in source
+    assert "or filament_wait_semaphores" in source
     assert "self._vulkan_projection_quality_chain_requested" in source
     assert "cached_sources" not in source
     assert "if timeline is None:" in source
@@ -926,6 +928,39 @@ def test_projection_quality_chain_is_not_disabled_by_filament_waits() -> None:
     # Filament waits synchronize the producer; they must not suppress the
     # projection quality pass or make GUI LOD/MIP/RCAS settings ineffective.
     assert "and not filament_wait_semaphores" not in source
+
+
+def test_filament_controller_overlay_runs_after_vulkan_composer() -> None:
+    calls = []
+
+    class Bridge:
+        controller_overlay_abi_available = True
+
+        def set_active_eye(self, eye_index):
+            calls.append(("eye", eye_index))
+
+        def set_acquired_image(self, image_index):
+            calls.append(("image", image_index))
+
+        def render_controller_overlay(self):
+            calls.append(("overlay", None))
+
+    presenter = OpenXrVulkanPresenter()
+    presenter.filament_bridge = Bridge()
+    presenter._filament_controller_overlay_after_composer = True
+    presenter._render_filament_controller_overlay(
+        [(object(), 3), (object(), 5)], lambda *_args: None
+    )
+
+    assert calls == [
+        ("eye", 0), ("image", 3), ("overlay", None),
+        ("eye", 1), ("image", 5), ("overlay", None),
+    ]
+    source = inspect.getsource(OpenXrVulkanPresenter._render_projection_layer)
+    composer = source.index("composer_timeline = self._render_vulkan_projection_composer")
+    overlay = source.index("self._render_filament_controller_overlay", composer)
+    output_commit = source.index("composer_frame.metadata", overlay)
+    assert composer < overlay < output_commit
 
 
 def test_projection_quality_chain_disabled_forces_lod0_sampling() -> None:
@@ -2511,7 +2546,7 @@ def test_projection_glow_keeps_legacy_geometry_density_and_surround_order() -> N
         OpenXrVulkanPresenter._render_vulkan_projection_composer
     )
     assert "clear_target=True" in source
-    assert "load_target=surround_active" in source
+    assert "or filament_wait_semaphores" in source
 
 
 def test_projection_glow_does_not_repeat_the_producer_y_flip() -> None:

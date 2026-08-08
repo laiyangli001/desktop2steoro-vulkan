@@ -2,7 +2,11 @@
 
 本文件只记录用户可感知的功能、行为变化、重要修复和架构里程碑，不记录逐次调试过程。新记录按日期倒序追加，并将同一目标的连续修改归纳为一条有效结果。
 
+## 2026-08-08
+- Added an opt-in post-Composer Filament foreground pass and minimal LOD0 launcher: environment renders first, Vulkan draws screen/Glow next, then the existing controller/laser/guide Views render last so foreground priority can be validated without reloading models.
+
 ## 2026-08-07
+- Fixed Vulkan Projection Composer quality-chain composition with Filament environment and controller output: quality passes now wait for Filament completion and preserve the color target with `LOAD` before drawing the SBS screen.
 - Fixed OpenXR 3D Depth on/off and live Depth Strength changes for the Vulkan deferred compositor: every frame now forwards the current runtime depth value to the Vulkan stereo push constants, so `0.0` produces mono output and controller adjustments apply on the next rendered frame.
 - Removed the conflicting continuous OpenXR Glow adjustment shortcut; existing 3D Depth controls are unchanged.
 
