@@ -144,7 +144,9 @@ def test_artemis_controller_lighting_matches_legacy_head_light() -> None:
     native_lighting = (root / "native/filament/bridge/bridge_material.cpp").read_text(
         encoding="utf-8"
     )
-    assert "constexpr float kControllerTopLightWeight = 0.85f;" in native_lighting
+    assert "constexpr float kControllerHeadLightWeight = 0.70f;" in native_lighting
+    assert "constexpr float kControllerTopLightWeight = 1.00f;" in native_lighting
+    assert "kControllerHeadLightWeight * intensity * kLegacyControllerCandelaScale" in native_lighting
     assert "kControllerTopLightWeight * intensity * kLegacyControllerCandelaScale" in native_lighting
 
 

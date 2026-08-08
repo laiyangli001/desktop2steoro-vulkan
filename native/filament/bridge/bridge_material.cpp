@@ -9,7 +9,8 @@ namespace {
 constexpr float kLegacyControllerCandelaScale = 10000.0f;
 constexpr float kLegacyAmbientLux = 30000.0f;
 constexpr float kControllerBaseLightWeight = 0.20f;
-constexpr float kControllerTopLightWeight = 0.85f;
+constexpr float kControllerHeadLightWeight = 0.70f;
+constexpr float kControllerTopLightWeight = 1.00f;
 
 }  // namespace
 
@@ -296,7 +297,7 @@ int bridge_material_set_fill_light(
             // Convert the legacy unit-less head-light level for Filament's
             // daylight-exposed main camera without altering scene exposure.
             .intensityCandela(
-                    intensity * kLegacyControllerCandelaScale *
+                    kControllerHeadLightWeight * intensity * kLegacyControllerCandelaScale *
                     kControllerBaseLightWeight)
             .position({0.0f, 0.05f, 0.0f})
             .falloff(2.0f)
