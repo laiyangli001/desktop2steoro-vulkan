@@ -141,6 +141,12 @@ def test_artemis_controller_lighting_matches_legacy_head_light() -> None:
     assert '"env_ambient_color", self._filament_ambient_light_color' in config
     assert "bridge.set_ambient_light(self._controller_ambient_light_color())" in config
 
+    native_lighting = (root / "native/filament/bridge/bridge_material.cpp").read_text(
+        encoding="utf-8"
+    )
+    assert "constexpr float kControllerTopLightWeight = 0.85f;" in native_lighting
+    assert "kControllerTopLightWeight * intensity * kLegacyControllerCandelaScale" in native_lighting
+
 
 @pytest.mark.parametrize("brand", ("HP", "INDEX", "PICO", "QUEST", "VIVE", "YVR"))
 @pytest.mark.parametrize("hand", ("left", "right"))

@@ -9,6 +9,7 @@ namespace {
 constexpr float kLegacyControllerCandelaScale = 10000.0f;
 constexpr float kLegacyAmbientLux = 30000.0f;
 constexpr float kControllerBaseLightWeight = 0.20f;
+constexpr float kControllerTopLightWeight = 0.85f;
 
 }  // namespace
 
@@ -307,7 +308,7 @@ int bridge_material_set_fill_light(
     filament::LightManager::Builder(filament::LightManager::Type::POINT)
             .color(filament::LinearColor{0.95f, 0.97f, 1.0f})
             .intensityCandela(
-                    0.55f * intensity * kLegacyControllerCandelaScale *
+                    kControllerTopLightWeight * intensity * kLegacyControllerCandelaScale *
                     kControllerBaseLightWeight)
             .position({0.0f, 0.45f, -0.18f})
             .falloff(2.0f)
