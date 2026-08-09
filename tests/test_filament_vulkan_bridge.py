@@ -244,7 +244,9 @@ def test_native_controller_multiview_eye_diagnostic_replaces_glb_materials() -> 
     )
 
     assert "D2S_FILAMENT_CONTROLLER_EYE_DIAGNOSTIC" in source
-    assert "getEyeIndex() == 0" in source
+    assert "material.d2sEyeIndex = float4(float(getEyeIndex())" in source
+    assert "variable_d2sEyeIndex.x < 0.5" in source
+    assert '.variable(filamat::MaterialBuilder::Variable::CUSTOM0, "d2sEyeIndex")' in source
     assert "left=red right=green" in source
     assert (
         ".stereoscopicType(filamat::MaterialBuilder::StereoscopicType::MULTIVIEW)"
@@ -252,6 +254,17 @@ def test_native_controller_multiview_eye_diagnostic_replaces_glb_materials() -> 
     )
     assert "renderables.setMaterialInstanceAt(" in source
     assert "controller_eye_diagnostic_material_instance" in internal
+
+
+def test_controller_eye_diagnostic_launcher_enables_backend_stereo_trace() -> None:
+    root = Path(__file__).resolve().parents[1]
+    launcher = (
+        root / "run_windows_filament_multiview_controller_eye_diagnostic.ps1"
+    ).read_text(encoding="utf-8")
+
+    assert '$env:D2S_FILAMENT_CONTROLLER_EYE_DIAGNOSTIC = "1"' in launcher
+    assert '$env:D2S_FILAMENT_EYE_DIAGNOSTIC = "1"' in launcher
+    assert "[D2S stereo trace]" in launcher
 
 
 def test_native_foreground_uses_one_view_for_multiview_stereo() -> None:
