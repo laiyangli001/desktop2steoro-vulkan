@@ -1,6 +1,9 @@
 #include "bridge_controller.h"
 #include "bridge_internal.h"
 
+#include <cstdlib>
+#include <cstring>
+
 void bridge_controller_destroy(FilamentBridge* bridge, ControllerAsset& controller) {
     if (controller.asset && bridge->foreground_scene) {
         bridge->foreground_scene->removeEntities(
@@ -10,6 +13,18 @@ void bridge_controller_destroy(FilamentBridge* bridge, ControllerAsset& controll
         bridge->asset_loader->destroyAsset(controller.asset);
     }
     controller = {};
+}
+
+void bridge_controller_eye_diagnostic_destroy(FilamentBridge* bridge) {
+    if (!bridge || !bridge->engine) return;
+    if (bridge->controller_eye_diagnostic_material_instance) {
+        bridge->engine->destroy(bridge->controller_eye_diagnostic_material_instance);
+        bridge->controller_eye_diagnostic_material_instance = nullptr;
+    }
+    if (bridge->controller_eye_diagnostic_material) {
+        bridge->engine->destroy(bridge->controller_eye_diagnostic_material);
+        bridge->controller_eye_diagnostic_material = nullptr;
+    }
 }
 
 std::string bridge_controller_semantic(std::string name) {
@@ -52,6 +67,52 @@ std::string bridge_controller_semantic(std::string name) {
 }
 
 namespace {
+
+bool controller_eye_diagnostic_requested() {
+    const char* value = std::getenv("D2S_FILAMENT_CONTROLLER_EYE_DIAGNOSTIC");
+    return value && value[0] != '\0' && std::strcmp(value, "0") != 0;
+}
+
+bool ensure_controller_eye_diagnostic_material(FilamentBridge* bridge) {
+    if (bridge->controller_eye_diagnostic_material_instance) return true;
+    const char* shader = R"FILAMENT(
+        void material(inout MaterialInputs material) {
+            prepareMaterial(material);
+            material.baseColor = getEyeIndex() == 0
+                    ? float4(1.0, 0.0, 0.0, 1.0)
+                    : float4(0.0, 1.0, 0.0, 1.0);
+        }
+    )FILAMENT";
+    filamat::MaterialBuilder::init();
+    filamat::MaterialBuilder builder;
+    builder.name("D2S Controller Eye Diagnostic")
+            .material(shader)
+            .shading(filament::Shading::UNLIT)
+            .materialDomain(filament::MaterialDomain::SURFACE)
+            .blending(filament::BlendingMode::OPAQUE)
+            .culling(filament::backend::CullingMode::NONE)
+            .depthWrite(true)
+            .depthCulling(true)
+            .stereoscopicType(filamat::MaterialBuilder::StereoscopicType::MULTIVIEW)
+            .stereoscopicEyeCount(2)
+            .targetApi(filamat::MaterialBuilder::TargetApi::ALL)
+            .platform(filamat::MaterialBuilder::Platform::ALL);
+    const filamat::Package package = builder.build(bridge->engine->getJobSystem());
+    if (!package.isValid()) {
+        bridge_set_error(bridge, "Filament could not build controller eye diagnostic material");
+        return false;
+    }
+    bridge->controller_eye_diagnostic_material = filament::Material::Builder()
+            .package(package.getData(), package.getSize())
+            .build(*bridge->engine);
+    if (!bridge->controller_eye_diagnostic_material) {
+        bridge_set_error(bridge, "Filament could not create controller eye diagnostic material");
+        return false;
+    }
+    bridge->controller_eye_diagnostic_material_instance =
+            bridge->controller_eye_diagnostic_material->createInstance();
+    return bridge->controller_eye_diagnostic_material_instance != nullptr;
+}
 
 struct ControllerQuaternion {
     float x;
@@ -293,6 +354,11 @@ int bridge_controller_load(
     }
     bridge->foreground_scene->addEntities(
             controller.asset->getEntities(), controller.asset->getEntityCount());
+    const bool eye_diagnostic = controller_eye_diagnostic_requested();
+    if (eye_diagnostic && !ensure_controller_eye_diagnostic_material(bridge)) {
+        bridge_controller_destroy(bridge, controller);
+        return 0;
+    }
     // Keep controllers in front of the virtual screen and below the laser.
     // Both are rendered in the same Filament View, so priority is the
     // ordering contract for the foreground objects.
@@ -305,6 +371,14 @@ int bridge_controller_load(
         renderables.setLightChannel(instance, 0, false);
         renderables.setLightChannel(instance, 1, true);
         renderables.setLayerMask(instance, 0xff, 0x01);
+        if (eye_diagnostic) {
+            const size_t primitive_count = renderables.getPrimitiveCount(instance);
+            for (size_t primitive = 0; primitive < primitive_count; ++primitive) {
+                renderables.setMaterialInstanceAt(
+                        instance, primitive,
+                        bridge->controller_eye_diagnostic_material_instance);
+            }
+        }
     }
     for (size_t index = 0; index < controller.asset->getEntityCount(); ++index) {
         const auto entity = controller.asset->getEntities()[index];
@@ -354,6 +428,12 @@ int bridge_controller_load(
     }
     std::printf("\n");
     std::fflush(stdout);
+    if (eye_diagnostic) {
+        std::printf(
+                "[FilamentBridge] controller eye diagnostic active hand=%u "
+                "left=red right=green\n", hand);
+        std::fflush(stdout);
+    }
     controller.asset->releaseSourceData();
     controller.bytes.clear();
     bridge->engine->flushAndWait();

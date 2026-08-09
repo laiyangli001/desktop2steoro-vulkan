@@ -314,6 +314,8 @@ struct FilamentBridge {
     MaterialBrightnessState brightness;
     FilamentBridgeLightingConfig lighting{};
     std::array<ControllerAsset, 2> controllers;
+    filament::Material* controller_eye_diagnostic_material = nullptr;
+    filament::MaterialInstance* controller_eye_diagnostic_material_instance = nullptr;
     filament::Material* laser_material = nullptr;
     filament::MaterialInstance* laser_material_instance = nullptr;
     filament::VertexBuffer* laser_vertex_buffer = nullptr;

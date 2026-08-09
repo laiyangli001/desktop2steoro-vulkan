@@ -670,6 +670,12 @@ class OpenXrVulkanPresenter(
         self.swapchain_format: int | None = None
         self.swapchains: list[_EyeSwapchain] = []
         self._multiview_active = False
+        self._projection_array_eye_diagnostic = _env_flag(
+            "D2S_OPENXR_PROJECTION_ARRAY_EYE_DIAGNOSTIC", default=False
+        )
+        self._filament_multiview_projection_diagnostic = _env_flag(
+            "D2S_FILAMENT_MULTIVIEW_PROJECTION_DIAGNOSTIC", default=False
+        )
         self._vulkan_projection_composer_requested = _env_flag(
             "D2S_VULKAN_PROJECTION_COMPOSER", default=True
         )
@@ -1548,6 +1554,15 @@ class OpenXrVulkanPresenter(
                     output_lock_started = time.perf_counter()
                     with self._output_lock:
                         output_frame = self._pending_output
+                    if (
+                        self._filament_multiview_projection_diagnostic
+                        and output_frame is not None
+                    ):
+                        # This diagnostic renders only Filament. Do not retain
+                        # an inference output as the displayed SBS frame when
+                        # neither eye entered source-image sampling.
+                        self._abort_output_frame(output_frame)
+                        output_frame = None
                     if self._on_breakdown_add_time is not None:
                         self._on_breakdown_add_time(
                             "openxr_output_lock",
@@ -1562,7 +1577,12 @@ class OpenXrVulkanPresenter(
                         )
                     # Match the legacy frame gate: runtime rendering readiness
                     # is separate from the availability of a fresh stereo frame.
-                    if self._pending_output is None and not self._has_presented_frame:
+                    if (
+                        self._pending_output is None
+                        and not self._has_presented_frame
+                        and not self._projection_array_eye_diagnostic
+                        and not self._filament_multiview_projection_diagnostic
+                    ):
                         if not self._source_frame_wait_logged:
                             self._source_frame_wait_logged = True
                             print(
@@ -3746,6 +3766,7 @@ class OpenXrVulkanPresenter(
                 f"PRIMARY_STEREO returned {len(view_configs)} view(s)"
             )
 
+        eye_extents = []
         for view_config in view_configs[:2]:
             width = _scaled_dimension(
                 view_config.recommended_image_rect_width,
@@ -3757,7 +3778,27 @@ class OpenXrVulkanPresenter(
                 view_config.max_image_rect_height,
                 self.config.render_scale,
             )
-            self.swapchains.append(self._create_projection_swapchain(width, height))
+            eye_extents.append((width, height))
+        if self._projection_array_eye_diagnostic:
+            if eye_extents[0] != eye_extents[1]:
+                raise OpenXrVulkanUnavailableError(
+                    "Projection array diagnostic requires equal eye extents: "
+                    f"left={eye_extents[0]} right={eye_extents[1]}"
+                )
+            width, height = eye_extents[0]
+            self.swapchains.append(
+                self._create_projection_swapchain(width, height, array_size=2)
+            )
+            print(
+                "[OpenXRViewer] Projection array eye diagnostic created: "
+                f"array_size=2 extent={width}x{height}",
+                flush=True,
+            )
+        else:
+            for width, height in eye_extents:
+                self.swapchains.append(
+                    self._create_projection_swapchain(width, height)
+                )
 
     def _create_projection_swapchain(
         self, width: int, height: int, *, array_size: int = 1
@@ -4144,17 +4185,28 @@ class OpenXrVulkanPresenter(
                 queue_family_index=self.vulkan.queue_family_index,
                 queue_index=0,
             )
-            # The current producer depth contract is per-eye.  Prefer that
-            # contract over Filament multiview so Vulkan laser occlusion can
-            # consume one depth attachment and completion semaphore per eye.
-            # Virtual Desktop does not reliably accept a single stereo array
-            # swapchain. Keep the OpenXR, Filament and Vulkan paths aligned on
-            # two independent per-eye swapchains.
-            self._multiview_active = False
-            if getattr(bridge, "multiview_abi_available", False):
+            # Keep the current per-eye producer as the default until the
+            # layered Filament render itself has passed headset validation.
+            # The preceding red/green Projection diagnostic proved that VDXR
+            # routes imageArrayIndex 0/1 correctly; this second, explicit gate
+            # isolates Filament multiview from SBS/Glow composition.
+            self._multiview_active = bool(
+                self._filament_multiview_projection_diagnostic
+                and self._try_enable_filament_multiview(bridge)
+            )
+            if (
+                self._filament_multiview_projection_diagnostic
+                and not self._multiview_active
+            ):
                 print(
-                    "[OpenXRViewer] Filament multiview disabled: "
-                    "Virtual Desktop requires per-eye swapchains",
+                    "[OpenXRViewer] Filament multiview Projection diagnostic "
+                    "unavailable; using per-eye swapchains",
+                    flush=True,
+                )
+            elif self._multiview_active:
+                print(
+                    "[OpenXRViewer] Filament multiview Projection diagnostic active: "
+                    "one array_size=2 swapchain, SBS/Glow disabled",
                     flush=True,
                 )
             if not self._multiview_active:
@@ -5788,6 +5840,10 @@ class OpenXrVulkanPresenter(
                 )
             record_time("openxr_swapchain_wait", wait_pair_started)
 
+            if self._projection_array_eye_diagnostic:
+                self._render_projection_array_eye_diagnostic(acquired_images)
+                render_succeeded = True
+
             shared_prepare_started = time.perf_counter()
             if use_vulkan_projection_composer and presentation_frame is not None:
                 sampling_frame = presentation_frame
@@ -6112,6 +6168,29 @@ class OpenXrVulkanPresenter(
         return OpenXrCompositionBuilder(xr, self.reference_space).projection_layer(
             composition_views, self.swapchains
         )
+
+    def _render_projection_array_eye_diagnostic(
+        self, acquired_images: list[tuple[_EyeSwapchain, int]]
+    ) -> None:
+        if len(acquired_images) != 1 or acquired_images[0][0].array_size < 2:
+            raise RuntimeError(
+                "Projection array eye diagnostic requires one array_size=2 swapchain"
+            )
+        eye, image_index = acquired_images[0]
+        target = eye.resources[image_index].image
+        for array_layer, color in enumerate(
+            ((1.0, 0.0, 0.0, 1.0), (0.0, 1.0, 0.0, 1.0))
+        ):
+            self.vulkan.clear_color_image(
+                target, color, base_array_layer=array_layer
+            )
+        if not getattr(self, "_projection_array_eye_diagnostic_logged", False):
+            self._projection_array_eye_diagnostic_logged = True
+            print(
+                "[OpenXRViewer] Projection array eye diagnostic active: "
+                "left=red layer=0 right=green layer=1",
+                flush=True,
+            )
 
     def _ensure_sbs_capture_slots(self, frame: VulkanStereoOutputFrame) -> bool:
         if self._sbs_capture_slots:

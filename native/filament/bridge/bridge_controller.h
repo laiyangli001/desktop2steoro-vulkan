@@ -7,6 +7,7 @@ struct FilamentBridge;
 
 void bridge_controller_destroy(
         FilamentBridge* bridge, ControllerAsset& controller);
+void bridge_controller_eye_diagnostic_destroy(FilamentBridge* bridge);
 void bridge_controller_update_animations(
         FilamentBridge* bridge, ControllerAsset& controller);
 int bridge_controller_load(

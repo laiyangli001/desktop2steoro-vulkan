@@ -195,6 +195,7 @@ void bridge_context_destroy(FilamentBridge* bridge) {
     for (auto& controller : bridge->controllers) {
         bridge_controller_destroy(bridge, controller);
     }
+    bridge_controller_eye_diagnostic_destroy(bridge);
     bridge_laser_destroy(bridge);
     bridge_controller_guide_destroy(bridge);
     bridge_text_overlay_destroy(bridge);

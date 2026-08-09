@@ -91,6 +91,33 @@ def test_cuda_consumer_release_uses_filament_completion_timeline_once():
     assert adapter.right_release_values == [5]
 
 
+def test_cuda_consumer_release_without_prepared_eyes_needs_no_semaphore_slots():
+    released = []
+    adapter = object.__new__(CudaVulkanOutputAdapter)
+    adapter.presenter = SimpleNamespace(vulkan=SimpleNamespace(device_lost=False))
+    adapter._released_source_frames = set()
+    adapter._prepared_source_eyes = set()
+    adapter._release_signaled = set()
+    adapter.left_release_semaphores = []
+    adapter.right_release_semaphores = []
+    adapter.left_release_values = []
+    adapter.right_release_values = []
+    adapter._source_frames = {
+        7: (
+            SimpleNamespace(resource="left"),
+            SimpleNamespace(resource="right"),
+            2,
+        )
+    }
+    adapter.release_frame = released.append
+
+    adapter.release_consumer_frame(7)
+
+    assert released == [7]
+    assert adapter._source_frames == {}
+    assert adapter._released_source_frames == {7}
+
+
 def test_screen_light_sample_completion_is_non_blocking_and_clamped():
     adapter = CudaVulkanOutputAdapter(None)
     adapter._screen_light_pending = (

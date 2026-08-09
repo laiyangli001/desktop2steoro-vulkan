@@ -234,6 +234,26 @@ def test_native_controller_animation_preserves_touch_semantics_without_abi_growt
     assert "uint32_t button_mask" in public_header
 
 
+def test_native_controller_multiview_eye_diagnostic_replaces_glb_materials() -> None:
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "native/filament/bridge/bridge_controller.cpp").read_text(
+        encoding="utf-8"
+    )
+    internal = (root / "native/filament/bridge/bridge_internal.h").read_text(
+        encoding="utf-8"
+    )
+
+    assert "D2S_FILAMENT_CONTROLLER_EYE_DIAGNOSTIC" in source
+    assert "getEyeIndex() == 0" in source
+    assert "left=red right=green" in source
+    assert (
+        ".stereoscopicType(filamat::MaterialBuilder::StereoscopicType::MULTIVIEW)"
+        in source
+    )
+    assert "renderables.setMaterialInstanceAt(" in source
+    assert "controller_eye_diagnostic_material_instance" in internal
+
+
 def test_native_foreground_uses_one_view_for_multiview_stereo() -> None:
     root = Path(__file__).resolve().parents[1]
     eye_source = (root / "native/filament/bridge/bridge_eye.cpp").read_text(

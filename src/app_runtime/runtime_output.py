@@ -506,22 +506,23 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
             self._discard_source_frame_after_device_loss(frame_key)
             return
         try:
-            for eye_index, resource, release_semaphore, release_values in (
-                (
-                    0,
-                    left.resource,
-                    self.left_release_semaphores[slot_index],
-                    self.left_release_values,
-                ),
-                (
-                    1,
-                    right.resource,
-                    self.right_release_semaphores[slot_index],
-                    self.right_release_values,
-                ),
+            for eye_index, resource in (
+                (0, left.resource),
+                (1, right.resource),
             ):
                 if (frame_key, eye_index) not in self._prepared_source_eyes:
                     continue
+                release_semaphores = (
+                    self.left_release_semaphores
+                    if eye_index == 0
+                    else self.right_release_semaphores
+                )
+                release_values = (
+                    self.left_release_values
+                    if eye_index == 0
+                    else self.right_release_values
+                )
+                release_semaphore = release_semaphores[slot_index]
                 release_value = release_values[slot_index] + 1
                 context.release_external_image_from_sampling(
                     resource,

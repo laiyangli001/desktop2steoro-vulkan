@@ -2393,7 +2393,10 @@ def test_openxr_frame_gate_waits_for_runtime_output_before_filament() -> None:
     source = (Path(__file__).resolve().parents[1] /
               "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
 
-    assert "if self._pending_output is None and not self._has_presented_frame:" in source
+    assert "self._pending_output is None" in source
+    assert "and not self._has_presented_frame" in source
+    assert "and not self._projection_array_eye_diagnostic" in source
+    assert "and not self._filament_multiview_projection_diagnostic" in source
     assert "waiting for first runtime eye frame" in source
     assert "layer = self._render_projection_layer(views, output_frame)" in source
     assert "Vulkan Projection Composer" in source
@@ -3196,6 +3199,58 @@ def test_filament_multiview_keeps_fallback_for_mismatched_eye_extents() -> None:
 
     assert not presenter._try_enable_filament_multiview(bridge)
     assert [eye.handle for eye in presenter.swapchains] == ["left", "right"]
+
+
+def test_filament_multiview_projection_diagnostic_activates_layered_path(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("D2S_FILAMENT_MULTIVIEW_PROJECTION_DIAGNOSTIC", "1")
+    calls = []
+
+    class FakeBridge:
+        def __init__(self, _path):
+            pass
+
+        def create(self, **_kwargs):
+            pass
+
+        def set_scene_exposure(self, _value):
+            pass
+
+        def set_skybox_brightness(self, _value):
+            pass
+
+        def set_fill_light(self, _color, _intensity, _direction):
+            pass
+
+        def close(self):
+            pass
+
+    import xr_viewer.filament_vulkan_bridge as bridge_module
+
+    monkeypatch.setattr(bridge_module, "FilamentVulkanBridge", FakeBridge)
+    presenter = OpenXrVulkanPresenter(
+        OpenXrVulkanConfig(filament_bridge_path="bridge.dll")
+    )
+    presenter.vulkan = SimpleNamespace(
+        instance=1,
+        physical_device=2,
+        device=3,
+        queue_family_index=4,
+    )
+    presenter.swapchains = [
+        _EyeSwapchain("left", [], 10, 20),
+        _EyeSwapchain("right", [], 10, 20),
+    ]
+    presenter._try_enable_filament_multiview = lambda bridge: (
+        calls.append(bridge),
+        True,
+    )[-1]
+
+    presenter._initialize_filament_bridges()
+
+    assert calls == [presenter.filament_bridge]
+    assert presenter._multiview_active
 
 
 def test_filament_camera_receives_openxr_pose_and_fov() -> None:
@@ -4066,6 +4121,40 @@ def test_projection_layer_builder_maps_multiview_to_array_layers() -> None:
         "stereo-chain",
         "stereo-chain",
     ]
+
+
+def test_projection_array_eye_diagnostic_clears_two_layers(monkeypatch) -> None:
+    calls = []
+    presenter = OpenXrVulkanPresenter()
+    presenter.vulkan = SimpleNamespace(
+        clear_color_image=lambda image, color, **kwargs: calls.append(
+            (image, color, kwargs)
+        )
+    )
+    swapchain = _EyeSwapchain(
+        "stereo-chain",
+        [],
+        10,
+        20,
+        resources=[SimpleNamespace(image="stereo-image")],
+        array_size=2,
+    )
+
+    presenter._render_projection_array_eye_diagnostic([(swapchain, 0)])
+
+    assert calls == [
+        ("stereo-image", (1.0, 0.0, 0.0, 1.0), {"base_array_layer": 0}),
+        ("stereo-image", (0.0, 1.0, 0.0, 1.0), {"base_array_layer": 1}),
+    ]
+
+
+def test_projection_array_eye_diagnostic_requires_layered_swapchain() -> None:
+    presenter = OpenXrVulkanPresenter()
+
+    with pytest.raises(RuntimeError, match="one array_size=2 swapchain"):
+        presenter._render_projection_array_eye_diagnostic(
+            [(_EyeSwapchain("left", [], 10, 20), 0)]
+        )
 
 
 def test_quad_layer_builder_maps_each_eye_to_its_array_layer() -> None:
