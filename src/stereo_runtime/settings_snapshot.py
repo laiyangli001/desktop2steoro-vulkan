@@ -217,6 +217,9 @@ class RuntimeSettingsSnapshot:
             updates["parallax_preset"] = self.parallax_budget_preset
         if self.temporal_enabled is not None and self.temporal is None:
             updates["temporal"] = self.temporal_enabled
+        if self.hole_fill_mode is not None:
+            mode = str(self.hole_fill_mode).strip().lower()
+            updates["hole_fill"] = "none" if mode == "none" else "edge_aware"
         if self.runtime_quality_mode is not None:
             updates["mode"] = _normalize_runtime_mode(self.runtime_quality_mode)
         return updates

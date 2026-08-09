@@ -165,6 +165,41 @@ def test_settings_snapshot_maps_temporal_reset_fields():
     assert ("reset_" + "cooldown" + "_frames") not in updates
 
 
+def test_runtime_hot_switches_hole_fill_master_gate_with_mode() -> None:
+    runtime = StereoRuntime(
+        StereoRuntimeConfig(model_id="Distill-Any-Depth-Base", cache_dir="models", stereo_preset="cinema"),
+        depth_provider=FakeDepthProvider(),
+        collect_memory_stats=False,
+    )
+
+    runtime.apply_settings_snapshot(
+        RuntimeSettingsSnapshot(
+            version=20,
+            timestamp=1.0,
+            hole_fill_mode="none",
+            hole_fill_radius=0,
+            hole_fill_strength=0.0,
+        )
+    )
+    assert runtime.config.hole_fill == "none"
+    assert runtime.stereo_config.hole_fill == "none"
+
+    runtime.apply_settings_snapshot(
+        RuntimeSettingsSnapshot(
+            version=21,
+            timestamp=2.0,
+            hole_fill_mode="quality",
+            hole_fill_radius=3,
+            hole_fill_strength=1.0,
+        )
+    )
+    assert runtime.config.hole_fill == "edge_aware"
+    assert runtime.stereo_config.hole_fill == "edge_aware"
+    assert runtime.stereo_config.hole_fill_mode == "quality"
+    assert runtime.stereo_config.hole_fill_radius == 3
+    assert runtime.stereo_config.hole_fill_strength == pytest.approx(1.0)
+
+
 def test_settings_snapshot_maps_profile_sync_as_provider_rebuild_config():
     snapshot = RuntimeSettingsSnapshot(version=15, timestamp=1.0, profile_sync=True)
 

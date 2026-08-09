@@ -1070,6 +1070,16 @@ def test_filament_controller_overlay_runs_after_vulkan_composer() -> None:
     assert composer < overlay < output_commit
 
 
+def test_projection_composer_base_pass_defers_controller_layers() -> None:
+    source = inspect.getsource(
+        OpenXrVulkanPresenter._render_filament_for_projection_composer
+    )
+
+    assert 'getattr(bridge, "background_frame_abi_available", False)' in source
+    assert "bridge.begin_background_frame()" in source
+    assert "bridge.begin_frame()" in source
+
+
 def test_projection_quality_chain_disabled_forces_lod0_sampling() -> None:
     source = inspect.getsource(OpenXrVulkanPresenter._apply_vulkan_projection_sampling)
 

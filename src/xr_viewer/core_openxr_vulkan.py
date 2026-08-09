@@ -5596,7 +5596,14 @@ class OpenXrVulkanPresenter(
             record_time(f"openxr_filament_eye{eye_index}_state", state_started)
             bridge.set_acquired_image(image_index)
             queue_started = time.perf_counter()
-            bridge.begin_frame()
+            if (
+                self._filament_controller_overlay_after_composer
+                and bool(getattr(bridge, "controller_overlay_abi_available", False))
+                and bool(getattr(bridge, "background_frame_abi_available", False))
+            ):
+                bridge.begin_background_frame()
+            else:
+                bridge.begin_frame()
             record_time(f"openxr_filament_eye{eye_index}_queue", queue_started)
             finish_started = time.perf_counter()
             if deferred:

@@ -280,7 +280,10 @@ int bridge_eye_set_stereo_camera(
     return 1;
 }
 
-int bridge_eye_begin_frame(FilamentBridge* bridge) {
+namespace {
+
+int bridge_eye_begin_frame_impl(
+        FilamentBridge* bridge, bool render_controller_layers) {
     if (!bridge || !bridge->renderer || !bridge->swapchain || bridge->frame_active) {
         return 0;
     }
@@ -301,11 +304,21 @@ int bridge_eye_begin_frame(FilamentBridge* bridge) {
     // layered Views preserve only the first View's per-eye camera state.
     auto& eye = bridge->eyes[bridge->active_eye];
     bridge->renderer->render(eye.foreground_view);
-    if (!bridge->multiview_active) {
+    if (render_controller_layers && !bridge->multiview_active) {
         bridge->renderer->render(eye.controller_view);
         bridge->renderer->render(eye.controller_guide_view);
     }
     return bridge->frame_active ? 1 : 0;
+}
+
+}  // namespace
+
+int bridge_eye_begin_frame(FilamentBridge* bridge) {
+    return bridge_eye_begin_frame_impl(bridge, true);
+}
+
+int bridge_eye_begin_background_frame(FilamentBridge* bridge) {
+    return bridge_eye_begin_frame_impl(bridge, false);
 }
 
 int bridge_eye_render_controller_overlay(FilamentBridge* bridge) {

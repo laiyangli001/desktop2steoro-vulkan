@@ -38,6 +38,7 @@ int bridge_eye_set_stereo_camera(
         FilamentBridge* bridge, const float* eye_model_matrices32,
         const double* eye_frustums8, double near_plane, double far_plane);
 int bridge_eye_begin_frame(FilamentBridge* bridge);
+int bridge_eye_begin_background_frame(FilamentBridge* bridge);
 int bridge_eye_render_controller_overlay(FilamentBridge* bridge);
 int bridge_eye_end_frame(FilamentBridge* bridge);
 int bridge_eye_end_frame_deferred(FilamentBridge* bridge);
