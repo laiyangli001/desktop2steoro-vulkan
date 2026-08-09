@@ -32,6 +32,7 @@ from viewer.vulkan_resources import (
     VulkanDepthAttachment,
     VulkanExportableImage,
     VulkanHostImage,
+    VulkanHostReadbackBuffer,
     VulkanImageResource,
 )
 from viewer.vulkan_msdf_quad import VulkanMsdfQuadRenderer, VulkanMsdfQuadRequest
@@ -177,6 +178,16 @@ def _write_sbs_capture_png(
 
     sbs = np.concatenate((left_rgb, right_rgb), axis=1)
     Image.fromarray(sbs, mode="RGB").save(output_path, compress_level=1)
+
+
+def _active_rgb_mean(rgb: np.ndarray, *, threshold: int = 16) -> tuple[int, tuple[float, float, float]]:
+    """Return non-background pixel count and RGB mean for visual diagnostics."""
+    active = np.max(rgb, axis=2) > int(threshold)
+    count = int(np.count_nonzero(active))
+    if count == 0:
+        return 0, (0.0, 0.0, 0.0)
+    mean = np.mean(rgb[active], axis=0)
+    return count, tuple(float(value) for value in mean)
 
 
 def _layout_msdf_osd_runs(
@@ -676,6 +687,10 @@ class OpenXrVulkanPresenter(
         self._filament_multiview_projection_diagnostic = _env_flag(
             "D2S_FILAMENT_MULTIVIEW_PROJECTION_DIAGNOSTIC", default=False
         )
+        self._filament_multiview_layer_readback_requested = _env_flag(
+            "D2S_FILAMENT_MULTIVIEW_LAYER_READBACK", default=False
+        )
+        self._filament_multiview_layer_readback_done = False
         self._vulkan_projection_composer_requested = _env_flag(
             "D2S_VULKAN_PROJECTION_COMPOSER", default=True
         )
@@ -3804,13 +3819,16 @@ class OpenXrVulkanPresenter(
         self, width: int, height: int, *, array_size: int = 1
     ) -> _EyeSwapchain:
         xr = self.xr
+        usage_flags = (
+            xr.SwapchainUsageFlags.COLOR_ATTACHMENT_BIT
+            | xr.SwapchainUsageFlags.TRANSFER_DST_BIT
+        )
+        if self._filament_multiview_layer_readback_requested and array_size >= 2:
+            usage_flags |= xr.SwapchainUsageFlags.TRANSFER_SRC_BIT
         handle = xr.create_swapchain(
             self.session,
             xr.SwapchainCreateInfo(
-                usage_flags=(
-                    xr.SwapchainUsageFlags.COLOR_ATTACHMENT_BIT
-                    | xr.SwapchainUsageFlags.TRANSFER_DST_BIT
-                ),
+                usage_flags=usage_flags,
                 format=self.swapchain_format,
                 sample_count=1,
                 width=width,
@@ -5618,6 +5636,115 @@ class OpenXrVulkanPresenter(
             else None
         )
 
+    def _capture_filament_multiview_layers(
+        self,
+        acquired_images: list[tuple[_EyeSwapchain, int]],
+        wait_for_timeline: int | None,
+        wait_semaphore: Any | None = None,
+    ) -> int | None:
+        """Read back both Filament array layers once to locate stereo routing faults."""
+        if (
+            not self._filament_multiview_layer_readback_requested
+            or self._filament_multiview_layer_readback_done
+        ):
+            return wait_for_timeline
+        self._filament_multiview_layer_readback_done = True
+        if len(acquired_images) != 1 or acquired_images[0][0].array_size < 2:
+            print(
+                "[OpenXRViewer] Filament multiview layer readback skipped: "
+                "array_size=2 swapchain unavailable",
+                flush=True,
+            )
+            return wait_for_timeline
+
+        eye, image_index = acquired_images[0]
+        source = eye.resources[image_index]
+        output_width = min(320, int(source.width))
+        output_height = max(
+            1, round(int(source.height) * output_width / int(source.width))
+        )
+        host: VulkanHostReadbackBuffer | None = None
+        try:
+            vk = self.vulkan.vk
+            # The custom external Filament platform deliberately disables the
+            # PRESENT transition. Its finished semaphore therefore publishes
+            # the layered target in COLOR_ATTACHMENT_OPTIMAL.
+            self.vulkan.register_image_state(
+                source.image,
+                ImageState(
+                    layout=vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                    access_mask=vk.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                    stage_mask=vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                    queue_family_index=self.vulkan.queue_family_index,
+                ),
+            )
+            # Use an exact-size copy instead of a GPU blit. Some Windows
+            # drivers create the linear host image successfully but do not
+            # produce data for an optimal-to-linear scaled blit. Reuse one
+            # full-size host allocation and shrink each completed layer on CPU.
+            host = VulkanHostReadbackBuffer(
+                self.vulkan,
+                int(source.width),
+                int(source.height),
+                label="filament-multiview-readback",
+            )
+            from PIL import Image
+
+            layers: list[np.ndarray] = []
+            for layer in range(2):
+                wait_for_timeline = self.vulkan.copy_image_to_host_buffer(
+                    source,
+                    host,
+                    wait_for_timeline=wait_for_timeline,
+                    wait_semaphore=wait_semaphore if layer == 0 else None,
+                    source_array_layer=layer,
+                )
+                self.vulkan.wait_for_timeline(int(wait_for_timeline))
+                full_rgb = _vulkan_rgba_to_rgb(
+                    host.read_rgba(),
+                    format_value=int(source.format),
+                    vk=vk,
+                    image_origin="bottom_left",
+                )
+                layers.append(
+                    np.asarray(
+                        Image.fromarray(full_rgb, mode="RGB").resize(
+                            (output_width, output_height), Image.Resampling.BILINEAR
+                        )
+                    )
+                )
+            output_dir = Path(__file__).resolve().parents[2] / "artifacts"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output_path = output_dir / (
+                "filament_multiview_layers_"
+                f"{time.strftime('%Y%m%d_%H%M%S')}.png"
+            )
+            _write_sbs_capture_png(output_path, layers[0], layers[1])
+            statistics = []
+            for layer, rgb in enumerate(layers):
+                active_count, mean = _active_rgb_mean(rgb)
+                statistics.append(
+                    f"layer{layer}: active={active_count} "
+                    f"mean_rgb=({mean[0]:.1f},{mean[1]:.1f},{mean[2]:.1f})"
+                )
+            print(
+                "[OpenXRViewer] Filament multiview layer readback saved: "
+                f"{output_path} source={source.width}x{source.height} "
+                f"format={source.format} copy=image-to-buffer | "
+                f"{' | '.join(statistics)}",
+                flush=True,
+            )
+        except Exception as exc:
+            print(
+                "[OpenXRViewer] Filament multiview layer readback failed: "
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+        finally:
+            if host is not None:
+                host.close()
+        return wait_for_timeline
+
     def _render_filament_for_projection_composer(
         self,
         render_views: list[Any],
@@ -6026,7 +6153,20 @@ class OpenXrVulkanPresenter(
                 raise RuntimeError(
                     "Filament did not publish the expected render-finished semaphores"
                 )
-            if published_semaphores:
+            readback_consumed_filament_semaphore = False
+            if (
+                published_semaphores
+                and self._multiview_active
+                and self._filament_multiview_layer_readback_requested
+                and not self._filament_multiview_layer_readback_done
+            ):
+                consumer_completion_timeline = self._capture_filament_multiview_layers(
+                    acquired_images,
+                    None,
+                    published_semaphores,
+                )
+                readback_consumed_filament_semaphore = True
+            if published_semaphores and not readback_consumed_filament_semaphore:
                 drain_started = time.perf_counter()
                 completion_drain_attempted = True
                 consumer_completion_timeline = self.vulkan.submit_on(
@@ -6044,6 +6184,11 @@ class OpenXrVulkanPresenter(
                         ),
                         int(consumer_completion_timeline),
                     )
+            if self._multiview_active and not readback_consumed_filament_semaphore:
+                self._capture_filament_multiview_layers(
+                    acquired_images,
+                    consumer_completion_timeline,
+                )
             render_succeeded = True
             if presentation_frame is not None and (
                 use_vulkan_projection_composer

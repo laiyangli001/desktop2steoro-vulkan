@@ -1293,6 +1293,138 @@ class VulkanContext:
         )
         return timeline_value
 
+    def copy_image_to_host_buffer(
+        self,
+        source: Any,
+        destination: Any,
+        *,
+        source_array_layer: int = 0,
+        wait_for_timeline: int | None = None,
+        wait_semaphore: Any | None = None,
+    ) -> int:
+        """Copy one tightly packed RGBA image layer into a host-visible buffer."""
+        self._ensure_open()
+        if getattr(source, "context", self) is not self:
+            raise VulkanCapabilityError("Vulkan image belongs to a different context")
+        if getattr(destination, "context", self) is not self:
+            raise VulkanCapabilityError("Vulkan buffer belongs to a different context")
+        if (
+            int(source.width) != int(destination.width)
+            or int(source.height) != int(destination.height)
+        ):
+            raise ValueError("image and host readback buffer dimensions must match")
+        if int(source_array_layer) < 0:
+            raise ValueError("image array layer must not be negative")
+
+        vk = self.vk
+        source_key = _cffi_handle_address(vk, source.image)
+        source_state = self._image_states.get(
+            source_key, undefined_layout=vk.VK_IMAGE_LAYOUT_UNDEFINED
+        )
+        self._image_states.require_owner(source_key, self.queue_family_index)
+        if source_state.layout == vk.VK_IMAGE_LAYOUT_UNDEFINED:
+            raise VulkanCapabilityError(
+                "source image must have a defined layout before buffer copy"
+            )
+        source_stage = source_state.stage_mask or vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
+
+        def record(command_buffer: Any) -> None:
+            image_range = _color_subresource_range(
+                vk, base_array_layer=source_array_layer
+            )
+            vk.vkCmdPipelineBarrier(
+                command_buffer,
+                source_stage,
+                vk.VK_PIPELINE_STAGE_TRANSFER_BIT,
+                0,
+                0,
+                None,
+                0,
+                None,
+                1,
+                [
+                    vk.VkImageMemoryBarrier(
+                        sType=vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                        srcAccessMask=source_state.access_mask,
+                        dstAccessMask=vk.VK_ACCESS_TRANSFER_READ_BIT,
+                        oldLayout=source_state.layout,
+                        newLayout=vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                        srcQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+                        dstQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+                        image=source.image,
+                        subresourceRange=image_range,
+                    )
+                ],
+            )
+            vk.vkCmdCopyImageToBuffer(
+                command_buffer,
+                source.image,
+                vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                destination.buffer,
+                1,
+                [
+                    vk.VkBufferImageCopy(
+                        bufferOffset=0,
+                        bufferRowLength=0,
+                        bufferImageHeight=0,
+                        imageSubresource=vk.VkImageSubresourceLayers(
+                            aspectMask=vk.VK_IMAGE_ASPECT_COLOR_BIT,
+                            mipLevel=0,
+                            baseArrayLayer=int(source_array_layer),
+                            layerCount=1,
+                        ),
+                        imageOffset=vk.VkOffset3D(x=0, y=0, z=0),
+                        imageExtent=vk.VkExtent3D(
+                            width=int(source.width),
+                            height=int(source.height),
+                            depth=1,
+                        ),
+                    )
+                ],
+            )
+            vk.vkCmdPipelineBarrier(
+                command_buffer,
+                vk.VK_PIPELINE_STAGE_TRANSFER_BIT,
+                vk.VK_PIPELINE_STAGE_HOST_BIT | source_stage,
+                0,
+                0,
+                None,
+                1,
+                [
+                    vk.VkBufferMemoryBarrier(
+                        sType=vk.VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+                        srcAccessMask=vk.VK_ACCESS_TRANSFER_WRITE_BIT,
+                        dstAccessMask=vk.VK_ACCESS_HOST_READ_BIT,
+                        srcQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+                        dstQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+                        buffer=destination.buffer,
+                        offset=0,
+                        size=destination.size,
+                    )
+                ],
+                1,
+                [
+                    vk.VkImageMemoryBarrier(
+                        sType=vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                        srcAccessMask=vk.VK_ACCESS_TRANSFER_READ_BIT,
+                        dstAccessMask=source_state.access_mask,
+                        oldLayout=vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                        newLayout=source_state.layout,
+                        srcQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+                        dstQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+                        image=source.image,
+                        subresourceRange=image_range,
+                    )
+                ],
+            )
+
+        return self.submit_on(
+            "graphics",
+            record,
+            wait_for_timeline=wait_for_timeline,
+            wait_semaphore=wait_semaphore,
+        )
+
     def submit(self, record: Callable[[Any], None]) -> None:
         self.submit_on("graphics", record)
 

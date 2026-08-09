@@ -424,6 +424,74 @@ class VulkanHostImage:
         self.vk.vkFreeMemory(self.context.device, self.memory, None)
 
 
+class VulkanHostReadbackBuffer:
+    """Tightly packed host-visible destination for Vulkan image diagnostics."""
+
+    def __init__(self, context: Any, width: int, height: int, *, label: str) -> None:
+        self.context = context
+        self.vk = context.vk
+        self.width = int(width)
+        self.height = int(height)
+        self.label = str(label)
+        self.size = self.width * self.height * 4
+        vk = self.vk
+        self.buffer = vk.vkCreateBuffer(
+            context.device,
+            vk.VkBufferCreateInfo(
+                sType=vk.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+                size=self.size,
+                usage=vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                sharingMode=vk.VK_SHARING_MODE_EXCLUSIVE,
+            ),
+            None,
+        )
+        requirements = vk.vkGetBufferMemoryRequirements(context.device, self.buffer)
+        properties = vk.vkGetPhysicalDeviceMemoryProperties(context.physical_device)
+        flags = int(
+            vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
+            | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+        )
+        memory_type = next(
+            (
+                index
+                for index, item in enumerate(properties.memoryTypes)
+                if requirements.memoryTypeBits & (1 << index)
+                and int(item.propertyFlags) & flags == flags
+            ),
+            None,
+        )
+        if memory_type is None:
+            vk.vkDestroyBuffer(context.device, self.buffer, None)
+            raise RuntimeError("no host-visible Vulkan memory type for readback buffer")
+        self.memory = vk.vkAllocateMemory(
+            context.device,
+            vk.VkMemoryAllocateInfo(
+                sType=vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+                allocationSize=requirements.size,
+                memoryTypeIndex=memory_type,
+            ),
+            None,
+        )
+        vk.vkBindBufferMemory(context.device, self.buffer, self.memory, 0)
+
+    def read_rgba(self):
+        import numpy as np
+
+        mapped = self.vk.vkMapMemory(
+            self.context.device, self.memory, 0, self.size, 0
+        )
+        try:
+            return np.frombuffer(bytes(mapped[0:self.size]), dtype=np.uint8).reshape(
+                self.height, self.width, 4
+            ).copy()
+        finally:
+            self.vk.vkUnmapMemory(self.context.device, self.memory)
+
+    def close(self) -> None:
+        self.vk.vkDestroyBuffer(self.context.device, self.buffer, None)
+        self.vk.vkFreeMemory(self.context.device, self.memory, None)
+
+
 class VulkanExportableBuffer:
     """Own a Vulkan storage buffer whose memory can be imported by a GPU producer."""
 

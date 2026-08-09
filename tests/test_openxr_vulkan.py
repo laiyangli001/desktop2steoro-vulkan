@@ -3253,6 +3253,28 @@ def test_filament_multiview_projection_diagnostic_activates_layered_path(
     assert presenter._multiview_active
 
 
+def test_active_rgb_mean_ignores_black_background() -> None:
+    from xr_viewer.core_openxr_vulkan import _active_rgb_mean
+
+    rgb = np.zeros((2, 2, 3), dtype=np.uint8)
+    rgb[0, 0] = (255, 0, 0)
+    rgb[1, 1] = (0, 255, 0)
+
+    count, mean = _active_rgb_mean(rgb)
+
+    assert count == 2
+    assert mean == pytest.approx((127.5, 127.5, 0.0))
+
+
+def test_filament_multiview_readback_requests_transfer_source(monkeypatch) -> None:
+    monkeypatch.setenv("D2S_FILAMENT_MULTIVIEW_LAYER_READBACK", "1")
+    presenter = OpenXrVulkanPresenter()
+
+    assert presenter._filament_multiview_layer_readback_requested
+    source = inspect.getsource(OpenXrVulkanPresenter._create_projection_swapchain)
+    assert "SwapchainUsageFlags.TRANSFER_SRC_BIT" in source
+
+
 def test_filament_camera_receives_openxr_pose_and_fov() -> None:
     calls: list[tuple[str, tuple[float, ...]]] = []
 

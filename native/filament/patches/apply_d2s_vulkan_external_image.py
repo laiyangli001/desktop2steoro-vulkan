@@ -29,7 +29,40 @@ def main() -> int:
     vulkan_handles_cpp = root / "filament/backend/src/vulkan/VulkanHandles.cpp"
     vulkan_async_handles_cpp = root / "filament/backend/src/vulkan/VulkanAsyncHandles.cpp"
     renderer_cpp = root / "filament/src/details/Renderer.cpp"
+    post_process_manager_cpp = root / "filament/src/PostProcessManager.cpp"
     vulkan_fbo_cache_cpp = root / "filament/backend/src/vulkan/VulkanFboCache.cpp"
+
+    # Filament 1.75 builds a multiview clearDepth package but always registers
+    # the ordinary instanced package in PostProcessManager. Match the package
+    # to the Engine stereo mode just like the default material and skybox do.
+    replace_once(
+        post_process_manager_cpp,
+        '        { "clearDepth",                 MATERIAL(MATERIALS, CLEARDEPTH) },\n',
+        "",
+    )
+    replace_once(
+        post_process_manager_cpp,
+        """        for (auto const& info: sMaterialList) {
+            registerPostProcessMaterial(info.name, info);
+        }
+""",
+        """        for (auto const& info: sMaterialList) {
+            registerPostProcessMaterial(info.name, info);
+        }
+#ifdef FILAMENT_ENABLE_MULTIVIEW
+        if (engine.getConfig().stereoscopicType == StereoscopicType::MULTIVIEW) {
+            StaticMaterialInfo const clearDepthInfo = {
+                    "clearDepth", MATERIAL(MATERIALS, CLEARDEPTH_MULTIVIEW) };
+            registerPostProcessMaterial(clearDepthInfo.name, clearDepthInfo);
+        } else
+#endif
+        {
+            StaticMaterialInfo const clearDepthInfo = {
+                    "clearDepth", MATERIAL(MATERIALS, CLEARDEPTH) };
+            registerPostProcessMaterial(clearDepthInfo.name, clearDepthInfo);
+        }
+""",
+    )
 
     replace_once(
         renderer_cpp,

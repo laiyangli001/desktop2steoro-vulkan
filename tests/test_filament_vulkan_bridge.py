@@ -68,6 +68,8 @@ def test_remote_filament_build_enables_multiview_without_stale_sdk_cache() -> No
     assert "[D2S stereo trace] draw viewCount=%u %s" in patch
     assert "rt->getRenderPassKey().viewCount" in patch
     assert "getViewType(getSamplerTypeFromDepth(depth))" in patch
+    assert "CLEARDEPTH_MULTIVIEW" in patch
+    assert "engine.getConfig().stereoscopicType == StereoscopicType::MULTIVIEW" in patch
 
 
 def test_pointer_value_accepts_integer_and_c_void_p() -> None:
