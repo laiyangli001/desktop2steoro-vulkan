@@ -142,7 +142,11 @@ FilamentBridge* bridge_context_create(
         eye.foreground_view->setChannelDepthClearEnabled(2, true);
         eye.controller_view->setScene(bridge->foreground_scene);
         eye.controller_view->setCamera(eye.camera);
-        eye.controller_view->setVisibleLayers(0xff, 0x01);
+        // Controllers/lasers use layer 0 and the guide uses layer 2. The
+        // guide material disables depth culling, so both can share one View
+        // without allowing the controller to cover the guide. This avoids a
+        // second full-resolution post-process View for every eye.
+        eye.controller_view->setVisibleLayers(0xff, 0x05);
         eye.controller_view->setAntiAliasing(filament::AntiAliasing::NONE);
         eye.controller_view->setBlendMode(filament::View::BlendMode::TRANSLUCENT);
         eye.controller_view->setPostProcessingEnabled(true);
@@ -156,8 +160,8 @@ FilamentBridge* bridge_context_create(
         eye.controller_guide_view->setBlendMode(
                 filament::View::BlendMode::TRANSLUCENT);
         eye.controller_guide_view->setPostProcessingEnabled(true);
-        // The B-button callout is an instructional overlay. Render it after
-        // controllers with fresh depth so the controller can never cover it.
+        // Retain the dedicated guide View for ABI/resource compatibility;
+        // normal rendering includes layer 2 in controller_view above.
         eye.controller_guide_view->setChannelDepthClearEnabled(2, true);
     }
     bridge_eye_activate(bridge.get(), 0);

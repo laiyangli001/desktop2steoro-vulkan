@@ -306,7 +306,6 @@ int bridge_eye_begin_frame_impl(
     bridge->renderer->render(eye.foreground_view);
     if (render_controller_layers && !bridge->multiview_active) {
         bridge->renderer->render(eye.controller_view);
-        bridge->renderer->render(eye.controller_guide_view);
     }
     return bridge->frame_active ? 1 : 0;
 }
@@ -336,7 +335,6 @@ int bridge_eye_render_controller_overlay(FilamentBridge* bridge) {
         bridge_set_error(bridge, "Filament controller overlay beginFrame failed");
     } else {
         bridge->renderer->render(eye.controller_view);
-        bridge->renderer->render(eye.controller_guide_view);
         bridge->renderer->endFrame();
         bridge->frame_active = false;
         eye.frame_active = false;

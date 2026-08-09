@@ -256,9 +256,18 @@ def test_native_controller_overlay_preserves_composer_color() -> None:
     assert "overlay_options.clear = false;" in overlay
     assert "overlay_options.discard = false;" in overlay
     assert "render(eye.controller_view)" in overlay
-    assert "render(eye.controller_guide_view)" in overlay
+    assert "render(eye.controller_guide_view)" not in overlay
     assert "render(bridge->view)" not in overlay
     assert "render(eye.foreground_view)" not in overlay
+
+    context_source = (
+        root / "native/filament/bridge/bridge_context.cpp"
+    ).read_text(encoding="utf-8")
+    assert "eye.controller_view->setVisibleLayers(0xff, 0x05);" in context_source
+    guide_source = (
+        root / "native/filament/bridge/bridge_controller_guide.cpp"
+    ).read_text(encoding="utf-8")
+    assert ".depthCulling(false)" in guide_source
 
 
 def test_native_background_frame_defers_controller_layers_to_overlay() -> None:
