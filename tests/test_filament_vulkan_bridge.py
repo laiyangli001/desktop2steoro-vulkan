@@ -288,6 +288,9 @@ def test_native_foreground_uses_one_view_for_multiview_stereo() -> None:
     assert "bridge_screen_prepare_frame" not in eye_source
     assert "bridge_screen_bind_stereo_textures" not in eye_source
     assert "bridge->renderer->render(bridge->view);" in eye_source
+    assert "filament::View::BlendMode::OPAQUE" in eye_source
+    assert "filament::View::BlendMode::TRANSLUCENT" in eye_source
+    assert "eye.foreground_view->setBlendMode(foreground_blend);" in eye_source
 
 
 def test_native_controller_overlay_preserves_composer_color() -> None:

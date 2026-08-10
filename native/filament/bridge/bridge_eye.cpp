@@ -29,6 +29,18 @@ void set_multiview_views(FilamentBridge* bridge, bool enabled) {
     eye.foreground_view->setFrustumCullingEnabled(!enabled);
     eye.controller_view->setFrustumCullingEnabled(!enabled);
     eye.controller_guide_view->setFrustumCullingEnabled(!enabled);
+    // A translucent View forces Filament's final PostProcessManager::blit().
+    // In multiview that path treats the whole array resource as subresource
+    // layer zero, samples it with blitLow, and duplicates layer zero into both
+    // views. Post-processing is disabled below, so render the layered
+    // foreground directly and retain transparency through each material's own
+    // blend state. Restore the legacy per-eye composition mode on fallback.
+    const auto foreground_blend = enabled
+            ? filament::View::BlendMode::OPAQUE
+            : filament::View::BlendMode::TRANSLUCENT;
+    eye.foreground_view->setBlendMode(foreground_blend);
+    eye.controller_view->setBlendMode(foreground_blend);
+    eye.controller_guide_view->setBlendMode(foreground_blend);
     eye.view->setPostProcessingEnabled(!enabled);
     eye.foreground_view->setPostProcessingEnabled(!enabled);
     eye.controller_view->setPostProcessingEnabled(!enabled);
