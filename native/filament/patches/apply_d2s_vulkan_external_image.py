@@ -142,6 +142,7 @@ def main() -> int:
             (std::strstr(d2sProgramName, "D2S") ||
                     std::strcmp(d2sProgramName, "clearDepth") == 0);
     bool d2sVertexHasViewIndex = false;
+    bool d2sFragmentHasViewIndex = false;
     for (size_t i = 0; i < MAX_SHADER_MODULES; i++) {
 """,
     )
@@ -152,10 +153,14 @@ def main() -> int:
         uint32_t* data = (uint32_t*) blob.data();
 """,
         """        Program::ShaderBlob const& blob = blobs[i];
-        if (i == 0 && d2sTraceProgram) {
+        if (d2sTraceProgram) {
             const auto* words = reinterpret_cast<const uint32_t*>(blob.data());
             for (size_t word = 0; word < blob.size() / sizeof(uint32_t); ++word) {
-                d2sVertexHasViewIndex |= words[word] == 4440u;
+                if (i == 0) {
+                    d2sVertexHasViewIndex |= words[word] == 4440u;
+                } else {
+                    d2sFragmentHasViewIndex |= words[word] == 4440u;
+                }
             }
         }
 
@@ -169,9 +174,12 @@ def main() -> int:
 """,
         """    if (d2sTraceProgram) {
         std::fprintf(stderr,
-                "[D2S stereo trace] program name=%s multiview=%u vertexViewIndex=%u %s\\n",
+                "[D2S stereo trace] program name=%s multiview=%u "
+                "vertexViewIndex=%u fragmentViewIndex=%u %s\\n",
                 d2sProgramName, static_cast<unsigned>(builder.isMultiview()),
-                static_cast<unsigned>(d2sVertexHasViewIndex), programString.c_str_safe());
+                static_cast<unsigned>(d2sVertexHasViewIndex),
+                static_cast<unsigned>(d2sFragmentHasViewIndex),
+                programString.c_str_safe());
         std::fflush(stderr);
     }
 

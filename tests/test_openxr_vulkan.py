@@ -2396,6 +2396,7 @@ def test_openxr_frame_gate_waits_for_runtime_output_before_filament() -> None:
     assert "self._pending_output is None" in source
     assert "and not self._has_presented_frame" in source
     assert "and not self._projection_array_eye_diagnostic" in source
+    assert "and not self._vulkan_multiview_eye_diagnostic" in source
     assert "and not self._filament_multiview_projection_diagnostic" in source
     assert "waiting for first runtime eye frame" in source
     assert "layer = self._render_projection_layer(views, output_frame)" in source

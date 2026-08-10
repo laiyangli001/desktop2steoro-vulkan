@@ -65,6 +65,7 @@ def test_remote_filament_build_enables_multiview_without_stale_sdk_cache() -> No
     assert "[D2S stereo trace] program" in patch
     assert "builder.isMultiview()" in patch
     assert "words[word] == 4440u" in patch
+    assert "fragmentViewIndex=%u" in patch
     assert "[D2S stereo trace] draw viewCount=%u %s" in patch
     assert "rt->getRenderPassKey().viewCount" in patch
     assert "getViewType(getSamplerTypeFromDepth(depth))" in patch
@@ -246,9 +247,9 @@ def test_native_controller_multiview_eye_diagnostic_replaces_glb_materials() -> 
     )
 
     assert "D2S_FILAMENT_CONTROLLER_EYE_DIAGNOSTIC" in source
-    assert "material.d2sEyeIndex = float4(float(getEyeIndex())" in source
-    assert "variable_d2sEyeIndex.x < 0.5" in source
-    assert '.variable(filamat::MaterialBuilder::Variable::CUSTOM0, "d2sEyeIndex")' in source
+    assert "material.baseColor = getEyeIndex() == 0" in source
+    assert "materialVertex" not in source
+    assert "variable_d2sEyeIndex" not in source
     assert "left=red right=green" in source
     assert (
         ".stereoscopicType(filamat::MaterialBuilder::StereoscopicType::MULTIVIEW)"

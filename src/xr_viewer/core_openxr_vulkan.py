@@ -1603,6 +1603,7 @@ class OpenXrVulkanPresenter(
                         self._pending_output is None
                         and not self._has_presented_frame
                         and not self._projection_array_eye_diagnostic
+                        and not self._vulkan_multiview_eye_diagnostic
                         and not self._filament_multiview_projection_diagnostic
                     ):
                         if not self._source_frame_wait_logged:
