@@ -3903,9 +3903,14 @@ def test_multiview_projection_renders_one_layered_filament_frame(monkeypatch) ->
     composer_source = inspect.getsource(
         OpenXrVulkanPresenter._render_vulkan_projection_composer
     )
+    projection_source = inspect.getsource(
+        OpenXrVulkanPresenter._render_projection_layer
+    )
     assert "set_image_ready_semaphore" in render_source
     assert "layerCount=2" in render_source
-    assert "submit_filament_hdr" in composer_source
+    assert "_resolve_filament_multiview_hdr" in composer_source
+    assert "_resolve_filament_multiview_hdr" in projection_source
+    assert "or self._filament_multiview_finished_consumed" in projection_source
     return
 
     monkeypatch.setenv("D2S_VULKAN_PROJECTION_COMPOSER", "0")

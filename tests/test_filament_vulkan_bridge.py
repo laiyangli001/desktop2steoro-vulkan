@@ -69,6 +69,9 @@ def test_remote_filament_build_enables_multiview_without_stale_sdk_cache() -> No
     assert "D2S_FILAMENT_SHADER_DUMP_DIR" in patch
     assert "filament_controller_eye_diag.%s.spv" in patch
     assert "[D2S stereo trace] controller draw program=%s viewCount=%u " in patch
+    assert "common_getters.glsl" in patch
+    assert "inverse(frameUniforms.eyeFromViewMatrix[getEyeIndex()])" in patch
+    assert "getWorldCameraPosition() - shading_position" in patch
     assert 'std::strcmp(program->name.c_str(), "D2S Controller Eye Diagnostic") == 0' in patch
     assert "rt->getRenderPassKey().viewCount" in patch
     assert "rt->getRenderPassKey().needsResolveMask" in patch
