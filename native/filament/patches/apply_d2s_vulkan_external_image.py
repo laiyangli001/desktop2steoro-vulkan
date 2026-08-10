@@ -225,14 +225,15 @@ def main() -> int:
 """,
         """    // Update the VK raster state.
     auto rt = mCurrentRenderPass.renderTarget;
-    static unsigned d2sScreenDrawTraceCount = 0;
-    if (d2sScreenDrawTraceCount < 8 &&
+    static unsigned d2sControllerDrawTraceCount = 0;
+    if (d2sControllerDrawTraceCount < 8 &&
             std::getenv("D2S_FILAMENT_EYE_DIAGNOSTIC") &&
-            std::strstr(program->name.c_str(), "D2S OpenXR Screen")) {
-        ++d2sScreenDrawTraceCount;
+            std::strcmp(program->name.c_str(), "D2S Controller Eye Diagnostic") == 0) {
+        ++d2sControllerDrawTraceCount;
         std::fprintf(stderr,
-                "[D2S stereo trace] draw viewCount=%u %s\\n",
-                rt->getRenderPassKey().viewCount, program->programString.c_str_safe());
+                "[D2S stereo trace] controller draw program=%s viewCount=%u %s\\n",
+                program->name.c_str(), rt->getRenderPassKey().viewCount,
+                program->programString.c_str_safe());
         std::fflush(stderr);
     }
 

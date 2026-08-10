@@ -16,7 +16,7 @@ $env:D2S_FILAMENT_SHADER_DUMP_DIR = $shaderDumpDir
 
 Write-Host "D2S_FILAMENT_CONTROLLER_EYE_DIAGNOSTIC=1"
 Write-Host "D2S_FILAMENT_EYE_DIAGNOSTIC=1 (backend stereo trace enabled)"
-Write-Host "D2S_FILAMENT_MULTIVIEW_LAYER_READBACK=1 (one-shot layer 0/1 GPU readback)"
+Write-Host "D2S_FILAMENT_MULTIVIEW_LAYER_READBACK=1 (layer 0/1 GPU readback after 30 rendered frames)"
 Write-Host "D2S_FILAMENT_SHADER_DUMP_DIR=$shaderDumpDir"
 Write-Host "Controller geometry uses vertex getEyeIndex() without a fragment varying:"
 Write-Host "  eye index 0: solid-red controller remains visible"

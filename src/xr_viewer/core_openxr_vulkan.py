@@ -695,6 +695,8 @@ class OpenXrVulkanPresenter(
             "D2S_FILAMENT_MULTIVIEW_LAYER_READBACK", default=False
         )
         self._filament_multiview_layer_readback_done = False
+        self._filament_multiview_layer_readback_frame = 0
+        self._filament_multiview_layer_readback_delay_frames = 30
         self._vulkan_projection_composer_requested = _env_flag(
             "D2S_VULKAN_PROJECTION_COMPOSER", default=True
         )
@@ -5771,6 +5773,26 @@ class OpenXrVulkanPresenter(
                 host.close()
         return wait_for_timeline
 
+    def _advance_filament_multiview_layer_readback(self) -> bool:
+        """Delay diagnostic capture until Filament has compiled and rendered materials."""
+        if (
+            not self._filament_multiview_layer_readback_requested
+            or self._filament_multiview_layer_readback_done
+            or not self._multiview_active
+        ):
+            return False
+        self._filament_multiview_layer_readback_frame += 1
+        if self._filament_multiview_layer_readback_frame == 1:
+            print(
+                "[OpenXRViewer] Filament multiview layer readback deferred: "
+                f"capture_frame={self._filament_multiview_layer_readback_delay_frames}",
+                flush=True,
+            )
+        return (
+            self._filament_multiview_layer_readback_frame
+            >= self._filament_multiview_layer_readback_delay_frames
+        )
+
     def _render_filament_for_projection_composer(
         self,
         render_views: list[Any],
@@ -6182,12 +6204,11 @@ class OpenXrVulkanPresenter(
                 raise RuntimeError(
                     "Filament did not publish the expected render-finished semaphores"
                 )
+            readback_ready = self._advance_filament_multiview_layer_readback()
             readback_consumed_filament_semaphore = False
             if (
                 published_semaphores
-                and self._multiview_active
-                and self._filament_multiview_layer_readback_requested
-                and not self._filament_multiview_layer_readback_done
+                and readback_ready
             ):
                 consumer_completion_timeline = self._capture_filament_multiview_layers(
                     acquired_images,
@@ -6213,7 +6234,7 @@ class OpenXrVulkanPresenter(
                         ),
                         int(consumer_completion_timeline),
                     )
-            if self._multiview_active and not readback_consumed_filament_semaphore:
+            if readback_ready and not readback_consumed_filament_semaphore:
                 self._capture_filament_multiview_layers(
                     acquired_images,
                     consumer_completion_timeline,

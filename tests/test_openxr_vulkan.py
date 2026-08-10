@@ -3276,6 +3276,22 @@ def test_filament_multiview_readback_requests_transfer_source(monkeypatch) -> No
     assert "SwapchainUsageFlags.TRANSFER_SRC_BIT" in source
 
 
+def test_filament_multiview_readback_waits_for_stable_rendering(monkeypatch) -> None:
+    monkeypatch.setenv("D2S_FILAMENT_MULTIVIEW_LAYER_READBACK", "1")
+    presenter = OpenXrVulkanPresenter()
+    presenter._multiview_active = True
+
+    for _ in range(29):
+        assert not presenter._advance_filament_multiview_layer_readback()
+
+    assert presenter._filament_multiview_layer_readback_frame == 29
+    assert presenter._advance_filament_multiview_layer_readback()
+
+    presenter._filament_multiview_layer_readback_done = True
+    assert not presenter._advance_filament_multiview_layer_readback()
+    assert presenter._filament_multiview_layer_readback_frame == 30
+
+
 def test_pure_vulkan_multiview_diagnostic_bypasses_filament(monkeypatch) -> None:
     monkeypatch.setenv("D2S_OPENXR_VULKAN_MULTIVIEW_EYE_DIAGNOSTIC", "1")
     presenter = OpenXrVulkanPresenter(

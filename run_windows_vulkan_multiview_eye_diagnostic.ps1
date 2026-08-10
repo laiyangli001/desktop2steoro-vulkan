@@ -11,13 +11,14 @@ $env:D2S_VULKAN_PROJECTION_COMPOSER = "0"
 $env:D2S_VULKAN_PROJECTION_QUALITY_CHAIN = "0"
 Remove-Item Env:D2S_OPENXR_PROJECTION_ARRAY_EYE_DIAGNOSTIC -ErrorAction SilentlyContinue
 Remove-Item Env:D2S_FILAMENT_MULTIVIEW_PROJECTION_DIAGNOSTIC -ErrorAction SilentlyContinue
-Remove-Item Env:D2S_FILAMENT_MULTIVIEW_LAYER_READBACK -ErrorAction SilentlyContinue
+$env:D2S_FILAMENT_MULTIVIEW_LAYER_READBACK = "1"
 Remove-Item Env:D2S_FILAMENT_CONTROLLER_EYE_DIAGNOSTIC -ErrorAction SilentlyContinue
 
 Write-Host "Minimal Vulkan multiview vertex gl_ViewIndex diagnostic"
 Write-Host "  Target: one OpenXR array_size=2 Projection swapchain"
 Write-Host "  Draw: vertex gl_ViewIndex -> flat varying -> fragment, viewMask=0x3"
 Write-Host "  Expected: left eye red, right eye green"
+Write-Host "  Readback: layer 0/1 captured after 30 rendered frames"
 Write-Host "  Filament, SBS, Glow and model loading are bypassed"
 
 & $runBat
