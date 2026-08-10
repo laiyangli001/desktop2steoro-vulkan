@@ -230,9 +230,19 @@ def main() -> int:
             std::getenv("D2S_FILAMENT_EYE_DIAGNOSTIC") &&
             std::strcmp(program->name.c_str(), "D2S Controller Eye Diagnostic") == 0) {
         ++d2sControllerDrawTraceCount;
+        auto& d2sColor = rt->getColor(0);
+        auto const& d2sPrimaryRange = d2sColor.texture->getPrimaryViewRange();
         std::fprintf(stderr,
-                "[D2S stereo trace] controller draw program=%s viewCount=%u %s\\n",
+                "[D2S stereo trace] controller draw program=%s viewCount=%u "
+                "samples=%u resolveMask=0x%x fbLayers=%u colorLayers=%u "
+                "primaryLayers=%u viewType=%u %s\\n",
                 program->name.c_str(), rt->getRenderPassKey().viewCount,
+                static_cast<unsigned>(rt->getSamples()),
+                static_cast<unsigned>(rt->getRenderPassKey().needsResolveMask),
+                static_cast<unsigned>(rt->getFboKey().layers),
+                static_cast<unsigned>(d2sColor.layerCount),
+                static_cast<unsigned>(d2sPrimaryRange.layerCount),
+                static_cast<unsigned>(d2sColor.texture->getViewType()),
                 program->programString.c_str_safe());
         std::fflush(stderr);
     }

@@ -68,9 +68,13 @@ def test_remote_filament_build_enables_multiview_without_stale_sdk_cache() -> No
     assert "fragmentViewIndex=%u" in patch
     assert "D2S_FILAMENT_SHADER_DUMP_DIR" in patch
     assert "filament_controller_eye_diag.%s.spv" in patch
-    assert "[D2S stereo trace] controller draw program=%s viewCount=%u %s" in patch
+    assert "[D2S stereo trace] controller draw program=%s viewCount=%u " in patch
     assert 'std::strcmp(program->name.c_str(), "D2S Controller Eye Diagnostic") == 0' in patch
     assert "rt->getRenderPassKey().viewCount" in patch
+    assert "rt->getRenderPassKey().needsResolveMask" in patch
+    assert "rt->getFboKey().layers" in patch
+    assert "d2sColor.texture->getPrimaryViewRange()" in patch
+    assert "d2sColor.texture->getViewType()" in patch
     assert "getViewType(getSamplerTypeFromDepth(depth))" in patch
     assert "CLEARDEPTH_MULTIVIEW" in patch
     assert "engine.getConfig().stereoscopicType == StereoscopicType::MULTIVIEW" in patch
