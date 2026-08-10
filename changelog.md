@@ -14,7 +14,8 @@
 - **纯 Vulkan multiview 已通过实机验证：** 头显显示左眼红色、右眼绿色，主机可见计数器记录 `fragment_counts=(1, 1)`。这证明两个 view 均正确执行，`gl_ViewIndex`、`viewMask=0x3`、双层 attachment 写入以及 OpenXR `imageArrayIndex=0/1` 提交均正常，故障边界已收敛到 Filament 内部 shader/立体 variant 路径。
 - **Filament fragment 取眼索引路径已排除：** 实机 trace 显示 `D2S Controller Eye Diagnostic` 为 `multiview=1 vertexViewIndex=1 fragmentViewIndex=0`，且 `fragmentVariant=(none)`，头显仍为双眼红色。这证明 Filament 1.75 的 stereo variant 只作用于 vertex stage，fragment 中直接调用 `getEyeIndex()` 会退化为常量 0，不能用来修复或验证正常 multiview 路径。
 - **纯 Vulkan vertex-stage 路径也已通过：** vertex shader 读取 `gl_ViewIndex` 并通过 flat varying 传给 fragment 后，实机仍显示左红右绿且 `fragment_counts=(1, 1)`。因此 vertex-stage view index、跨阶段 flat varying、multiview render pass 和 OpenXR layered 提交都正常，问题进一步收敛到 Filament 自身。
-- **当前下一项测量：** Filament 手柄诊断只在 vertex stage 使用 `getEyeIndex()`：eye 0 保留纯红手柄，eye 1 将手柄顶点移出视野，完全不依赖 fragment eye index 或 CUSTOM0 varying；同时一次性记录 Bridge 实际收到的左右眼相对平移和 frustum。右眼手柄消失说明 Filament vertex 眼索引有效，应继续检查相机 uniform；双眼仍显示红色手柄则证明 Filament vertex shader 运行时始终得到 eye 0。
+- **Filament vertex 眼索引诊断未通过：** 在 eye 1 将手柄顶点移出视野、且完全不依赖 fragment/CUSTOM0 的诊断中，实机仍为双眼红色手柄。这说明 Filament vertex shader 的 eye-1 分支没有生效；纯 Vulkan 的同阶段测试已通过，因此问题位于 Filament 生成或执行的 vertex SPIR-V，而不是 VDXR/Vulkan/OpenXR multiview。
+- **当前下一项测量：** 诊断启动脚本会一次性导出 Filament 实际交给 Vulkan 创建管线的手柄 vertex/fragment SPIR-V。使用 `spirv-dis` 检查 `BuiltIn ViewIndex` 的 `OpLoad`、比较和条件分支，确认 `ViewIndex` 是仅存在于未使用声明中、被错误常量化，还是正确参与了 eye-1 顶点位移但被后续指令覆盖。
 - **后续验证顺序：** 先让纯 Vulkan 测试生成并计数不同的红/绿 view，再重复 Filament 手柄双眼诊断；仅当两者都通过后，才将独立 Filament 离屏 producer 接入正常屏幕/Glow 合成。此前会触发 device lost 的双 SwapChain deferred 路径继续保持禁用，不属于本次实验范围。
 
 ## 2026-08-09

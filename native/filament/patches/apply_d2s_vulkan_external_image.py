@@ -153,6 +153,24 @@ def main() -> int:
         uint32_t* data = (uint32_t*) blob.data();
 """,
         """        Program::ShaderBlob const& blob = blobs[i];
+        const char* const d2sShaderDumpDir =
+                std::getenv("D2S_FILAMENT_SHADER_DUMP_DIR");
+        if (d2sShaderDumpDir && d2sShaderDumpDir[0] != '\0' &&
+                std::strcmp(d2sProgramName, "D2S Controller Eye Diagnostic") == 0) {
+            char d2sShaderDumpPath[1024];
+            std::snprintf(d2sShaderDumpPath, sizeof(d2sShaderDumpPath),
+                    "%s/filament_controller_eye_diag.%s.spv", d2sShaderDumpDir,
+                    i == 0 ? "vert" : "frag");
+            if (std::FILE* const dump = std::fopen(d2sShaderDumpPath, "wb")) {
+                std::fwrite(blob.data(), 1, blob.size(), dump);
+                std::fclose(dump);
+                std::fprintf(stderr,
+                        "[D2S stereo trace] shader dump stage=%s bytes=%zu path=%s\\n",
+                        i == 0 ? "vertex" : "fragment", blob.size(),
+                        d2sShaderDumpPath);
+                std::fflush(stderr);
+            }
+        }
         if (d2sTraceProgram) {
             const auto* words = reinterpret_cast<const uint32_t*>(blob.data());
             for (size_t word = 0; word < blob.size() / sizeof(uint32_t); ++word) {
