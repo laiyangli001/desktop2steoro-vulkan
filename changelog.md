@@ -4,19 +4,14 @@
 
 ## 2026-08-10
 
-### Vulkan / Filament multiview 验证状态
+### Vulkan / Filament multiview 验证与修复
 
-- **已验证 VDXR array layer 路由：** 一个 `array_size=2` 的 OpenXR Projection swapchain，在 layer 0 独立清为红色、layer 1 独立清为绿色，头显左眼显示红色、右眼显示绿色。这证明 VDXR 接受 `imageArrayIndex=0/1`，并排除了闭源 Virtual Desktop 服务端/客户端导致当前双眼同画面的可能性。
-- **已验证 Filament layered 配置，但立体结果尚未通过：** Bridge 创建一个双层外部 swapchain，Engine 报告双眼 multiview stereo，Vulkan render pass 报告 `viewMask=0x3`，手柄、激光和指南程序均包含 Vulkan `ViewIndex` 内建变量。手柄模型加载仍确认正常，但双眼都显示红色的 eye-0 诊断画面，与此前手柄图像呈二维的观察一致。
-- **修复并重新验证 Filament 内部深度清除材质：** Filament 1.75 生成了 multiview `clearDepth` 包，却注册了它的 instanced 包。修补后的后端现在为 multiview Engine 选择 `CLEARDEPTH_MULTIVIEW`，`compiled type 1 / engine type 2` 警告已消失。重新构建后双眼仍为红色，证明该警告确实是不兼容问题，但并非立体路由异常的唯一原因。
-- **不再将 swapchain 回读作为证据：** 缩放图像 blit、精确 linear image copy 和直接 image-to-buffer copy 在头显同时显示红色时，对两个 OpenXR array layer 的回读结果均为黑色。这些捕获不能反映可见 swapchain 内容；在单独修复外部图像所有权/回读边界之前，不再用它们判断 Filament 是否写入 layer 1。
-- **将故障边界下移到 Filament 以下：** 新增纯 Vulkan 诊断，绕过 Filament、GLB 模型、SBS、Glow、推理合成和材质辅助逻辑。单次全屏 multiview draw 使用 `viewMask=0x3`，并在 fragment SPIR-V 中直接读取 `gl_ViewIndex`，但实机结果仍是双眼红色。因此，在解释清楚 Vulkan 核心 multiview 执行行为之前，暂停进一步修改 Filament。
-- **纯 Vulkan multiview 已通过实机验证：** 头显显示左眼红色、右眼绿色，主机可见计数器记录 `fragment_counts=(1, 1)`。这证明两个 view 均正确执行，`gl_ViewIndex`、`viewMask=0x3`、双层 attachment 写入以及 OpenXR `imageArrayIndex=0/1` 提交均正常，故障边界已收敛到 Filament 内部 shader/立体 variant 路径。
-- **Filament fragment 取眼索引路径已排除：** 实机 trace 显示 `D2S Controller Eye Diagnostic` 为 `multiview=1 vertexViewIndex=1 fragmentViewIndex=0`，且 `fragmentVariant=(none)`，头显仍为双眼红色。这证明 Filament 1.75 的 stereo variant 只作用于 vertex stage，fragment 中直接调用 `getEyeIndex()` 会退化为常量 0，不能用来修复或验证正常 multiview 路径。
-- **纯 Vulkan vertex-stage 路径也已通过：** vertex shader 读取 `gl_ViewIndex` 并通过 flat varying 传给 fragment 后，实机仍显示左红右绿且 `fragment_counts=(1, 1)`。因此 vertex-stage view index、跨阶段 flat varying、multiview render pass 和 OpenXR layered 提交都正常，问题进一步收敛到 Filament 自身。
-- **Filament vertex 眼索引诊断未通过：** 在 eye 1 将手柄顶点移出视野、且完全不依赖 fragment/CUSTOM0 的诊断中，实机仍为双眼红色手柄。这说明 Filament vertex shader 的 eye-1 分支没有生效；纯 Vulkan 的同阶段测试已通过，因此问题位于 Filament 生成或执行的 vertex SPIR-V，而不是 VDXR/Vulkan/OpenXR multiview。
-- **当前下一项测量：** 诊断启动脚本会一次性导出 Filament 实际交给 Vulkan 创建管线的手柄 vertex/fragment SPIR-V。使用 `spirv-dis` 检查 `BuiltIn ViewIndex` 的 `OpLoad`、比较和条件分支，确认 `ViewIndex` 是仅存在于未使用声明中、被错误常量化，还是正确参与了 eye-1 顶点位移但被后续指令覆盖。
-- **后续验证顺序：** 先让纯 Vulkan 测试生成并计数不同的红/绿 view，再重复 Filament 手柄双眼诊断；仅当两者都通过后，才将独立 Filament 离屏 producer 接入正常屏幕/Glow 合成。此前会触发 device lost 的双 SwapChain deferred 路径继续保持禁用，不属于本次实验范围。
+- **VDXR array layer 路由已通过实机验证：** 一个 `array_size=2` 的 OpenXR Projection swapchain 将 layer 0 提交给左眼、layer 1 提交给右眼，头显稳定显示左红右绿；纯 Vulkan multiview 测试同时记录 `fragment_counts=(1, 1)`。这确认 `gl_ViewIndex`、`viewMask=0x3`、双层 attachment 写入以及 OpenXR `imageArrayIndex=0/1` 均正常。
+- **Filament multiview 双眼路由已通过实机验证：** layered Bridge、普通手柄顶点路径和红绿诊断材质现在均使用正确的 multiview stereo variant，头显可见左眼红色、右眼绿色。Filament 1.75 内部 `clearDepth` 也改为注册生成的 `CLEARDEPTH_MULTIVIEW` 包，不再出现材质 stereo type 与 Engine 不兼容的警告。
+- **恢复正常手柄纹理的 layered HDR 合成：** Filament multiview 先输出双层 `R16G16B16A16_SFLOAT` HDR producer，再由 Vulkan resolve 到 OpenXR 左右眼 Projection 目标；Projection-only 诊断与正常 Composer 共用同一 resolve，并只消费一次 Filament render-finished semaphore，避免完成信号未发布、手柄消失或输出停滞。
+- **修正 multiview PBR 的逐眼视点：** Filament 原有几何投影会按眼选择矩阵，但 PBR 视线、高光与反射仍读取头部中心相机。Patched shader 现在通过 `worldFromViewMatrix * inverse(eyeFromViewMatrix[gl_ViewIndex])` 推导每只眼的世界相机位置，正常手柄材质的低粗糙度外壳不再使用错误的中心视点产生三角反光碎片和类似透明的外观。
+- **保留安全边界：** 会触发 device lost 的双 SwapChain deferred 路径继续禁用；正式 multiview 使用一个双层 producer 和统一 Vulkan/OpenXR 提交者，不恢复已证实不稳定的双 Renderer/双 deferred 完成路径。
+- **验证结果：** Filament 1.75 完整补丁已在 Windows x86_64、Linux x86_64 和 macOS arm64 三个平台重新构建成功，生成的 Bridge 二进制已同步；Python/OpenXR/Bridge 专项测试 `226 passed`，shader 合规检查通过。
 
 ## 2026-08-09
 - 新增纯 Vulkan multiview 双眼诊断，绕过 Filament、模型、SBS 和 Glow：一个 `viewMask=0x3` 的 render pass 向 OpenXR `array_size=2` swapchain 绘制全屏三角形，并直接根据 `gl_ViewIndex` 选择红色或绿色。一个主机可见的单像素计数器记录 fragment invocation 是否实际为 view index 0 和 1 执行，不依赖 OpenXR 图像回读。在普通逐层 array 路由通过、但 Filament 手柄输出仍为双眼红色后，该测试将 Vulkan multiview 执行与 Filament 隔离开来。
