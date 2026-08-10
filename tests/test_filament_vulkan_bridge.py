@@ -69,9 +69,12 @@ def test_remote_filament_build_enables_multiview_without_stale_sdk_cache() -> No
     assert "D2S_FILAMENT_SHADER_DUMP_DIR" in patch
     assert "filament_controller_eye_diag.%s.spv" in patch
     assert "[D2S stereo trace] controller draw program=%s viewCount=%u " in patch
-    assert "common_getters.glsl" in patch
-    assert "inverse(frameUniforms.eyeFromViewMatrix[getEyeIndex()])" in patch
-    assert "getWorldCameraPosition() - shading_position" in patch
+    # Stereo projection is handled by Filament's generated multiview variants.
+    # Do not override its global PBR camera helpers: doing so made PICO's
+    # zero-roughness shell break into view-dependent reflective facets.
+    assert "common_getters.glsl" not in patch
+    assert "surface_shading_parameters.fs" not in patch
+    assert "worldFromEye" not in patch
     assert 'std::strcmp(program->name.c_str(), "D2S Controller Eye Diagnostic") == 0' in patch
     assert "rt->getRenderPassKey().viewCount" in patch
     assert "rt->getRenderPassKey().needsResolveMask" in patch

@@ -31,41 +31,6 @@ def main() -> int:
     renderer_cpp = root / "filament/src/details/Renderer.cpp"
     post_process_manager_cpp = root / "filament/src/PostProcessManager.cpp"
     vulkan_fbo_cache_cpp = root / "filament/backend/src/vulkan/VulkanFboCache.cpp"
-    common_getters_glsl = root / "shaders/src/common_getters.glsl"
-    surface_shading_parameters_fs = root / "shaders/src/surface_shading_parameters.fs"
-
-    # Filament's stereo matrices route geometry to the correct multiview layer,
-    # but its PBR helpers still use the head-center camera for both eyes. Derive
-    # the world-space eye position from eyeFromViewMatrix so view-dependent
-    # lighting (especially low-roughness controller shells) remains coherent.
-    replace_once(
-        common_getters_glsl,
-        """highp vec3 getWorldCameraPosition() {
-    return frameUniforms.worldFromViewMatrix[3].xyz;
-}
-""",
-        """highp vec3 getWorldCameraPosition() {
-#if defined(VARIANT_HAS_STEREO)
-    highp mat4 worldFromEye = frameUniforms.worldFromViewMatrix *
-            inverse(frameUniforms.eyeFromViewMatrix[getEyeIndex()]);
-    return worldFromEye[3].xyz;
-#else
-    return frameUniforms.worldFromViewMatrix[3].xyz;
-#endif
-}
-""",
-    )
-    replace_once(
-        surface_shading_parameters_fs,
-        """    highp vec3 sv = isPerspectiveProjection() ?
-        (frameUniforms.worldFromViewMatrix[3].xyz - shading_position) :
-         frameUniforms.worldFromViewMatrix[2].xyz; // ortho camera backward dir
-""",
-        """    highp vec3 sv = isPerspectiveProjection() ?
-        (getWorldCameraPosition() - shading_position) :
-         frameUniforms.worldFromViewMatrix[2].xyz; // ortho camera backward dir
-""",
-    )
 
     # Filament 1.75 builds a multiview clearDepth package but always registers
     # the ordinary instanced package in PostProcessManager. Match the package
