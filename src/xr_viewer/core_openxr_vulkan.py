@@ -6389,7 +6389,7 @@ class OpenXrVulkanPresenter(
             view_counts = self._vulkan_multiview_diagnostic_pass.read_view_counts()
             print(
                 "[OpenXRViewer] Vulkan multiview eye diagnostic active: "
-                "viewMask=0x3 gl_ViewIndex left=red right=green "
+                "viewMask=0x3 vertex_gl_ViewIndex left=red right=green "
                 f"fragment_counts={view_counts}",
                 flush=True,
             )

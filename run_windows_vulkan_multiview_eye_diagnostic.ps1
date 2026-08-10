@@ -14,9 +14,9 @@ Remove-Item Env:D2S_FILAMENT_MULTIVIEW_PROJECTION_DIAGNOSTIC -ErrorAction Silent
 Remove-Item Env:D2S_FILAMENT_MULTIVIEW_LAYER_READBACK -ErrorAction SilentlyContinue
 Remove-Item Env:D2S_FILAMENT_CONTROLLER_EYE_DIAGNOSTIC -ErrorAction SilentlyContinue
 
-Write-Host "Minimal Vulkan multiview gl_ViewIndex diagnostic"
+Write-Host "Minimal Vulkan multiview vertex gl_ViewIndex diagnostic"
 Write-Host "  Target: one OpenXR array_size=2 Projection swapchain"
-Write-Host "  Draw: one Vulkan multiview render pass, viewMask=0x3"
+Write-Host "  Draw: vertex gl_ViewIndex -> flat varying -> fragment, viewMask=0x3"
 Write-Host "  Expected: left eye red, right eye green"
 Write-Host "  Filament, SBS, Glow and model loading are bypassed"
 

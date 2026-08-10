@@ -14,7 +14,7 @@ from viewer.vulkan_descriptors import (
 
 
 class VulkanMultiviewEyeDiagnosticPass:
-    """Draw red/green views into one two-layer target using gl_ViewIndex."""
+    """Draw red/green views using vertex gl_ViewIndex through a flat varying."""
 
     def __init__(self, context: Any, target_format: int) -> None:
         self.context = context

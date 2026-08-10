@@ -2,6 +2,7 @@
 #include "bridge_internal.h"
 #include "bridge_material.h"
 
+#include <cstdlib>
 #include <type_traits>
 
 namespace {
@@ -277,6 +278,20 @@ int bridge_eye_set_stereo_camera(
     bridge->camera->setEyeModelMatrix(1, eye_models[1]);
     bridge->camera->setCustomEyeProjection(
             projections, 2, projections[0], near_plane, far_plane);
+    static bool stereo_camera_trace_logged = false;
+    if (!stereo_camera_trace_logged && std::getenv("D2S_FILAMENT_EYE_DIAGNOSTIC")) {
+        stereo_camera_trace_logged = true;
+        std::fprintf(stderr,
+                "[D2S stereo trace] stereo camera "
+                "eye0_t=(%.5f,%.5f,%.5f) eye1_t=(%.5f,%.5f,%.5f) "
+                "eye0_lr=(%.5f,%.5f) eye1_lr=(%.5f,%.5f)\n",
+                eye_model_matrices32[12], eye_model_matrices32[13],
+                eye_model_matrices32[14], eye_model_matrices32[28],
+                eye_model_matrices32[29], eye_model_matrices32[30],
+                eye_frustums8[0], eye_frustums8[1],
+                eye_frustums8[4], eye_frustums8[5]);
+        std::fflush(stderr);
+    }
     return 1;
 }
 

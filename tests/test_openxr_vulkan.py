@@ -3285,6 +3285,17 @@ def test_pure_vulkan_multiview_diagnostic_bypasses_filament(monkeypatch) -> None
     presenter._initialize_filament_bridges()
 
     assert presenter.filament_bridge is None
+    root = Path(__file__).resolve().parents[1]
+    vertex_shader = (root / "shaders/d2s_multiview_eye_diag.vert").read_text(
+        encoding="utf-8"
+    )
+    fragment_shader = (root / "shaders/d2s_multiview_eye_diag.frag").read_text(
+        encoding="utf-8"
+    )
+    assert "viewIndexFromVertex = gl_ViewIndex" in vertex_shader
+    assert "flat out uint viewIndexFromVertex" in vertex_shader
+    assert "flat in uint viewIndexFromVertex" in fragment_shader
+    assert "gl_ViewIndex" not in fragment_shader
     source = inspect.getsource(
         OpenXrVulkanPresenter._render_vulkan_multiview_eye_diagnostic
     )

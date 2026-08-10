@@ -12,7 +12,9 @@
 - **不再将 swapchain 回读作为证据：** 缩放图像 blit、精确 linear image copy 和直接 image-to-buffer copy 在头显同时显示红色时，对两个 OpenXR array layer 的回读结果均为黑色。这些捕获不能反映可见 swapchain 内容；在单独修复外部图像所有权/回读边界之前，不再用它们判断 Filament 是否写入 layer 1。
 - **将故障边界下移到 Filament 以下：** 新增纯 Vulkan 诊断，绕过 Filament、GLB 模型、SBS、Glow、推理合成和材质辅助逻辑。单次全屏 multiview draw 使用 `viewMask=0x3`，并在 fragment SPIR-V 中直接读取 `gl_ViewIndex`，但实机结果仍是双眼红色。因此，在解释清楚 Vulkan 核心 multiview 执行行为之前，暂停进一步修改 Filament。
 - **纯 Vulkan multiview 已通过实机验证：** 头显显示左眼红色、右眼绿色，主机可见计数器记录 `fragment_counts=(1, 1)`。这证明两个 view 均正确执行，`gl_ViewIndex`、`viewMask=0x3`、双层 attachment 写入以及 OpenXR `imageArrayIndex=0/1` 提交均正常，故障边界已收敛到 Filament 内部 shader/立体 variant 路径。
-- **当前下一项测量：** Filament 手柄双眼诊断改为在 fragment stage 直接调用 `getEyeIndex()`，不再通过 vertex CUSTOM0 varying 传递；后端 stereo trace 同时报告 `vertexViewIndex` 和 `fragmentViewIndex`，用于区分 CUSTOM0 插值问题、fragment multiview variant 缺失和 Filament 内部视图索引路由异常。
+- **Filament fragment 取眼索引路径已排除：** 实机 trace 显示 `D2S Controller Eye Diagnostic` 为 `multiview=1 vertexViewIndex=1 fragmentViewIndex=0`，且 `fragmentVariant=(none)`，头显仍为双眼红色。这证明 Filament 1.75 的 stereo variant 只作用于 vertex stage，fragment 中直接调用 `getEyeIndex()` 会退化为常量 0，不能用来修复或验证正常 multiview 路径。
+- **纯 Vulkan vertex-stage 路径也已通过：** vertex shader 读取 `gl_ViewIndex` 并通过 flat varying 传给 fragment 后，实机仍显示左红右绿且 `fragment_counts=(1, 1)`。因此 vertex-stage view index、跨阶段 flat varying、multiview render pass 和 OpenXR layered 提交都正常，问题进一步收敛到 Filament 自身。
+- **当前下一项测量：** Filament 手柄诊断只在 vertex stage 使用 `getEyeIndex()`：eye 0 保留纯红手柄，eye 1 将手柄顶点移出视野，完全不依赖 fragment eye index 或 CUSTOM0 varying；同时一次性记录 Bridge 实际收到的左右眼相对平移和 frustum。右眼手柄消失说明 Filament vertex 眼索引有效，应继续检查相机 uniform；双眼仍显示红色手柄则证明 Filament vertex shader 运行时始终得到 eye 0。
 - **后续验证顺序：** 先让纯 Vulkan 测试生成并计数不同的红/绿 view，再重复 Filament 手柄双眼诊断；仅当两者都通过后，才将独立 Filament 离屏 producer 接入正常屏幕/Glow 合成。此前会触发 device lost 的双 SwapChain deferred 路径继续保持禁用，不属于本次实验范围。
 
 ## 2026-08-09

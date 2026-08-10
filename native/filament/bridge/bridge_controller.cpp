@@ -78,15 +78,21 @@ bool ensure_controller_eye_diagnostic_material(FilamentBridge* bridge) {
     const char* fragment_shader = R"FILAMENT(
         void material(inout MaterialInputs material) {
             prepareMaterial(material);
-            material.baseColor = getEyeIndex() == 0
-                    ? float4(1.0, 0.0, 0.0, 1.0)
-                    : float4(0.0, 1.0, 0.0, 1.0);
+            material.baseColor = float4(1.0, 0.0, 0.0, 1.0);
+        }
+    )FILAMENT";
+    const char* vertex_shader = R"FILAMENT(
+        void materialVertex(inout MaterialVertexInputs material) {
+            if (getEyeIndex() != 0) {
+                material.worldPosition.x += 10000.0;
+            }
         }
     )FILAMENT";
     filamat::MaterialBuilder::init();
     filamat::MaterialBuilder builder;
     builder.name("D2S Controller Eye Diagnostic")
             .material(fragment_shader)
+            .materialVertex(vertex_shader)
             .shading(filament::Shading::UNLIT)
             .materialDomain(filament::MaterialDomain::SURFACE)
             .blending(filament::BlendingMode::OPAQUE)
@@ -431,7 +437,7 @@ int bridge_controller_load(
     if (eye_diagnostic) {
         std::printf(
                 "[FilamentBridge] controller eye diagnostic active hand=%u "
-                "left=red right=green\n", hand);
+                "eye0=red eye1=vertex_hidden\n", hand);
         std::fflush(stdout);
     }
     controller.asset->releaseSourceData();
