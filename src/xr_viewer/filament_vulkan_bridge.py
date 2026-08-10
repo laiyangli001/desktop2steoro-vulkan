@@ -80,6 +80,7 @@ class FilamentVulkanBridge:
         self._lighting_config_abi_available = False
         self._controller_screen_light_abi_available = False
         self._finished_drawing_semaphore_abi_available = False
+        self._image_ready_semaphore_abi_available = False
         self._controller_overlay_abi_available = False
         self._background_frame_abi_available = False
         self._async_submit_abi_available = False
@@ -335,6 +336,21 @@ class FilamentVulkanBridge:
                 self._handle, int(image_index)
             ),
             "set_acquired_image",
+        )
+
+    @property
+    def image_ready_semaphore_abi_available(self) -> bool:
+        return self._image_ready_semaphore_abi_available
+
+    def set_image_ready_semaphore(self, semaphore: int) -> None:
+        self._ensure_loaded()
+        if not self._image_ready_semaphore_abi_available:
+            raise FilamentBridgeError("image-ready semaphore ABI is unavailable")
+        self._check_result(
+            self._library.filament_bridge_set_image_ready_semaphore(
+                self._handle, ctypes.c_void_p(int(semaphore))
+            ),
+            "set_image_ready_semaphore",
         )
 
     def set_camera_look_at(
@@ -927,6 +943,12 @@ class FilamentVulkanBridge:
             ctypes.c_void_p, ctypes.c_uint32
         ]
         library.filament_bridge_set_acquired_image.restype = ctypes.c_int
+        if hasattr(library, "filament_bridge_set_image_ready_semaphore"):
+            library.filament_bridge_set_image_ready_semaphore.argtypes = [
+                ctypes.c_void_p, ctypes.c_void_p
+            ]
+            library.filament_bridge_set_image_ready_semaphore.restype = ctypes.c_int
+            self._image_ready_semaphore_abi_available = True
         library.filament_bridge_set_camera_look_at.argtypes = [
             ctypes.c_void_p,
             ctypes.c_float, ctypes.c_float, ctypes.c_float,

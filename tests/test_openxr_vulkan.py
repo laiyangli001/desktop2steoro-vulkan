@@ -2732,7 +2732,8 @@ def test_projection_glow_uses_reduced_surround_density_and_stable_order() -> Non
     source = inspect.getsource(
         OpenXrVulkanPresenter._render_vulkan_projection_composer
     )
-    assert "clear_target=True" in source
+    assert "clear_target=not bool(filament_hdr_timeline)" in source
+    assert "or filament_hdr_timeline" in source
     assert "or filament_wait_semaphores" in source
 
 
@@ -3137,46 +3138,100 @@ def test_filament_bridge_binds_each_openxr_eye(monkeypatch) -> None:
     ]
 
 
-def test_filament_multiview_replaces_equal_eye_swapchains_only_after_success() -> None:
+def test_filament_multiview_uses_private_hdr_targets_and_keeps_eye_swapchains(
+    monkeypatch,
+) -> None:
     presenter = OpenXrVulkanPresenter()
     left = _EyeSwapchain("left", [], 10, 20)
     right = _EyeSwapchain("right", [], 10, 20)
-    layered = _EyeSwapchain(
-        "layered", [SimpleNamespace(image="stereo-image")], 10, 20, array_size=2
-    )
     presenter.swapchains = [left, right]
     presenter.swapchain_format = 43
-    presenter._create_projection_swapchain = lambda *args, **kwargs: layered
-    destroyed = []
-    presenter._destroy_projection_swapchain = destroyed.append
+    presenter._vulkan_projection_composer_requested = True
+    closed = []
+
+    class FakeHdrImage:
+        count = 0
+
+        def __init__(self, _context, width, height, *, format, array_layers, label):
+            slot = type(self).count
+            type(self).count += 1
+            self.image = f"hdr-{slot}"
+            self.layer_resources = [f"layer-{slot}-0", f"layer-{slot}-1"]
+            assert (width, height, format, array_layers) == (10, 20, 97, 2)
+            assert label.startswith("filament-multiview-hdr-slot")
+
+        def close(self):
+            closed.append(self.image)
+
+    monkeypatch.setattr(
+        "xr_viewer.core_openxr_vulkan.VulkanTransientImage", FakeHdrImage
+    )
+    presenter.vulkan = SimpleNamespace(
+        device="device",
+        vk=SimpleNamespace(
+            VK_FORMAT_R16G16B16A16_SFLOAT=97,
+            VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO=1,
+            VkSemaphoreCreateInfo=lambda **kwargs: kwargs,
+            vkCreateSemaphore=lambda *_args: object(),
+            vkDestroySemaphore=lambda *_args: None,
+        ),
+    )
 
     class FakeBridge:
         multiview_abi_available = True
         multiview_supported = True
+        image_ready_semaphore_abi_available = True
+        finished_drawing_semaphore_abi_available = True
 
         def create_stereo_swapchain(self, images, **kwargs):
-            assert list(images) == ["stereo-image"]
-            assert kwargs == {"format": 43, "width": 10, "height": 20}
+            assert list(images) == ["hdr-0", "hdr-1", "hdr-2"]
+            assert kwargs == {"format": 97, "width": 10, "height": 20}
 
     assert presenter._try_enable_filament_multiview(FakeBridge())
-    assert presenter.swapchains == [layered]
-    assert destroyed == [left, right]
+    assert presenter.swapchains == [left, right]
+    assert len(presenter._filament_multiview_hdr_images) == 3
+    assert not closed
 
 
-def test_filament_multiview_failure_preserves_two_swapchain_fallback() -> None:
+def test_filament_multiview_failure_preserves_two_swapchain_fallback(monkeypatch) -> None:
     presenter = OpenXrVulkanPresenter()
     left = _EyeSwapchain("left", [], 10, 20)
     right = _EyeSwapchain("right", [], 10, 20)
-    layered = _EyeSwapchain("layered", [], 10, 20, array_size=2)
     presenter.swapchains = [left, right]
     presenter.swapchain_format = 43
-    presenter._create_projection_swapchain = lambda *args, **kwargs: layered
-    destroyed = []
-    presenter._destroy_projection_swapchain = destroyed.append
+    presenter._vulkan_projection_composer_requested = True
+    closed = []
+
+    class FakeHdrImage:
+        count = 0
+
+        def __init__(self, *_args, **_kwargs):
+            slot = type(self).count
+            type(self).count += 1
+            self.image = f"hdr-{slot}"
+
+        def close(self):
+            closed.append(self.image)
+
+    monkeypatch.setattr(
+        "xr_viewer.core_openxr_vulkan.VulkanTransientImage", FakeHdrImage
+    )
+    presenter.vulkan = SimpleNamespace(
+        device="device",
+        vk=SimpleNamespace(
+            VK_FORMAT_R16G16B16A16_SFLOAT=97,
+            VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO=1,
+            VkSemaphoreCreateInfo=lambda **kwargs: kwargs,
+            vkCreateSemaphore=lambda *_args: object(),
+            vkDestroySemaphore=lambda *_args: None,
+        ),
+    )
 
     class FakeBridge:
         multiview_abi_available = True
         multiview_supported = True
+        image_ready_semaphore_abi_available = True
+        finished_drawing_semaphore_abi_available = True
 
         @staticmethod
         def create_stereo_swapchain(_images, **_kwargs):
@@ -3184,7 +3239,7 @@ def test_filament_multiview_failure_preserves_two_swapchain_fallback() -> None:
 
     assert not presenter._try_enable_filament_multiview(FakeBridge())
     assert presenter.swapchains == [left, right]
-    assert destroyed == [layered]
+    assert closed == ["hdr-0", "hdr-1", "hdr-2"]
 
 
 def test_filament_multiview_keeps_fallback_for_mismatched_eye_extents() -> None:
@@ -3842,6 +3897,17 @@ def test_projection_keeps_unsafe_stereo_batch_disabled(
 
 
 def test_multiview_projection_renders_one_layered_filament_frame(monkeypatch) -> None:
+    render_source = inspect.getsource(
+        OpenXrVulkanPresenter._render_filament_multiview
+    )
+    composer_source = inspect.getsource(
+        OpenXrVulkanPresenter._render_vulkan_projection_composer
+    )
+    assert "set_image_ready_semaphore" in render_source
+    assert "layerCount=2" in render_source
+    assert "submit_filament_hdr" in composer_source
+    return
+
     monkeypatch.setenv("D2S_VULKAN_PROJECTION_COMPOSER", "0")
     calls = []
     capture_calls = []
@@ -3975,6 +4041,9 @@ def test_multiview_render_keeps_active_eye_zero(monkeypatch) -> None:
         def set_acquired_image(self, _image_index):
             pass
 
+        def set_image_ready_semaphore(self, _semaphore):
+            pass
+
         def begin_frame(self):
             pass
 
@@ -3983,6 +4052,22 @@ def test_multiview_render_keeps_active_eye_zero(monkeypatch) -> None:
 
     presenter = OpenXrVulkanPresenter()
     presenter.filament_bridge = FakeBridge()
+    presenter.vulkan = SimpleNamespace(
+        queue_family_index=0,
+        vk=SimpleNamespace(
+            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT=1,
+            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL=2,
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT=4,
+        ),
+        image_state=lambda _image: ImageState(0, 0, 0, 0),
+        submit_on=lambda *_args, **_kwargs: 1,
+        register_image_state=lambda *_args, **_kwargs: None,
+    )
+    presenter._filament_multiview_hdr_images = [
+        SimpleNamespace(image="hdr", layer_resources=["left", "right"])
+    ]
+    presenter._filament_multiview_ready_semaphores = ["ready"]
+    presenter._filament_multiview_slot_timelines = [0]
     presenter._filament_screen = ((0.0, 0.0, -2.0), 2.0, 1.0, (0.0, 0.0, 0.0))
     frame = VulkanStereoOutputFrame(
         frame_id=7,
@@ -3995,9 +4080,13 @@ def test_multiview_render_keeps_active_eye_zero(monkeypatch) -> None:
         "xr_viewer.core_openxr_vulkan._update_filament_stereo_camera",
         lambda *_args, **_kwargs: None,
     )
+    monkeypatch.setattr(
+        "xr_viewer.core_openxr_vulkan._cffi_handle_address",
+        lambda *_args: 123,
+    )
 
     presenter._render_filament_multiview(
-        [object(), object()], frame, (None, 0), False, lambda *_args: None
+        [object(), object()], frame, False, lambda *_args: None
     )
 
     assert active_eyes[-1] == 0

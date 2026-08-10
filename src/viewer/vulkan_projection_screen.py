@@ -67,6 +67,8 @@ class VulkanProjectionScreenPass:
         self.rcas_descriptor_timelines = [0] * self._DESCRIPTOR_COUNT
         self.quality_descriptor_sets: list[Any] = []
         self.quality_descriptor_timelines = [0] * self._DESCRIPTOR_COUNT
+        self.hdr_descriptor_sets: list[Any] = []
+        self.hdr_descriptor_timelines = [0] * self._DESCRIPTOR_COUNT
         self.glow_descriptor_sets: list[Any] = []
         self.glow_descriptor_timelines = [0] * self._DESCRIPTOR_COUNT
         self.glow_param_buffers: list[VulkanStorageBuffer] = []
@@ -101,6 +103,8 @@ class VulkanProjectionScreenPass:
         self.copy_pipeline = None
         self.quality_pipeline_layout = None
         self.quality_pipeline = None
+        self.hdr_pipeline_layout = None
+        self.hdr_pipeline = None
         self.image_views: dict[tuple[int, int], Any] = {}
         self.framebuffers: dict[tuple[int, int, int, int], Any] = {}
         self.overlay_framebuffers: dict[tuple[int, int, int, int], Any] = {}
@@ -258,6 +262,9 @@ class VulkanProjectionScreenPass:
         quality_fragment_module = self._create_shader_module(
             shader_root / "d2s_projection_quality_frag.spv"
         )
+        hdr_fragment_module = self._create_shader_module(
+            shader_root / "d2s_projection_hdr_frag.spv"
+        )
         self.descriptor_set_layout = create_descriptor_set_layout(
             self.context,
             [
@@ -272,12 +279,12 @@ class VulkanProjectionScreenPass:
             self.context.device,
             vk.VkDescriptorPoolCreateInfo(
                 sType=vk.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-                maxSets=self._DESCRIPTOR_COUNT * 3,
+                maxSets=self._DESCRIPTOR_COUNT * 4,
                 poolSizeCount=1,
                 pPoolSizes=[
                     vk.VkDescriptorPoolSize(
                         type=vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                        descriptorCount=self._DESCRIPTOR_COUNT * 3,
+                        descriptorCount=self._DESCRIPTOR_COUNT * 4,
                     )
                 ],
             ),
@@ -289,8 +296,8 @@ class VulkanProjectionScreenPass:
                 vk.VkDescriptorSetAllocateInfo(
                     sType=vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
                     descriptorPool=self.descriptor_pool,
-                    descriptorSetCount=self._DESCRIPTOR_COUNT * 3,
-                    pSetLayouts=[self.descriptor_set_layout] * (self._DESCRIPTOR_COUNT * 3),
+                    descriptorSetCount=self._DESCRIPTOR_COUNT * 4,
+                    pSetLayouts=[self.descriptor_set_layout] * (self._DESCRIPTOR_COUNT * 4),
                 ),
             )
         )
@@ -300,6 +307,9 @@ class VulkanProjectionScreenPass:
         ]
         self.quality_descriptor_sets = allocated_descriptor_sets[
             self._DESCRIPTOR_COUNT * 2:self._DESCRIPTOR_COUNT * 3
+        ]
+        self.hdr_descriptor_sets = allocated_descriptor_sets[
+            self._DESCRIPTOR_COUNT * 3:self._DESCRIPTOR_COUNT * 4
         ]
         self.glow_descriptor_set_layout = create_descriptor_set_layout(
             self.context,
@@ -1107,6 +1117,96 @@ class VulkanProjectionScreenPass:
             ],
             None,
         )[0]
+        self.hdr_pipeline_layout = vk.vkCreatePipelineLayout(
+            self.context.device,
+            vk.VkPipelineLayoutCreateInfo(
+                sType=vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+                setLayoutCount=1,
+                pSetLayouts=[self.descriptor_set_layout],
+                pushConstantRangeCount=1,
+                pPushConstantRanges=[vk.VkPushConstantRange(
+                    stageFlags=vk.VK_SHADER_STAGE_FRAGMENT_BIT,
+                    offset=0,
+                    size=16,
+                )],
+            ),
+            None,
+        )
+        hdr_stages = [
+            vk.VkPipelineShaderStageCreateInfo(
+                sType=vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                stage=vk.VK_SHADER_STAGE_VERTEX_BIT,
+                module=rcas_vertex_module,
+                pName="main",
+            ),
+            vk.VkPipelineShaderStageCreateInfo(
+                sType=vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                stage=vk.VK_SHADER_STAGE_FRAGMENT_BIT,
+                module=hdr_fragment_module,
+                pName="main",
+            ),
+        ]
+        self.hdr_pipeline = vk.vkCreateGraphicsPipelines(
+            self.context.device,
+            None,
+            1,
+            [
+                vk.VkGraphicsPipelineCreateInfo(
+                    sType=vk.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+                    stageCount=2,
+                    pStages=hdr_stages,
+                    pVertexInputState=vk.VkPipelineVertexInputStateCreateInfo(
+                        sType=vk.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+                    ),
+                    pInputAssemblyState=vk.VkPipelineInputAssemblyStateCreateInfo(
+                        sType=vk.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+                        topology=vk.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+                    ),
+                    pViewportState=vk.VkPipelineViewportStateCreateInfo(
+                        sType=vk.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+                        viewportCount=1,
+                        scissorCount=1,
+                    ),
+                    pRasterizationState=vk.VkPipelineRasterizationStateCreateInfo(
+                        sType=vk.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+                        polygonMode=vk.VK_POLYGON_MODE_FILL,
+                        cullMode=vk.VK_CULL_MODE_NONE,
+                        frontFace=vk.VK_FRONT_FACE_COUNTER_CLOCKWISE,
+                        lineWidth=1.0,
+                    ),
+                    pMultisampleState=vk.VkPipelineMultisampleStateCreateInfo(
+                        sType=vk.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+                        rasterizationSamples=vk.VK_SAMPLE_COUNT_1_BIT,
+                    ),
+                    pColorBlendState=vk.VkPipelineColorBlendStateCreateInfo(
+                        sType=vk.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+                        attachmentCount=1,
+                        pAttachments=[vk.VkPipelineColorBlendAttachmentState(
+                            blendEnable=vk.VK_FALSE,
+                            colorWriteMask=(
+                                vk.VK_COLOR_COMPONENT_R_BIT
+                                | vk.VK_COLOR_COMPONENT_G_BIT
+                                | vk.VK_COLOR_COMPONENT_B_BIT
+                                | vk.VK_COLOR_COMPONENT_A_BIT
+                            ),
+                        )],
+                    ),
+                    pDynamicState=vk.VkPipelineDynamicStateCreateInfo(
+                        sType=vk.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+                        dynamicStateCount=2,
+                        pDynamicStates=[
+                            vk.VK_DYNAMIC_STATE_VIEWPORT,
+                            vk.VK_DYNAMIC_STATE_SCISSOR,
+                        ],
+                    ),
+                    layout=self.hdr_pipeline_layout,
+                    renderPass=self.render_pass,
+                    subpass=0,
+                    basePipelineIndex=-1,
+                )
+            ],
+            None,
+        )[0]
 
     def _target_view_and_framebuffer(
         self, target: Any, array_layer: int, *, overlay: bool = False
@@ -1788,6 +1888,104 @@ class VulkanProjectionScreenPass:
         self._last_submit_timeline = int(timeline)
         return int(timeline)
 
+    def submit_filament_hdr(
+        self,
+        draws: list[dict[str, Any]],
+        sources: list[Any] | tuple[Any, ...],
+        *,
+        exposure_ev: float,
+        wait_semaphores: list[Any] | tuple[Any, ...],
+    ) -> int:
+        """Resolve a layered Filament HDR frame into the two OpenXR targets."""
+        if len(draws) != 2 or len(sources) != 2:
+            raise ValueError("Filament HDR resolve requires exactly two eyes")
+        if self.hdr_pipeline is None or self.hdr_pipeline_layout is None:
+            raise RuntimeError("Filament HDR resolve pipeline is unavailable")
+        prepared = []
+        frame_slot = int(draws[0]["frame_slot"]) % 3
+        for eye_index, (item, source) in enumerate(zip(draws, sources)):
+            descriptor_index = (
+                int(eye_index) * 3 + frame_slot
+            ) % self._DESCRIPTOR_COUNT
+            descriptor_set = self.hdr_descriptor_sets[descriptor_index]
+            self.vk.vkUpdateDescriptorSets(
+                self.context.device,
+                1,
+                [self.vk.VkWriteDescriptorSet(
+                    sType=self.vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                    dstSet=descriptor_set,
+                    dstBinding=0,
+                    descriptorCount=1,
+                    descriptorType=self.vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                    pImageInfo=[self.vk.VkDescriptorImageInfo(
+                        sampler=self.sampler,
+                        imageView=source.require_view(),
+                        imageLayout=self.vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    )],
+                )],
+                0,
+                None,
+            )
+            target = item["target"]
+            target_layer = int(item["array_layer"])
+            _view, framebuffer = self._target_view_and_framebuffer(
+                target, target_layer
+            )
+            prepared.append({
+                "source": source,
+                "source_array_layer": int(eye_index),
+                "target": target,
+                "target_array_layer": target_layer,
+                "framebuffer": framebuffer,
+                "descriptor_set": descriptor_set,
+                "descriptor_index": descriptor_index,
+                "target_old_layout": self.context.image_state(target.image).layout,
+                "source_ready_in_submission": True,
+                "pipeline": self.hdr_pipeline,
+                "pipeline_layout": self.hdr_pipeline_layout,
+                "payload": self.vk.ffi.new(
+                    "char[]", struct.pack("<4f", float(exposure_ev), 0.0, 0.0, 0.0)
+                ),
+            })
+        timeline = self.context.submit_on(
+            "graphics",
+            lambda command_buffer: [
+                self._record_copy_draw(command_buffer, draw) for draw in prepared
+            ],
+            wait_semaphore=[item for item in wait_semaphores if item is not None],
+            wait_for_timeline=max(
+                self.hdr_descriptor_timelines[draw["descriptor_index"]]
+                for draw in prepared
+            ),
+        )
+        registered_sources: set[int] = set()
+        for draw in prepared:
+            source = draw["source"]
+            source_key = id(source.image)
+            if source_key not in registered_sources:
+                registered_sources.add(source_key)
+                self.context.register_image_state(
+                    source.image,
+                    ImageState(
+                        layout=self.vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        access_mask=self.vk.VK_ACCESS_SHADER_READ_BIT,
+                        stage_mask=self.vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                        queue_family_index=self.context.queue_family_index,
+                    ),
+                )
+            self.context.register_image_state(
+                draw["target"].image,
+                ImageState(
+                    layout=self.vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                    access_mask=self.vk.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                    stage_mask=self.vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                    queue_family_index=self.context.queue_family_index,
+                ),
+            )
+            self.hdr_descriptor_timelines[draw["descriptor_index"]] = int(timeline)
+        self._last_submit_timeline = int(timeline)
+        return int(timeline)
+
     def _supports_linear_blit(self, format_value: int) -> bool:
         properties = self.vk.vkGetPhysicalDeviceFormatProperties(
             self.context.physical_device, int(format_value)
@@ -1903,7 +2101,10 @@ class VulkanProjectionScreenPass:
                 image=source.image,
                 subresourceRange=self.vk.VkImageSubresourceRange(
                     aspectMask=self.vk.VK_IMAGE_ASPECT_COLOR_BIT,
-                    baseMipLevel=0, levelCount=1, baseArrayLayer=0, layerCount=1,
+                    baseMipLevel=0,
+                    levelCount=1,
+                    baseArrayLayer=int(draw.get("source_array_layer", 0)),
+                    layerCount=1,
                 ),
             )
             self.vk.vkCmdPipelineBarrier(
@@ -1927,7 +2128,10 @@ class VulkanProjectionScreenPass:
             image=target.image,
             subresourceRange=self.vk.VkImageSubresourceRange(
                 aspectMask=self.vk.VK_IMAGE_ASPECT_COLOR_BIT,
-                baseMipLevel=0, levelCount=1, baseArrayLayer=0, layerCount=1,
+                baseMipLevel=0,
+                levelCount=1,
+                baseArrayLayer=int(draw.get("target_array_layer", 0)),
+                layerCount=1,
             ),
         )
         self.vk.vkCmdPipelineBarrier(
@@ -2536,6 +2740,8 @@ class VulkanProjectionScreenPass:
                 self.vk.vkDestroyPipeline(self.context.device, self.copy_pipeline, None)
             if self.quality_pipeline is not None:
                 self.vk.vkDestroyPipeline(self.context.device, self.quality_pipeline, None)
+            if self.hdr_pipeline is not None:
+                self.vk.vkDestroyPipeline(self.context.device, self.hdr_pipeline, None)
             if self.pipeline_layout is not None:
                 self.vk.vkDestroyPipelineLayout(
                     self.context.device, self.pipeline_layout, None
@@ -2559,6 +2765,10 @@ class VulkanProjectionScreenPass:
             if self.quality_pipeline_layout is not None:
                 self.vk.vkDestroyPipelineLayout(
                     self.context.device, self.quality_pipeline_layout, None
+                )
+            if self.hdr_pipeline_layout is not None:
+                self.vk.vkDestroyPipelineLayout(
+                    self.context.device, self.hdr_pipeline_layout, None
                 )
             if self.render_pass is not None:
                 self.vk.vkDestroyRenderPass(self.context.device, self.render_pass, None)
@@ -2609,6 +2819,7 @@ class VulkanProjectionScreenPass:
         self.descriptor_sets.clear()
         self.rcas_descriptor_sets.clear()
         self.quality_descriptor_sets.clear()
+        self.hdr_descriptor_sets.clear()
         self.glow_descriptor_sets.clear()
         self.glow_param_buffers.clear()
         self.laser_descriptor_sets.clear()
@@ -2627,6 +2838,8 @@ class VulkanProjectionScreenPass:
         self.copy_pipeline_layout = None
         self.quality_pipeline = None
         self.quality_pipeline_layout = None
+        self.hdr_pipeline = None
+        self.hdr_pipeline_layout = None
         self.laser_descriptor_set_layout = None
         self.laser_descriptor_pool = None
         self.render_pass = None

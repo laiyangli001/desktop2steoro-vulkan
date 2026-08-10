@@ -193,12 +193,13 @@ semaphore 调用 `prepare_external_depth_for_sampling` 转为
 `SHADER_READ_ONLY_OPTIMAL`。在激光 descriptor、shader 和坐标比较尚未完成前，
 该转换接口不自动调用，避免改变现有激光显示行为。
 
-当前合成顺序已先接入颜色 producer：非 multiview 的每眼 Filament swapchain 在
+当前合成顺序已接入颜色 producer：非 multiview 的每眼 Filament swapchain 在
 Projection Composer 前完成环境/手柄绘制，Composer 通过 render-finished semaphore
-等待后以 `LOAD` 方式叠加 SBS、Glow 和其它 Vulkan overlay。若 Composer 失败，已完成的
-Filament semaphore 会先经过 graphics queue drain，再走环境/手柄安全降级，避免遗留
-未消费的 producer 完成点。Filament multiview 暂不进入这条 per-eye LOAD 实验路径，
-保持原有 multiview 行为，待 array-image 的 producer/consumer 同步契约单独验证。
+等待后以 `LOAD` 方式叠加 SBS、Glow 和其它 Vulkan overlay。multiview 使用三缓冲的
+私有 `R16G16B16A16_SFLOAT` 双层图像作为 Filament producer；Vulkan 等待 producer
+完成点后逐层应用与旧前景 View 等价的 LINEAR exposure/clamp 输出，再写入 Virtual
+Desktop 兼容的两只逐眼 OpenXR Projection swapchain。SBS/Glow 随后以 `LOAD` 方式
+叠加，避免 Filament multiview 禁用后处理时直接写入 8-bit sRGB 目标造成高光细节丢失。
 
 手柄优先级隔离使用 post-Composer 前景 pass：环境仍在 Composer 前由主 View
 输出；屏幕和 Glow 完成后，Bridge 仅复用现有 `controller_view` 与

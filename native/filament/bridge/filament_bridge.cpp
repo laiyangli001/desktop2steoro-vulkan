@@ -68,6 +68,11 @@ int filament_bridge_set_acquired_image(
     return bridge_eye_set_acquired_image(bridge, image_index);
 }
 
+int filament_bridge_set_image_ready_semaphore(
+        FilamentBridge* bridge, const void* semaphore) {
+    return bridge_eye_set_ready_semaphore(bridge, semaphore);
+}
+
 int filament_bridge_set_camera_look_at(
         FilamentBridge* bridge,
         float eye_x, float eye_y, float eye_z,

@@ -80,6 +80,9 @@ FILAMENT_BRIDGE_API int filament_bridge_set_active_eye(
         FilamentBridge* bridge, uint32_t eye_index);
 FILAMENT_BRIDGE_API int filament_bridge_set_acquired_image(
         FilamentBridge* bridge, uint32_t image_index);
+// Supply the binary semaphore that makes the selected borrowed image writable.
+FILAMENT_BRIDGE_API int filament_bridge_set_image_ready_semaphore(
+        FilamentBridge* bridge, const void* semaphore);
 FILAMENT_BRIDGE_API int filament_bridge_set_camera_look_at(
         FilamentBridge* bridge,
         float eye_x, float eye_y, float eye_z,

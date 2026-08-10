@@ -53,6 +53,7 @@ class VulkanTransientImage:
         format: int,
         label: str,
         mip_levels: int = 1,
+        array_layers: int = 1,
         usage: int | None = None,
         aspect_mask: int | None = None,
     ) -> None:
@@ -63,6 +64,8 @@ class VulkanTransientImage:
         max_mip_levels = int(math.floor(math.log2(max(int(width), int(height))))) + 1
         if int(mip_levels) < 1 or int(mip_levels) > max_mip_levels:
             raise ValueError("transient image mip level count is invalid")
+        if int(array_layers) < 1:
+            raise ValueError("transient image array layer count must be positive")
         self.context = context
         self.vk = context.vk
         self.width = int(width)
@@ -70,11 +73,14 @@ class VulkanTransientImage:
         self.format = int(format)
         self.label = str(label)
         self.mip_levels = int(mip_levels)
+        self.array_layers = int(array_layers)
         self._usage = usage
         self._aspect_mask = aspect_mask
         self.image = None
         self.memory = None
         self.view = None
+        self.layer_views: list[Any] = []
+        self.layer_resources: list[VulkanImageResource] = []
         self.resource: VulkanImageResource | None = None
         self._create()
 
@@ -96,7 +102,7 @@ class VulkanTransientImage:
                 format=self.format,
                 extent=vk.VkExtent3D(width=self.width, height=self.height, depth=1),
                 mipLevels=self.mip_levels,
-                arrayLayers=1,
+                arrayLayers=self.array_layers,
                 samples=vk.VK_SAMPLE_COUNT_1_BIT,
                 tiling=vk.VK_IMAGE_TILING_OPTIMAL,
                 usage=self._usage if self._usage is not None else (
@@ -140,7 +146,11 @@ class VulkanTransientImage:
             vk.VkImageViewCreateInfo(
                 sType=vk.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
                 image=self.image,
-                viewType=vk.VK_IMAGE_VIEW_TYPE_2D,
+                viewType=(
+                    vk.VK_IMAGE_VIEW_TYPE_2D_ARRAY
+                    if self.array_layers > 1
+                    else vk.VK_IMAGE_VIEW_TYPE_2D
+                ),
                 format=self.format,
                 subresourceRange=vk.VkImageSubresourceRange(
                     aspectMask=(
@@ -151,7 +161,7 @@ class VulkanTransientImage:
                     baseMipLevel=0,
                     levelCount=self.mip_levels,
                     baseArrayLayer=0,
-                    layerCount=1,
+                    layerCount=self.array_layers,
                 ),
             ),
             None,
@@ -172,6 +182,47 @@ class VulkanTransientImage:
             label=self.label,
         )
         self.context.register_external_image(self.resource)
+        if self.array_layers > 1:
+            for layer in range(self.array_layers):
+                layer_view = vk.vkCreateImageView(
+                    self.context.device,
+                    vk.VkImageViewCreateInfo(
+                        sType=vk.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                        image=self.image,
+                        viewType=vk.VK_IMAGE_VIEW_TYPE_2D,
+                        format=self.format,
+                        subresourceRange=vk.VkImageSubresourceRange(
+                            aspectMask=(
+                                self._aspect_mask
+                                if self._aspect_mask is not None
+                                else vk.VK_IMAGE_ASPECT_COLOR_BIT
+                            ),
+                            baseMipLevel=0,
+                            levelCount=self.mip_levels,
+                            baseArrayLayer=layer,
+                            layerCount=1,
+                        ),
+                    ),
+                    None,
+                )
+                self.layer_views.append(layer_view)
+                self.layer_resources.append(
+                    VulkanImageResource(
+                        context=self.context,
+                        image=self.image,
+                        view=layer_view,
+                        width=self.width,
+                        height=self.height,
+                        format=self.format,
+                        layout=vk.VK_IMAGE_LAYOUT_UNDEFINED,
+                        access_mask=0,
+                        stage_mask=0,
+                        queue_family_index=self.context.queue_family_index,
+                        mip_levels=self.mip_levels,
+                        external=False,
+                        label=f"{self.label}-layer{layer}",
+                    )
+                )
 
     def close(self) -> None:
         if self.resource is not None:
@@ -180,6 +231,8 @@ class VulkanTransientImage:
             except Exception:
                 pass
         if self.context.device is not None:
+            for layer_view in self.layer_views:
+                self.vk.vkDestroyImageView(self.context.device, layer_view, None)
             if self.view is not None:
                 self.vk.vkDestroyImageView(self.context.device, self.view, None)
             if self.image is not None:
@@ -187,6 +240,8 @@ class VulkanTransientImage:
             if self.memory is not None:
                 self.vk.vkFreeMemory(self.context.device, self.memory, None)
         self.resource = None
+        self.layer_resources = []
+        self.layer_views = []
         self.view = None
         self.image = None
         self.memory = None

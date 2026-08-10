@@ -24,6 +24,7 @@ from viewer.vulkan_context import (
     ImageState,
     VulkanContext,
     VulkanCapabilityError,
+    _cffi_handle_address,
     _require_timeline_semaphore_features,
     find_graphics_queue_family,
     make_vulkan_version,
@@ -34,6 +35,7 @@ from viewer.vulkan_resources import (
     VulkanHostImage,
     VulkanHostReadbackBuffer,
     VulkanImageResource,
+    VulkanTransientImage,
 )
 from viewer.vulkan_msdf_quad import VulkanMsdfQuadRenderer, VulkanMsdfQuadRequest
 from viewer.vulkan_projection_screen import VulkanProjectionScreenPass
@@ -682,6 +684,13 @@ class OpenXrVulkanPresenter(
         self.swapchain_format: int | None = None
         self.swapchains: list[_EyeSwapchain] = []
         self._multiview_active = False
+        self._filament_multiview_hdr_images: list[VulkanTransientImage] = []
+        self._filament_multiview_ready_semaphores: list[Any] = []
+        self._filament_multiview_slot_timelines: list[int] = []
+        self._filament_multiview_slot = 0
+        self._filament_multiview_current: VulkanTransientImage | None = None
+        self._filament_multiview_current_slot: int | None = None
+        self._filament_multiview_finished_consumed = False
         self._projection_array_eye_diagnostic = _env_flag(
             "D2S_OPENXR_PROJECTION_ARRAY_EYE_DIAGNOSTIC", default=False
         )
@@ -3493,6 +3502,26 @@ class OpenXrVulkanPresenter(
                 pass
             self._vulkan_multiview_diagnostic_pass = None
 
+        for image in self._filament_multiview_hdr_images:
+            try:
+                image.close()
+            except Exception:
+                pass
+        self._filament_multiview_hdr_images.clear()
+        if self.vulkan is not None and getattr(self.vulkan, "device", None) is not None:
+            for semaphore in self._filament_multiview_ready_semaphores:
+                try:
+                    self.vulkan.vk.vkDestroySemaphore(
+                        self.vulkan.device, semaphore, None
+                    )
+                except Exception:
+                    pass
+        self._filament_multiview_ready_semaphores.clear()
+        self._filament_multiview_slot_timelines.clear()
+        self._filament_multiview_current = None
+        self._filament_multiview_current_slot = None
+        self._filament_multiview_finished_consumed = False
+
         if xr is not None:
             self._destroy_tool_quad_layers()
             self._destroy_quad_swapchains()
@@ -4640,6 +4669,7 @@ class OpenXrVulkanPresenter(
         acquired_images: list[tuple[_EyeSwapchain, int]],
         views: list[Any],
         filament_wait_semaphores: list[Any] | tuple[Any, ...] = (),
+        filament_hdr_sources: list[Any] | tuple[Any, ...] = (),
     ) -> int:
         if self.vulkan is None or len(acquired_images) not in {1, 2}:
             raise RuntimeError("Vulkan Projection Composer has no valid targets")
@@ -4703,22 +4733,6 @@ class OpenXrVulkanPresenter(
             self._vulkan_projection_screen_pass = VulkanProjectionScreenPass(
                 self.vulkan, target_format
             )
-        if self._filament_projection_only and filament_wait_semaphores:
-            timeline = self.vulkan.submit_on(
-                "graphics",
-                lambda _command_buffer: None,
-                wait_semaphore=filament_wait_semaphores,
-            )
-            if not getattr(self, "_filament_projection_only_logged", False):
-                self._filament_projection_only_logged = True
-                print(
-                    "[OpenXRViewer] Filament projection-only diagnostic active: "
-                    "SBS/Glow Vulkan overlays skipped",
-                    flush=True,
-                )
-            self._vulkan_projection_composer_frame_id = int(frame.frame_id)
-            self._vulkan_projection_composer_active = True
-            return int(timeline)
         depth_sampling_timeline = 0
         depth_sampling_active = False
         self._vulkan_projection_laser_depth_available = False
@@ -4822,6 +4836,41 @@ class OpenXrVulkanPresenter(
                     "openxr_vulkan_composer_draw_prepare",
                     time.perf_counter() - draw_prepare_started,
                 )
+        filament_hdr_timeline = 0
+        if filament_hdr_sources:
+            filament_hdr_timeline = (
+                self._vulkan_projection_screen_pass.submit_filament_hdr(
+                    projection_draws,
+                    filament_hdr_sources,
+                    exposure_ev=float(self._filament_scene_exposure),
+                    wait_semaphores=filament_wait_semaphores,
+                )
+            )
+            self._filament_multiview_finished_consumed = True
+            if self._filament_multiview_current_slot is not None:
+                self._filament_multiview_slot_timelines[
+                    self._filament_multiview_current_slot
+                ] = int(filament_hdr_timeline)
+            if not getattr(self, "_filament_multiview_hdr_resolve_logged", False):
+                self._filament_multiview_hdr_resolve_logged = True
+                print(
+                    "[OpenXRViewer] Filament multiview HDR resolve active: "
+                    f"exposure_ev={self._filament_scene_exposure:.2f} "
+                    "tone_mapper=LINEAR targets=per_eye_projection",
+                    flush=True,
+                )
+            filament_wait_semaphores = ()
+        if self._filament_projection_only and filament_hdr_timeline:
+            if not getattr(self, "_filament_projection_only_logged", False):
+                self._filament_projection_only_logged = True
+                print(
+                    "[OpenXRViewer] Filament projection-only diagnostic active: "
+                    "SBS/Glow Vulkan overlays skipped",
+                    flush=True,
+                )
+            self._vulkan_projection_composer_frame_id = int(frame.frame_id)
+            self._vulkan_projection_composer_active = True
+            return int(filament_hdr_timeline)
         laser_prepare_status = (
             "owner=filament "
             f"vulkan_depth={int(self._vulkan_projection_laser_depth_available)} "
@@ -4853,8 +4902,8 @@ class OpenXrVulkanPresenter(
                 surround_timeline = (
                     self._vulkan_projection_screen_pass.submit_stereo_glow(
                         projection_draws,
-                        wait_for_timeline=0,
-                        clear_target=True,
+                        wait_for_timeline=int(filament_hdr_timeline),
+                        clear_target=not bool(filament_hdr_timeline),
                     )
                 )
                 surround_active = True
@@ -4879,11 +4928,14 @@ class OpenXrVulkanPresenter(
                     upscale_scale=plan.upscale_scale,
                     load_target=bool(
                         surround_active
+                        or filament_hdr_timeline
                         or filament_wait_semaphores
                         or depth_sampling_timeline
                     ),
                     wait_for_timeline=max(
-                        int(surround_timeline), int(depth_sampling_timeline)
+                        int(surround_timeline),
+                        int(depth_sampling_timeline),
+                        int(filament_hdr_timeline),
                     ),
                     extra_wait_semaphores=filament_wait_semaphores,
                 )
@@ -4903,11 +4955,14 @@ class OpenXrVulkanPresenter(
                 projection_draws,
                 load_target=bool(
                     surround_active
+                    or filament_hdr_timeline
                     or filament_wait_semaphores
                     or depth_sampling_timeline
                 ),
                 wait_for_timeline=max(
-                    int(surround_timeline), int(depth_sampling_timeline)
+                    int(surround_timeline),
+                    int(depth_sampling_timeline),
+                    int(filament_hdr_timeline),
                 ),
                 extra_wait_semaphores=filament_wait_semaphores,
             )
@@ -4996,7 +5051,11 @@ class OpenXrVulkanPresenter(
         if not (
             getattr(bridge, "multiview_abi_available", False)
             and getattr(bridge, "multiview_supported", False)
+            and getattr(bridge, "image_ready_semaphore_abi_available", False)
+            and getattr(bridge, "finished_drawing_semaphore_abi_available", False)
+            and self.vulkan is not None
             and len(self.swapchains) == 2
+            and self._vulkan_projection_composer_requested
         ):
             return False
         left, right = self.swapchains
@@ -5006,31 +5065,62 @@ class OpenXrVulkanPresenter(
                 flush=True,
             )
             return False
-        layered = self._create_projection_swapchain(
-            left.width, left.height, array_size=2
-        )
+        vk = self.vulkan.vk
+        hdr_format = int(vk.VK_FORMAT_R16G16B16A16_SFLOAT)
+        hdr_images: list[VulkanTransientImage] = []
+        ready_semaphores: list[Any] = []
         try:
+            for slot in range(3):
+                hdr_images.append(
+                    VulkanTransientImage(
+                        self.vulkan,
+                        left.width,
+                        left.height,
+                        format=hdr_format,
+                        array_layers=2,
+                        label=f"filament-multiview-hdr-slot{slot}",
+                    )
+                )
+                ready_semaphores.append(
+                    vk.vkCreateSemaphore(
+                        self.vulkan.device,
+                        vk.VkSemaphoreCreateInfo(
+                            sType=vk.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+                        ),
+                        None,
+                    )
+                )
             bridge.create_stereo_swapchain(
-                (image.image for image in layered.images),
-                format=self.swapchain_format,
-                width=layered.width,
-                height=layered.height,
+                (image.image for image in hdr_images),
+                format=hdr_format,
+                width=left.width,
+                height=left.height,
             )
         except Exception as exc:
-            self._destroy_projection_swapchain(layered)
+            for image in hdr_images:
+                image.close()
+            for semaphore in ready_semaphores:
+                try:
+                    vk.vkDestroySemaphore(self.vulkan.device, semaphore, None)
+                except Exception:
+                    pass
             print(
                 "[OpenXRViewer] Filament multiview fallback: "
                 f"{type(exc).__name__}: {exc}",
                 flush=True,
             )
             return False
-        previous = self.swapchains
-        self.swapchains = [layered]
-        for eye in previous:
-            self._destroy_projection_swapchain(eye)
+        self._filament_multiview_hdr_images = hdr_images
+        self._filament_multiview_ready_semaphores = ready_semaphores
+        self._filament_multiview_slot_timelines = [0] * len(hdr_images)
+        self._filament_multiview_slot = 0
+        self._filament_multiview_current = None
+        self._filament_multiview_current_slot = None
+        self._filament_multiview_finished_consumed = False
         print(
             "[OpenXRViewer] Filament projection path: "
-            f"multiview array_size=2 extent={layered.width}x{layered.height}",
+            f"multiview_hdr slots={len(hdr_images)} array_size=2 "
+            f"format=R16G16B16A16_SFLOAT extent={left.width}x{left.height}",
             flush=True,
         )
         return True
@@ -5635,12 +5725,73 @@ class OpenXrVulkanPresenter(
         self,
         render_views: list[Any],
         presentation_frame: VulkanStereoOutputFrame | None,
-        acquired_image: tuple[_EyeSwapchain, int],
         finished_semaphore_available: bool,
         record_time: Callable[[str, float], None],
     ) -> int | None:
         bridge = self.filament_bridge
-        eye, image_index = acquired_image
+        if (
+            self.vulkan is None
+            or not self._filament_multiview_hdr_images
+            or not self._filament_multiview_ready_semaphores
+        ):
+            raise RuntimeError("Filament multiview HDR targets are unavailable")
+        slot = int(self._filament_multiview_slot) % len(
+            self._filament_multiview_hdr_images
+        )
+        hdr_image = self._filament_multiview_hdr_images[slot]
+        ready_semaphore = self._filament_multiview_ready_semaphores[slot]
+        previous_timeline = int(self._filament_multiview_slot_timelines[slot])
+        vk = self.vulkan.vk
+        source_state = self.vulkan.image_state(hdr_image.image)
+
+        def prepare_hdr_target(command_buffer: Any) -> None:
+            old_layout = int(source_state.layout)
+            barrier = vk.VkImageMemoryBarrier(
+                sType=vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                srcAccessMask=int(source_state.access_mask),
+                dstAccessMask=vk.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                oldLayout=old_layout,
+                newLayout=vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                srcQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+                dstQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+                image=hdr_image.image,
+                subresourceRange=vk.VkImageSubresourceRange(
+                    aspectMask=vk.VK_IMAGE_ASPECT_COLOR_BIT,
+                    baseMipLevel=0,
+                    levelCount=1,
+                    baseArrayLayer=0,
+                    layerCount=2,
+                ),
+            )
+            vk.vkCmdPipelineBarrier(
+                command_buffer,
+                int(source_state.stage_mask)
+                or vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                0,
+                0,
+                None,
+                0,
+                None,
+                1,
+                [barrier],
+            )
+
+        self.vulkan.submit_on(
+            "graphics",
+            prepare_hdr_target,
+            wait_for_timeline=previous_timeline,
+            signal_semaphore=ready_semaphore,
+        )
+        self.vulkan.register_image_state(
+            hdr_image.image,
+            ImageState(
+                layout=vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                access_mask=vk.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                stage_mask=vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                queue_family_index=self.vulkan.queue_family_index,
+            ),
+        )
         state_started = time.perf_counter()
         bridge.set_active_eye(0)
         _update_filament_stereo_camera(
@@ -5651,13 +5802,22 @@ class OpenXrVulkanPresenter(
         )
         record_time("openxr_filament_multiview_state", state_started)
         bridge.set_active_eye(0)
-        bridge.set_acquired_image(image_index)
+        bridge.set_acquired_image(slot)
+        bridge.set_image_ready_semaphore(
+            _cffi_handle_address(vk, ready_semaphore)
+        )
         queue_started = time.perf_counter()
         bridge.begin_frame()
         record_time("openxr_filament_multiview_queue", queue_started)
         finish_started = time.perf_counter()
         bridge.end_frame()
         record_time("openxr_filament_multiview_finish_wait", finish_started)
+        self._filament_multiview_current = hdr_image
+        self._filament_multiview_current_slot = slot
+        self._filament_multiview_finished_consumed = False
+        self._filament_multiview_slot = (slot + 1) % len(
+            self._filament_multiview_hdr_images
+        )
         return (
             bridge.get_finished_drawing_semaphore()
             if finished_semaphore_available
@@ -6060,26 +6220,42 @@ class OpenXrVulkanPresenter(
                     )
             if not render_succeeded and use_vulkan_projection_composer:
                 try:
-                    # The per-eye Composer LOAD path is not compatible with
-                    # Filament multiview's array target yet. Keep the
-                    # established multiview path intact until it has an
-                    # explicit array-image semaphore contract.
-                    if self.filament_bridge is not None and not self._multiview_active:
-                        filament_composer_wait_semaphores = (
-                            self._render_filament_for_projection_composer(
+                    filament_hdr_sources: tuple[Any, ...] = ()
+                    if self.filament_bridge is not None:
+                        if self._multiview_active:
+                            finished = self._render_filament_multiview(
                                 render_views,
-                                acquired_images,
-                                animation_time,
+                                presentation_frame,
+                                finished_semaphore_available,
                                 record_time,
                             )
-                        )
+                            filament_composer_wait_semaphores = (
+                                [finished] if finished is not None else []
+                            )
+                            if self._filament_multiview_current is None:
+                                raise RuntimeError(
+                                    "Filament multiview HDR frame was not published"
+                                )
+                            filament_hdr_sources = tuple(
+                                self._filament_multiview_current.layer_resources
+                            )
+                        else:
+                            filament_composer_wait_semaphores = (
+                                self._render_filament_for_projection_composer(
+                                    render_views,
+                                    acquired_images,
+                                    animation_time,
+                                    record_time,
+                                )
+                            )
                         filament_composer_rendered = True
-                    if filament_composer_wait_semaphores:
+                    if filament_composer_wait_semaphores or filament_hdr_sources:
                         composer_timeline = self._render_vulkan_projection_composer(
                             composer_frame,
                             acquired_images,
                             composition_views,
                             filament_wait_semaphores=filament_composer_wait_semaphores,
+                            filament_hdr_sources=filament_hdr_sources,
                         )
                     else:
                         composer_timeline = self._render_vulkan_projection_composer(
@@ -6096,6 +6272,10 @@ class OpenXrVulkanPresenter(
                         ),
                         int(composer_timeline),
                     )
+                    if self._filament_multiview_current_slot is not None:
+                        self._filament_multiview_slot_timelines[
+                            self._filament_multiview_current_slot
+                        ] = int(composer_timeline)
                     render_succeeded = True
                 except Exception as exc:
                     use_vulkan_projection_composer = False
@@ -6115,7 +6295,10 @@ class OpenXrVulkanPresenter(
                             "openxr_vulkan_projection_composer_fallback", 1
                         )
                     if filament_composer_rendered:
-                        if filament_composer_wait_semaphores:
+                        if (
+                            filament_composer_wait_semaphores
+                            and not self._filament_multiview_finished_consumed
+                        ):
                             drain_started = time.perf_counter()
                             consumer_completion_timeline = self.vulkan.submit_on(
                                 "graphics",
@@ -6134,6 +6317,8 @@ class OpenXrVulkanPresenter(
                                     ),
                                     int(consumer_completion_timeline),
                                 )
+                        if self._multiview_active:
+                            self._clear_projection_targets(acquired_images)
                         render_succeeded = True
                     else:
                         fallback_prepare_started = time.perf_counter()
@@ -6150,7 +6335,6 @@ class OpenXrVulkanPresenter(
                 consumer_release_semaphores[0] = self._render_filament_multiview(
                     render_views,
                     presentation_frame,
-                    acquired_images[0],
                     finished_semaphore_available,
                     record_time,
                 )
