@@ -21,12 +21,25 @@ class ControllerBrand:
     rotation_deg: float
     profile_id: str
     ambient_light_multiplier: float
+    material_roughness_factor: float | None
+    material_metallic_factor: float | None
+    material_specular_color_factor: tuple[float, float, float] | None
 
 
 def _vector3(value, default=(0.0, 0.0, 0.0)) -> tuple[float, float, float]:
     if not isinstance(value, (list, tuple)) or len(value) < 3:
         return default
     return tuple(float(item) for item in value[:3])
+
+
+def _optional_float(value) -> float | None:
+    return None if value is None else float(value)
+
+
+def _optional_vector3(value) -> tuple[float, float, float] | None:
+    if value is None:
+        return None
+    return _vector3(value)
 
 
 def discover_controller_brands(root: str | Path) -> dict[str, ControllerBrand]:
@@ -62,6 +75,15 @@ def discover_controller_brands(root: str | Path) -> dict[str, ControllerBrand]:
             else directory.name,
             ambient_light_multiplier=max(
                 0.0, float(overrides.get("ambient_light_multiplier", 1.0))
+            ),
+            material_roughness_factor=_optional_float(
+                overrides.get("material_roughness_factor")
+            ),
+            material_metallic_factor=_optional_float(
+                overrides.get("material_metallic_factor")
+            ),
+            material_specular_color_factor=_optional_vector3(
+                overrides.get("material_specular_color_factor")
             ),
         )
     return result

@@ -8,6 +8,9 @@ struct FilamentBridge;
 void bridge_controller_destroy(
         FilamentBridge* bridge, ControllerAsset& controller);
 void bridge_controller_eye_diagnostic_destroy(FilamentBridge* bridge);
+int bridge_controller_set_material_override(
+        FilamentBridge* bridge, float roughness_factor, float metallic_factor,
+        float specular_red, float specular_green, float specular_blue);
 void bridge_controller_update_animations(
         FilamentBridge* bridge, ControllerAsset& controller);
 int bridge_controller_load(

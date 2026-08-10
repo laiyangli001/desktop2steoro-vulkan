@@ -68,6 +68,7 @@ class FilamentVulkanBridge:
             raise FilamentBridgeError(f"unable to load Filament Bridge: {path}") from exc
         self._controller_abi_available = False
         self._controller_visibility_abi_available = False
+        self._controller_material_override_abi_available = False
         self._laser_abi_available = False
         self._controller_guide_abi_available = False
         self._text_overlay_abi_available = False
@@ -114,6 +115,10 @@ class FilamentVulkanBridge:
     @property
     def controller_visibility_abi_available(self) -> bool:
         return self._controller_visibility_abi_available
+
+    @property
+    def controller_material_override_abi_available(self) -> bool:
+        return self._controller_material_override_abi_available
 
     @property
     def vulkan_external_image_abi_available(self) -> bool:
@@ -607,6 +612,28 @@ class FilamentVulkanBridge:
             "set_controller_visible",
         )
 
+    def set_controller_material_override(
+        self,
+        *,
+        roughness_factor: float | None,
+        metallic_factor: float | None,
+        specular_color_factor: tuple[float, float, float] | None,
+    ) -> bool:
+        self._ensure_loaded()
+        if not self.controller_material_override_abi_available:
+            return False
+        specular = specular_color_factor or (-1.0, -1.0, -1.0)
+        self._check_result(
+            self._library.filament_bridge_set_controller_material_override(
+                self._handle,
+                -1.0 if roughness_factor is None else float(roughness_factor),
+                -1.0 if metallic_factor is None else float(metallic_factor),
+                *(float(value) for value in specular),
+            ),
+            "set_controller_material_override",
+        )
+        return True
+
     def set_controller_laser(self, hand: int, matrix, *, visible: bool) -> None:
         self._ensure_loaded()
         if not self._laser_abi_available:
@@ -1091,6 +1118,20 @@ class FilamentVulkanBridge:
             ]
             set_controller_visible.restype = ctypes.c_int
             self._controller_visibility_abi_available = True
+        set_controller_material_override = getattr(
+            library, "filament_bridge_set_controller_material_override", None
+        )
+        if set_controller_material_override is not None:
+            set_controller_material_override.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_float,
+                ctypes.c_float,
+                ctypes.c_float,
+                ctypes.c_float,
+                ctypes.c_float,
+            ]
+            set_controller_material_override.restype = ctypes.c_int
+            self._controller_material_override_abi_available = True
         set_controller_laser = getattr(
             library, "filament_bridge_set_controller_laser", None
         )

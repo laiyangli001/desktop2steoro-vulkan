@@ -2,6 +2,9 @@
     "profileId" : "pico-4u",
     "overrides" : {
         "model_offset": [0.0, -0.02, -0.03],
-        "model_rotation_deg": -20.0
+        "model_rotation_deg": -20.0,
+        "material_roughness_factor": 0.08,
+        "material_metallic_factor": 0.85,
+        "material_specular_color_factor": [2.0, 2.0, 2.0]
     }
 }

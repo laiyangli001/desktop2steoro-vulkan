@@ -132,6 +132,9 @@ FILAMENT_BRIDGE_API int filament_bridge_set_controller_inputs(
         uint32_t button_mask);
 FILAMENT_BRIDGE_API int filament_bridge_set_controller_visible(
         FilamentBridge* bridge, uint32_t hand, int visible);
+FILAMENT_BRIDGE_API int filament_bridge_set_controller_material_override(
+        FilamentBridge* bridge, float roughness_factor, float metallic_factor,
+        float specular_red, float specular_green, float specular_blue);
 FILAMENT_BRIDGE_API int filament_bridge_set_controller_laser(
         FilamentBridge* bridge, uint32_t hand,
         const float* matrix16, int visible);

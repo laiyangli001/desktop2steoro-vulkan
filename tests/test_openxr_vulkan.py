@@ -450,6 +450,30 @@ def test_controller_lighting_config_is_resolved_outside_native_bridge() -> None:
     assert bridge.config["top_light_offset"] == pytest.approx((0.0, 0.45, -0.18))
 
 
+@pytest.mark.parametrize("brand_name", ("HP", "INDEX", "PICO", "QUEST", "VIVE", "YVR"))
+def test_controller_material_override_is_consistent_across_brands(
+    brand_name: str,
+) -> None:
+    class Bridge:
+        def __init__(self) -> None:
+            self.config = None
+
+        def set_controller_material_override(self, **config) -> bool:
+            self.config = config
+            return True
+
+    presenter = OpenXrVulkanPresenter()
+    bridge = Bridge()
+
+    presenter._apply_controller_material_profile(
+        bridge, presenter._controller_brands[brand_name]
+    )
+
+    assert bridge.config == {
+        "roughness_factor": pytest.approx(0.08),
+        "metallic_factor": pytest.approx(0.85),
+        "specular_color_factor": pytest.approx((2.0, 2.0, 2.0)),
+    }
 def test_controller_screen_light_tracks_linear_screen_color_in_foreground() -> None:
     class Bridge:
         def __init__(self) -> None:

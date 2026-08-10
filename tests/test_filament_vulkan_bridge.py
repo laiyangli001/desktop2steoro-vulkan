@@ -130,6 +130,31 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
         bridge_dir / "bridge_internal.h"
     ).read_text(encoding="utf-8")
 
+
+def test_controller_material_override_stays_profile_driven() -> None:
+    root = Path(__file__).resolve().parents[1]
+    facade = (root / "native/filament/bridge/filament_bridge.cpp").read_text(
+        encoding="utf-8"
+    )
+    controller = (root / "native/filament/bridge/bridge_controller.cpp").read_text(
+        encoding="utf-8"
+    )
+    assert "filament_bridge_set_controller_material_override" in facade
+    assert 'hasParameter("roughnessFactor")' in controller
+    assert 'hasParameter("metallicFactor")' in controller
+    assert 'hasParameter("specularColorFactor")' in controller
+    for brand in ("HP", "INDEX", "PICO", "QUEST", "VIVE", "YVR"):
+        profile = json.loads(
+            (root / f"src/xr_viewer/controllers/{brand}/profile.json").read_text(
+                encoding="utf-8"
+            )
+        )["overrides"]
+        assert profile["material_roughness_factor"] == pytest.approx(0.08)
+        assert profile["material_metallic_factor"] == pytest.approx(0.85)
+        assert profile["material_specular_color_factor"] == pytest.approx(
+            [2.0, 2.0, 2.0]
+        )
+
 def test_legacy_filament_screen_texture_light_path_stays_removed() -> None:
     root = Path(__file__).resolve().parents[1]
     source = (root / "src/xr_viewer/core_openxr_vulkan.py").read_text(

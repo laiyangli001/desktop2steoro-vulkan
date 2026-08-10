@@ -1216,6 +1216,29 @@ class OpenXrVulkanPresenter(
                 self._filament_fill_light_direction,
             )
 
+    def _apply_controller_material_profile(self, bridge=None, brand=None) -> None:
+        bridge = bridge or self.filament_bridge
+        brand = brand or self._controller_brand
+        setter = getattr(bridge, "set_controller_material_override", None)
+        if bridge is None or brand is None or not callable(setter):
+            return
+        roughness = getattr(brand, "material_roughness_factor", None)
+        metallic = getattr(brand, "material_metallic_factor", None)
+        specular = getattr(brand, "material_specular_color_factor", None)
+        if roughness is None and metallic is None and specular is None:
+            return
+        if setter(
+            roughness_factor=roughness,
+            metallic_factor=metallic,
+            specular_color_factor=specular,
+        ):
+            print(
+                "[OpenXRViewer] Controller material override: "
+                f"brand={brand.name} roughness={roughness} "
+                f"metallic={metallic} specular={specular}",
+                flush=True,
+            )
+
     def _update_controller_screen_light(
         self, frame: VulkanStereoOutputFrame | None, bridge: Any
     ) -> None:
@@ -2249,10 +2272,12 @@ class OpenXrVulkanPresenter(
             if bridge is not None and hasattr(bridge, "load_controller"):
                 bridge.load_controller(0, next_brand.left_glb.read_bytes())
                 bridge.load_controller(1, next_brand.right_glb.read_bytes())
+                self._apply_controller_material_profile(bridge, next_brand)
         except Exception:
             if bridge is not None and previous is not None:
                 bridge.load_controller(0, previous.left_glb.read_bytes())
                 bridge.load_controller(1, previous.right_glb.read_bytes())
+                self._apply_controller_material_profile(bridge, previous)
             raise
         self._controller_brand = next_brand
         self._controller_calibration_offset = np.asarray(
@@ -4413,6 +4438,9 @@ class OpenXrVulkanPresenter(
             ):
                 bridge.load_controller(0, asset_reads["controller_left"].result())
                 bridge.load_controller(1, asset_reads["controller_right"].result())
+                self._apply_controller_material_profile(
+                    bridge, self._controller_brand
+                )
                 print(
                     "Filament controllers loaded: "
                     f"brand={self._controller_brand.name} "

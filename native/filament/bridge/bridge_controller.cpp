@@ -4,6 +4,50 @@
 #include <cstdlib>
 #include <cstring>
 
+int bridge_controller_set_material_override(
+        FilamentBridge* bridge, float roughness_factor, float metallic_factor,
+        float specular_red, float specular_green, float specular_blue) {
+    if (!bridge || !bridge->engine ||
+            !std::isfinite(roughness_factor) || !std::isfinite(metallic_factor) ||
+            !std::isfinite(specular_red) || !std::isfinite(specular_green) ||
+            !std::isfinite(specular_blue)) {
+        return 0;
+    }
+    const bool set_roughness = roughness_factor >= 0.0f;
+    const bool set_metallic = metallic_factor >= 0.0f;
+    const bool set_specular = specular_red >= 0.0f &&
+            specular_green >= 0.0f && specular_blue >= 0.0f;
+    auto& renderables = bridge->engine->getRenderableManager();
+    for (auto& controller : bridge->controllers) {
+        if (!controller.asset) continue;
+        for (size_t index = 0;
+                index < controller.asset->getRenderableEntityCount(); ++index) {
+            const auto entity = controller.asset->getRenderableEntities()[index];
+            const auto instance = renderables.getInstance(entity);
+            if (!instance.isValid()) continue;
+            for (size_t primitive = 0;
+                    primitive < renderables.getPrimitiveCount(instance); ++primitive) {
+                auto* material = renderables.getMaterialInstanceAt(instance, primitive);
+                if (!material) continue;
+                const auto* definition = material->getMaterial();
+                if (set_roughness && definition->hasParameter("roughnessFactor")) {
+                    material->setParameter("roughnessFactor",
+                            std::clamp(roughness_factor, 0.0f, 1.0f));
+                }
+                if (set_metallic && definition->hasParameter("metallicFactor")) {
+                    material->setParameter("metallicFactor",
+                            std::clamp(metallic_factor, 0.0f, 1.0f));
+                }
+                if (set_specular && definition->hasParameter("specularColorFactor")) {
+                    material->setParameter("specularColorFactor", filament::math::float3{
+                            specular_red, specular_green, specular_blue});
+                }
+            }
+        }
+    }
+    return 1;
+}
+
 void bridge_controller_destroy(FilamentBridge* bridge, ControllerAsset& controller) {
     if (controller.asset && bridge->scene) {
         bridge->scene->removeEntities(

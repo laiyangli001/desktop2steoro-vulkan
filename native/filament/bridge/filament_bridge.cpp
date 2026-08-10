@@ -158,6 +158,14 @@ int filament_bridge_set_controller_visible(
     return bridge_controller_set_visible(bridge, hand, visible);
 }
 
+int filament_bridge_set_controller_material_override(
+        FilamentBridge* bridge, float roughness_factor, float metallic_factor,
+        float specular_red, float specular_green, float specular_blue) {
+    return bridge_controller_set_material_override(
+            bridge, roughness_factor, metallic_factor,
+            specular_red, specular_green, specular_blue);
+}
+
 int filament_bridge_set_controller_laser(
         FilamentBridge* bridge, uint32_t hand,
         const float* matrix16, int visible) {
