@@ -254,11 +254,11 @@ def test_native_controller_multiview_eye_diagnostic_replaces_glb_materials() -> 
     )
 
     assert "D2S_FILAMENT_CONTROLLER_EYE_DIAGNOSTIC" in source
-    assert "material.baseColor = float4(1.0, 0.0, 0.0, 1.0)" in source
-    assert "if (getEyeIndex() != 0)" in source
-    assert "material.worldPosition.x += 10000.0" in source
-    assert "variable_d2sEyeIndex" not in source
-    assert "eye0=red eye1=vertex_hidden" in source
+    assert "variable_d2sEyeIndex.x < 0.5" in source
+    assert "material.d2sEyeIndex = float4(float(getEyeIndex())" in source
+    assert '.variable(filamat::MaterialBuilder::Variable::CUSTOM0, "d2sEyeIndex")' in source
+    assert "material.worldPosition.x += 10000.0" not in source
+    assert "eye0=red eye1=green" in source
     assert (
         ".stereoscopicType(filamat::MaterialBuilder::StereoscopicType::MULTIVIEW)"
         in source
