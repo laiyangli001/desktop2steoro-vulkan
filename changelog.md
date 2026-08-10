@@ -9,7 +9,7 @@
 - **VDXR array layer 路由已通过实机验证：** 一个 `array_size=2` 的 OpenXR Projection swapchain 将 layer 0 提交给左眼、layer 1 提交给右眼，头显稳定显示左红右绿；纯 Vulkan multiview 测试同时记录 `fragment_counts=(1, 1)`。这确认 `gl_ViewIndex`、`viewMask=0x3`、双层 attachment 写入以及 OpenXR `imageArrayIndex=0/1` 均正常。
 - **Filament multiview 双眼路由已通过实机验证：** layered Bridge、普通手柄顶点路径和红绿诊断材质现在均使用正确的 multiview stereo variant，头显可见左眼红色、右眼绿色。Filament 1.75 内部 `clearDepth` 也改为注册生成的 `CLEARDEPTH_MULTIVIEW` 包，不再出现材质 stereo type 与 Engine 不兼容的警告。
 - **恢复正常手柄纹理的 layered HDR 合成：** Filament multiview 先输出双层 `R16G16B16A16_SFLOAT` HDR producer，再由 Vulkan resolve 到 OpenXR 左右眼 Projection 目标；Projection-only 诊断与正常 Composer 共用同一 resolve，并只消费一次 Filament render-finished semaphore，避免完成信号未发布、手柄消失或输出停滞。
-- **恢复 multiview 手柄原始 PBR 外观：** 撤销尚未实机证实、且会全局改写 Filament `getWorldCameraPosition()` 的逐眼 PBR 相机补丁。双眼几何和红绿诊断继续使用已经验证的 multiview stereo variant；PICO 的零粗糙度外壳重新遵循 Filament 官方 PBR 视点约定，避免被逐眼高光拆成三角反射碎片并呈现类似透明的外观。统一前景 View、新鲜深度、glTF `OPAQUE` 材质和 layered HDR resolve 均保持不变。
+- **恢复 multiview 手柄不透明外壳：** 撤销尚未实机证实、且会全局改写 Filament `getWorldCameraPosition()` 的逐眼 PBR 相机补丁；并恢复此前已通过实机验证的合成约束：环境、手柄 GLB、激光和指南/文字不再拆成独立 foreground/controller View，而是进入同一个 stereoscopic View，共享逐眼深度和 glTF `OPAQUE` 合成链。手柄灯仍由 light channel 隔离，PICO 原始材质参数不作修改。
 - **保留安全边界：** 会触发 device lost 的双 SwapChain deferred 路径继续禁用；正式 multiview 使用一个双层 producer 和统一 Vulkan/OpenXR 提交者，不恢复已证实不稳定的双 Renderer/双 deferred 完成路径。
 - **验证结果：** Filament 1.75 完整补丁已在 Windows x86_64、Linux x86_64 和 macOS arm64 三个平台重新构建成功，生成的 Bridge 二进制已同步；Python/OpenXR/Bridge 专项测试 `226 passed`，shader 合规检查通过。
 

@@ -5,6 +5,10 @@
 #include <cstring>
 
 void bridge_controller_destroy(FilamentBridge* bridge, ControllerAsset& controller) {
+    if (controller.asset && bridge->scene) {
+        bridge->scene->removeEntities(
+                controller.asset->getEntities(), controller.asset->getEntityCount());
+    }
     if (controller.asset && bridge->foreground_scene) {
         bridge->foreground_scene->removeEntities(
                 controller.asset->getEntities(), controller.asset->getEntityCount());
@@ -359,7 +363,9 @@ int bridge_controller_load(
         bridge_set_error(bridge, "Filament could not load controller GLB resources");
         return 0;
     }
-    bridge->foreground_scene->addEntities(
+    auto* controller_scene = bridge->multiview_active
+            ? bridge->scene : bridge->foreground_scene;
+    controller_scene->addEntities(
             controller.asset->getEntities(), controller.asset->getEntityCount());
     const bool eye_diagnostic = controller_eye_diagnostic_requested();
     if (eye_diagnostic && !ensure_controller_eye_diagnostic_material(bridge)) {

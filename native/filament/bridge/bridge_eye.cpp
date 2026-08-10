@@ -19,6 +19,35 @@ const void* semaphore_handle_as_void(T handle) {
 void set_multiview_views(FilamentBridge* bridge, bool enabled) {
     if (!bridge) return;
     auto& eye = bridge->eyes[0];
+    auto* controller_scene = enabled ? bridge->scene : bridge->foreground_scene;
+    auto* previous_controller_scene = enabled ? bridge->foreground_scene : bridge->scene;
+    for (auto& controller : bridge->controllers) {
+        if (!controller.asset) continue;
+        previous_controller_scene->removeEntities(
+                controller.asset->getEntities(), controller.asset->getEntityCount());
+        controller_scene->addEntities(
+                controller.asset->getEntities(), controller.asset->getEntityCount());
+    }
+    for (const auto entity : bridge->laser_entities) {
+        if (entity.isNull()) continue;
+        previous_controller_scene->remove(entity);
+        controller_scene->addEntity(entity);
+    }
+    if (!bridge->controller_guide_entity.isNull()) {
+        previous_controller_scene->remove(bridge->controller_guide_entity);
+        controller_scene->addEntity(bridge->controller_guide_entity);
+    }
+    for (const auto& page : bridge->text_pages) {
+        if (page.entity.isNull()) continue;
+        previous_controller_scene->remove(page.entity);
+        controller_scene->addEntity(page.entity);
+    }
+    for (const auto light : {bridge->fill_light, bridge->controller_top_light,
+            bridge->controller_screen_light}) {
+        if (light.isNull()) continue;
+        previous_controller_scene->remove(light);
+        controller_scene->addEntity(light);
+    }
     filament::StereoscopicOptions options{};
     options.enabled = enabled;
     eye.view->setStereoscopicOptions(options);
@@ -29,6 +58,14 @@ void set_multiview_views(FilamentBridge* bridge, bool enabled) {
     eye.foreground_view->setFrustumCullingEnabled(!enabled);
     eye.controller_view->setFrustumCullingEnabled(!enabled);
     eye.controller_guide_view->setFrustumCullingEnabled(!enabled);
+    // The previously validated opaque-controller fix requires the controller
+    // GLB and laser to stay in the main View. An independent controller View
+    // bypasses the normal glTF opaque/depth composition and makes the shell
+    // appear transparent. In multiview room, controllers, lasers and guides
+    // therefore share one stereo pass; the foreground View is not submitted.
+    if (enabled) {
+        eye.view->setVisibleLayers(0xff, 0x07);
+    }
     // A translucent View forces Filament's final PostProcessManager::blit().
     // In multiview that path treats the whole array resource as subresource
     // layer zero, samples it with blitLow, and duplicates layer zero into both
@@ -189,9 +226,7 @@ int bridge_eye_create_stereo_swapchain(
     eye.foreground_view->setViewport(filament::Viewport{0, 0, width, height});
     eye.controller_view->setViewport(filament::Viewport{0, 0, width, height});
     eye.controller_guide_view->setViewport(filament::Viewport{0, 0, width, height});
-    eye.foreground_view->setVisibleLayers(
-            0xff, static_cast<uint8_t>(
-                    0x01u | 0x02u | 0x04u | (1u << kScreenLayerBase)));
+    eye.foreground_view->setVisibleLayers(0xff, 0x06);
     set_multiview_views(bridge, true);
     bridge->multiview_active = true;
     bridge_eye_activate(bridge, 0);
@@ -330,7 +365,9 @@ int bridge_eye_begin_frame_impl(
     // Multiview must render all foreground layers through one View. Sequential
     // layered Views preserve only the first View's per-eye camera state.
     auto& eye = bridge->eyes[bridge->active_eye];
-    bridge->renderer->render(eye.foreground_view);
+    if (!bridge->multiview_active) {
+        bridge->renderer->render(eye.foreground_view);
+    }
     if (render_controller_layers && !bridge->multiview_active) {
         bridge->renderer->render(eye.controller_view);
     }

@@ -290,10 +290,17 @@ def test_native_foreground_uses_one_view_for_multiview_stereo() -> None:
     eye_source = (root / "native/filament/bridge/bridge_eye.cpp").read_text(
         encoding="utf-8"
     )
+    controller_source = (
+        root / "native/filament/bridge/bridge_controller.cpp"
+    ).read_text(encoding="utf-8")
 
     assert "bridge_screen_prepare_frame" not in eye_source
     assert "bridge_screen_bind_stereo_textures" not in eye_source
     assert "bridge->renderer->render(bridge->view);" in eye_source
+    assert "controller_scene = enabled ? bridge->scene : bridge->foreground_scene" in eye_source
+    assert "eye.view->setVisibleLayers(0xff, 0x07);" in eye_source
+    assert "if (!bridge->multiview_active) {\n        bridge->renderer->render(eye.foreground_view);" in eye_source
+    assert "bridge->multiview_active\n            ? bridge->scene : bridge->foreground_scene" in controller_source
     assert "filament::View::BlendMode::OPAQUE" in eye_source
     assert "filament::View::BlendMode::TRANSLUCENT" in eye_source
     assert "eye.foreground_view->setBlendMode(foreground_blend);" in eye_source

@@ -7,6 +7,7 @@ void bridge_laser_destroy(FilamentBridge* bridge) {
     if (!bridge || !bridge->engine) return;
     for (auto& entity : bridge->laser_entities) {
         if (entity.isNull()) continue;
+        if (bridge->scene) bridge->scene->remove(entity);
         if (bridge->foreground_scene) bridge->foreground_scene->remove(entity);
         bridge->engine->destroy(entity);
         entity = {};

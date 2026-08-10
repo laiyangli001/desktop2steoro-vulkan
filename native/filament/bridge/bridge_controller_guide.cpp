@@ -7,6 +7,7 @@
 void bridge_controller_guide_destroy(FilamentBridge* bridge) {
     if (!bridge || !bridge->engine) return;
     if (!bridge->controller_guide_entity.isNull()) {
+        if (bridge->scene) bridge->scene->remove(bridge->controller_guide_entity);
         if (bridge->foreground_scene) bridge->foreground_scene->remove(bridge->controller_guide_entity);
         bridge->engine->destroy(bridge->controller_guide_entity);
         bridge->controller_guide_entity = {};
@@ -157,7 +158,8 @@ int bridge_controller_guide_set_texture(
         bridge_set_error(bridge, "Filament could not create controller guide renderable");
         return 0;
     }
-    bridge->foreground_scene->addEntity(bridge->controller_guide_entity);
+    (bridge->multiview_active ? bridge->scene : bridge->foreground_scene)
+            ->addEntity(bridge->controller_guide_entity);
     bridge_set_renderable_layer(bridge, bridge->controller_guide_entity, 2, false);
     return 1;
 }

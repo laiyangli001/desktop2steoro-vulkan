@@ -46,6 +46,7 @@ const char* kMsdfShader = R"FILAMENT(
 void destroy_page(FilamentBridge* bridge, MsdfTextPage& page) {
     if (!bridge || !bridge->engine) return;
     if (!page.entity.isNull()) {
+        if (bridge->scene) bridge->scene->remove(page.entity);
         if (bridge->foreground_scene) bridge->foreground_scene->remove(page.entity);
         bridge->engine->destroy(page.entity);
         page.entity = {};
@@ -123,7 +124,8 @@ bool create_page_geometry(FilamentBridge* bridge, MsdfTextPage& page) {
             .priority(7).culling(false).castShadows(false).receiveShadows(false)
             .build(*bridge->engine, page.entity);
     if (result != filament::RenderableManager::Builder::Success) return false;
-    bridge->foreground_scene->addEntity(page.entity);
+    (bridge->multiview_active ? bridge->scene : bridge->foreground_scene)
+            ->addEntity(page.entity);
     bridge_set_renderable_layer(bridge, page.entity, 1, false);
     return true;
 }
