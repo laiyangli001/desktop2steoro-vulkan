@@ -86,6 +86,7 @@ class FilamentVulkanBridge:
         self._async_submit_abi_available = False
         self._stereo_batch_submit_abi_available = False
         self._multiview_abi_version = 0
+        self._multiview_depth_swapchain_abi_available = False
         self._configure_abi()
         self._handle: ctypes.c_void_p | None = None
         self._owner_thread_id: int | None = None
@@ -149,6 +150,10 @@ class FilamentVulkanBridge:
     @property
     def multiview_abi_available(self) -> bool:
         return self._multiview_abi_version >= 2
+
+    @property
+    def multiview_depth_swapchain_abi_available(self) -> bool:
+        return self._multiview_depth_swapchain_abi_available
 
     @property
     def multiview_supported(self) -> bool:
@@ -318,6 +323,39 @@ class FilamentVulkanBridge:
                 int(height),
             ),
             "create_stereo_swapchain",
+        )
+
+    def create_stereo_swapchain_with_depth(
+        self,
+        image_handles: Iterable[Any],
+        *,
+        format: int,
+        width: int,
+        height: int,
+        depth_image: Any,
+        depth_format: int,
+    ) -> None:
+        self._ensure_loaded()
+        if not self.multiview_depth_swapchain_abi_available:
+            raise FilamentBridgeError(
+                "Filament Vulkan multiview depth swapchain is unavailable"
+            )
+        values = [ctypes.c_void_p(_as_pointer_value(image)) for image in image_handles]
+        if not values:
+            raise ValueError("Filament stereo swapchain requires at least one VkImage")
+        array_type = ctypes.c_void_p * len(values)
+        self._check_result(
+            self._library.filament_bridge_create_stereo_swapchain_with_depth(
+                self._handle,
+                array_type(*values),
+                len(values),
+                int(format),
+                int(width),
+                int(height),
+                ctypes.c_void_p(_as_pointer_value(depth_image)),
+                int(depth_format),
+            ),
+            "create_stereo_swapchain_with_depth",
         )
 
     def set_active_eye(self, eye_index: int) -> None:
@@ -901,6 +939,9 @@ class FilamentVulkanBridge:
         create_stereo_swapchain = getattr(
             library, "filament_bridge_create_stereo_swapchain", None
         )
+        create_stereo_swapchain_with_depth = getattr(
+            library, "filament_bridge_create_stereo_swapchain_with_depth", None
+        )
         set_stereo_camera = getattr(
             library, "filament_bridge_set_stereo_camera", None
         )
@@ -926,6 +967,19 @@ class FilamentVulkanBridge:
                 ctypes.c_uint32,
             ]
             create_stereo_swapchain.restype = ctypes.c_int
+            if create_stereo_swapchain_with_depth is not None:
+                create_stereo_swapchain_with_depth.argtypes = [
+                    ctypes.c_void_p,
+                    ctypes.POINTER(ctypes.c_void_p),
+                    ctypes.c_uint32,
+                    ctypes.c_int32,
+                    ctypes.c_uint32,
+                    ctypes.c_uint32,
+                    ctypes.c_void_p,
+                    ctypes.c_int32,
+                ]
+                create_stereo_swapchain_with_depth.restype = ctypes.c_int
+                self._multiview_depth_swapchain_abi_available = True
             set_stereo_camera.argtypes = [
                 ctypes.c_void_p,
                 ctypes.POINTER(ctypes.c_float),

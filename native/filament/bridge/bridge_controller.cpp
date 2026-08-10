@@ -363,9 +363,7 @@ int bridge_controller_load(
         bridge_set_error(bridge, "Filament could not load controller GLB resources");
         return 0;
     }
-    auto* controller_scene = bridge->multiview_active
-            ? bridge->scene : bridge->foreground_scene;
-    controller_scene->addEntities(
+    bridge->foreground_scene->addEntities(
             controller.asset->getEntities(), controller.asset->getEntityCount());
     const bool eye_diagnostic = controller_eye_diagnostic_requested();
     if (eye_diagnostic && !ensure_controller_eye_diagnostic_material(bridge)) {

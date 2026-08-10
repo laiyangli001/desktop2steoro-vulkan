@@ -250,7 +250,15 @@ class VulkanTransientImage:
 class VulkanDepthAttachment(VulkanTransientImage):
     """Owned single-sample depth image that can be borrowed by Filament."""
 
-    def __init__(self, context: Any, width: int, height: int, *, label: str):
+    def __init__(
+        self,
+        context: Any,
+        width: int,
+        height: int,
+        *,
+        label: str,
+        array_layers: int = 1,
+    ):
         vk = context.vk
         selected = None
         for candidate in (
@@ -280,6 +288,7 @@ class VulkanDepthAttachment(VulkanTransientImage):
             format=selected,
             label=label,
             mip_levels=1,
+            array_layers=array_layers,
             usage=(
                 vk.VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
                 | vk.VK_IMAGE_USAGE_SAMPLED_BIT

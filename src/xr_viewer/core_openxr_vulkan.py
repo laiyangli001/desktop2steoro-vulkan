@@ -5086,6 +5086,7 @@ class OpenXrVulkanPresenter(
         if not (
             getattr(bridge, "multiview_abi_available", False)
             and getattr(bridge, "multiview_supported", False)
+            and getattr(bridge, "multiview_depth_swapchain_abi_available", False)
             and getattr(bridge, "image_ready_semaphore_abi_available", False)
             and getattr(bridge, "finished_drawing_semaphore_abi_available", False)
             and self.vulkan is not None
@@ -5103,8 +5104,16 @@ class OpenXrVulkanPresenter(
         vk = self.vulkan.vk
         hdr_format = int(vk.VK_FORMAT_R16G16B16A16_SFLOAT)
         hdr_images: list[VulkanTransientImage] = []
+        depth_attachment: VulkanDepthAttachment | None = None
         ready_semaphores: list[Any] = []
         try:
+            depth_attachment = VulkanDepthAttachment(
+                self.vulkan,
+                left.width,
+                left.height,
+                label="filament-multiview-depth",
+                array_layers=2,
+            )
             for slot in range(3):
                 hdr_images.append(
                     VulkanTransientImage(
@@ -5125,13 +5134,17 @@ class OpenXrVulkanPresenter(
                         None,
                     )
                 )
-            bridge.create_stereo_swapchain(
+            bridge.create_stereo_swapchain_with_depth(
                 (image.image for image in hdr_images),
                 format=hdr_format,
                 width=left.width,
                 height=left.height,
+                depth_image=depth_attachment.image,
+                depth_format=depth_attachment.format,
             )
         except Exception as exc:
+            if depth_attachment is not None:
+                depth_attachment.close()
             for image in hdr_images:
                 image.close()
             for semaphore in ready_semaphores:
@@ -5145,6 +5158,8 @@ class OpenXrVulkanPresenter(
                 flush=True,
             )
             return False
+        self._filament_depth_attachments = [depth_attachment]
+        self._filament_depth_attachments_bound = True
         self._filament_multiview_hdr_images = hdr_images
         self._filament_multiview_ready_semaphores = ready_semaphores
         self._filament_multiview_slot_timelines = [0] * len(hdr_images)
@@ -5155,7 +5170,8 @@ class OpenXrVulkanPresenter(
         print(
             "[OpenXRViewer] Filament projection path: "
             f"multiview_hdr slots={len(hdr_images)} array_size=2 "
-            f"format=R16G16B16A16_SFLOAT extent={left.width}x{left.height}",
+            f"format=R16G16B16A16_SFLOAT extent={left.width}x{left.height} "
+            f"depth_layers=2 depth_format={depth_attachment.format}",
             flush=True,
         )
         return True

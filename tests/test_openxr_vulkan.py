@@ -3149,6 +3149,16 @@ def test_filament_multiview_uses_private_hdr_targets_and_keeps_eye_swapchains(
     presenter._vulkan_projection_composer_requested = True
     closed = []
 
+    class FakeDepthImage:
+        def __init__(self, _context, width, height, *, label, array_layers):
+            self.image = "depth"
+            self.format = 126
+            assert (width, height, array_layers) == (10, 20, 2)
+            assert label == "filament-multiview-depth"
+
+        def close(self):
+            closed.append(self.image)
+
     class FakeHdrImage:
         count = 0
 
@@ -3166,6 +3176,9 @@ def test_filament_multiview_uses_private_hdr_targets_and_keeps_eye_swapchains(
     monkeypatch.setattr(
         "xr_viewer.core_openxr_vulkan.VulkanTransientImage", FakeHdrImage
     )
+    monkeypatch.setattr(
+        "xr_viewer.core_openxr_vulkan.VulkanDepthAttachment", FakeDepthImage
+    )
     presenter.vulkan = SimpleNamespace(
         device="device",
         vk=SimpleNamespace(
@@ -3180,16 +3193,24 @@ def test_filament_multiview_uses_private_hdr_targets_and_keeps_eye_swapchains(
     class FakeBridge:
         multiview_abi_available = True
         multiview_supported = True
+        multiview_depth_swapchain_abi_available = True
         image_ready_semaphore_abi_available = True
         finished_drawing_semaphore_abi_available = True
 
-        def create_stereo_swapchain(self, images, **kwargs):
+        def create_stereo_swapchain_with_depth(self, images, **kwargs):
             assert list(images) == ["hdr-0", "hdr-1", "hdr-2"]
-            assert kwargs == {"format": 97, "width": 10, "height": 20}
+            assert kwargs == {
+                "format": 97,
+                "width": 10,
+                "height": 20,
+                "depth_image": "depth",
+                "depth_format": 126,
+            }
 
     assert presenter._try_enable_filament_multiview(FakeBridge())
     assert presenter.swapchains == [left, right]
     assert len(presenter._filament_multiview_hdr_images) == 3
+    assert len(presenter._filament_depth_attachments) == 1
     assert not closed
 
 
@@ -3201,6 +3222,14 @@ def test_filament_multiview_failure_preserves_two_swapchain_fallback(monkeypatch
     presenter.swapchain_format = 43
     presenter._vulkan_projection_composer_requested = True
     closed = []
+
+    class FakeDepthImage:
+        def __init__(self, *_args, **_kwargs):
+            self.image = "depth"
+            self.format = 126
+
+        def close(self):
+            closed.append(self.image)
 
     class FakeHdrImage:
         count = 0
@@ -3216,6 +3245,9 @@ def test_filament_multiview_failure_preserves_two_swapchain_fallback(monkeypatch
     monkeypatch.setattr(
         "xr_viewer.core_openxr_vulkan.VulkanTransientImage", FakeHdrImage
     )
+    monkeypatch.setattr(
+        "xr_viewer.core_openxr_vulkan.VulkanDepthAttachment", FakeDepthImage
+    )
     presenter.vulkan = SimpleNamespace(
         device="device",
         vk=SimpleNamespace(
@@ -3230,16 +3262,17 @@ def test_filament_multiview_failure_preserves_two_swapchain_fallback(monkeypatch
     class FakeBridge:
         multiview_abi_available = True
         multiview_supported = True
+        multiview_depth_swapchain_abi_available = True
         image_ready_semaphore_abi_available = True
         finished_drawing_semaphore_abi_available = True
 
         @staticmethod
-        def create_stereo_swapchain(_images, **_kwargs):
+        def create_stereo_swapchain_with_depth(_images, **_kwargs):
             raise RuntimeError("layered target rejected")
 
     assert not presenter._try_enable_filament_multiview(FakeBridge())
     assert presenter.swapchains == [left, right]
-    assert closed == ["hdr-0", "hdr-1", "hdr-2"]
+    assert closed == ["depth", "hdr-0", "hdr-1", "hdr-2"]
 
 
 def test_filament_multiview_keeps_fallback_for_mismatched_eye_extents() -> None:

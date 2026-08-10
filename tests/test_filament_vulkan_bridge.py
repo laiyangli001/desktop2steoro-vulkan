@@ -124,6 +124,8 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     depth_capability = facade[facade.index("filament_bridge_depth_output_abi_available"):]
     assert "return 1;" in depth_capability[:depth_capability.index("int filament_bridge_get_depth_attachment")]
     assert "filament_bridge_create_eye_swapchain_with_depth" in facade
+    assert "filament_bridge_create_stereo_swapchain_with_depth" in facade
+    assert "filament_bridge_multiview_abi_available() { return 3; }" in facade
     assert "bundle.depth = swapchain->depth" in (
         bridge_dir / "bridge_internal.h"
     ).read_text(encoding="utf-8")
@@ -285,22 +287,24 @@ def test_controller_eye_diagnostic_launcher_enables_backend_stereo_trace() -> No
     assert "[D2S stereo trace]" in launcher
 
 
-def test_native_foreground_uses_one_view_for_multiview_stereo() -> None:
+def test_native_multiview_restores_validated_fresh_depth_foreground_pass() -> None:
     root = Path(__file__).resolve().parents[1]
     eye_source = (root / "native/filament/bridge/bridge_eye.cpp").read_text(
         encoding="utf-8"
     )
-    controller_source = (
-        root / "native/filament/bridge/bridge_controller.cpp"
-    ).read_text(encoding="utf-8")
+    context_source = (root / "native/filament/bridge/bridge_context.cpp").read_text(
+        encoding="utf-8"
+    )
 
     assert "bridge_screen_prepare_frame" not in eye_source
     assert "bridge_screen_bind_stereo_textures" not in eye_source
     assert "bridge->renderer->render(bridge->view);" in eye_source
-    assert "controller_scene = enabled ? bridge->scene : bridge->foreground_scene" in eye_source
-    assert "eye.view->setVisibleLayers(0xff, 0x07);" in eye_source
-    assert "if (!bridge->multiview_active) {\n        bridge->renderer->render(eye.foreground_view);" in eye_source
-    assert "bridge->multiview_active\n            ? bridge->scene : bridge->foreground_scene" in controller_source
+    assert "bridge->renderer->render(eye.foreground_view);" in eye_source
+    assert "0x01u | 0x02u | 0x04u | (1u << kScreenLayerBase)" in eye_source
+    assert "eye.foreground_view->setChannelDepthClearEnabled(2, true);" in context_source
+    assert "filament_bridge_create_stereo_swapchain_with_depth" in (
+        root / "native/filament/bridge/filament_bridge.cpp"
+    ).read_text(encoding="utf-8")
     assert "filament::View::BlendMode::OPAQUE" in eye_source
     assert "filament::View::BlendMode::TRANSLUCENT" in eye_source
     assert "eye.foreground_view->setBlendMode(foreground_blend);" in eye_source

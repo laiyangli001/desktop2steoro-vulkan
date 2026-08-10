@@ -17,6 +17,10 @@ int bridge_eye_create_target_swapchain(
 int bridge_eye_create_stereo_swapchain(
         FilamentBridge* bridge, const void* const* image_handles,
         uint32_t image_count, int32_t format, uint32_t width, uint32_t height);
+int bridge_eye_create_stereo_swapchain_with_depth(
+        FilamentBridge* bridge, const void* const* image_handles,
+        uint32_t image_count, int32_t format, uint32_t width, uint32_t height,
+        const void* depth_image_handle, int32_t depth_format);
 int bridge_eye_multiview_supported(const FilamentBridge* bridge);
 int bridge_eye_set_active(FilamentBridge* bridge, uint32_t eye_index);
 int bridge_eye_set_acquired_image(FilamentBridge* bridge, uint32_t image_index);

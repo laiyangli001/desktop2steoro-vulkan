@@ -19,35 +19,6 @@ const void* semaphore_handle_as_void(T handle) {
 void set_multiview_views(FilamentBridge* bridge, bool enabled) {
     if (!bridge) return;
     auto& eye = bridge->eyes[0];
-    auto* controller_scene = enabled ? bridge->scene : bridge->foreground_scene;
-    auto* previous_controller_scene = enabled ? bridge->foreground_scene : bridge->scene;
-    for (auto& controller : bridge->controllers) {
-        if (!controller.asset) continue;
-        previous_controller_scene->removeEntities(
-                controller.asset->getEntities(), controller.asset->getEntityCount());
-        controller_scene->addEntities(
-                controller.asset->getEntities(), controller.asset->getEntityCount());
-    }
-    for (const auto entity : bridge->laser_entities) {
-        if (entity.isNull()) continue;
-        previous_controller_scene->remove(entity);
-        controller_scene->addEntity(entity);
-    }
-    if (!bridge->controller_guide_entity.isNull()) {
-        previous_controller_scene->remove(bridge->controller_guide_entity);
-        controller_scene->addEntity(bridge->controller_guide_entity);
-    }
-    for (const auto& page : bridge->text_pages) {
-        if (page.entity.isNull()) continue;
-        previous_controller_scene->remove(page.entity);
-        controller_scene->addEntity(page.entity);
-    }
-    for (const auto light : {bridge->fill_light, bridge->controller_top_light,
-            bridge->controller_screen_light}) {
-        if (light.isNull()) continue;
-        previous_controller_scene->remove(light);
-        controller_scene->addEntity(light);
-    }
     filament::StereoscopicOptions options{};
     options.enabled = enabled;
     eye.view->setStereoscopicOptions(options);
@@ -58,14 +29,6 @@ void set_multiview_views(FilamentBridge* bridge, bool enabled) {
     eye.foreground_view->setFrustumCullingEnabled(!enabled);
     eye.controller_view->setFrustumCullingEnabled(!enabled);
     eye.controller_guide_view->setFrustumCullingEnabled(!enabled);
-    // The previously validated opaque-controller fix requires the controller
-    // GLB and laser to stay in the main View. An independent controller View
-    // bypasses the normal glTF opaque/depth composition and makes the shell
-    // appear transparent. In multiview room, controllers, lasers and guides
-    // therefore share one stereo pass; the foreground View is not submitted.
-    if (enabled) {
-        eye.view->setVisibleLayers(0xff, 0x07);
-    }
     // A translucent View forces Filament's final PostProcessManager::blit().
     // In multiview that path treats the whole array resource as subresource
     // layer zero, samples it with blitLow, and duplicates layer zero into both
@@ -194,6 +157,15 @@ int bridge_eye_multiview_supported(const FilamentBridge* bridge) {
 int bridge_eye_create_stereo_swapchain(
         FilamentBridge* bridge, const void* const* image_handles,
         uint32_t image_count, int32_t format, uint32_t width, uint32_t height) {
+    return bridge_eye_create_stereo_swapchain_with_depth(
+            bridge, image_handles, image_count, format, width, height,
+            nullptr, 0);
+}
+
+int bridge_eye_create_stereo_swapchain_with_depth(
+        FilamentBridge* bridge, const void* const* image_handles,
+        uint32_t image_count, int32_t format, uint32_t width, uint32_t height,
+        const void* depth_image_handle, int32_t depth_format) {
     if (!bridge || !bridge->engine || !bridge->platform ||
             !bridge->multiview_supported) return 0;
     auto& eye = bridge->eyes[0];
@@ -209,6 +181,14 @@ int bridge_eye_create_stereo_swapchain(
         bridge_set_error(bridge, "Invalid layered OpenXR Vulkan swapchain image list");
         return 0;
     }
+    auto* external_swapchain =
+            static_cast<OpenXrVulkanPlatform::ExternalSwapChain*>(external);
+    external_swapchain->depth = depth_image_handle
+            ? reinterpret_cast<VkImage>(const_cast<void*>(depth_image_handle))
+            : VK_NULL_HANDLE;
+    external_swapchain->depth_format = depth_image_handle
+            ? static_cast<VkFormat>(depth_format)
+            : VK_FORMAT_UNDEFINED;
     uint64_t swapchain_flags = 0;
     if (static_cast<VkFormat>(format) == VK_FORMAT_R8G8B8A8_SRGB ||
             static_cast<VkFormat>(format) == VK_FORMAT_B8G8R8A8_SRGB) {
@@ -220,20 +200,28 @@ int bridge_eye_create_stereo_swapchain(
         bridge_set_error(bridge, "Filament layered Vulkan SwapChain creation failed");
         return 0;
     }
-    eye.external_swapchain =
-            static_cast<OpenXrVulkanPlatform::ExternalSwapChain*>(external);
+    eye.external_swapchain = external_swapchain;
     eye.view->setViewport(filament::Viewport{0, 0, width, height});
     eye.foreground_view->setViewport(filament::Viewport{0, 0, width, height});
     eye.controller_view->setViewport(filament::Viewport{0, 0, width, height});
     eye.controller_guide_view->setViewport(filament::Viewport{0, 0, width, height});
-    eye.foreground_view->setVisibleLayers(0xff, 0x06);
+    // Preserve the validated composition contract: room first, then one
+    // foreground pass whose channel-2 depth is cleared before drawing Glow,
+    // controllers, lasers and guides. The layered depth attachment supplied
+    // above makes that same contract effective for both multiview layers.
+    eye.foreground_view->setVisibleLayers(
+            0xff, static_cast<uint8_t>(
+                    0x01u | 0x02u | 0x04u | (1u << kScreenLayerBase)));
     set_multiview_views(bridge, true);
     bridge->multiview_active = true;
     bridge_eye_activate(bridge, 0);
     std::fprintf(stderr,
             "[FilamentBridge] stereo swapchain created images=%u format=%d "
-            "extent=%ux%u layers=2\n",
-            image_count, format, width, height);
+            "extent=%ux%u layers=2 depth=%p depth_format=%d\n",
+            image_count, format, width, height,
+            reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(
+                    external_swapchain->depth)),
+            static_cast<int>(external_swapchain->depth_format));
     std::fflush(stderr);
     return 1;
 }
@@ -362,12 +350,10 @@ int bridge_eye_begin_frame_impl(
         std::fflush(stderr);
     }
     bridge->renderer->render(bridge->view);
-    // Multiview must render all foreground layers through one View. Sequential
-    // layered Views preserve only the first View's per-eye camera state.
+    // The foreground View starts from fresh depth while preserving the room
+    // color, matching the previously validated opaque-controller ordering.
     auto& eye = bridge->eyes[bridge->active_eye];
-    if (!bridge->multiview_active) {
-        bridge->renderer->render(eye.foreground_view);
-    }
+    bridge->renderer->render(eye.foreground_view);
     if (render_controller_layers && !bridge->multiview_active) {
         bridge->renderer->render(eye.controller_view);
     }

@@ -50,7 +50,7 @@ int filament_bridge_create_eye_swapchain_with_depth(
             depth_image_handle, depth_format);
 }
 
-int filament_bridge_multiview_abi_available() { return 2; }
+int filament_bridge_multiview_abi_available() { return 3; }
 int filament_bridge_multiview_supported(const FilamentBridge* bridge) {
     return bridge_eye_multiview_supported(bridge); }
 int filament_bridge_create_stereo_swapchain(
@@ -58,6 +58,13 @@ int filament_bridge_create_stereo_swapchain(
         uint32_t image_count, int32_t format, uint32_t width, uint32_t height) {
     return bridge_eye_create_stereo_swapchain(
             bridge, image_handles, image_count, format, width, height); }
+int filament_bridge_create_stereo_swapchain_with_depth(
+        FilamentBridge* bridge, const void* const* image_handles,
+        uint32_t image_count, int32_t format, uint32_t width, uint32_t height,
+        const void* depth_image_handle, int32_t depth_format) {
+    return bridge_eye_create_stereo_swapchain_with_depth(
+            bridge, image_handles, image_count, format, width, height,
+            depth_image_handle, depth_format); }
 int filament_bridge_set_active_eye(
         FilamentBridge* bridge, uint32_t eye_index) {
     return bridge_eye_set_active(bridge, eye_index);
