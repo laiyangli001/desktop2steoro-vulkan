@@ -37,6 +37,7 @@ from viewer.vulkan_resources import (
 )
 from viewer.vulkan_msdf_quad import VulkanMsdfQuadRenderer, VulkanMsdfQuadRequest
 from viewer.vulkan_projection_screen import VulkanProjectionScreenPass
+from viewer.vulkan_multiview_diagnostic import VulkanMultiviewEyeDiagnosticPass
 from app_runtime.output_contract import VulkanStereoOutputFrame
 
 
@@ -684,6 +685,9 @@ class OpenXrVulkanPresenter(
         self._projection_array_eye_diagnostic = _env_flag(
             "D2S_OPENXR_PROJECTION_ARRAY_EYE_DIAGNOSTIC", default=False
         )
+        self._vulkan_multiview_eye_diagnostic = _env_flag(
+            "D2S_OPENXR_VULKAN_MULTIVIEW_EYE_DIAGNOSTIC", default=False
+        )
         self._filament_multiview_projection_diagnostic = _env_flag(
             "D2S_FILAMENT_MULTIVIEW_PROJECTION_DIAGNOSTIC", default=False
         )
@@ -1010,6 +1014,9 @@ class OpenXrVulkanPresenter(
         self._msdf_font_atlas: MsdfFontAtlas | None = None
         self._vulkan_msdf_quad_renderer: VulkanMsdfQuadRenderer | None = None
         self._vulkan_projection_screen_pass: VulkanProjectionScreenPass | None = None
+        self._vulkan_multiview_diagnostic_pass: (
+            VulkanMultiviewEyeDiagnosticPass | None
+        ) = None
         # Legacy screen OSD state. These are rendered as Quad layers above
         # the virtual screen, never inside the projection scene.
         self._preset_name_overlay: str | None = None
@@ -3476,6 +3483,12 @@ class OpenXrVulkanPresenter(
             except Exception:
                 pass
             self._vulkan_projection_screen_pass = None
+        if self._vulkan_multiview_diagnostic_pass is not None:
+            try:
+                self._vulkan_multiview_diagnostic_pass.close()
+            except Exception:
+                pass
+            self._vulkan_multiview_diagnostic_pass = None
 
         if xr is not None:
             self._destroy_tool_quad_layers()
@@ -3794,7 +3807,10 @@ class OpenXrVulkanPresenter(
                 self.config.render_scale,
             )
             eye_extents.append((width, height))
-        if self._projection_array_eye_diagnostic:
+        if (
+            self._projection_array_eye_diagnostic
+            or self._vulkan_multiview_eye_diagnostic
+        ):
             if eye_extents[0] != eye_extents[1]:
                 raise OpenXrVulkanUnavailableError(
                     "Projection array diagnostic requires equal eye extents: "
@@ -3804,8 +3820,10 @@ class OpenXrVulkanPresenter(
             self.swapchains.append(
                 self._create_projection_swapchain(width, height, array_size=2)
             )
+            if self._vulkan_multiview_eye_diagnostic:
+                self._multiview_active = True
             print(
-                "[OpenXRViewer] Projection array eye diagnostic created: "
+                "[OpenXRViewer] Layered Projection diagnostic created: "
                 f"array_size=2 extent={width}x{height}",
                 flush=True,
             )
@@ -4185,6 +4203,13 @@ class OpenXrVulkanPresenter(
         self._release_output_frame(frame)
 
     def _initialize_filament_bridges(self) -> None:
+        if self._vulkan_multiview_eye_diagnostic:
+            print(
+                "[OpenXRViewer] Pure Vulkan multiview diagnostic: "
+                "Filament initialization bypassed",
+                flush=True,
+            )
+            return
         bridge_path = self.config.filament_bridge_path or os.environ.get(
             "D2S_FILAMENT_BRIDGE"
         )
@@ -5970,6 +5995,9 @@ class OpenXrVulkanPresenter(
             if self._projection_array_eye_diagnostic:
                 self._render_projection_array_eye_diagnostic(acquired_images)
                 render_succeeded = True
+            elif self._vulkan_multiview_eye_diagnostic:
+                self._render_vulkan_multiview_eye_diagnostic(acquired_images)
+                render_succeeded = True
 
             shared_prepare_started = time.perf_counter()
             if use_vulkan_projection_composer and presentation_frame is not None:
@@ -6334,6 +6362,34 @@ class OpenXrVulkanPresenter(
             print(
                 "[OpenXRViewer] Projection array eye diagnostic active: "
                 "left=red layer=0 right=green layer=1",
+                flush=True,
+            )
+
+    def _render_vulkan_multiview_eye_diagnostic(
+        self, acquired_images: list[tuple[_EyeSwapchain, int]]
+    ) -> None:
+        if len(acquired_images) != 1 or acquired_images[0][0].array_size < 2:
+            raise RuntimeError(
+                "Vulkan multiview diagnostic requires one array_size=2 swapchain"
+            )
+        eye, image_index = acquired_images[0]
+        if self._vulkan_multiview_diagnostic_pass is None:
+            self._vulkan_multiview_diagnostic_pass = (
+                VulkanMultiviewEyeDiagnosticPass(
+                    self.vulkan, int(self.swapchain_format)
+                )
+            )
+        timeline = self._vulkan_multiview_diagnostic_pass.submit(
+            eye.resources[image_index]
+        )
+        self.vulkan.wait_for_timeline(timeline)
+        if not getattr(self, "_vulkan_multiview_eye_diagnostic_logged", False):
+            self._vulkan_multiview_eye_diagnostic_logged = True
+            view_counts = self._vulkan_multiview_diagnostic_pass.read_view_counts()
+            print(
+                "[OpenXRViewer] Vulkan multiview eye diagnostic active: "
+                "viewMask=0x3 gl_ViewIndex left=red right=green "
+                f"fragment_counts={view_counts}",
                 flush=True,
             )
 

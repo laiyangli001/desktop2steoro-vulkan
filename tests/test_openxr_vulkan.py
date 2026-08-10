@@ -3275,6 +3275,22 @@ def test_filament_multiview_readback_requests_transfer_source(monkeypatch) -> No
     assert "SwapchainUsageFlags.TRANSFER_SRC_BIT" in source
 
 
+def test_pure_vulkan_multiview_diagnostic_bypasses_filament(monkeypatch) -> None:
+    monkeypatch.setenv("D2S_OPENXR_VULKAN_MULTIVIEW_EYE_DIAGNOSTIC", "1")
+    presenter = OpenXrVulkanPresenter(
+        OpenXrVulkanConfig(filament_bridge_path="bridge.dll")
+    )
+
+    presenter._initialize_filament_bridges()
+
+    assert presenter.filament_bridge is None
+    source = inspect.getsource(
+        OpenXrVulkanPresenter._render_vulkan_multiview_eye_diagnostic
+    )
+    assert "VulkanMultiviewEyeDiagnosticPass" in source
+    assert "wait_for_timeline" in source
+
+
 def test_filament_camera_receives_openxr_pose_and_fov() -> None:
     calls: list[tuple[str, tuple[float, ...]]] = []
 
