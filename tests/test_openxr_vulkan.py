@@ -442,16 +442,16 @@ def test_controller_lighting_config_is_resolved_outside_native_bridge() -> None:
     presenter._apply_filament_bridge_lighting(bridge)
 
     assert bridge.config["environment_ambient_intensity_lux"] == pytest.approx(30000.0)
-    assert bridge.config["controller_ambient_intensity_lux"] == pytest.approx(6000.0)
+    assert bridge.config["controller_ambient_intensity_lux"] == pytest.approx(8000.0)
     assert bridge.config["controller_ambient_color"] == pytest.approx((0.2, 0.3, 0.4))
-    assert bridge.config["head_light_intensity_candela"] == pytest.approx(1400.0)
-    assert bridge.config["top_light_intensity_candela"] == pytest.approx(2000.0)
+    assert bridge.config["head_light_intensity_candela"] == pytest.approx(1700.0)
+    assert bridge.config["top_light_intensity_candela"] == pytest.approx(1200.0)
     assert bridge.config["head_light_offset"] == pytest.approx((0.0, 0.05, 0.0))
     assert bridge.config["top_light_offset"] == pytest.approx((0.0, 0.45, -0.18))
 
 
 @pytest.mark.parametrize("brand_name", ("HP", "INDEX", "PICO", "QUEST", "VIVE", "YVR"))
-def test_controller_material_override_is_disabled_for_default_brands(
+def test_controller_material_profile_matches_brand_defaults(
     brand_name: str,
 ) -> None:
     class Bridge:
@@ -471,12 +471,14 @@ def test_controller_material_override_is_disabled_for_default_brands(
 
     if brand_name == "PICO":
         assert bridge.config == {
-            "roughness_factor": pytest.approx(0.0),
-            "metallic_factor": None,
-            "specular_color_factor": pytest.approx((2.0, 2.0, 2.0)),
+            "roughness_factor": pytest.approx(0.3),
+            "metallic_factor": pytest.approx(0.0),
+            "specular_color_factor": pytest.approx((1.0, 1.0, 1.0)),
         }
     else:
         assert bridge.config is None
+
+
 def test_controller_screen_light_tracks_linear_screen_color_in_foreground() -> None:
     class Bridge:
         def __init__(self) -> None:

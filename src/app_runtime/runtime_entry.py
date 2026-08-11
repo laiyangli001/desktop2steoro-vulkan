@@ -181,10 +181,10 @@ def _openxr_filament_config(settings: dict) -> dict[str, object]:
             common_filament.get("ambient_light_intensity_lux", 30000.0)
         ),
         "filament_controller_ambient_light_intensity_lux": float(
-            common_filament.get("controller_ambient_light_intensity_lux", 6000.0)
+            common_filament.get("controller_ambient_light_intensity_lux", 8000.0)
         ),
         "filament_controller_hdr_ambient_light_intensity_lux": float(
-            common_filament.get("controller_hdr_ambient_light_intensity_lux", 6000.0)
+            common_filament.get("controller_hdr_ambient_light_intensity_lux", 8000.0)
         ),
         "filament_controller_light_intensity_candela": float(
             common_filament.get("controller_light_intensity_candela", 2000.0)
@@ -193,10 +193,10 @@ def _openxr_filament_config(settings: dict) -> dict[str, object]:
             common_filament.get("controller_head_light_color", (0.55, 0.55, 0.58))
         ),
         "filament_controller_head_light_weight": float(
-            common_filament.get("controller_head_light_weight", 0.70)
+            common_filament.get("controller_head_light_weight", 0.85)
         ),
         "filament_controller_top_light_weight": float(
-            common_filament.get("controller_top_light_weight", 1.0)
+            common_filament.get("controller_top_light_weight", 0.6)
         ),
         "filament_controller_top_light_color": tuple(
             common_filament.get("controller_top_light_color", (0.95, 0.97, 1.0))

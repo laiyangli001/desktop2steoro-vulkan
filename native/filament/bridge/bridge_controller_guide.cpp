@@ -158,8 +158,7 @@ int bridge_controller_guide_set_texture(
         bridge_set_error(bridge, "Filament could not create controller guide renderable");
         return 0;
     }
-    (bridge->multiview_active ? bridge->scene : bridge->foreground_scene)
-            ->addEntity(bridge->controller_guide_entity);
+    bridge->foreground_scene->addEntity(bridge->controller_guide_entity);
     bridge_set_renderable_layer(bridge, bridge->controller_guide_entity, 2, false);
     return 1;
 }

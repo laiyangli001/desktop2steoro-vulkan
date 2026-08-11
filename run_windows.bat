@@ -10,6 +10,18 @@ set "LAUNCH_STDOUT=%LOG_DIR%\launcher_stdout.log"
 set "LAUNCH_STDERR=%LOG_DIR%\launcher_stderr.log"
 set "APP_LOG=%LOG_DIR%\desktop2stereo.log"
 
+rem Formal launcher must not inherit diagnostic overrides from a reused shell.
+set "D2S_FILAMENT_CONTROLLER_EYE_DIAGNOSTIC="
+set "D2S_FILAMENT_EYE_DIAGNOSTIC="
+set "D2S_FILAMENT_MULTIVIEW_LAYER_READBACK="
+set "D2S_FILAMENT_SHADER_DUMP_DIR="
+set "D2S_FILAMENT_MULTIVIEW_PROJECTION_DIAGNOSTIC="
+set "D2S_FILAMENT_PROJECTION_ONLY="
+set "D2S_OPENXR_PROJECTION_ARRAY_EYE_DIAGNOSTIC="
+set "D2S_OPENXR_SCREEN_QUAD_EYE_DIAGNOSTIC="
+set "D2S_OPENXR_VULKAN_MULTIVIEW_EYE_DIAGNOSTIC="
+set "D2S_VULKAN_PROJECTION_COMPOSER_EYE_DIAGNOSTIC="
+
 if not exist "%PYTHON_EXE%" (
     echo [Error] [EN] Python not found at %PYTHON_EXE%
     echo [Error] [CN] 初始化 Python 环境 ...失败，未找到 %PYTHON_EXE%

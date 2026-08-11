@@ -149,16 +149,17 @@ def test_controller_material_override_is_not_enabled_by_default_profiles() -> No
                 encoding="utf-8"
             )
         )["overrides"]
-        assert "material_metallic_factor" not in profile
         if brand == "PICO":
-            assert profile["material_roughness_factor"] == pytest.approx(0.0)
+            assert profile["material_roughness_factor"] == pytest.approx(0.3)
+            assert profile["material_metallic_factor"] == pytest.approx(0.0)
             assert profile["material_specular_color_factor"] == pytest.approx(
-                [2.0, 2.0, 2.0]
+                [1.0, 1.0, 1.0]
             )
             assert profile["controller_head_light_cast_shadows"] is True
             assert profile["controller_top_light_cast_shadows"] is True
         else:
             assert "material_roughness_factor" not in profile
+            assert "material_metallic_factor" not in profile
             assert "material_specular_color_factor" not in profile
 
 def test_legacy_filament_screen_texture_light_path_stays_removed() -> None:
@@ -211,8 +212,8 @@ def test_artemis_controller_lighting_matches_legacy_head_light() -> None:
     common = json.loads(
         (root / "src/xr_viewer/environments/common.json").read_text(encoding="utf-8")
     )["filament"]
-    assert common["controller_head_light_weight"] == pytest.approx(0.70)
-    assert common["controller_top_light_weight"] == pytest.approx(1.0)
+    assert common["controller_head_light_weight"] == pytest.approx(0.85)
+    assert common["controller_top_light_weight"] == pytest.approx(0.6)
     assert common["controller_head_light_offset"] == [0.0, 0.05, 0.0]
     assert common["controller_top_light_offset"] == [0.0, 0.45, -0.18]
     assert common["controller_screen_light_enabled"] is True
@@ -322,6 +323,25 @@ def test_controller_eye_diagnostic_launcher_enables_backend_stereo_trace() -> No
     assert "[D2S stereo trace]" in launcher
 
 
+def test_formal_launcher_clears_filament_diagnostics() -> None:
+    root = Path(__file__).resolve().parents[1]
+    launcher = (root / "run_windows.bat").read_text(encoding="utf-8")
+
+    for name in (
+        "D2S_FILAMENT_CONTROLLER_EYE_DIAGNOSTIC",
+        "D2S_FILAMENT_EYE_DIAGNOSTIC",
+        "D2S_FILAMENT_MULTIVIEW_LAYER_READBACK",
+        "D2S_FILAMENT_SHADER_DUMP_DIR",
+        "D2S_FILAMENT_MULTIVIEW_PROJECTION_DIAGNOSTIC",
+        "D2S_FILAMENT_PROJECTION_ONLY",
+        "D2S_OPENXR_PROJECTION_ARRAY_EYE_DIAGNOSTIC",
+        "D2S_OPENXR_SCREEN_QUAD_EYE_DIAGNOSTIC",
+        "D2S_OPENXR_VULKAN_MULTIVIEW_EYE_DIAGNOSTIC",
+        "D2S_VULKAN_PROJECTION_COMPOSER_EYE_DIAGNOSTIC",
+    ):
+        assert f'set "{name}="' in launcher
+
+
 def test_native_multiview_restores_validated_fresh_depth_foreground_pass() -> None:
     root = Path(__file__).resolve().parents[1]
     eye_source = (root / "native/filament/bridge/bridge_eye.cpp").read_text(
@@ -380,6 +400,14 @@ def test_native_controller_overlay_preserves_composer_color() -> None:
         root / "native/filament/bridge/bridge_controller_guide.cpp"
     ).read_text(encoding="utf-8")
     assert ".depthCulling(false)" in guide_source
+    assert (
+        "bridge->foreground_scene->addEntity(bridge->controller_guide_entity)"
+        in guide_source
+    )
+    assert (
+        "bridge->multiview_active ? bridge->scene : bridge->foreground_scene"
+        not in guide_source
+    )
 
 
 def test_native_background_frame_defers_controller_layers_to_overlay() -> None:
