@@ -309,6 +309,10 @@ def test_controller_eye_diagnostic_launcher_enables_backend_stereo_trace() -> No
     assert '$env:D2S_FILAMENT_CONTROLLER_EYE_DIAGNOSTIC = "1"' in launcher
     assert '$env:D2S_FILAMENT_EYE_DIAGNOSTIC = "1"' in launcher
     assert '$env:D2S_FILAMENT_SHADER_DUMP_DIR = $shaderDumpDir' in launcher
+    assert 'commonLightingPath = Join-Path $repoRoot "src\\xr_viewer\\environments\\common.json"' in launcher
+    assert 'controller_head_light_weight' in launcher
+    assert 'controller_top_light_weight' in launcher
+    assert 'controller_screen_light_intensity_lux' in launcher
     assert "[D2S stereo trace]" in launcher
 
 
@@ -333,6 +337,18 @@ def test_native_multiview_restores_validated_fresh_depth_foreground_pass() -> No
     assert "filament::View::BlendMode::OPAQUE" in eye_source
     assert "filament::View::BlendMode::TRANSLUCENT" in eye_source
     assert "eye.foreground_view->setBlendMode(foreground_blend);" in eye_source
+
+
+def test_controller_lights_remain_in_foreground_scene_for_multiview() -> None:
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "native/filament/bridge/bridge_material.cpp").read_text(
+        encoding="utf-8"
+    )
+
+    assert "bridge->foreground_scene->addEntity(bridge->fill_light)" in source
+    assert "bridge->foreground_scene->addEntity(bridge->controller_top_light)" in source
+    assert "bridge->foreground_scene->addEntity(bridge->controller_screen_light)" in source
+    assert "bridge->multiview_active ? bridge->scene : bridge->foreground_scene" not in source
 
 
 def test_native_controller_overlay_preserves_composer_color() -> None:

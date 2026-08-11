@@ -342,8 +342,7 @@ int bridge_material_set_lighting_config(
                 .lightChannel(0, false).lightChannel(1, true)
                 .castShadows(config->head_light_cast_shadows != 0)
                 .build(*bridge->engine, bridge->fill_light);
-        (bridge->multiview_active ? bridge->scene : bridge->foreground_scene)
-                ->addEntity(bridge->fill_light);
+        bridge->foreground_scene->addEntity(bridge->fill_light);
     }
     if (config->top_light_intensity_candela > 0.0f &&
             color_visible(config->top_light_color)) {
@@ -359,8 +358,7 @@ int bridge_material_set_lighting_config(
                 .lightChannel(0, false).lightChannel(1, true)
                 .castShadows(config->top_light_cast_shadows != 0)
                 .build(*bridge->engine, bridge->controller_top_light);
-        (bridge->multiview_active ? bridge->scene : bridge->foreground_scene)
-                ->addEntity(bridge->controller_top_light);
+        bridge->foreground_scene->addEntity(bridge->controller_top_light);
     }
 
     auto* previous_environment = bridge->indirect_light;
@@ -415,8 +413,7 @@ int bridge_material_set_controller_screen_light(
                 .lightChannel(0, false).lightChannel(1, true)
                 .castShadows(shadow_enabled)
                 .build(*bridge->engine, bridge->controller_screen_light);
-        (bridge->multiview_active ? bridge->scene : bridge->foreground_scene)
-                ->addEntity(bridge->controller_screen_light);
+        bridge->foreground_scene->addEntity(bridge->controller_screen_light);
         bridge->controller_screen_light_cast_shadows = shadow_enabled;
         return 1;
     }
