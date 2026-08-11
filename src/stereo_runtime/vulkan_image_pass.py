@@ -24,7 +24,7 @@ class VulkanImageCopyPass:
         *,
         width: int,
         height: int,
-        shader_path: str | Path = "shaders/d2s_copy_image.spv",
+        shader_path: str | Path = "src/shaders/d2s_copy_image.spv",
     ) -> None:
         if int(width) < 1 or int(height) < 1:
             raise ValueError("image pass dimensions must be positive")

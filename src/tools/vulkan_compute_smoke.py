@@ -28,7 +28,7 @@ def main() -> int:
         )
         with VulkanComputePipeline(
             context,
-            "shaders/d2s_storage_increment.spv",
+            "src/shaders/d2s_storage_increment.spv",
             descriptor_bindings=[binding],
         ) as pipeline, VulkanDescriptorArena(context) as arena, VulkanStorageBuffer(
             context, 4

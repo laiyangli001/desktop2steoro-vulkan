@@ -193,6 +193,7 @@ def test_presenter_owned_vulkan_compute_declares_cuda_external_input_path():
 def test_vulkan_output_shader_decodes_srgb_before_unorm_store():
     shader = (
         Path(__file__).resolve().parents[1]
+        / "src"
         / "shaders"
         / "d2s_stereo_layered_output.comp"
     ).read_text(encoding="utf-8")
@@ -207,6 +208,7 @@ def test_vulkan_output_shader_decodes_srgb_before_unorm_store():
 def test_vulkan_msdf_quad_shader_is_a_gpu_atlas_to_storage_image_pass():
     shader = (
         Path(__file__).resolve().parents[1]
+        / "src"
         / "shaders"
         / "d2s_msdf_quad.comp"
     ).read_text(encoding="utf-8")
@@ -231,6 +233,7 @@ def test_vulkan_msdf_quad_request_keeps_one_quad_texture_contract():
 def test_vulkan_openxr_output_shader_uses_legacy_openxr_eye_order():
     shader = (
         Path(__file__).resolve().parents[1]
+        / "src"
         / "shaders"
         / "d2s_stereo_layered_output.comp"
     ).read_text(encoding="utf-8")
@@ -242,6 +245,7 @@ def test_vulkan_openxr_output_shader_uses_legacy_openxr_eye_order():
 def test_vulkan_generic_sbs_shader_keeps_synthesis_eye_order():
     shader = (
         Path(__file__).resolve().parents[1]
+        / "src"
         / "shaders"
         / "d2s_stereo_layered.comp"
     ).read_text(encoding="utf-8")
@@ -253,6 +257,7 @@ def test_vulkan_generic_sbs_shader_keeps_synthesis_eye_order():
 def test_vulkan_tiled_reference_shader_keeps_layered_pass_abi():
     shader = (
         Path(__file__).resolve().parents[1]
+        / "src"
         / "shaders"
         / "d2s_stereo_layered_tiled.comp"
     ).read_text(encoding="utf-8")

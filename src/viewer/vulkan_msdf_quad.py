@@ -72,7 +72,7 @@ class VulkanMsdfQuadRenderer:
 
     def _create(self) -> None:
         shader_path = (
-            Path(__file__).resolve().parents[2] / "shaders" / "d2s_msdf_quad.spv"
+            Path(__file__).resolve().parents[1] / "shaders" / "d2s_msdf_quad.spv"
         )
         try:
             import vulkan as vk

@@ -34,7 +34,7 @@ class VulkanGlowSourcePass:
         if self.target_width < 1 or self.target_height < 1:
             raise ValueError("Glow target dimensions must be positive")
         shader = Path(shader_path) if shader_path is not None else (
-            Path(__file__).resolve().parents[2] / "shaders" / "d2s_glow_source.spv"
+            Path(__file__).resolve().parents[1] / "shaders" / "d2s_glow_source.spv"
         )
         vk = context.vk
         self.pipeline = VulkanComputePipeline(

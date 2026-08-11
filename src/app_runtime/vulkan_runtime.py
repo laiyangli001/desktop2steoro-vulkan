@@ -16,7 +16,7 @@ from viewer.vulkan_resources import VulkanImageResource
 class VulkanRuntimeConfig:
     width: int
     height: int
-    shader_path: str | Path = "shaders/d2s_copy_image.spv"
+    shader_path: str | Path = "src/shaders/d2s_copy_image.spv"
 
     def __post_init__(self) -> None:
         if int(self.width) < 1 or int(self.height) < 1:

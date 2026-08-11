@@ -25,10 +25,10 @@ from stereo_runtime.vulkan_stereo_pass import (
 def test_vulkan_stereo_shaders_skip_fill_neighborhood_when_disabled():
     root = Path(__file__).resolve().parents[1]
     shader_paths = (
-        root / "shaders" / "d2s_stereo_fused.comp",
-        root / "shaders" / "d2s_stereo_layered.comp",
-        root / "shaders" / "d2s_stereo_layered_tiled.comp",
-        root / "shaders" / "d2s_stereo_layered_output.comp",
+        root / "src" / "shaders" / "d2s_stereo_fused.comp",
+        root / "src" / "shaders" / "d2s_stereo_layered.comp",
+        root / "src" / "shaders" / "d2s_stereo_layered_tiled.comp",
+        root / "src" / "shaders" / "d2s_stereo_layered_output.comp",
     )
 
     for shader_path in shader_paths:
@@ -55,7 +55,7 @@ def test_vulkan_layered_shaders_implement_quality_content_aware_fill():
         "d2s_stereo_layered_tiled.comp",
         "d2s_stereo_layered_output.comp",
     ):
-        source = (root / "shaders" / name).read_text(encoding="utf-8")
+        source = (root / "src" / "shaders" / name).read_text(encoding="utf-8")
         assert "const uint HOLE_FILL_NONE = 2u;" in source
         assert "abs(right_shift - left_shift) > 0.05" in source
         assert "for (int step = 1; step <= 3; ++step)" in source

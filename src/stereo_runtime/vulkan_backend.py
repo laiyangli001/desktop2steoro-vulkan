@@ -37,7 +37,7 @@ class VulkanStereoImageComputeBackend:
     def __init__(self, context: Any, *, shader_path: str | Path | None = None) -> None:
         self.context = context
         self.shader_path = Path(shader_path) if shader_path is not None else (
-            Path(__file__).resolve().parents[2]
+            Path(__file__).resolve().parents[1]
             / "shaders"
             / "d2s_stereo_layered_output.spv"
         )
@@ -377,7 +377,7 @@ class VulkanStereoComputeBackend:
         self._owns_context = context is None
         self.context = context
         self.shader_path = Path(shader_path) if shader_path is not None else (
-            Path(__file__).resolve().parents[2] / "shaders" / "d2s_stereo_fused.spv"
+            Path(__file__).resolve().parents[1] / "shaders" / "d2s_stereo_fused.spv"
         )
         self.layered_shader_path = Path(layered_shader_path) if layered_shader_path is not None else (
             self.shader_path.with_name("d2s_stereo_layered.spv")

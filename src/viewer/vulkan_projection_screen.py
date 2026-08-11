@@ -231,7 +231,7 @@ class VulkanProjectionScreenPass:
 
     def _create(self) -> None:
         vk = self.vk
-        shader_root = Path(__file__).resolve().parents[2] / "shaders"
+        shader_root = Path(__file__).resolve().parents[1] / "shaders"
         vertex_module = self._create_shader_module(
             shader_root / "d2s_projection_screen_vert.spv"
         )

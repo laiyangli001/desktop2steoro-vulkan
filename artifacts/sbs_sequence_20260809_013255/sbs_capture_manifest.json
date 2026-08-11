@@ -1,0 +1,2430 @@
+{
+  "stage": "vulkan_stereo_eye_images_before_projection_composition",
+  "contains_projection": false,
+  "delay_seconds": 15.0,
+  "requested_samples": 300,
+  "observed_samples": 300,
+  "requested_images": 6,
+  "scheduled_images": 6,
+  "skipped_images": 0,
+  "records": [
+    {
+      "sample_index": 0,
+      "frame_id": 582,
+      "source_timestamp": 4842.6759983,
+      "capture_monotonic": 4842.7323141,
+      "image_origin": "top_left",
+      "status": "saved",
+      "path": "E:\\AI_2D_to_3D\\4.LC700X_Desktop2Stereo\\desktop2steoro-vulkan\\artifacts\\sbs_sequence_20260809_013255\\sbs_sample_0000.png",
+      "file": "sbs_sample_0000.png",
+      "gpu_timeline": 3572
+    },
+    {
+      "sample_index": 1,
+      "frame_id": 583,
+      "source_timestamp": 4842.7152728,
+      "capture_monotonic": 4842.7808564,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 2,
+      "frame_id": 584,
+      "source_timestamp": 4842.7390114,
+      "capture_monotonic": 4842.8060749,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 3,
+      "frame_id": 585,
+      "source_timestamp": 4842.789171,
+      "capture_monotonic": 4842.8323974,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 4,
+      "frame_id": 586,
+      "source_timestamp": 4842.7979611,
+      "capture_monotonic": 4842.8766801,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 5,
+      "frame_id": 587,
+      "source_timestamp": 4842.8148784,
+      "capture_monotonic": 4842.9007959,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 6,
+      "frame_id": 588,
+      "source_timestamp": 4842.8485533,
+      "capture_monotonic": 4842.9244688,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 7,
+      "frame_id": 589,
+      "source_timestamp": 4842.8727235,
+      "capture_monotonic": 4842.9474486,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 8,
+      "frame_id": 590,
+      "source_timestamp": 4842.8983749,
+      "capture_monotonic": 4842.9704926,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 9,
+      "frame_id": 591,
+      "source_timestamp": 4842.9157656,
+      "capture_monotonic": 4842.9962748,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 10,
+      "frame_id": 592,
+      "source_timestamp": 4842.9489514,
+      "capture_monotonic": 4843.0208502,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 11,
+      "frame_id": 593,
+      "source_timestamp": 4842.9663865,
+      "capture_monotonic": 4843.0444961,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 12,
+      "frame_id": 594,
+      "source_timestamp": 4843.008032,
+      "capture_monotonic": 4843.0672238,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 13,
+      "frame_id": 595,
+      "source_timestamp": 4843.0147964,
+      "capture_monotonic": 4843.0905334,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 14,
+      "frame_id": 596,
+      "source_timestamp": 4843.0351599,
+      "capture_monotonic": 4843.1151938,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 15,
+      "frame_id": 597,
+      "source_timestamp": 4843.0741551,
+      "capture_monotonic": 4843.1351635,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 16,
+      "frame_id": 598,
+      "source_timestamp": 4843.0983345,
+      "capture_monotonic": 4843.1594495,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 17,
+      "frame_id": 599,
+      "source_timestamp": 4843.1319084,
+      "capture_monotonic": 4843.1830666,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 18,
+      "frame_id": 600,
+      "source_timestamp": 4843.1495628,
+      "capture_monotonic": 4843.2070554,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 19,
+      "frame_id": 601,
+      "source_timestamp": 4843.1647892,
+      "capture_monotonic": 4843.2285679,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 20,
+      "frame_id": 602,
+      "source_timestamp": 4843.1980071,
+      "capture_monotonic": 4843.253091,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 21,
+      "frame_id": 603,
+      "source_timestamp": 4843.2301984,
+      "capture_monotonic": 4843.2767535,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 22,
+      "frame_id": 604,
+      "source_timestamp": 4843.2382092,
+      "capture_monotonic": 4843.3034568,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 23,
+      "frame_id": 605,
+      "source_timestamp": 4843.2989399,
+      "capture_monotonic": 4843.3498436,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 24,
+      "frame_id": 606,
+      "source_timestamp": 4843.3228935,
+      "capture_monotonic": 4843.3722063,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 25,
+      "frame_id": 607,
+      "source_timestamp": 4843.3481158,
+      "capture_monotonic": 4843.4171869,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 26,
+      "frame_id": 608,
+      "source_timestamp": 4843.3795804,
+      "capture_monotonic": 4843.4400073,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 27,
+      "frame_id": 609,
+      "source_timestamp": 4843.3891257,
+      "capture_monotonic": 4843.4625154,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 28,
+      "frame_id": 610,
+      "source_timestamp": 4843.4073033,
+      "capture_monotonic": 4843.4849175,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 29,
+      "frame_id": 611,
+      "source_timestamp": 4843.4398553,
+      "capture_monotonic": 4843.5093933,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 30,
+      "frame_id": 612,
+      "source_timestamp": 4843.4582151,
+      "capture_monotonic": 4843.5328217,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 31,
+      "frame_id": 613,
+      "source_timestamp": 4843.490609,
+      "capture_monotonic": 4843.5564678,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 32,
+      "frame_id": 614,
+      "source_timestamp": 4843.4982189,
+      "capture_monotonic": 4843.579617,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 33,
+      "frame_id": 615,
+      "source_timestamp": 4843.5399084,
+      "capture_monotonic": 4843.6044903,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 34,
+      "frame_id": 616,
+      "source_timestamp": 4843.5490761,
+      "capture_monotonic": 4843.6279373,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 35,
+      "frame_id": 617,
+      "source_timestamp": 4843.5814273,
+      "capture_monotonic": 4843.6518915,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 36,
+      "frame_id": 618,
+      "source_timestamp": 4843.6062824,
+      "capture_monotonic": 4843.6737965,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 37,
+      "frame_id": 619,
+      "source_timestamp": 4843.6237897,
+      "capture_monotonic": 4843.6962036,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 38,
+      "frame_id": 620,
+      "source_timestamp": 4843.6395023,
+      "capture_monotonic": 4843.7198637,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 39,
+      "frame_id": 621,
+      "source_timestamp": 4843.6724539,
+      "capture_monotonic": 4843.745163,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 40,
+      "frame_id": 622,
+      "source_timestamp": 4843.6916008,
+      "capture_monotonic": 4843.7683847,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 41,
+      "frame_id": 623,
+      "source_timestamp": 4843.7160042,
+      "capture_monotonic": 4843.7929097,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 42,
+      "frame_id": 624,
+      "source_timestamp": 4843.7563074,
+      "capture_monotonic": 4843.816501,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 43,
+      "frame_id": 625,
+      "source_timestamp": 4843.7733549,
+      "capture_monotonic": 4843.8432698,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 44,
+      "frame_id": 626,
+      "source_timestamp": 4843.8079078,
+      "capture_monotonic": 4843.866628,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 45,
+      "frame_id": 627,
+      "source_timestamp": 4843.8236744,
+      "capture_monotonic": 4843.8898159,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 46,
+      "frame_id": 628,
+      "source_timestamp": 4843.8576138,
+      "capture_monotonic": 4843.9138946,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 47,
+      "frame_id": 629,
+      "source_timestamp": 4843.8731095,
+      "capture_monotonic": 4843.9364841,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 48,
+      "frame_id": 630,
+      "source_timestamp": 4843.891589,
+      "capture_monotonic": 4843.9605095,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 49,
+      "frame_id": 631,
+      "source_timestamp": 4843.9226476,
+      "capture_monotonic": 4843.9843641,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 50,
+      "frame_id": 632,
+      "source_timestamp": 4843.9488464,
+      "capture_monotonic": 4844.0085444,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 51,
+      "frame_id": 633,
+      "source_timestamp": 4843.9656322,
+      "capture_monotonic": 4844.0302288,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 52,
+      "frame_id": 634,
+      "source_timestamp": 4843.9994194,
+      "capture_monotonic": 4844.055151,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 53,
+      "frame_id": 635,
+      "source_timestamp": 4844.0234032,
+      "capture_monotonic": 4844.0788701,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 54,
+      "frame_id": 636,
+      "source_timestamp": 4844.0324813,
+      "capture_monotonic": 4844.1018601,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 55,
+      "frame_id": 637,
+      "source_timestamp": 4844.0568711,
+      "capture_monotonic": 4844.1253264,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 56,
+      "frame_id": 638,
+      "source_timestamp": 4844.0904389,
+      "capture_monotonic": 4844.1481279,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 57,
+      "frame_id": 639,
+      "source_timestamp": 4844.115902,
+      "capture_monotonic": 4844.1726393,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 58,
+      "frame_id": 640,
+      "source_timestamp": 4844.1316982,
+      "capture_monotonic": 4844.1970414,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 59,
+      "frame_id": 641,
+      "source_timestamp": 4844.15002,
+      "capture_monotonic": 4844.2198038,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 60,
+      "frame_id": 642,
+      "source_timestamp": 4844.1817264,
+      "capture_monotonic": 4844.2432487,
+      "image_origin": "top_left",
+      "status": "saved",
+      "path": "E:\\AI_2D_to_3D\\4.LC700X_Desktop2Stereo\\desktop2steoro-vulkan\\artifacts\\sbs_sequence_20260809_013255\\sbs_sample_0060.png",
+      "file": "sbs_sample_0060.png",
+      "gpu_timeline": 3944
+    },
+    {
+      "sample_index": 61,
+      "frame_id": 643,
+      "source_timestamp": 4844.2075379,
+      "capture_monotonic": 4844.2756066,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 62,
+      "frame_id": 644,
+      "source_timestamp": 4844.2485916,
+      "capture_monotonic": 4844.3024838,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 63,
+      "frame_id": 645,
+      "source_timestamp": 4844.2851177,
+      "capture_monotonic": 4844.3484723,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 64,
+      "frame_id": 646,
+      "source_timestamp": 4844.332273,
+      "capture_monotonic": 4844.400658,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 65,
+      "frame_id": 647,
+      "source_timestamp": 4844.3553227,
+      "capture_monotonic": 4844.4234202,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 66,
+      "frame_id": 648,
+      "source_timestamp": 4844.3824925,
+      "capture_monotonic": 4844.4482951,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 67,
+      "frame_id": 649,
+      "source_timestamp": 4844.4057013,
+      "capture_monotonic": 4844.4712323,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 68,
+      "frame_id": 650,
+      "source_timestamp": 4844.4221402,
+      "capture_monotonic": 4844.4938115,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 69,
+      "frame_id": 651,
+      "source_timestamp": 4844.4494289,
+      "capture_monotonic": 4844.5165352,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 70,
+      "frame_id": 652,
+      "source_timestamp": 4844.4728734,
+      "capture_monotonic": 4844.5417613,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 71,
+      "frame_id": 653,
+      "source_timestamp": 4844.4983703,
+      "capture_monotonic": 4844.5638455,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 72,
+      "frame_id": 654,
+      "source_timestamp": 4844.5229632,
+      "capture_monotonic": 4844.589321,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 73,
+      "frame_id": 655,
+      "source_timestamp": 4844.5488776,
+      "capture_monotonic": 4844.6114188,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 74,
+      "frame_id": 656,
+      "source_timestamp": 4844.5653177,
+      "capture_monotonic": 4844.6343993,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 75,
+      "frame_id": 657,
+      "source_timestamp": 4844.5890152,
+      "capture_monotonic": 4844.6591447,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 76,
+      "frame_id": 658,
+      "source_timestamp": 4844.6230731,
+      "capture_monotonic": 4844.6834125,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 77,
+      "frame_id": 659,
+      "source_timestamp": 4844.6496849,
+      "capture_monotonic": 4844.7063121,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 78,
+      "frame_id": 660,
+      "source_timestamp": 4844.6738854,
+      "capture_monotonic": 4844.7296161,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 79,
+      "frame_id": 661,
+      "source_timestamp": 4844.6897033,
+      "capture_monotonic": 4844.7516403,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 80,
+      "frame_id": 662,
+      "source_timestamp": 4844.7152868,
+      "capture_monotonic": 4844.7762825,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 81,
+      "frame_id": 663,
+      "source_timestamp": 4844.7407879,
+      "capture_monotonic": 4844.8000462,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 82,
+      "frame_id": 664,
+      "source_timestamp": 4844.7566435,
+      "capture_monotonic": 4844.8246587,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 83,
+      "frame_id": 665,
+      "source_timestamp": 4844.7910565,
+      "capture_monotonic": 4844.849096,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 84,
+      "frame_id": 666,
+      "source_timestamp": 4844.8163736,
+      "capture_monotonic": 4844.8714961,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 85,
+      "frame_id": 667,
+      "source_timestamp": 4844.8465671,
+      "capture_monotonic": 4844.8937058,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 86,
+      "frame_id": 668,
+      "source_timestamp": 4844.8555936,
+      "capture_monotonic": 4844.918149,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 87,
+      "frame_id": 669,
+      "source_timestamp": 4844.8824904,
+      "capture_monotonic": 4844.9424323,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 88,
+      "frame_id": 670,
+      "source_timestamp": 4844.9149618,
+      "capture_monotonic": 4844.9671243,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 89,
+      "frame_id": 671,
+      "source_timestamp": 4844.9238174,
+      "capture_monotonic": 4844.9902588,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 90,
+      "frame_id": 672,
+      "source_timestamp": 4844.9589264,
+      "capture_monotonic": 4845.0133329,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 91,
+      "frame_id": 673,
+      "source_timestamp": 4844.9725526,
+      "capture_monotonic": 4845.0368358,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 92,
+      "frame_id": 674,
+      "source_timestamp": 4844.9855024,
+      "capture_monotonic": 4845.0604818,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 93,
+      "frame_id": 675,
+      "source_timestamp": 4845.0155187,
+      "capture_monotonic": 4845.0826274,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 94,
+      "frame_id": 676,
+      "source_timestamp": 4845.048613,
+      "capture_monotonic": 4845.1052464,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 95,
+      "frame_id": 677,
+      "source_timestamp": 4845.0802018,
+      "capture_monotonic": 4845.1291139,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 96,
+      "frame_id": 678,
+      "source_timestamp": 4845.0893094,
+      "capture_monotonic": 4845.1529809,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 97,
+      "frame_id": 679,
+      "source_timestamp": 4845.1231522,
+      "capture_monotonic": 4845.1766324,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 98,
+      "frame_id": 680,
+      "source_timestamp": 4845.1487929,
+      "capture_monotonic": 4845.2008639,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 99,
+      "frame_id": 681,
+      "source_timestamp": 4845.1726086,
+      "capture_monotonic": 4845.2258818,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 100,
+      "frame_id": 682,
+      "source_timestamp": 4845.189142,
+      "capture_monotonic": 4845.2510641,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 101,
+      "frame_id": 683,
+      "source_timestamp": 4845.2236051,
+      "capture_monotonic": 4845.2950367,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 102,
+      "frame_id": 684,
+      "source_timestamp": 4845.2737379,
+      "capture_monotonic": 4845.3183184,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 103,
+      "frame_id": 685,
+      "source_timestamp": 4845.2911538,
+      "capture_monotonic": 4845.3651413,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 104,
+      "frame_id": 686,
+      "source_timestamp": 4845.3393471,
+      "capture_monotonic": 4845.3888467,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 105,
+      "frame_id": 687,
+      "source_timestamp": 4845.3596726,
+      "capture_monotonic": 4845.4148407,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 106,
+      "frame_id": 688,
+      "source_timestamp": 4845.3721696,
+      "capture_monotonic": 4845.4402942,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 107,
+      "frame_id": 689,
+      "source_timestamp": 4845.4076242,
+      "capture_monotonic": 4845.4632845,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 108,
+      "frame_id": 690,
+      "source_timestamp": 4845.4160185,
+      "capture_monotonic": 4845.486622,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 109,
+      "frame_id": 691,
+      "source_timestamp": 4845.4423956,
+      "capture_monotonic": 4845.5111755,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 110,
+      "frame_id": 692,
+      "source_timestamp": 4845.474518,
+      "capture_monotonic": 4845.534765,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 111,
+      "frame_id": 693,
+      "source_timestamp": 4845.4890231,
+      "capture_monotonic": 4845.5594052,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 112,
+      "frame_id": 694,
+      "source_timestamp": 4845.5244607,
+      "capture_monotonic": 4845.5841009,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 113,
+      "frame_id": 695,
+      "source_timestamp": 4845.5492851,
+      "capture_monotonic": 4845.60853,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 114,
+      "frame_id": 696,
+      "source_timestamp": 4845.5756747,
+      "capture_monotonic": 4845.6302302,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 115,
+      "frame_id": 697,
+      "source_timestamp": 4845.589453,
+      "capture_monotonic": 4845.6561924,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 116,
+      "frame_id": 698,
+      "source_timestamp": 4845.6237999,
+      "capture_monotonic": 4845.6793039,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 117,
+      "frame_id": 699,
+      "source_timestamp": 4845.6319796,
+      "capture_monotonic": 4845.7032986,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 118,
+      "frame_id": 700,
+      "source_timestamp": 4845.6573309,
+      "capture_monotonic": 4845.7273058,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 119,
+      "frame_id": 701,
+      "source_timestamp": 4845.6906685,
+      "capture_monotonic": 4845.7514173,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 120,
+      "frame_id": 702,
+      "source_timestamp": 4845.7159538,
+      "capture_monotonic": 4845.7773302,
+      "image_origin": "top_left",
+      "status": "saved",
+      "path": "E:\\AI_2D_to_3D\\4.LC700X_Desktop2Stereo\\desktop2steoro-vulkan\\artifacts\\sbs_sequence_20260809_013255\\sbs_sample_0120.png",
+      "file": "sbs_sample_0120.png",
+      "gpu_timeline": 4316
+    },
+    {
+      "sample_index": 121,
+      "frame_id": 703,
+      "source_timestamp": 4845.742694,
+      "capture_monotonic": 4845.8105771,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 122,
+      "frame_id": 704,
+      "source_timestamp": 4845.7902346,
+      "capture_monotonic": 4845.8358802,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 123,
+      "frame_id": 705,
+      "source_timestamp": 4845.8061115,
+      "capture_monotonic": 4845.8622085,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 124,
+      "frame_id": 706,
+      "source_timestamp": 4845.8230154,
+      "capture_monotonic": 4845.885933,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 125,
+      "frame_id": 707,
+      "source_timestamp": 4845.8394094,
+      "capture_monotonic": 4845.9116452,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 126,
+      "frame_id": 708,
+      "source_timestamp": 4845.858269,
+      "capture_monotonic": 4845.934998,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 127,
+      "frame_id": 709,
+      "source_timestamp": 4845.8985407,
+      "capture_monotonic": 4845.9591174,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 128,
+      "frame_id": 710,
+      "source_timestamp": 4845.9233522,
+      "capture_monotonic": 4845.9818081,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 129,
+      "frame_id": 711,
+      "source_timestamp": 4845.949531,
+      "capture_monotonic": 4846.0049385,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 130,
+      "frame_id": 712,
+      "source_timestamp": 4845.9807117,
+      "capture_monotonic": 4846.0496839,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 131,
+      "frame_id": 713,
+      "source_timestamp": 4845.9909377,
+      "capture_monotonic": 4846.0721649,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 132,
+      "frame_id": 714,
+      "source_timestamp": 4846.0223905,
+      "capture_monotonic": 4846.0953794,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 133,
+      "frame_id": 715,
+      "source_timestamp": 4846.0490333,
+      "capture_monotonic": 4846.1180366,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 134,
+      "frame_id": 716,
+      "source_timestamp": 4846.0738821,
+      "capture_monotonic": 4846.1408448,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 135,
+      "frame_id": 717,
+      "source_timestamp": 4846.0913198,
+      "capture_monotonic": 4846.1618147,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 136,
+      "frame_id": 718,
+      "source_timestamp": 4846.1084343,
+      "capture_monotonic": 4846.1862206,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 137,
+      "frame_id": 719,
+      "source_timestamp": 4846.1395845,
+      "capture_monotonic": 4846.2087312,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 138,
+      "frame_id": 720,
+      "source_timestamp": 4846.1578255,
+      "capture_monotonic": 4846.2317866,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 139,
+      "frame_id": 721,
+      "source_timestamp": 4846.1754082,
+      "capture_monotonic": 4846.2537121,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 140,
+      "frame_id": 722,
+      "source_timestamp": 4846.2051085,
+      "capture_monotonic": 4846.2763426,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 141,
+      "frame_id": 723,
+      "source_timestamp": 4846.2240541,
+      "capture_monotonic": 4846.3002182,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 142,
+      "frame_id": 724,
+      "source_timestamp": 4846.2500973,
+      "capture_monotonic": 4846.3253102,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 143,
+      "frame_id": 725,
+      "source_timestamp": 4846.272301,
+      "capture_monotonic": 4846.3485946,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 144,
+      "frame_id": 726,
+      "source_timestamp": 4846.2923351,
+      "capture_monotonic": 4846.371062,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 145,
+      "frame_id": 727,
+      "source_timestamp": 4846.324232,
+      "capture_monotonic": 4846.394715,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 146,
+      "frame_id": 728,
+      "source_timestamp": 4846.355636,
+      "capture_monotonic": 4846.4184594,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 147,
+      "frame_id": 729,
+      "source_timestamp": 4846.3825293,
+      "capture_monotonic": 4846.4438203,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 148,
+      "frame_id": 730,
+      "source_timestamp": 4846.4397305,
+      "capture_monotonic": 4846.4930715,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 149,
+      "frame_id": 731,
+      "source_timestamp": 4846.456325,
+      "capture_monotonic": 4846.5186461,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 150,
+      "frame_id": 732,
+      "source_timestamp": 4846.4741229,
+      "capture_monotonic": 4846.5489583,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 151,
+      "frame_id": 733,
+      "source_timestamp": 4846.4981776,
+      "capture_monotonic": 4846.5717845,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 152,
+      "frame_id": 734,
+      "source_timestamp": 4846.5259259,
+      "capture_monotonic": 4846.5955436,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 153,
+      "frame_id": 735,
+      "source_timestamp": 4846.55558,
+      "capture_monotonic": 4846.6180808,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 154,
+      "frame_id": 736,
+      "source_timestamp": 4846.5733764,
+      "capture_monotonic": 4846.6417198,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 155,
+      "frame_id": 737,
+      "source_timestamp": 4846.6072458,
+      "capture_monotonic": 4846.6634768,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 156,
+      "frame_id": 738,
+      "source_timestamp": 4846.6231752,
+      "capture_monotonic": 4846.6871784,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 157,
+      "frame_id": 739,
+      "source_timestamp": 4846.6384321,
+      "capture_monotonic": 4846.7122134,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 158,
+      "frame_id": 740,
+      "source_timestamp": 4846.6749455,
+      "capture_monotonic": 4846.7358584,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 159,
+      "frame_id": 741,
+      "source_timestamp": 4846.6896813,
+      "capture_monotonic": 4846.7590226,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 160,
+      "frame_id": 742,
+      "source_timestamp": 4846.7238268,
+      "capture_monotonic": 4846.7831178,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 161,
+      "frame_id": 743,
+      "source_timestamp": 4846.7407352,
+      "capture_monotonic": 4846.8068284,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 162,
+      "frame_id": 744,
+      "source_timestamp": 4846.7551813,
+      "capture_monotonic": 4846.8289373,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 163,
+      "frame_id": 745,
+      "source_timestamp": 4846.789372,
+      "capture_monotonic": 4846.8540699,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 164,
+      "frame_id": 746,
+      "source_timestamp": 4846.8067155,
+      "capture_monotonic": 4846.8781633,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 165,
+      "frame_id": 747,
+      "source_timestamp": 4846.8390333,
+      "capture_monotonic": 4846.9037393,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 166,
+      "frame_id": 748,
+      "source_timestamp": 4846.8662857,
+      "capture_monotonic": 4846.9264255,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 167,
+      "frame_id": 749,
+      "source_timestamp": 4846.8902752,
+      "capture_monotonic": 4846.9493067,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 168,
+      "frame_id": 750,
+      "source_timestamp": 4846.9167179,
+      "capture_monotonic": 4846.9736061,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 169,
+      "frame_id": 751,
+      "source_timestamp": 4846.9431182,
+      "capture_monotonic": 4846.9975406,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 170,
+      "frame_id": 752,
+      "source_timestamp": 4846.9505902,
+      "capture_monotonic": 4847.0194765,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 171,
+      "frame_id": 753,
+      "source_timestamp": 4846.9825086,
+      "capture_monotonic": 4847.0430071,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 172,
+      "frame_id": 754,
+      "source_timestamp": 4847.0079619,
+      "capture_monotonic": 4847.0669281,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 173,
+      "frame_id": 755,
+      "source_timestamp": 4847.0244184,
+      "capture_monotonic": 4847.09081,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 174,
+      "frame_id": 756,
+      "source_timestamp": 4847.0573787,
+      "capture_monotonic": 4847.115378,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 175,
+      "frame_id": 757,
+      "source_timestamp": 4847.0722599,
+      "capture_monotonic": 4847.1399731,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 176,
+      "frame_id": 758,
+      "source_timestamp": 4847.0919131,
+      "capture_monotonic": 4847.1608426,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 177,
+      "frame_id": 759,
+      "source_timestamp": 4847.1222157,
+      "capture_monotonic": 4847.1853377,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 178,
+      "frame_id": 760,
+      "source_timestamp": 4847.1412347,
+      "capture_monotonic": 4847.2086613,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 179,
+      "frame_id": 761,
+      "source_timestamp": 4847.1739771,
+      "capture_monotonic": 4847.2333517,
+      "image_origin": "top_left",
+      "status": "saved",
+      "path": "E:\\AI_2D_to_3D\\4.LC700X_Desktop2Stereo\\desktop2steoro-vulkan\\artifacts\\sbs_sequence_20260809_013255\\sbs_sample_0179.png",
+      "file": "sbs_sample_0179.png",
+      "gpu_timeline": 4680
+    },
+    {
+      "sample_index": 180,
+      "frame_id": 762,
+      "source_timestamp": 4847.1903755,
+      "capture_monotonic": 4847.2631861,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 181,
+      "frame_id": 763,
+      "source_timestamp": 4847.2243432,
+      "capture_monotonic": 4847.2868484,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 182,
+      "frame_id": 764,
+      "source_timestamp": 4847.238849,
+      "capture_monotonic": 4847.309643,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 183,
+      "frame_id": 765,
+      "source_timestamp": 4847.2587957,
+      "capture_monotonic": 4847.3326438,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 184,
+      "frame_id": 766,
+      "source_timestamp": 4847.2893574,
+      "capture_monotonic": 4847.3546081,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 185,
+      "frame_id": 767,
+      "source_timestamp": 4847.3057791,
+      "capture_monotonic": 4847.3783569,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 186,
+      "frame_id": 768,
+      "source_timestamp": 4847.3236343,
+      "capture_monotonic": 4847.4023831,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 187,
+      "frame_id": 769,
+      "source_timestamp": 4847.3502046,
+      "capture_monotonic": 4847.4266897,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 188,
+      "frame_id": 770,
+      "source_timestamp": 4847.391344,
+      "capture_monotonic": 4847.449835,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 189,
+      "frame_id": 771,
+      "source_timestamp": 4847.4166424,
+      "capture_monotonic": 4847.4738905,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 190,
+      "frame_id": 772,
+      "source_timestamp": 4847.4402349,
+      "capture_monotonic": 4847.4968405,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 191,
+      "frame_id": 773,
+      "source_timestamp": 4847.4574615,
+      "capture_monotonic": 4847.5214849,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 192,
+      "frame_id": 774,
+      "source_timestamp": 4847.4750086,
+      "capture_monotonic": 4847.544211,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 193,
+      "frame_id": 775,
+      "source_timestamp": 4847.5081359,
+      "capture_monotonic": 4847.5713351,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 194,
+      "frame_id": 776,
+      "source_timestamp": 4847.5230243,
+      "capture_monotonic": 4847.5968489,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 195,
+      "frame_id": 777,
+      "source_timestamp": 4847.5568904,
+      "capture_monotonic": 4847.6206197,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 196,
+      "frame_id": 778,
+      "source_timestamp": 4847.5728601,
+      "capture_monotonic": 4847.6444678,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 197,
+      "frame_id": 779,
+      "source_timestamp": 4847.6079911,
+      "capture_monotonic": 4847.6693658,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 198,
+      "frame_id": 780,
+      "source_timestamp": 4847.6231834,
+      "capture_monotonic": 4847.6924837,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 199,
+      "frame_id": 781,
+      "source_timestamp": 4847.6568252,
+      "capture_monotonic": 4847.716202,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 200,
+      "frame_id": 782,
+      "source_timestamp": 4847.6741485,
+      "capture_monotonic": 4847.7383135,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 201,
+      "frame_id": 783,
+      "source_timestamp": 4847.7075059,
+      "capture_monotonic": 4847.7627798,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 202,
+      "frame_id": 784,
+      "source_timestamp": 4847.7225587,
+      "capture_monotonic": 4847.7873395,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 203,
+      "frame_id": 785,
+      "source_timestamp": 4847.7406353,
+      "capture_monotonic": 4847.8106327,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 204,
+      "frame_id": 786,
+      "source_timestamp": 4847.7756716,
+      "capture_monotonic": 4847.8330474,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 205,
+      "frame_id": 787,
+      "source_timestamp": 4847.7893561,
+      "capture_monotonic": 4847.8569811,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 206,
+      "frame_id": 788,
+      "source_timestamp": 4847.8252768,
+      "capture_monotonic": 4847.8820699,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 207,
+      "frame_id": 789,
+      "source_timestamp": 4847.8397823,
+      "capture_monotonic": 4847.9058099,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 208,
+      "frame_id": 790,
+      "source_timestamp": 4847.859261,
+      "capture_monotonic": 4847.9284713,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 209,
+      "frame_id": 791,
+      "source_timestamp": 4847.8910158,
+      "capture_monotonic": 4847.9517578,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 210,
+      "frame_id": 792,
+      "source_timestamp": 4847.9159157,
+      "capture_monotonic": 4847.9758252,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 211,
+      "frame_id": 793,
+      "source_timestamp": 4847.9401356,
+      "capture_monotonic": 4848.0000594,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 212,
+      "frame_id": 794,
+      "source_timestamp": 4847.9570609,
+      "capture_monotonic": 4848.0223321,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 213,
+      "frame_id": 795,
+      "source_timestamp": 4847.9909482,
+      "capture_monotonic": 4848.0491479,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 214,
+      "frame_id": 796,
+      "source_timestamp": 4848.007326,
+      "capture_monotonic": 4848.070451,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 215,
+      "frame_id": 797,
+      "source_timestamp": 4848.0332981,
+      "capture_monotonic": 4848.0942394,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 216,
+      "frame_id": 798,
+      "source_timestamp": 4848.0572911,
+      "capture_monotonic": 4848.1182815,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 217,
+      "frame_id": 799,
+      "source_timestamp": 4848.0898168,
+      "capture_monotonic": 4848.1431503,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 218,
+      "frame_id": 800,
+      "source_timestamp": 4848.106468,
+      "capture_monotonic": 4848.1860929,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 219,
+      "frame_id": 801,
+      "source_timestamp": 4848.1406582,
+      "capture_monotonic": 4848.2091567,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 220,
+      "frame_id": 802,
+      "source_timestamp": 4848.1569737,
+      "capture_monotonic": 4848.2316148,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 221,
+      "frame_id": 803,
+      "source_timestamp": 4848.1900967,
+      "capture_monotonic": 4848.2535732,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 222,
+      "frame_id": 804,
+      "source_timestamp": 4848.2051964,
+      "capture_monotonic": 4848.2763552,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 223,
+      "frame_id": 805,
+      "source_timestamp": 4848.2238659,
+      "capture_monotonic": 4848.3006939,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 224,
+      "frame_id": 806,
+      "source_timestamp": 4848.2560768,
+      "capture_monotonic": 4848.3233294,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 225,
+      "frame_id": 807,
+      "source_timestamp": 4848.2721193,
+      "capture_monotonic": 4848.3473471,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 226,
+      "frame_id": 808,
+      "source_timestamp": 4848.3058728,
+      "capture_monotonic": 4848.3698557,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 227,
+      "frame_id": 809,
+      "source_timestamp": 4848.3160871,
+      "capture_monotonic": 4848.3942167,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 228,
+      "frame_id": 810,
+      "source_timestamp": 4848.3392796,
+      "capture_monotonic": 4848.419227,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 229,
+      "frame_id": 811,
+      "source_timestamp": 4848.3717956,
+      "capture_monotonic": 4848.4441973,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 230,
+      "frame_id": 812,
+      "source_timestamp": 4848.3902896,
+      "capture_monotonic": 4848.4677581,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 231,
+      "frame_id": 813,
+      "source_timestamp": 4848.4334649,
+      "capture_monotonic": 4848.4915301,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 232,
+      "frame_id": 814,
+      "source_timestamp": 4848.4635561,
+      "capture_monotonic": 4848.513259,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 233,
+      "frame_id": 815,
+      "source_timestamp": 4848.4728208,
+      "capture_monotonic": 4848.5387323,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 234,
+      "frame_id": 816,
+      "source_timestamp": 4848.4898352,
+      "capture_monotonic": 4848.5614301,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 235,
+      "frame_id": 817,
+      "source_timestamp": 4848.5248776,
+      "capture_monotonic": 4848.5886446,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 236,
+      "frame_id": 818,
+      "source_timestamp": 4848.5570194,
+      "capture_monotonic": 4848.6110507,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 237,
+      "frame_id": 819,
+      "source_timestamp": 4848.5727713,
+      "capture_monotonic": 4848.6360373,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 238,
+      "frame_id": 820,
+      "source_timestamp": 4848.6076696,
+      "capture_monotonic": 4848.6629136,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 239,
+      "frame_id": 821,
+      "source_timestamp": 4848.6251654,
+      "capture_monotonic": 4848.6854583,
+      "image_origin": "top_left",
+      "status": "saved",
+      "path": "E:\\AI_2D_to_3D\\4.LC700X_Desktop2Stereo\\desktop2steoro-vulkan\\artifacts\\sbs_sequence_20260809_013255\\sbs_sample_0239.png",
+      "file": "sbs_sample_0239.png",
+      "gpu_timeline": 5046
+    },
+    {
+      "sample_index": 240,
+      "frame_id": 822,
+      "source_timestamp": 4848.641502,
+      "capture_monotonic": 4848.7166421,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 241,
+      "frame_id": 823,
+      "source_timestamp": 4848.6908099,
+      "capture_monotonic": 4848.7412263,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 242,
+      "frame_id": 824,
+      "source_timestamp": 4848.715951,
+      "capture_monotonic": 4848.7861968,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 243,
+      "frame_id": 825,
+      "source_timestamp": 4848.7556925,
+      "capture_monotonic": 4848.809958,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 244,
+      "frame_id": 826,
+      "source_timestamp": 4848.8056406,
+      "capture_monotonic": 4848.8560219,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 245,
+      "frame_id": 827,
+      "source_timestamp": 4848.8232118,
+      "capture_monotonic": 4848.8819592,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 246,
+      "frame_id": 828,
+      "source_timestamp": 4848.8495332,
+      "capture_monotonic": 4848.9268977,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 247,
+      "frame_id": 829,
+      "source_timestamp": 4848.873537,
+      "capture_monotonic": 4848.9504268,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 248,
+      "frame_id": 830,
+      "source_timestamp": 4848.9224732,
+      "capture_monotonic": 4848.9746783,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 249,
+      "frame_id": 831,
+      "source_timestamp": 4848.9396985,
+      "capture_monotonic": 4849.018492,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 250,
+      "frame_id": 832,
+      "source_timestamp": 4848.9741834,
+      "capture_monotonic": 4849.0405683,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 251,
+      "frame_id": 833,
+      "source_timestamp": 4848.9915274,
+      "capture_monotonic": 4849.0632966,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 252,
+      "frame_id": 834,
+      "source_timestamp": 4849.006695,
+      "capture_monotonic": 4849.0846439,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 253,
+      "frame_id": 835,
+      "source_timestamp": 4849.0404063,
+      "capture_monotonic": 4849.1073523,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 254,
+      "frame_id": 836,
+      "source_timestamp": 4849.0576822,
+      "capture_monotonic": 4849.1323999,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 255,
+      "frame_id": 837,
+      "source_timestamp": 4849.0894138,
+      "capture_monotonic": 4849.1540299,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 256,
+      "frame_id": 838,
+      "source_timestamp": 4849.1010686,
+      "capture_monotonic": 4849.177264,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 257,
+      "frame_id": 839,
+      "source_timestamp": 4849.1388584,
+      "capture_monotonic": 4849.2015542,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 258,
+      "frame_id": 840,
+      "source_timestamp": 4849.1573542,
+      "capture_monotonic": 4849.2256052,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 259,
+      "frame_id": 841,
+      "source_timestamp": 4849.1897761,
+      "capture_monotonic": 4849.2476651,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 260,
+      "frame_id": 842,
+      "source_timestamp": 4849.2163968,
+      "capture_monotonic": 4849.2711659,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 261,
+      "frame_id": 843,
+      "source_timestamp": 4849.2660925,
+      "capture_monotonic": 4849.3173255,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 262,
+      "frame_id": 844,
+      "source_timestamp": 4849.2891733,
+      "capture_monotonic": 4849.3409445,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 263,
+      "frame_id": 845,
+      "source_timestamp": 4849.3058087,
+      "capture_monotonic": 4849.386375,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 264,
+      "frame_id": 846,
+      "source_timestamp": 4849.3391713,
+      "capture_monotonic": 4849.4105376,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 265,
+      "frame_id": 847,
+      "source_timestamp": 4849.3741243,
+      "capture_monotonic": 4849.4349614,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 266,
+      "frame_id": 848,
+      "source_timestamp": 4849.4060717,
+      "capture_monotonic": 4849.4585769,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 267,
+      "frame_id": 849,
+      "source_timestamp": 4849.4231927,
+      "capture_monotonic": 4849.5043821,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 268,
+      "frame_id": 850,
+      "source_timestamp": 4849.4568152,
+      "capture_monotonic": 4849.5270199,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 269,
+      "frame_id": 851,
+      "source_timestamp": 4849.4759726,
+      "capture_monotonic": 4849.5509611,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 270,
+      "frame_id": 852,
+      "source_timestamp": 4849.506399,
+      "capture_monotonic": 4849.5736512,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 271,
+      "frame_id": 853,
+      "source_timestamp": 4849.5178064,
+      "capture_monotonic": 4849.597723,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 272,
+      "frame_id": 854,
+      "source_timestamp": 4849.5558992,
+      "capture_monotonic": 4849.6193994,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 273,
+      "frame_id": 855,
+      "source_timestamp": 4849.5722282,
+      "capture_monotonic": 4849.6442272,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 274,
+      "frame_id": 856,
+      "source_timestamp": 4849.6087557,
+      "capture_monotonic": 4849.6686873,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 275,
+      "frame_id": 857,
+      "source_timestamp": 4849.6228227,
+      "capture_monotonic": 4849.6949516,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 276,
+      "frame_id": 858,
+      "source_timestamp": 4849.6558643,
+      "capture_monotonic": 4849.7177781,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 277,
+      "frame_id": 859,
+      "source_timestamp": 4849.6835097,
+      "capture_monotonic": 4849.7440133,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 278,
+      "frame_id": 860,
+      "source_timestamp": 4849.7150211,
+      "capture_monotonic": 4849.7682091,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 279,
+      "frame_id": 861,
+      "source_timestamp": 4849.7233145,
+      "capture_monotonic": 4849.7932432,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 280,
+      "frame_id": 862,
+      "source_timestamp": 4849.7559047,
+      "capture_monotonic": 4849.8170184,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 281,
+      "frame_id": 863,
+      "source_timestamp": 4849.7838863,
+      "capture_monotonic": 4849.8401367,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 282,
+      "frame_id": 864,
+      "source_timestamp": 4849.8077041,
+      "capture_monotonic": 4849.8622858,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 283,
+      "frame_id": 865,
+      "source_timestamp": 4849.8233699,
+      "capture_monotonic": 4849.8872054,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 284,
+      "frame_id": 866,
+      "source_timestamp": 4849.8424627,
+      "capture_monotonic": 4849.9117397,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 285,
+      "frame_id": 867,
+      "source_timestamp": 4849.873449,
+      "capture_monotonic": 4849.9369547,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 286,
+      "frame_id": 868,
+      "source_timestamp": 4849.9065705,
+      "capture_monotonic": 4849.9616657,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 287,
+      "frame_id": 869,
+      "source_timestamp": 4849.9327006,
+      "capture_monotonic": 4849.9865163,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 288,
+      "frame_id": 870,
+      "source_timestamp": 4849.9561387,
+      "capture_monotonic": 4850.0098368,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 289,
+      "frame_id": 871,
+      "source_timestamp": 4849.9742484,
+      "capture_monotonic": 4850.0361774,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 290,
+      "frame_id": 872,
+      "source_timestamp": 4850.0056839,
+      "capture_monotonic": 4850.0611274,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 291,
+      "frame_id": 873,
+      "source_timestamp": 4850.0232641,
+      "capture_monotonic": 4850.0855567,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 292,
+      "frame_id": 874,
+      "source_timestamp": 4850.056462,
+      "capture_monotonic": 4850.1091834,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 293,
+      "frame_id": 875,
+      "source_timestamp": 4850.073556,
+      "capture_monotonic": 4850.1332638,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 294,
+      "frame_id": 876,
+      "source_timestamp": 4850.1066692,
+      "capture_monotonic": 4850.1768851,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 295,
+      "frame_id": 877,
+      "source_timestamp": 4850.1163067,
+      "capture_monotonic": 4850.2006973,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 296,
+      "frame_id": 878,
+      "source_timestamp": 4850.1499799,
+      "capture_monotonic": 4850.2243146,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 297,
+      "frame_id": 879,
+      "source_timestamp": 4850.173284,
+      "capture_monotonic": 4850.2454372,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 298,
+      "frame_id": 880,
+      "source_timestamp": 4850.1905494,
+      "capture_monotonic": 4850.2683842,
+      "image_origin": "top_left",
+      "status": "metadata_only"
+    },
+    {
+      "sample_index": 299,
+      "frame_id": 881,
+      "source_timestamp": 4850.2224559,
+      "capture_monotonic": 4850.2914394,
+      "image_origin": "top_left",
+      "status": "saved",
+      "path": "E:\\AI_2D_to_3D\\4.LC700X_Desktop2Stereo\\desktop2steoro-vulkan\\artifacts\\sbs_sequence_20260809_013255\\sbs_sample_0299.png",
+      "file": "sbs_sample_0299.png",
+      "gpu_timeline": 5428
+    }
+  ]
+}

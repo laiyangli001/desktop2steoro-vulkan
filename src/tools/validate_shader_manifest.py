@@ -61,7 +61,8 @@ def _source_bindings(source: str) -> list[dict[str, object]]:
 
 
 def validate_manifest(root: Path) -> list[str]:
-    manifest_path = root / "shaders" / "manifest.json"
+    shader_root = root / "src" / "shaders"
+    manifest_path = shader_root / "manifest.json"
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     errors: list[str] = []
     if payload.get("schema_version") != 1:
@@ -78,8 +79,8 @@ def validate_manifest(root: Path) -> list[str]:
             errors.append(f"invalid or duplicate shader name: {name!r}")
             continue
         names.add(name)
-        source_path = root / "shaders" / entry["source"]
-        spirv_path = root / "shaders" / entry["spirv"]
+        source_path = shader_root / entry["source"]
+        spirv_path = shader_root / entry["spirv"]
         if not source_path.is_file():
             errors.append(f"{name}: missing source {entry['source']}")
             continue

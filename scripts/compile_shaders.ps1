@@ -1,6 +1,6 @@
 param(
     [string]$Compiler = "glslc",
-    [string]$ShaderRoot = "$PSScriptRoot\..\shaders"
+    [string]$ShaderRoot = "$PSScriptRoot\..\src\shaders"
 )
 
 $ErrorActionPreference = "Stop"

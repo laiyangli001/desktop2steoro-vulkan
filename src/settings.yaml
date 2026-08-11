@@ -1,5 +1,5 @@
 Capture Mode: Monitor
-Monitor Index: 3
+Monitor Index: 1
 Window Title: ''
 Show FPS: false
 Model List:
@@ -502,15 +502,15 @@ Color Gamma: 1.0
 Color Temperature: 0.0
 Color Tint: 0.0
 Vulkan Projection Min LOD: 0.0
-Vulkan Projection Max LOD: 0.7
-Vulkan Projection MIP LOD Bias: -0.7
-Vulkan Projection RCAS Sharpness: 0.35
+Vulkan Projection Max LOD: 0.3
+Vulkan Projection MIP LOD Bias: -0.25
+Vulkan Projection RCAS Sharpness: 1.0
 Display Mode: Half-SBS
 FP16: true
 torch.compile: true
 TensorRT: true
-Parallel Inference: true
-Parallel Inference Workers: 2
+Parallel Inference: false
+Parallel Inference Workers: 1
 Recompile TensorRT: false
 CoreML: null
 Recompile CoreML: false
@@ -523,7 +523,7 @@ Run Mode: OpenXR Link
 XR Headset Model: Pico 4 / 4 Ultra
 XR Preview Window: false
 VSync: false
-Target FPS: 0
+Target FPS: 60
 Processing Resolution: Auto
 Render Size Policy: scaled
 Render Scale: 4K / 100%
@@ -531,7 +531,7 @@ Render Fixed Width: 1920
 Render Fixed Height: 1080
 Render Max Pixels: 8294400
 Render Min Dimension: 480
-Render Align: 1
+Render Align: 16
 Upscaler: 'Off'
 Upscaler Sharpness: 0.0
 Stream Protocol: HLS

@@ -53,7 +53,7 @@ class VulkanMultiviewEyeDiagnosticPass:
 
     def _create(self) -> None:
         vk = self.vk
-        shader_root = Path(__file__).resolve().parents[2] / "shaders"
+        shader_root = Path(__file__).resolve().parents[1] / "shaders"
         vertex = self._shader_module(shader_root / "d2s_multiview_eye_diag_vert.spv")
         fragment = self._shader_module(shader_root / "d2s_multiview_eye_diag_frag.spv")
         attachment = vk.VkAttachmentDescription(

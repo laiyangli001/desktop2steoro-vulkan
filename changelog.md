@@ -2,6 +2,7 @@
 
 ## 2026-08-11
 
+- 将全部 Vulkan GLSL、SPIR-V 和 shader manifest 从仓库根目录迁入 `src/shaders/`，使运行时资源遵守 `src/` 产品发布边界；同步更新 Python 加载路径、编译脚本、CI、测试及需求追踪，根目录不再保留 Shader 运行依赖。
 - 新增 DLL 外部的手柄材质覆盖参数，并为 HP、Index、PICO、Quest、Vive 和 YVR 统一启用高反光外观：运行时在 GLB 加载或品牌热切换后应用 `roughness=0.08`、`metallic=0.85` 和 `specular=[2,2,2]`。后续可直接修改各手柄 `profile.json` 调整反光，无需重新编译 Bridge。
 - 将已通过实机验证的“房间先画、手柄后画，后置 foreground pass 只清深度不清颜色”不透明外壳对策移植到 Filament multiview：新 ABI 为双层 HDR swapchain 绑定一张 `array_layers=2` 的深度图，手柄、激光和指南重新由后置立体 View 在新深度上绘制。GLB 模型、原始材质、roughness 和光照参数保持不变。
 

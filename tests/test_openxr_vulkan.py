@@ -2748,7 +2748,10 @@ def test_projection_glow_uses_reduced_surround_density_and_stable_order() -> Non
     assert "vk.VK_BLEND_OP_MAX if maximum else vk.VK_BLEND_OP_ADD" in pipeline_source
 
     shader = (
-        Path(__file__).parents[1] / "shaders" / "d2s_projection_glow_vert.vert"
+        Path(__file__).parents[1]
+        / "src"
+        / "shaders"
+        / "d2s_projection_glow_vert.vert"
     ).read_text(encoding="utf-8")
     assert "const int GLOW_SHELL_SEGMENTS = 48;" in shader
     assert "const int SHELL_RADIAL_SEGMENTS = 24;" in shader
@@ -2763,7 +2766,10 @@ def test_projection_glow_uses_reduced_surround_density_and_stable_order() -> Non
 
 def test_projection_glow_does_not_repeat_the_producer_y_flip() -> None:
     shader = (
-        Path(__file__).parents[1] / "shaders" / "d2s_projection_glow_frag.frag"
+        Path(__file__).parents[1]
+        / "src"
+        / "shaders"
+        / "d2s_projection_glow_frag.frag"
     ).read_text(encoding="utf-8")
 
     assert "vec2 content_uv = raw;" in shader
@@ -3414,10 +3420,10 @@ def test_pure_vulkan_multiview_diagnostic_bypasses_filament(monkeypatch) -> None
 
     assert presenter.filament_bridge is None
     root = Path(__file__).resolve().parents[1]
-    vertex_shader = (root / "shaders/d2s_multiview_eye_diag.vert").read_text(
+    vertex_shader = (root / "src/shaders/d2s_multiview_eye_diag.vert").read_text(
         encoding="utf-8"
     )
-    fragment_shader = (root / "shaders/d2s_multiview_eye_diag.frag").read_text(
+    fragment_shader = (root / "src/shaders/d2s_multiview_eye_diag.frag").read_text(
         encoding="utf-8"
     )
     assert "viewIndexFromVertex = gl_ViewIndex" in vertex_shader

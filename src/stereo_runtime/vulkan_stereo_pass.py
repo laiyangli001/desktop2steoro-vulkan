@@ -162,7 +162,7 @@ class VulkanStereoFusedPass:
         *,
         width: int,
         height: int,
-        shader_path: str | Path = "shaders/d2s_stereo_fused.spv",
+        shader_path: str | Path = "src/shaders/d2s_stereo_fused.spv",
     ) -> None:
         if int(width) < 1 or int(height) < 1:
             raise ValueError("Vulkan stereo dimensions must be positive")
@@ -307,7 +307,7 @@ class VulkanLayeredStereoPass(VulkanStereoFusedPass):
         *,
         width: int,
         height: int,
-        shader_path: str | Path = "shaders/d2s_stereo_layered.spv",
+        shader_path: str | Path = "src/shaders/d2s_stereo_layered.spv",
     ) -> None:
         super().__init__(context, width=width, height=height, shader_path=shader_path)
 
