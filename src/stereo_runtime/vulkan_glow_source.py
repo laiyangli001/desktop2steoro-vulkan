@@ -225,13 +225,11 @@ class VulkanGlowSourceComputeBackend:
             self.importer.register_semaphore(slot.input_ready)
 
     @staticmethod
-    def prefilter_scale(mode: str, frosted_lod: float) -> float:
+    def prefilter_scale(mode: str) -> float:
         """Return the old MIP footprint measured in source pixels."""
         normalized = str(mode or "off").strip().lower()
-        if normalized in {"glow", "glow2", "screen", "surround"}:
+        if normalized in {"glow", "screen", "surround"}:
             return 256.0
-        if normalized in {"frost", "frosted", "frost_glow", "frosted_glow"}:
-            return 2.0 ** max(0.0, float(frosted_lod))
         return 1.0
 
     def _prepare_source(self, source: Any):
@@ -261,7 +259,6 @@ class VulkanGlowSourceComputeBackend:
         source: Any,
         *,
         mode: str,
-        frosted_lod: float,
         screen_light_only: bool = False,
         temporal_smoothing_seconds: float = 0.10,
     ) -> bool:
@@ -280,7 +277,7 @@ class VulkanGlowSourceComputeBackend:
         if slot.input_buffer is None or slot.input_ready is None:
             raise VulkanGlowSourceUnavailable("Glow input slot is unavailable")
         start = time.perf_counter()
-        prefilter_scale = self.prefilter_scale(mode, frosted_lod)
+        prefilter_scale = self.prefilter_scale(mode)
         surround_region_average = str(mode or "").strip().lower() == "surround"
         history_key = (
             str(mode or "").strip().lower(), source_width, source_height,

@@ -4,21 +4,15 @@ layout(set = 0, binding = 0) uniform sampler2D glow_texture;
 layout(set = 0, binding = 1, std430) readonly buffer GlowState {
     vec4 head_mode;
     vec4 glow;
-    vec4 frost0;
-    vec4 frost1;
+    vec4 geometry;
     vec4 veil;
+    vec4 reserved;
     vec4 shell;
 } state;
 
 layout(location = 0) in vec2 texture_uv;
 layout(location = 1) in vec2 effect_uv;
 layout(location = 0) out vec4 output_color;
-
-float glow_hash(vec2 p) {
-    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return fract((p3.x + p3.y) * p3.z);
-}
 
 vec3 sample_region_cell(vec2 cell, vec2 grid) {
     vec2 q = (clamp(cell, vec2(0.0), grid - vec2(1.0)) + vec2(0.5)) / grid;
@@ -47,22 +41,21 @@ vec3 sample_region_average(vec2 p) {
     return mix(lower, upper, blend.y);
 }
 
-void screen_glow(int mode) {
+void screen_glow() {
     float base_width = max(state.glow.y, 0.75);
     float screen_long = max(state.shell.z, 2.4);
     float distance_to_head = max(state.shell.w, 0.5);
     float range = base_width * (screen_long / 2.4)
         * (distance_to_head / 2.0) * 20.0;
-    if (mode == 2) range *= 0.5;
-    vec2 glow_size = state.frost0.zw;
+    vec2 glow_size = state.geometry.xy;
     vec2 screen_half = vec2(
-        state.frost1.z / max(glow_size.x, 0.00001),
-        state.frost1.w / max(glow_size.y, 0.00001)
+        state.geometry.z / max(glow_size.x, 0.00001),
+        state.geometry.w / max(glow_size.y, 0.00001)
     );
     vec2 centered = texture_uv - vec2(0.5);
     vec2 p = abs(centered) - screen_half;
     float signed_distance = max(p.x, p.y);
-    float inner = mode == 2 ? 0.0 : min(screen_half.x, screen_half.y) * 0.075;
+    float inner = min(screen_half.x, screen_half.y) * 0.075;
     bool inside = signed_distance <= 0.0;
     if (inside) {
         if (inner <= 0.0 || signed_distance < -inner) discard;
@@ -95,37 +88,21 @@ void screen_glow(int mode) {
     output_color = vec4(color * min(amount, 1.0), 1.0);
 }
 
-void frost_glow(int mode) {
+void veil_glow() {
     vec2 uv = clamp(texture_uv, vec2(0.0), vec2(1.0));
     float depth = clamp(effect_uv.x, 0.0, 1.0);
-    float thickness = mode == 3 ? 3.0 : max(state.frost1.y, 0.1);
+    float thickness = 3.0;
     float beam = exp(-depth / 0.34);
     beam = pow(max(beam, 0.0), 1.0 / thickness);
-    float inset = mode == 3 ? 0.02 : max(state.frost1.w, 0.0001);
+    float inset = 0.02;
     float edge_distance = min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y));
     float edge = 1.0 - smoothstep(inset, inset * 4.0, edge_distance);
     vec2 sample_uv = uv;
     vec3 source = textureLod(glow_texture, sample_uv, 0.0).rgb;
-    float alpha;
-    vec3 color = source;
-    if (mode == 3) {
-        alpha = edge * beam * state.veil.y * state.veil.x * state.glow.z;
-    } else {
-        float noise = glow_hash(floor(
-            (sample_uv + vec2(state.veil.z * 0.011, -state.veil.z * 0.007)) * 54.0
-        ));
-        float luma = dot(source, vec3(0.2126, 0.7152, 0.0722));
-        float bright = smoothstep(state.frost0.z, 1.0, luma);
-        float scatter = max(bright, luma * max(state.frost1.z, 0.0) * 0.35);
-        alpha = edge * beam * scatter * state.frost0.y
-            * state.frost0.x * state.glow.z * (0.82 + 0.30 * noise);
-        color = mix(source, vec3(luma), 0.28);
-        color = color * (0.55 + max(state.frost1.x, 0.0) * 0.35)
-            + source * bright * 0.35;
-    }
+    float alpha = edge * beam * state.veil.y * state.veil.x * state.glow.z;
     if (alpha <= 0.002) discard;
     alpha = min(alpha, 1.0);
-    output_color = vec4(color * alpha, 1.0);
+    output_color = vec4(source * alpha, 1.0);
 }
 
 void surround_glow() {
@@ -140,10 +117,10 @@ void surround_glow() {
 
 void main() {
     int mode = int(round(state.head_mode.w));
-    if (mode == 1 || mode == 2) {
-        screen_glow(mode);
-    } else if (mode == 3 || mode == 4) {
-        frost_glow(mode);
+    if (mode == 1) {
+        screen_glow();
+    } else if (mode == 2) {
+        veil_glow();
     } else {
         surround_glow();
     }

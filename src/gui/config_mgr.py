@@ -148,12 +148,12 @@ class GUIConfigMixin:
         try:
             parallel_workers = int(parallel_workers)
         except (TypeError, ValueError):
-            parallel_workers = 2
+            parallel_workers = 1
         self.parallel_inference_dd.value = {
             1: "单路推理",
             2: "两路推理",
             3: "三路推理",
-        }.get(parallel_workers, "两路推理")
+        }.get(parallel_workers, "单路推理")
         self.recompile_trt_cb.value = cfg.get("Recompile TensorRT", DEFAULTS["Recompile TensorRT"])
         mgx_val = cfg.get("MIGraphX")
         if mgx_val is not None:
@@ -311,7 +311,7 @@ class GUIConfigMixin:
                 "单路推理": 1,
                 "两路推理": 2,
                 "三路推理": 3,
-            }.get(self.parallel_inference_dd.value, 2),
+            }.get(self.parallel_inference_dd.value, 1),
             **recompile_values,
             "Capture Tool": self.capture_tool_dd.value,
             "Fill 16:9": self.fill_16_9_cb.value,

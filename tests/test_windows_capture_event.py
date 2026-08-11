@@ -146,6 +146,26 @@ def test_windows_capture_cuda_software_limiter_maps_120hz_callbacks_to_60fps(mon
     assert runner._software_limited_frames == 2
 
 
+def test_windows_capture_cuda_software_limiter_reads_runtime_fps_provider(monkeypatch):
+    monkeypatch.delenv("D2S_WGC_SOFTWARE_THROTTLE", raising=False)
+    target = {"fps": 60}
+    runner = windows_capture_event.WindowsCaptureEventRunner(
+        CaptureConfig(
+            capture_tool="WindowsCaptureCUDA",
+            capture_mode="Monitor",
+            monitor_index=1,
+            fps=60,
+            fps_provider=lambda: target["fps"],
+        )
+    )
+
+    assert runner._accept_software_paced_frame(10.0) is True
+    assert runner._accept_software_paced_frame(10.0083) is False
+    target["fps"] = 24
+    assert runner._accept_software_paced_frame(10.0166) is True
+    assert runner._software_pacing_fps == 24
+
+
 def test_windows_capture_cuda_software_limiter_can_be_disabled(monkeypatch):
     monkeypatch.setenv("D2S_WGC_SOFTWARE_THROTTLE", "0")
     runner = windows_capture_event.WindowsCaptureEventRunner(

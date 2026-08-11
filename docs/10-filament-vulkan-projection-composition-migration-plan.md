@@ -1,7 +1,7 @@
 # Filament/Vulkan Projection Composition 迁移方案
 
 **文档状态**：进行中
-**更新时间**：2026-08-08
+**更新时间**：2026-08-11
 **适用范围**：OpenXR Vulkan Projection/Quad Layer、Filament Bridge、屏幕采样、激光、Glow 和线程调度
 
 ## 1. 目标
@@ -13,6 +13,7 @@
 - 单图 Tool Quad 承载 FPS 面板、操作指南、固定在虚拟屏幕上的 2D 光圈、固定在虚拟键盘上的 2D 光圈和虚拟键盘；主屏幕不使用 Quad swapchain。
 - OpenXR Session、swapchain acquire/release、Projection/Quad layer 构建和 `xrEndFrame` 由单一 Presenter 线程拥有。
 - 虚拟屏幕、效果和 UI 使用独立生产线程，通过有界 latest-frame 资源与 timeline 同步，不阻塞视频源帧率。
+- `Controller Model=None` 是性能隔离诊断：Presenter 完全跳过 Filament Engine、手柄 GLB 和环境 GLB，由 Projection Composer 按未经品牌校正的 OpenXR grip/aim 原始姿态在每眼同一次 draw 中绘制两个 `8×8×8 cm` 本地 Vulkan 立方体和双手激光；左手立方体使用固定不透明蓝色，右手使用固定不透明橙色，各面边界带抗锯齿黑色接缝线，并在无深度附件的 overlay pass 中丢弃背面片元，激光保留动态彩色流动。立方体沿用正式手柄的 5 秒静止隐藏规则，Tool Quad 的 B 键提示锚定到右手立方体前右顶点。该代理不替代正式手柄材质、动画或环境，只用于比较纯 Vulkan 与 Filament producer 的 XR/SBS 开销；正式默认仍为 PICO。
 
 迁移工作的行为基准固定为删除前的 Filament 实现。Vulkan 只替换执行后端，禁止自行改写屏幕/Glow 的几何、跟随关系、参数公式、模式映射、颜色混合、可见性条件或降级语义。尚未完成原样迁移的效果必须保持关闭，不能用近似实现代替，也不能依赖实机反复试错来重新定义既有行为。
 - Projection swapchain 优先 `array_size=2`，失败回退 per-eye。Virtual Desktop 已验证不接受双眼 Screen Quad swapchain；该实验永久停用，不能影响 Projection 主路径。
@@ -238,9 +239,9 @@ Glow：
 当前进度：Glow Compute 输出已标记为 `vulkan_projection_composer` 所有的
 latest-frame 资源，Presenter 不再用 Filament Glow 外部图像 ABI 判断该资源是否可用。
 主 SBS RenderPass 保持不透明绘制；此前将 Glow 图像覆盖整块 SBS 的临时 overlay 已删除。
-五态显示逻辑已按删除前 `bridge_glow.cpp` 迁入 Vulkan Graphics：`Glow/Glow2` 使用随屏幕移动、旋转、缩放和曲率更新的 64 段内外边缘几何；`Veil/Frosted` 使用原 8×8 四壁体积或 64 段曲面边界；`Surround` 使用四条 48×96 测地条带连接屏幕边缘与头部椭球光壳。`Glow/Glow2/Veil/Frosted` 在不透明 SBS 后通过 `LOAD` RenderPass 绘制；`Surround` 保持旧 Filament 的背景 Scene 顺序，先清屏并绘制加法光壳，再由 `LOAD` RenderPass 绘制不透明 SBS 将屏幕范围遮住。Vulkan Compute 仍只负责 Glow 源纹理预处理和区域平均，不重复实现显示几何。原范围、采样、衰减、噪声、混合、头部位置、默认环境和透视背景可见性条件均保留；每 descriptor slot 使用独立有界状态缓冲，禁止整屏覆盖和无界资源累积。Presenter 已不再调用 Filament Glow 更新函数，旧 `filament_bridge_set_glow_*` ABI、native Glow 模块和 Python ctypes 绑定均已删除。`openxr_vulkan_composer_glow` 用于确认成功提交。
+四态显示逻辑已迁入 Vulkan Graphics：`Glow` 使用随屏幕移动、旋转、缩放和曲率更新的 64 段内外边缘几何；`Veil` 使用 8×8 四壁体积或 64 段曲面边界；`Surround` 使用四条 48×96 测地条带连接屏幕边缘与头部椭球光壳；`Off` 不提交特效。`Glow/Veil` 在不透明 SBS 后通过 `LOAD` RenderPass 绘制；`Surround` 保持旧 Filament 的背景 Scene 顺序，先清屏并绘制加法光壳，再由 `LOAD` RenderPass 绘制不透明 SBS 将屏幕范围遮住。Vulkan Compute 仍只负责 Glow 源纹理预处理和区域平均，不重复实现显示几何。每 descriptor slot 使用独立有界状态缓冲，禁止整屏覆盖和无界资源累积。Presenter 已不再调用 Filament Glow 更新函数，旧 `filament_bridge_set_glow_*` ABI、native Glow 模块和 Python ctypes 绑定均已删除。`openxr_vulkan_composer_glow` 用于确认成功提交。
 
-完成条件：激光遮挡、Glow 五态和 latest-frame 复用正确；Glow 线程不阻塞主屏幕。
+完成条件：激光遮挡、Glow 四态和 latest-frame 复用正确；Glow 线程不阻塞主屏幕。
 
 当前激光迁移进度：按照兼容性要求，手柄模型、手柄动画、环境模型和激光继续由
 Filament 统一渲染；Projection Composer 只等待 Filament 完成 semaphore，并把同一

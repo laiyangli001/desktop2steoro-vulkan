@@ -143,9 +143,14 @@ def _capture_frame_to_rgb_torch(
 
         if can_use_triton_preprocess(frame_raw) and _same_torch_device(frame_raw.device, requested_device, torch):
             out = bgr_to_rgb_resize_norm(frame_raw, new_height, new_width)
+            scale_y = float(h0) / float(new_height)
+            scale_x = float(w0) / float(new_width)
+            backend = "triton_bgr_resize_norm"
+            if 1.0 < scale_y <= 2.0 and 1.0 < scale_x <= 2.0:
+                backend = "triton_bgr_area_resize_norm"
             _mark_preprocess_metadata(
                 out,
-                backend="triton_bgr_resize_norm",
+                backend=backend,
                 input_kind=input_kind,
                 origin_device=origin_device,
                 output_device=_frame_device_text(out),

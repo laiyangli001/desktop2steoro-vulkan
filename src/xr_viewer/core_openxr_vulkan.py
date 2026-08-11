@@ -294,6 +294,7 @@ def _build_msdf_fps_panel(
     *,
     actual_fps: float,
     sbs_fps: float,
+    capture_fps: float,
     latency_ms: float,
     screen_width: float,
     screen_height: float,
@@ -323,7 +324,8 @@ def _build_msdf_fps_panel(
     )
     latency_text = f"{float(latency_ms):.0f}ms" if float(latency_ms or 0.0) > 0 else "N/A"
     values = (
-        f"XR {float(actual_fps):.0f} FPS   SBS {float(sbs_fps):.0f} FPS   Latency {latency_text}",
+        f"XR {float(actual_fps):.0f} FPS   SBS {float(sbs_fps):.0f} FPS   "
+        f"Capture {float(capture_fps):.0f} FPS   Latency {latency_text}",
         (
             f"{float(screen_width):.2f} x {float(screen_height):.2f} m"
             f"  @  {float(screen_distance):.2f} m"
@@ -653,6 +655,8 @@ class OpenXrVulkanPresenter(
         on_breakdown_add_time: Callable[[str, float], None] | None = None,
         on_breakdown_set_latest: Callable[[str, Any], None] | None = None,
         on_runtime_fps: Callable[[], float] | None = None,
+        on_capture_fps: Callable[[], float] | None = None,
+        on_sbs_fps: Callable[[float], int] | None = None,
     ) -> None:
         self.config = config or OpenXrVulkanConfig()
         self._headset_preset = resolve_xr_headset_preset(self.config.headset_model)
@@ -662,6 +666,9 @@ class OpenXrVulkanPresenter(
         self._on_breakdown_add_time = on_breakdown_add_time
         self._on_breakdown_set_latest = on_breakdown_set_latest
         self._on_runtime_fps = on_runtime_fps
+        self._on_capture_fps = on_capture_fps
+        self._on_sbs_fps = on_sbs_fps
+        self._adaptive_capture_target_fps = 0
         # The projection presenter does not submit an asynchronous effect
         # source. Mark that validation branch inactive instead of reporting a
         # missing effect path for every otherwise-valid projection frame.
@@ -884,16 +891,8 @@ class OpenXrVulkanPresenter(
         self._filament_glow_shell_intensity_multiplier = 0.0
         self._filament_glow_shell_radius = 20.0
         self._filament_glow_shell_height = 9.5
-        self._frosted_glow_intensity = 1.0
-        self._frosted_glow_alpha = 0.42
-        self._frosted_glow_threshold = 0.46
-        self._frosted_glow_lod = 5.4
-        self._frosted_glow_blend = 1.35
-        self._frosted_glow_thickness = 1.6
-        self._frosted_glow_diffuse = 0.85
-        self._frosted_glow_inset = 0.045
-        self._frosted_veil_intensity = 1.5
-        self._frosted_veil_alpha = 1.0
+        self._veil_intensity = 1.5
+        self._veil_alpha = 1.0
         self._last_filament_glow_source_serial = -1
         self._last_filament_glow_source_key: tuple[str, int] | None = None
         self._last_filament_glow_status: tuple[Any, ...] | None = None
@@ -907,17 +906,32 @@ class OpenXrVulkanPresenter(
         self._passthrough_backdrop = False
         self._controllers_root = Path(__file__).resolve().parent / "controllers"
         self._controller_brands = discover_controller_brands(self._controllers_root)
-        self._controller_brand = select_controller_brand(
-            self._controller_brands,
-            self.config.controller_model or os.environ.get("D2S_CONTROLLER_MODEL", "PICO"),
+        requested_controller_model = (
+            self.config.controller_model
+            or os.environ.get("D2S_CONTROLLER_MODEL", "PICO")
+        )
+        self._vulkan_controller_proxy_enabled = (
+            str(requested_controller_model).strip().lower() == "none"
+        )
+        self._controller_brand = (
+            None
+            if self._vulkan_controller_proxy_enabled
+            else select_controller_brand(
+                self._controller_brands,
+                requested_controller_model,
+            )
         )
         self._controller_calibration_mode = False
         self._controller_calibration_offset = np.asarray(
-            self._controller_brand.offset if self._controller_brand else (0.0, 0.0, 0.0),
+            self._controller_brand.offset
+            if self._controller_brand
+            else (0.0, 0.0, 0.0),
             dtype=np.float64,
         )
         self._controller_calibration_rotation_deg = float(
-            self._controller_brand.rotation_deg if self._controller_brand else 0.0
+            self._controller_brand.rotation_deg
+            if self._controller_brand
+            else 0.0
         )
         self._controller_b_button_local: np.ndarray | None = None
         self._controller_b_button_resolved = False
@@ -1008,6 +1022,7 @@ class OpenXrVulkanPresenter(
         self._tool_overlay_xr_fps = 0.0
         self._tool_overlay_pending_xr_fps = 0.0
         self._tool_overlay_sbs_fps = 0.0
+        self._tool_overlay_capture_fps = 0.0
         self._tool_overlay_latency_ms = 0.0
         self._tool_overlay_depth_strength = 0.0
         self._tool_overlay_depth_strength_pending: float | None = None
@@ -1771,13 +1786,9 @@ class OpenXrVulkanPresenter(
             "false": "off",
             "0": "off",
             "screen": "glow",
-            "frost": "frosted",
-            "frost_glow": "frosted",
-            "frosted_glow": "frosted",
         }.get(mode, mode) if mode in {
             "off", "none", "false", "0", "screen", "surround",
-            "glow", "glow2", "veil", "frost", "frost_glow",
-            "frosted", "frosted_glow",
+            "glow", "veil",
         } else "off"
 
     def _apply_filament_glow_profile_fields(self, values: dict[str, Any]) -> None:
@@ -1792,16 +1803,8 @@ class OpenXrVulkanPresenter(
             ("glow_shell_intensity_multiplier", "_filament_glow_shell_intensity_multiplier", 0.0, None),
             ("glow_shell_radius", "_filament_glow_shell_radius", 0.0, None),
             ("glow_shell_height", "_filament_glow_shell_height", 0.0, None),
-            ("frosted_glow_intensity", "_frosted_glow_intensity", 0.0, None),
-            ("frosted_glow_alpha", "_frosted_glow_alpha", 0.0, 1.0),
-            ("frosted_glow_threshold", "_frosted_glow_threshold", 0.0, 1.0),
-            ("frosted_glow_lod", "_frosted_glow_lod", 0.0, None),
-            ("frosted_glow_blend", "_frosted_glow_blend", 0.0, None),
-            ("frosted_glow_thickness", "_frosted_glow_thickness", 0.1, None),
-            ("frosted_glow_diffuse", "_frosted_glow_diffuse", 0.0, None),
-            ("frosted_glow_inset", "_frosted_glow_inset", 0.0, None),
-            ("frosted_veil_intensity", "_frosted_veil_intensity", 0.0, None),
-            ("frosted_veil_alpha", "_frosted_veil_alpha", 0.0, 1.0),
+            ("veil_intensity", "_veil_intensity", 0.0, None),
+            ("veil_alpha", "_veil_alpha", 0.0, 1.0),
         ):
             if key not in values:
                 continue
@@ -1814,7 +1817,7 @@ class OpenXrVulkanPresenter(
                 continue
 
     def _cycle_filament_glow_mode(self) -> None:
-        modes = ("surround", "glow", "glow2", "veil", "frosted", "off")
+        modes = ("surround", "glow", "veil", "off")
         current = self._normalize_filament_glow_mode(self._filament_glow_mode)
         if current not in modes:
             current = (
@@ -1845,9 +1848,7 @@ class OpenXrVulkanPresenter(
         label = {
             "surround": "Surround Glow",
             "glow": "Glow",
-            "glow2": "Glow2",
             "veil": "Veil",
-            "frosted": "Frosted",
             "off": "Off",
         }[next_mode]
         self._preset_name_overlay = label
@@ -2386,9 +2387,6 @@ class OpenXrVulkanPresenter(
     def _refresh_or_upload_keyboard_content(self) -> None:
         # Tool quads rebuild their RGBA payload from the current state each XR tick.
         return None
-
-    def _adjust_frosted_glow_vk(self, _vk_code: int) -> bool:
-        return False
 
     def _keyboard_pose_mat4(self) -> np.ndarray:
         _position, _screen_width, screen_height, _rotation = self._filament_screen or (
@@ -4260,6 +4258,13 @@ class OpenXrVulkanPresenter(
         self._release_output_frame(frame)
 
     def _initialize_filament_bridges(self) -> None:
+        if self._vulkan_controller_proxy_enabled:
+            print(
+                "[OpenXRViewer] Vulkan controller proxy active: "
+                "Filament engine, controller GLB, and environment GLB are bypassed",
+                flush=True,
+            )
+            return
         if self._vulkan_multiview_eye_diagnostic:
             print(
                 "[OpenXRViewer] Pure Vulkan multiview diagnostic: "
@@ -4553,10 +4558,8 @@ class OpenXrVulkanPresenter(
             return None
         mode_value = {
             "glow": 1,
-            "glow2": 2,
-            "veil": 3,
-            "frosted": 4,
-            "surround": 5,
+            "veil": 2,
+            "surround": 3,
         }.get(mode)
         if mode_value is None:
             return None
@@ -4564,8 +4567,8 @@ class OpenXrVulkanPresenter(
         shell_multiplier = max(
             0.0, float(self._filament_glow_shell_intensity_multiplier)
         )
-        if (mode_value == 5 and shell_multiplier <= 0.0) or (
-            mode_value != 5 and glow_multiplier <= 0.0
+        if (mode_value == 3 and shell_multiplier <= 0.0) or (
+            mode_value != 3 and glow_multiplier <= 0.0
         ):
             return None
         screen_center, screen_width, screen_height, _rotation = self._filament_screen
@@ -4586,8 +4589,6 @@ class OpenXrVulkanPresenter(
             * (distance / 2.0)
             * 20.0
         )
-        if mode_value == 2:
-            glow_range *= 0.5
         glow_size = (
             float(screen_width) + glow_range * 2.0,
             float(screen_height) + glow_range * 2.0,
@@ -4599,25 +4600,17 @@ class OpenXrVulkanPresenter(
                 max(0.0, float(self._filament_glow_width)),
                 glow_multiplier,
                 shell_multiplier,
-                max(0.0, float(self._frosted_glow_intensity)),
-                min(1.0, max(0.0, float(self._frosted_glow_alpha))),
-                float(glow_size[0]) if mode_value <= 2 else min(
-                    1.0, max(0.0, float(self._frosted_glow_threshold))
-                ),
-                float(glow_size[1]) if mode_value <= 2 else max(
-                    0.0, float(self._frosted_glow_lod)
-                ),
-                max(0.0, float(self._frosted_glow_blend)),
-                max(0.1, float(self._frosted_glow_thickness)),
-                float(screen_width) * 0.5 if mode_value <= 2 else max(
-                    0.0, float(self._frosted_glow_diffuse)
-                ),
-                float(screen_height) * 0.5 if mode_value <= 2 else max(
-                    0.0001, float(self._frosted_glow_inset)
-                ),
-                max(0.0, float(self._frosted_veil_intensity)),
-                min(1.0, max(0.0, float(self._frosted_veil_alpha))),
-                float(math.fmod(time.monotonic(), 1024.0)),
+                float(glow_size[0]),
+                float(glow_size[1]),
+                float(screen_width) * 0.5,
+                float(screen_height) * 0.5,
+                max(0.0, float(self._veil_intensity)),
+                min(1.0, max(0.0, float(self._veil_alpha))),
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
                 0.0,
                 max(0.0, float(self._filament_glow_shell_radius)),
                 max(0.0, float(self._filament_glow_shell_height)),
@@ -4630,6 +4623,16 @@ class OpenXrVulkanPresenter(
 
     def _projection_laser_params(self, hand: int) -> bytes | None:
         """Pack the legacy controller laser transform for Vulkan overlay draw."""
+        laser_matrix = self._projection_laser_model(hand)
+        if laser_matrix is None:
+            return None
+        values = np.zeros(20, dtype=np.float32)
+        values[:16] = laser_matrix.reshape(-1, order="F")
+        values[16] = float(math.fmod(self._frame_now, 1024.0))
+        return values.astype("<f4", copy=False).tobytes()
+
+    def _projection_laser_model(self, hand: int) -> np.ndarray | None:
+        """Build the legacy beam transform without depending on Filament."""
         hand = int(hand)
         if hand not in (0, 1):
             return None
@@ -4657,9 +4660,37 @@ class OpenXrVulkanPresenter(
         laser_matrix[:3, 1] = (direction * 0.4).astype(np.float32)
         laser_matrix[:3, 2] = (normal_axis * 0.006).astype(np.float32)
         laser_matrix[:3, 3] = beam_origin.astype(np.float32)
-        values = np.zeros(20, dtype=np.float32)
-        values[:16] = laser_matrix.reshape(-1, order="F")
-        values[16] = float(math.fmod(self._frame_now, 1024.0))
+        return laser_matrix
+
+    def _projection_controller_proxy_params(self) -> bytes | None:
+        """Pack both OpenXR grip poses for the local Vulkan cube proxy."""
+        if not self._vulkan_controller_proxy_enabled:
+            return None
+        values = np.zeros(72, dtype=np.float32)
+        visible_count = 0
+        for hand, grip_matrix in enumerate((self._grip_mat_l, self._grip_mat_r)):
+            last_move = (
+                self._laser_last_move_l if hand == 0 else self._laser_last_move_r
+            )
+            if (
+                grip_matrix is None
+                or self._frame_now - float(last_move) > self._LASER_HIDE_AFTER
+            ):
+                continue
+            matrix = np.asarray(grip_matrix, dtype=np.float32)
+            if matrix.shape != (4, 4) or not np.all(np.isfinite(matrix)):
+                continue
+            values[hand * 16 : (hand + 1) * 16] = matrix.reshape(-1, order="F")
+            values[64 + hand] = 1.0
+            visible_count += 1
+            laser_matrix = self._projection_laser_model(hand)
+            if laser_matrix is not None:
+                start = 32 + hand * 16
+                values[start : start + 16] = laser_matrix.reshape(-1, order="F")
+                values[69 + hand] = 1.0
+        if visible_count == 0:
+            return None
+        values[68] = float(math.fmod(self._frame_now, 1024.0))
         return values.astype("<f4", copy=False).tobytes()
 
     def _apply_vulkan_projection_sampling(
@@ -4868,6 +4899,7 @@ class OpenXrVulkanPresenter(
         projection_draws = []
         glow_source = (frame.metadata or {}).get("glow_vulkan_image")
         glow_state = self._projection_glow_state()
+        controller_proxy_params = self._projection_controller_proxy_params()
         for eye_index, source in enumerate(source_inputs):
             source_prepare_started = time.perf_counter()
             wait_semaphore = prepare_source(frame.frame_id, eye_index)
@@ -4904,6 +4936,11 @@ class OpenXrVulkanPresenter(
             if laser_params is not None:
                 projection_draw["laser_params"] = laser_params
                 projection_draw["laser_push_constants"] = screen_push_constants[:64]
+            if controller_proxy_params is not None:
+                projection_draw["controller_proxy_params"] = controller_proxy_params
+                projection_draw["controller_proxy_push_constants"] = (
+                    screen_push_constants[:64]
+                )
             if glow_source is not None and glow_state is not None:
                 projection_draw["glow_source"] = glow_source
                 projection_draw["glow_push_constants"] = screen_push_constants
@@ -4959,14 +4996,14 @@ class OpenXrVulkanPresenter(
         surround_timeline = 0
         surround_requested = bool(
             glow_state is not None
-            and glow_state[0] == 5
+            and glow_state[0] == 3
             and all("glow_source" in draw for draw in projection_draws)
         )
         surround_active = False
         if surround_requested:
             # Match the legacy Filament scene split: Surround is room/background
             # emission and must be occluded by the opaque SBS surface.  The
-            # remaining four Glow modes are foreground effects drawn afterward.
+            # Glow and Veil are foreground effects drawn afterward.
             try:
                 surround_timeline = (
                     self._vulkan_projection_screen_pass.submit_stereo_glow(
@@ -5088,8 +5125,11 @@ class OpenXrVulkanPresenter(
                         flush=True,
                     )
         elif (
-            self.filament_bridge is None
-            or not getattr(self.filament_bridge, "laser_abi_available", False)
+            not self._vulkan_controller_proxy_enabled
+            and (
+                self.filament_bridge is None
+                or not getattr(self.filament_bridge, "laser_abi_available", False)
+            )
         ):
             if self._last_vulkan_projection_laser_depth_status != "unavailable":
                 self._last_vulkan_projection_laser_depth_status = "unavailable"
@@ -5098,6 +5138,11 @@ class OpenXrVulkanPresenter(
                     "Filament laser ABI is not available",
                     flush=True,
                 )
+        if any("controller_proxy_params" in draw for draw in projection_draws):
+            timeline = self._vulkan_projection_screen_pass.submit_stereo_controller_proxy(
+                projection_draws,
+                wait_for_timeline=int(timeline),
+            )
         if depth_sampling_active:
             release_depth = getattr(
                 self.vulkan, "release_external_depth_from_sampling", None
@@ -5126,6 +5171,29 @@ class OpenXrVulkanPresenter(
             ):
                 if stage in submit_profile:
                     self._on_breakdown_add_time(metric, submit_profile[stage])
+            if self._on_breakdown_inc is not None:
+                for stage, metric in (
+                    ("mip_template_hit", "openxr_vulkan_mip_template_hit"),
+                    ("mip_template_new", "openxr_vulkan_mip_template_new"),
+                    (
+                        "render_pass_template_hit",
+                        "openxr_vulkan_render_pass_template_hit",
+                    ),
+                    (
+                        "render_pass_template_new",
+                        "openxr_vulkan_render_pass_template_new",
+                    ),
+                    (
+                        "image_barrier_template_hit",
+                        "openxr_vulkan_image_barrier_template_hit",
+                    ),
+                    (
+                        "image_barrier_template_new",
+                        "openxr_vulkan_image_barrier_template_new",
+                    ),
+                ):
+                    if stage in submit_profile:
+                        self._on_breakdown_inc(metric, submit_profile[stage])
         self._vulkan_projection_composer_frame_id = int(frame.frame_id)
         self._vulkan_projection_composer_active = True
         return int(timeline)
@@ -5270,22 +5338,26 @@ class OpenXrVulkanPresenter(
                 return None
             return (width, height) if width > 0 and height > 0 else None
 
-        # capture_size is attached by the capture pipeline and represents the
-        # GUI input screen. The eye image is only the fallback after processing.
-        source_size = next(
-            (
-                metadata_size(metadata.get(key))
-                for key in ("capture_size", "source_size", "input_size")
-                if metadata_size(metadata.get(key)) is not None
-            ),
-            None,
+        # The sampling policy must describe the texture that the projection
+        # composer actually samples. capture_size can differ after the GUI 4K
+        # render-scale policy and is retained only as source diagnostics.
+        source = output_frame.left_eye
+        eye_size = (
+            int(getattr(source, "width", 0)),
+            int(getattr(source, "height", 0)),
         )
+        source_size = eye_size if eye_size[0] > 0 and eye_size[1] > 0 else None
         if source_size is None:
-            source = output_frame.left_eye
-            source_size = (
-                int(getattr(source, "width", 0)),
-                int(getattr(source, "height", 0)),
+            source_size = next(
+                (
+                    metadata_size(metadata.get(key))
+                    for key in ("render_size", "source_size", "input_size", "capture_size")
+                    if metadata_size(metadata.get(key)) is not None
+                ),
+                None,
             )
+        if source_size is None:
+            return None
         try:
             plan = build_screen_sampling_plan(
                 source_size[0],
@@ -7272,6 +7344,7 @@ class OpenXrVulkanPresenter(
         self._tool_overlay_xr_fps = 0.0
         self._tool_overlay_pending_xr_fps = 0.0
         self._tool_overlay_sbs_fps = 0.0
+        self._tool_overlay_capture_fps = 0.0
         self._tool_overlay_latency_ms = 0.0
         self._tool_overlay_depth_strength = 0.0
         self._tool_overlay_depth_strength_pending = None
@@ -7326,6 +7399,15 @@ class OpenXrVulkanPresenter(
             # snapshot. Rebuilding the PIL texture from per-frame latency
             # defeats the legacy overlay cache and stalls the presenter.
             self._tool_overlay_latency_ms = self._tool_overlay_pending_latency_ms
+            if self._on_capture_fps is not None:
+                try:
+                    capture_fps = float(self._on_capture_fps())
+                except (TypeError, ValueError):
+                    capture_fps = 0.0
+                self._tool_overlay_capture_fps = (
+                    capture_fps if math.isfinite(capture_fps) and capture_fps > 0.0
+                    else 0.0
+                )
             self._tool_overlay_xr_window_started = now
             self._tool_overlay_xr_window_frames = 0
 
@@ -7345,6 +7427,21 @@ class OpenXrVulkanPresenter(
             self._tool_overlay_sbs_fps = (
                 self._tool_overlay_sbs_window_frames / sbs_elapsed
             )
+            if self._on_sbs_fps is not None:
+                capture_target = int(
+                    self._on_sbs_fps(self._tool_overlay_sbs_fps)
+                )
+                if capture_target != self._adaptive_capture_target_fps:
+                    self._adaptive_capture_target_fps = capture_target
+                    print(
+                        "[OpenXRViewer] Adaptive capture target: "
+                        f"{capture_target} FPS (SBS={self._tool_overlay_sbs_fps:.1f})",
+                        flush=True,
+                    )
+                if self._on_breakdown_set_latest is not None:
+                    self._on_breakdown_set_latest(
+                        "adaptive_capture_target_fps", capture_target
+                    )
             self._tool_overlay_sbs_window_started = now
             self._tool_overlay_sbs_window_frames = 0
 
@@ -7997,6 +8094,7 @@ class OpenXrVulkanPresenter(
         fps_key = (
             "fps", language, environment_mode, round(width, 3), round(height, 3),
             round(self._tool_overlay_xr_fps, 1), round(self._tool_overlay_sbs_fps, 1),
+            round(self._tool_overlay_capture_fps, 1),
             round(self._tool_overlay_latency_ms, 1),
             round(self._tool_overlay_depth_strength, 3),
             vr_res,
@@ -8010,6 +8108,7 @@ class OpenXrVulkanPresenter(
                         msdf_atlas,
                         actual_fps=self._tool_overlay_xr_fps,
                         sbs_fps=self._tool_overlay_sbs_fps,
+                        capture_fps=self._tool_overlay_capture_fps,
                         latency_ms=self._tool_overlay_latency_ms,
                         screen_width=width,
                         screen_height=height,
@@ -8036,6 +8135,7 @@ class OpenXrVulkanPresenter(
                     rgba = build_fps_overlay_rgba(
                         actual_fps=self._tool_overlay_xr_fps,
                         sbs_fps=self._tool_overlay_sbs_fps,
+                        capture_fps=self._tool_overlay_capture_fps,
                         latency_ms=self._tool_overlay_latency_ms,
                         screen_width=width,
                         screen_height=height,
@@ -8127,6 +8227,39 @@ class OpenXrVulkanPresenter(
                 screen_pose @ hinge_translation @ hinge_rotation @ panel_offset
             )
             specs.append(("screen_help", rgba, panel_position, (panel_w, panel_h), panel_rotation))
+
+        if self._vulkan_controller_proxy_enabled:
+            callout_key = ("controller_proxy_callout", language)
+            controller_callout = self._tool_quad_texture_cache.get(
+                "controller_proxy_callout"
+            )
+            if (
+                controller_callout is None
+                or self._tool_quad_texture_keys.get("controller_proxy_callout")
+                != callout_key
+            ):
+                controller_callout = build_controller_callout_rgba(lang=language)
+                self._tool_quad_texture_cache[
+                    "controller_proxy_callout"
+                ] = controller_callout
+                self._tool_quad_texture_keys[
+                    "controller_proxy_callout"
+                ] = callout_key
+            geometry = self._controller_guide_geometry()
+            if geometry is not None:
+                callout_position, callout_size, callout_basis = geometry
+                callout_rotation = tuple(
+                    float(value) for value in _mat3_to_quat_xyzw(callout_basis)
+                )
+                specs.append(
+                    (
+                        "controller_proxy_callout",
+                        controller_callout,
+                        callout_position,
+                        callout_size,
+                        callout_rotation,
+                    )
+                )
 
         if self._hand_fps_visible:
             pose = self._controller_overlay_pose(0, 0.075, 0.10)
@@ -8312,9 +8445,13 @@ class OpenXrVulkanPresenter(
             self._controller_b_button_local = None
             self._controller_b_button_resolved = False
         if self._controller_brand is None:
-            self._controller_b_button_local = None
+            self._controller_b_button_local = (
+                np.asarray((0.040, 0.040, -0.040), dtype=np.float64)
+                if self._vulkan_controller_proxy_enabled
+                else None
+            )
             self._controller_b_button_resolved = True
-            return None
+            return self._controller_b_button_local
         if not self._controller_b_button_resolved:
             resolved = controller_button_local_position(
                 str(self._controller_brand.right_glb), "b_button"
@@ -8332,14 +8469,16 @@ class OpenXrVulkanPresenter(
         if button_local is None:
             return None
 
-        offset = np.eye(4, dtype=np.float64)
-        offset[:3, 3] = np.asarray(
-            self._controller_calibration_offset, dtype=np.float64
-        )
-        rotation = euler_to_mat4(
-            0.0, math.radians(self._controller_calibration_rotation_deg), 0.0
-        ).astype(np.float64)
-        model_matrix = np.asarray(self._grip_mat_r, dtype=np.float64) @ rotation @ offset
+        model_matrix = np.asarray(self._grip_mat_r, dtype=np.float64)
+        if not self._vulkan_controller_proxy_enabled:
+            offset = np.eye(4, dtype=np.float64)
+            offset[:3, 3] = np.asarray(
+                self._controller_calibration_offset, dtype=np.float64
+            )
+            rotation = euler_to_mat4(
+                0.0, math.radians(self._controller_calibration_rotation_deg), 0.0
+            ).astype(np.float64)
+            model_matrix = model_matrix @ rotation @ offset
         local = np.ones(4, dtype=np.float64)
         local[:3] = button_local
         return (model_matrix @ local)[:3]

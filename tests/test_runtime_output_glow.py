@@ -13,7 +13,6 @@ def _adapter_with_backend(backend):
         _filament_glow_sample_hz=30.0,
         _filament_glow_smoothing_seconds=0.10,
         _controller_screen_light_sample_hz=12.0,
-        _frosted_glow_lod=5.4,
         filament_bridge=SimpleNamespace(),
         vulkan=object(),
     )
@@ -32,13 +31,10 @@ def test_cuda_adapter_keeps_vulkan_screen_light_sampling_in_glb_environment() ->
         def poll(self) -> None:
             return None
 
-        def submit(
-            self, source, *, mode, frosted_lod, screen_light_only=False
-        ) -> bool:
+        def submit(self, source, *, mode, screen_light_only=False) -> bool:
             self.submits += 1
             assert source == "cuda-source"
             assert mode == "screen_light"
-            assert frosted_lod == 5.4
             assert screen_light_only is True
             return True
 
@@ -75,13 +71,10 @@ def test_cuda_adapter_reuses_completed_glow_while_new_dispatch_runs() -> None:
         def poll(self) -> None:
             self.polls += 1
 
-        def submit(
-            self, source, *, mode, frosted_lod, temporal_smoothing_seconds
-        ) -> bool:
+        def submit(self, source, *, mode, temporal_smoothing_seconds) -> bool:
             self.submits += 1
             assert source == "cuda-source"
             assert mode == "glow"
-            assert frosted_lod == 5.4
             assert temporal_smoothing_seconds == 0.10
             return True
 
@@ -110,9 +103,7 @@ def test_cuda_adapter_keeps_last_glow_image_after_submit_failure() -> None:
         def poll(self) -> None:
             return None
 
-        def submit(
-            self, _source, *, mode, frosted_lod, temporal_smoothing_seconds
-        ) -> bool:
+        def submit(self, _source, *, mode, temporal_smoothing_seconds) -> bool:
             raise RuntimeError("dispatch failed")
 
         def acquire(self, frame_id: int):

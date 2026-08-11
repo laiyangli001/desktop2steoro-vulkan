@@ -32,8 +32,28 @@ def _callbacks(depth_strength: float = 0.75) -> RuntimeCallbacks:
             stereo_config=SimpleNamespace(depth_strength=depth_strength)
         ),
         openxr_state=FakeOpenXrState(depth_strength),
+        fps_breakdown=SimpleNamespace(inc=lambda *_args, **_kwargs: None),
     )
     return RuntimeCallbacks(context)
+
+
+def test_capture_fps_reports_accepted_capture_rate_and_expires(monkeypatch) -> None:
+    callbacks = _callbacks()
+    times = iter((10.0, 10.5, 11.0))
+    monkeypatch.setattr(
+        "app_runtime.runtime_callbacks.time.perf_counter",
+        lambda: next(times),
+    )
+
+    callbacks.breakdown_inc("capture")
+    callbacks.breakdown_inc("capture")
+
+    assert callbacks.capture_fps() == pytest.approx(2.0)
+
+    monkeypatch.setattr(
+        "app_runtime.runtime_callbacks.time.perf_counter", lambda: 12.0
+    )
+    assert callbacks.capture_fps() == 0.0
 
 
 def test_controller_shortcut_toggles_stereo_and_restores_depth() -> None:

@@ -120,8 +120,8 @@ void main() {
     }
 
     // A fixed stratified 8x8 reduction bounds work independently of source
-    // resolution. Veil uses scale 1, Frosted uses its legacy LOD footprint,
-    // and Glow uses the old broad MIP footprint without creating CPU mipmaps.
+    // resolution. Veil uses scale 1, while Glow and Surround use the old
+    // broad MIP footprint without creating CPU mipmaps.
     vec3 total = vec3(0.0);
     for (uint sample_y = 0u; sample_y < 8u; ++sample_y) {
         for (uint sample_x = 0u; sample_x < 8u; ++sample_x) {

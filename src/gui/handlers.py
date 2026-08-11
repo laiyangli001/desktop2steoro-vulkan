@@ -703,7 +703,7 @@ class GUIHandlerMixin:
         self.local_vsync_cb.label = t.get("VSync", "VSync")
         self.target_fps_label.value = t.get("Capture FPS:", "Capture FPS:")
         target_fps_value = self._target_fps_from_display(self.target_fps_dd.value)
-        self.target_fps_dd.options = [t["Auto"], "60", "72", "80", "90", "120"]
+        self.target_fps_dd.options = [t["Auto"], "24", "30", "60", "72", "80", "90", "120"]
         self.target_fps_dd.value = self._target_fps_to_display(target_fps_value)
         self.render_policy_label.value = t["Render Policy:"]
         self.render_policy_dd.options = ["Scaled"]
@@ -800,6 +800,8 @@ class GUIHandlerMixin:
             (self.edge_threshold_dd, "tooltip_edge_threshold"),
             (self.hole_fill_mode_dd, "tooltip_hole_fill_mode"),
             (self.anaglyph_dd, "tooltip_anaglyph"),
+            (self.parallel_inference_label, "tooltip_parallel_inference"),
+            (self.parallel_inference_dd, "tooltip_parallel_inference"),
             (self.cross_eyed_cb, "tooltip_cross_eyed"),
             (self.advanced_stereo_cb, "tooltip_advanced_stereo"),
             (self.depth_pop_dd, "tooltip_depth_pop"),

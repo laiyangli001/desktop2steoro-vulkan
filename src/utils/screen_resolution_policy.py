@@ -39,15 +39,29 @@ class ScreenSamplingPlan:
 
 
 def classify_input_resolution(width: int, height: int) -> int:
-    """Map arbitrary input geometry to the nearest supported horizontal tier."""
-    long_edge = max(int(width), int(height))
-    if long_edge <= 0:
+    """Bucket input for the final screen-quality route.
+
+    Only a complete 4K source may use the native-MIP route. The GUI 3K
+    tier is a reduced 4K frame, so it remains in the upscale bucket and uses
+    the same EASU/RCAS chain as the 1K/2K inputs.
+    """
+    width = int(width)
+    height = int(height)
+    long_edge = max(width, height)
+    short_edge = min(width, height)
+    if long_edge <= 0 or short_edge <= 0:
         raise ValueError("input resolution must be positive")
     if long_edge <= 1920:
         return 1
-    if long_edge <= 2880:
-        return 2
-    return 4
+    full_4k = (
+        (long_edge >= 3840 and short_edge >= 1600)
+        or (
+            width * height >= 3840 * 2160 * 0.85
+            and long_edge >= 3200
+            and short_edge >= 1600
+        )
+    )
+    return 4 if full_4k else 2
 
 
 def build_screen_sampling_plan(

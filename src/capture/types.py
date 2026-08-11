@@ -17,6 +17,7 @@ class CaptureConfig:
     monitor_index: int = 1
     capture_tool: str | None = None
     os_name: str | None = None
+    fps_provider: Callable[[], int] | None = None
 
 
 class FrameCopyMode(Enum):

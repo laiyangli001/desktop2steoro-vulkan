@@ -1,7 +1,15 @@
 # Desktop2Stereo Vulkan 项目日志
 
 ## 2026-08-11
-
+- 修复“4K 缩放档”与 OpenXR 屏幕质量链的分流：投影 Composer 始终依据实际 SBS 左眼纹理尺寸选择采样策略，不再以原始 `capture_size` 覆盖已缩放的 1K/2K SBS 尺寸；OpenXR Projection render scale 仅在处理输入属于完整 4K 档时采用 GUI 缩放值，1K/2K 输入固定使用头显原生投影目标。3K（85%）也从错误的 `native_mip` 桶移入 `upscale_easu → RCAS → MIP` 路径；只有完整 4K SBS 可使用 `native_mip`。这样 4K 下采样得到的 1K、2K、3K SBS 与同尺寸原生输入复用同一最终质量链，避免二次缩小或错误 MIP 采样。
+- 4K 到低分辨率推理输入的 Triton 预处理补充面积下采样内核，并提供一次性预推理图像及同源下采样候选导出脚本，便于确认进入深度推理前的真实 RGB 尺寸和过滤结果；诊断默认关闭，不影响正常运行。
+- GUI“手柄模型”新增 `None` 性能隔离选项：选择后不创建 Filament Engine，不加载手柄或环境 GLB，Vulkan Projection Composer 在每眼同一次 draw 中使用未经品牌校正的 OpenXR grip/aim 姿态绘制左右两个 `8×8×8 cm` 本地立方体及双手激光；左手立方体使用固定不透明蓝色，右手使用固定不透明橙色，各面边界使用基于屏幕空间导数抗锯齿的黑色接缝线区分，颜色不受时间、背景或表面朝向影响，并在无深度附件的 overlay pass 中丢弃背面片元。修正立方体 `+Y/-Y` 面与法线相反的三角形绕序，避免背面过滤造成对称凹口和缺面。立方体与正式手柄一样在静止 5 秒后隐藏，激光保持彩色流动、旧版流向和尖端收窄几何，Tool Quad 的 B 键提示锚定到右手立方体的前右顶点。PICO 仍是默认值，该选项仅用于比较 Filament 与纯 Vulkan 代理的 XR/SBS 开销。
+- OpenXR FPS 面板新增实际捕获帧率，统计软件捕获节流后真正进入 raw queue 的帧，而不是显示配置目标；捕获停顿时归零，并与 XR、SBS 和延迟使用同一低频快照更新。
+- 修复删除 Glow2/Frosted 后 Surround 模式编号仍沿用旧值，导致其误入未清屏的前景 `LOAD` RenderPass 并跨帧累积的问题；Surround 重新使用先清除 Projection 目标、再绘制背景辉光的正确路径，消除整幅画面的重影拖尾。
+- 删除 Glow2 和 Frosted 两个 Glow 特效及其 Vulkan shader 分支、运行时模式、旧 profile 参数和预过滤路径；控制器切换序列简化为 `Surround → Glow → Veil → Off`，Veil 保留原有几何与显示行为。
+- 捕获帧率新增固定 24 Hz 和 30 Hz 档位；OpenXR 的“自动”档新增基于真实 SBS 吞吐量的运行时节流：每 60 秒按 SBS 平均帧率评估一次，并在显示器基础刷新率、30 FPS、24 FPS 之间最多升降一个档位，不再通过短时恢复高捕捉率制造周期性负载尖峰。该机制只在复制和推理前丢弃过量捕捉回调，不改变 SBS 输出、OpenXR 提交率或手动帧率档位，并通过 `capture_target` 记录当前有效捕捉上限。
+- 将“并行推理”移入“显示高级立体参数”，放在“交叉眼”左侧；启动默认值和 GUI 重置值统一改为“单路推理”。中英文 Tooltip 明确标记多路推理仅供实验，当前不建议启用两路或三路，因为实机效果更差；用户仍可手动选择多路进行对照测试。
+- 优化 Vulkan Projection Composer 的 CPU 侧逐帧命令录制：缓存 MIP 生成所需的 barrier/blit 描述、Render Pass begin/viewport/scissor 描述和常用 Image Barrier 描述，避免 Python/CFFI 在每个 XR tick 重复构造相同 Vulkan 结构；每帧仍按最新头姿重新录制和提交命令，不复用旧 swapchain 图像，不改变屏幕分辨率、MIP/RCAS 质量链、SBS 推理调度或遮挡关系。RTX 2060 单路推理实测基线为 SBS 14 FPS / XR 37 FPS，仅启用 MIP 模板缓存后为 SBS 10 FPS / XR 50 FPS；三类缓存合并时曾实测约 SBS 9 FPS / XR 67 FPS。FPSBreakdown 新增 `vk_mip_tpl_*`、`vk_rp_tpl_*` 和 `vk_barrier_tpl_*` 命中/新建统计，用于确认预热后只复用 CPU 描述而非复用显示帧。
 - 移除 HP、Index、PICO、Quest、Vive 和 YVR profile 中的强制材质覆盖，恢复各手柄 GLB 自带的 roughness、metallic 和 specular 参数；手柄灯光配置保持不变。
 - 恢复 PICO GLB 正式材质参数 `KHR_materials_specular=[2,2,2]`、`roughnessFactor=0`；PICO profile 保留 Head/Top 灯光阴影投射，其他品牌继续使用正式版光照与各自 GLB 原始材质。
 - 将已通过 `multiview_controller` 诊断的正常手柄纹理路径接入正式 Vulkan Projection Composer：Composer 开启时统一使用 layered Filament multiview，诊断模式只控制是否跳过 SBS/Glow，不再改变手柄渲染路径；正式灯光参数保持不变。

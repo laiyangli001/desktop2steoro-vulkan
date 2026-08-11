@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 from capture import capture_frame_to_rgb, prepare_rgb_for_stereo_runtime
+from capture.adaptive_rate import AdaptiveCaptureRate
 from capture.session import CaptureSessionLoop
 from stereo_runtime.pipeline import RuntimePipelineLoop
 from utils import (
@@ -106,14 +107,40 @@ def _load_common_filament_defaults(src_root: Path) -> dict[str, object]:
     return filament if isinstance(filament, dict) else {}
 
 
-def _resolve_openxr_render_scale(settings: dict) -> float:
-    """Return the explicitly selected OpenXR projection scale."""
+def _is_4k_processing_size(size: object) -> bool:
+    """Return whether the configured inference input is in the 4K tier."""
+    if isinstance(size, (tuple, list)) and len(size) == 2:
+        try:
+            width, height = int(size[0]), int(size[1])
+        except (TypeError, ValueError):
+            return False
+        short_side, long_side = min(width, height), max(width, height)
+        pixels = width * height
+        return (
+            (long_side >= 3840 and short_side >= 1600)
+            or (pixels >= 3840 * 2160 * 0.85 and long_side >= 3200 and short_side >= 1600)
+        )
+    try:
+        # Legacy scalar processing resolution means source-eye height.  2160p
+        # is the only GUI scalar that represents the 4K tier.
+        return int(size) >= 2000
+    except (TypeError, ValueError):
+        return False
+
+
+def _resolve_openxr_render_scale(
+    settings: dict,
+    processing_size: int | tuple[int, int] | None = None,
+) -> float:
+    """Resolve projection scale, keeping non-4K inputs at native target size."""
     env_value = os.environ.get("D2S_OPENXR_RENDER_SCALE")
     if env_value:
         try:
             return max(0.25, min(1.5, float(env_value)))
         except ValueError:
             pass
+    if processing_size is not None and not _is_4k_processing_size(processing_size):
+        return 1.0
     tiers = {
         "4K / 100%": 1.0,
         "3K / 85%": 0.85,
@@ -122,8 +149,11 @@ def _resolve_openxr_render_scale(settings: dict) -> float:
     }
     return float(tiers.get(str(settings.get("Render Scale", "4K / 100%")), 1.0))
 
-
-def _openxr_filament_config(settings: dict) -> dict[str, object]:
+def _openxr_filament_config(
+    settings: dict,
+    *,
+    processing_size: int | tuple[int, int] | None = None,
+) -> dict[str, object]:
     """Resolve the selected packaged Filament scene for direct OpenXR runs."""
     src_root = Path(__file__).resolve().parents[1]
     platform_bridge = {
@@ -146,7 +176,7 @@ def _openxr_filament_config(settings: dict) -> dict[str, object]:
     configured_glb = os.environ.get("D2S_FILAMENT_GLB")
     configured_profile = os.environ.get("D2S_FILAMENT_PROFILE")
     return {
-        "render_scale": _resolve_openxr_render_scale(settings),
+        "render_scale": _resolve_openxr_render_scale(settings, processing_size),
         "swapchain_color_mode": str(
             settings.get("OpenXR Color Mode", "sRGB")
         ).strip().lower(),
@@ -290,6 +320,17 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
 
     shutdown_event.clear()
     settings = _get_settings()
+    try:
+        configured_target_fps = int(settings.get("Target FPS", 0) or 0)
+    except (TypeError, ValueError):
+        configured_target_fps = 0
+    adaptive_capture_rate = AdaptiveCaptureRate(
+        FPS,
+        enabled=(
+            str(RUN_MODE).strip().lower() == "openxr"
+            and configured_target_fps <= 0
+        ),
+    )
     context = create_runtime_context(
         file_path=str(Path(__file__).resolve().parents[1] / "main.py"),
         settings=settings,
@@ -307,8 +348,12 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
         run_mode=RUN_MODE,
         depth_strength=DEPTH_STRENGTH,
         convergence=CONVERGENCE,
+        capture_fps_provider=adaptive_capture_rate.current_fps,
     )
     callbacks = RuntimeCallbacks(context)
+    callbacks.breakdown_set_latest(
+        "adaptive_capture_target_fps", adaptive_capture_rate.current_fps()
+    )
     runtime_ready_event = threading.Event()
 
     if str(RUN_MODE).strip().lower() == "openxr":
@@ -389,7 +434,10 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
                 OpenXrVulkanPresenter,
             )
 
-            filament_config = _openxr_filament_config(settings)
+            filament_config = _openxr_filament_config(
+                settings,
+                processing_size=OUTPUT_RESOLUTION,
+            )
             presenter = OpenXrVulkanPresenter(
                 OpenXrVulkanConfig(**filament_config),
                 on_headset_state=callbacks.on_openxr_headset_state,
@@ -398,6 +446,12 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
                 on_breakdown_add_time=callbacks.breakdown_add_time,
                 on_breakdown_set_latest=callbacks.breakdown_set_latest,
                 on_runtime_fps=callbacks.runtime_fps,
+                on_capture_fps=callbacks.capture_fps,
+                on_sbs_fps=(
+                    adaptive_capture_rate.observe_sbs_fps
+                    if adaptive_capture_rate.enabled
+                    else None
+                ),
             )
             presenter_thread = threading.Thread(
                 target=presenter.run_until,

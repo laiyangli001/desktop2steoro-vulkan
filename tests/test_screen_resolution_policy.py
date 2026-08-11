@@ -13,7 +13,8 @@ from utils.screen_resolution_policy import (
         (2560, 1440, 2),
         (3840, 2160, 4),
         (2560, 1600, 2),
-        (3440, 1440, 4),
+        (3264, 1836, 2),
+        (3440, 1440, 2),
     ),
 )
 def test_input_resolution_uses_nearest_standard_tier(width, height, tier):
@@ -29,6 +30,7 @@ def test_input_resolution_uses_nearest_standard_tier(width, height, tier):
         ((3840, 2160), 2, 8, 2, 2.0, 1.0, "downsample_lanczos_rcas"),
         ((1920, 1080), 8, 2, 2, 1.0, 2.0, "upscale_easu"),
         ((2560, 1440), 2, 4, 2, 1.0, 1.0, "native_mip"),
+        ((3264, 1836), 4, 4, 4, 1.0, 2.0, "upscale_easu"),
     ),
 )
 def test_input_headset_matrix(

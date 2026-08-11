@@ -11,9 +11,9 @@ layout(push_constant) uniform ScreenParams {
 layout(set = 0, binding = 1, std430) readonly buffer GlowState {
     vec4 head_mode;
     vec4 glow;
-    vec4 frost0;
-    vec4 frost1;
+    vec4 geometry;
     vec4 veil;
+    vec4 reserved;
     vec4 shell;
 } state;
 
@@ -68,7 +68,7 @@ vec3 extended_screen_surface(float local_x, float local_y) {
     return result;
 }
 
-vec3 frost_front(float u, float v) {
+vec3 veil_front(float u, float v) {
     vec3 local_head = state.head_mode.xyz - screen.center.xyz;
     float head_x = dot(local_head, screen.right.xyz);
     float head_y = dot(local_head, screen.up.xyz);
@@ -166,7 +166,7 @@ void main() {
     vec3 position = vec3(0.0);
     texture_uv = vec2(0.0);
     effect_uv = vec2(0.0);
-    if (mode == 1 || mode == 2) {
+    if (mode == 1) {
         int column = gl_VertexIndex / 2;
         bool top = (gl_VertexIndex & 1) != 0;
         float u = float(column) / float(GLOW_SEGMENTS);
@@ -181,14 +181,13 @@ void main() {
         );
         float range = base_width * (screen_long / 2.4)
             * (distance_to_head / 2.0) * 20.0;
-        if (mode == 2) range *= 0.5;
         float glow_width = screen.size_curve.x * 2.0 + range * 2.0;
         float glow_height = screen.size_curve.y * 2.0 + range * 2.0;
         float local_x = (u - 0.5) * glow_width;
         float local_y = top ? glow_height * 0.5 : -glow_height * 0.5;
         position = extended_screen_surface(local_x, local_y);
         texture_uv = vec2(u, top ? 1.0 : 0.0);
-    } else if (mode == 3 || mode == 4) {
+    } else if (mode == 2) {
         int quad = gl_VertexIndex / 6;
         bool high_s;
         bool high_t;
@@ -231,7 +230,7 @@ void main() {
             }
         }
         vec3 rear = screen_surface(u, v);
-        vec3 front = frost_front(u, v);
+        vec3 front = veil_front(u, v);
         position = mix(rear, front, depth);
         texture_uv = vec2(u, v);
         effect_uv = vec2(depth, 0.0);

@@ -140,6 +140,7 @@ class WindowsCaptureEventRunner:
         self._last_frame_ts = 0.0
         self._capture_gap_logs = 0
         self._software_frame_due = 0.0
+        self._software_pacing_fps = 0
         self._software_limited_frames = 0
 
     @property
@@ -160,13 +161,17 @@ class WindowsCaptureEventRunner:
         if not _software_throttle_enabled(self.capture_tool):
             return True
         try:
-            fps = int(self.config.fps)
+            provider = getattr(self.config, "fps_provider", None)
+            fps = int(provider() if provider is not None else self.config.fps)
         except (TypeError, ValueError):
             return True
         if fps <= 0:
             return True
 
         interval = 1.0 / float(fps)
+        if fps != self._software_pacing_fps:
+            self._software_pacing_fps = fps
+            self._software_frame_due = 0.0
         if self._software_frame_due <= 0.0:
             self._software_frame_due = now + interval
             return True
@@ -321,6 +326,7 @@ class WindowsCaptureEventRunner:
             self._session = cap
             self._control = None
             self._software_frame_due = 0.0
+            self._software_pacing_fps = 0
             self._software_limited_frames = 0
             if on_session_update is not None:
                 on_session_update(self._session, self._control)

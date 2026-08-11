@@ -50,6 +50,22 @@ def test_openxr_filament_screen_geometry_follows_gui_headset_model() -> None:
     assert config["render_scale"] == 1.0
 
 
+def test_openxr_render_scale_keeps_non_4k_processing_inputs_at_native_projection_size():
+    from app_runtime.runtime_entry import _resolve_openxr_render_scale
+
+    settings = {"Render Scale": "1K / 50%"}
+
+    assert _resolve_openxr_render_scale(settings, (1920, 1080)) == 1.0
+    assert _resolve_openxr_render_scale(settings, (2560, 1440)) == 1.0
+    assert _resolve_openxr_render_scale(settings, 1080) == 1.0
+
+
+def test_openxr_render_scale_applies_selected_tier_for_4k_processing_input():
+    from app_runtime.runtime_entry import _resolve_openxr_render_scale
+
+    assert _resolve_openxr_render_scale({"Render Scale": "1K / 50%"}, (3840, 2160)) == 0.5
+    assert _resolve_openxr_render_scale({"Render Scale": "2K / 75%"}, 2160) == 0.75
+
 def test_openxr_filament_color_defaults_come_from_common_json() -> None:
     from app_runtime.runtime_entry import _openxr_filament_config
 

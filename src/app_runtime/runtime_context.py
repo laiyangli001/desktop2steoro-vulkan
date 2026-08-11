@@ -102,6 +102,7 @@ def create_runtime_context(
     run_mode,
     depth_strength,
     convergence,
+    capture_fps_provider=None,
 ):
     base_dir = os.path.dirname(os.path.abspath(file_path))
     use_cudart = "CUDA" in device_info and "ZLUDA" not in device_info
@@ -192,6 +193,7 @@ def create_runtime_context(
             monitor_index=monitor_index,
             capture_tool=capture_tool,
             os_name=os_name,
+            fps_provider=capture_fps_provider,
         ),
         render_size_config=render_size_config or RenderSizeConfig(),
         application_runtime_target=application_runtime_target,

@@ -212,11 +212,6 @@ class CoreInputHelpersMixin:
             if trig_now >= CLICK_THRESH and trig_prev < CLICK_THRESH and idx is not None:
                 key = self._keyboard_keys[idx]
                 mod_name = {VK_SHIFT: 'shift', VK_CTRL: 'ctrl', VK_ALT: 'alt', VK_WIN: 'win'}.get(key.vk)
-                if key.vk in (0x25, 0x26, 0x27, 0x28):
-                    adjust_frosted = getattr(self, '_adjust_frosted_glow_vk', None)
-                    if callable(adjust_frosted) and adjust_frosted(key.vk):
-                        setattr(self, trig_prev_attr, trig_now)
-                        continue
                 if mod_name is not None:
                     self._toggle_modifier_key(mod_name, key.vk)
                 elif key.vk == VK_CAPS:

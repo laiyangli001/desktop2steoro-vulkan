@@ -305,12 +305,20 @@ class GUIBuilderMixin:
             on_select=self.on_model_size_change,
             width=S(110))
         self.fp16_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="FP16")
-        self.parallel_inference_label = ft.Text("Parallel Inference:", size=FONT_SIZE, width=S(130))
+        parallel_inference_tooltip = (
+            "Experimental: do not enable two-worker or three-worker inference; "
+            "multi-worker inference performs worse."
+        )
+        self.parallel_inference_label = ft.Text(
+            "Parallel Inference:", size=FONT_SIZE, width=S(130),
+            tooltip=parallel_inference_tooltip,
+        )
         self.parallel_inference_dd = CompactDropdown(
             options=["单路推理", "两路推理", "三路推理"],
-            value="两路推理",
+            value="单路推理",
             width=S(130),
             on_select=self.on_stereo_hot_param_change,
+            tooltip=parallel_inference_tooltip,
         )
         row0 = ft.Row([
             self.depth_model_label, self.depth_model_dd,
@@ -399,10 +407,7 @@ class GUIBuilderMixin:
             label="Advanced Stereo", value=False, on_change=self.on_advanced_stereo_change)
         hole_fill_row = ft.Row([self.hole_fill_mode_label, self.hole_fill_mode_dd,
             ft.Container(width=S(40)), self.depth_separation_label, self.depth_separation_dd], spacing=1)
-        common_runtime_row = ft.Row([
-            self.parallel_inference_label, self.parallel_inference_dd,
-            ft.Container(width=S(40)), self.advanced_stereo_cb,
-        ], spacing=1)
+        advanced_stereo_row = ft.Row([self.advanced_stereo_cb], spacing=1)
 
         self.temporal_strength_label = ft.Text("Temporal Strength:", size=FONT_SIZE, width=S(130))
         self.temporal_strength_dd = CompactDropdown(options=[f"{i / 10:.1f}" for i in range(0, 11)],
@@ -443,7 +448,8 @@ class GUIBuilderMixin:
         self.cross_eyed_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT,
             label="Cross Eyed", value=False, on_change=self.on_stereo_hot_param_change)
         stereo_row4 = ft.Row([
-            self.cross_eyed_cb,
+            self.parallel_inference_label, self.parallel_inference_dd,
+            ft.Container(width=S(40)), self.cross_eyed_cb,
             ft.Container(width=S(20)), self.fp16_cb,
         ], spacing=1)
 
@@ -549,7 +555,7 @@ class GUIBuilderMixin:
         self.local_vsync_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT,
             label="VSync", value=DEFAULTS.get("VSync", False))
         self.target_fps_label = ft.Text("Capture FPS:", size=FONT_SIZE, width=S(130))
-        self.target_fps_dd = CompactDropdown(options=["Auto", "60", "72", "80", "90", "120"],
+        self.target_fps_dd = CompactDropdown(options=["Auto", "24", "30", "60", "72", "80", "90", "120"],
             value="Auto", width=S(74))
         self.xr_preview_cb = ft.Checkbox(label="XR Preview Window",
             value=DEFAULTS.get("XR Preview Window", True))
@@ -630,7 +636,9 @@ class GUIBuilderMixin:
             ctrl_dirs = []
         if not ctrl_dirs:
             ctrl_dirs = ["PICO"]
-        self.ctrl_model_dd = CompactDropdown(options=[c for c in ctrl_dirs], value="PICO", width=S(130))
+        self.ctrl_model_dd = CompactDropdown(
+            options=["None", *ctrl_dirs], value="PICO", width=S(130)
+        )
         self.environment_label = ft.Text("Environment:", size=FONT_SIZE, width=S(130))
         self.env_model_keys = get_environment_model_options(return_keys=True)
         self.env_model_display_names = load_environment_display_names(self.env_model_keys)
@@ -704,7 +712,7 @@ class GUIBuilderMixin:
 
         # Assembly
         depth_group = ft.Container(
-            ft.Column([row0, row1, stereo_row0, hole_fill_row, common_runtime_row,
+            ft.Column([row0, row1, stereo_row0, hole_fill_row, advanced_stereo_row,
                        convergence_depth_row, depth_strength_row, row2b, stereo_row1, stereo_row3,
                        stereo_row3b, stereo_row3c, stereo_row4, self.row4a, self.row4b, self.row4c], spacing=S(8)),
             margin=ft.Margin(0, 0, 0, S(8)),

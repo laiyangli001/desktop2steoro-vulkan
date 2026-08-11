@@ -29,6 +29,7 @@ def normalize_config(config: CaptureConfig | None = None) -> CaptureConfig:
         monitor_index=config.monitor_index,
         capture_tool=capture_tool,
         os_name=os_name,
+        fps_provider=config.fps_provider,
     )
 
 

@@ -601,8 +601,10 @@ def test_controller_callout_uses_projection_layer_not_quad_layer() -> None:
     assert 'entry.get("image_index") is None' in source
     assert "_tool_overlay_xr_fps" in source
     assert "_tool_overlay_sbs_fps" in source
+    assert "_tool_overlay_capture_fps" in source
     assert "self._update_tool_overlay_metrics(output_frame)" in source
     assert "actual_fps=self._tool_overlay_xr_fps" in source
+    assert "capture_fps=self._tool_overlay_capture_fps" in source
 
 
 def test_keyboard_quad_tracks_hover_and_held_indices() -> None:
@@ -713,7 +715,7 @@ def test_keyboard_modifier_clicks_toggle_real_key_state_for_combinations(monkeyp
 
 
 def test_tool_overlay_metrics_snapshot_latency_with_fps_window() -> None:
-    presenter = OpenXrVulkanPresenter()
+    presenter = OpenXrVulkanPresenter(on_capture_fps=lambda: 23.7)
     presenter._frame_now = 10.0
 
     frame = type("Frame", (), {"frame_id": 1, "timestamp": 10.0})()
@@ -733,6 +735,7 @@ def test_tool_overlay_metrics_snapshot_latency_with_fps_window() -> None:
     frame.metadata = {"depth_strength": 1.75}
     presenter._update_tool_overlay_metrics(frame)
     assert presenter._tool_overlay_xr_fps == pytest.approx(3.0 / 1.05)
+    assert presenter._tool_overlay_capture_fps == pytest.approx(23.7)
     assert presenter._tool_overlay_latency_ms == pytest.approx(50.0)
     assert presenter._tool_overlay_depth_strength == pytest.approx(1.75)
 
@@ -1015,14 +1018,35 @@ def test_projection_composer_sampling_does_not_mutate_filament_bridge() -> None:
         timestamp=0.0,
         left_eye=SimpleNamespace(width=1920, height=1080),
         right_eye=SimpleNamespace(width=1920, height=1080),
-        metadata={"capture_size": (1920, 1080)},
+        metadata={"capture_size": (3840, 2160), "render_size": (1920, 1080)},
     )
 
     plan = presenter._apply_screen_sampling_policy(frame)
 
     assert plan is not None
+    assert (plan.source_width, plan.source_height) == (1920, 1080)
+    assert plan.mode == "upscale_easu"
     assert presenter._active_screen_sampling_plan is plan
     assert calls == []
+
+
+def test_projection_composer_sampling_uses_scaled_2k_eye_texture_not_4k_capture() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_screen = ((0.0, 0.0, -2.0), 2.0, 1.0, (0.0, 0.0, 0.0))
+    frame = VulkanStereoOutputFrame(
+        frame_id=1,
+        timestamp=0.0,
+        left_eye=SimpleNamespace(width=2880, height=1620),
+        right_eye=SimpleNamespace(width=2880, height=1620),
+        metadata={"capture_size": (3840, 2160), "render_size": (2880, 1620)},
+    )
+
+    plan = presenter._apply_screen_sampling_policy(frame)
+
+    assert plan is not None
+    assert (plan.source_width, plan.source_height) == (2880, 1620)
+    assert plan.input_tier_k == 2
+    assert plan.mode == "upscale_easu"
 
 
 def test_projection_composer_final_pass_samples_completed_quality_mips() -> None:
@@ -1129,6 +1153,103 @@ def test_projection_quality_chain_bypasses_rcas_when_sharpness_is_zero() -> None
     assert "use_rcas = self.rcas_sharpness > 0.0" in mip_source
     assert "_record_rcas_draw" in mip_source
     assert "if use_rcas:" in mip_source
+
+
+def test_projection_mip_recording_templates_are_reused() -> None:
+    class FakeFfi:
+        @staticmethod
+        def cast(_type_name, value):
+            return value
+
+    class FakeVk:
+        ffi = FakeFfi()
+
+        def __getattr__(self, name):
+            if name.startswith("VK_"):
+                return abs(hash(name)) + 1
+            if name.startswith("Vk"):
+                return lambda **kwargs: (name, kwargs)
+            raise AttributeError(name)
+
+    class Image:
+        image = 123
+        width = 3840
+        height = 2160
+        mip_levels = 4
+
+    screen_pass = object.__new__(VulkanProjectionScreenPass)
+    screen_pass.vk = FakeVk()
+    screen_pass._mip_recording_templates = {}
+    screen_pass._mip_template_hits = 0
+    screen_pass._mip_template_misses = 0
+
+    first = screen_pass._mip_recording_template(
+        Image(), screen_pass.vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+    )
+    second = screen_pass._mip_recording_template(
+        Image(), screen_pass.vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+    )
+
+    assert second is first
+    assert len(first["levels"]) == 3
+    assert screen_pass._mip_template_hits == 1
+    assert screen_pass._mip_template_misses == 1
+
+
+def test_projection_render_pass_and_barrier_templates_are_reused() -> None:
+    class FakeFfi:
+        @staticmethod
+        def cast(_type_name, value):
+            return value
+
+    class FakeVk:
+        ffi = FakeFfi()
+
+        def __getattr__(self, name):
+            if name.startswith("VK_"):
+                return abs(hash(name)) + 1
+            if name.startswith("Vk"):
+                return lambda **kwargs: (name, kwargs)
+            raise AttributeError(name)
+
+    screen_pass = object.__new__(VulkanProjectionScreenPass)
+    screen_pass.vk = FakeVk()
+    screen_pass._render_pass_recording_templates = {}
+    screen_pass._render_pass_template_hits = 0
+    screen_pass._render_pass_template_misses = 0
+    screen_pass._image_barrier_templates = {}
+    screen_pass._image_barrier_template_hits = 0
+    screen_pass._image_barrier_template_misses = 0
+
+    render_first = screen_pass._render_pass_recording_template(
+        100, 200, 3648, 3648, (0.0, 0.0, 0.0, 1.0)
+    )
+    render_second = screen_pass._render_pass_recording_template(
+        100, 200, 3648, 3648, (0.0, 0.0, 0.0, 1.0)
+    )
+    barrier_first = screen_pass._image_barrier_template(
+        300,
+        src_access=1,
+        dst_access=2,
+        old_layout=3,
+        new_layout=4,
+        base_array_layer=1,
+    )
+    barrier_second = screen_pass._image_barrier_template(
+        300,
+        src_access=1,
+        dst_access=2,
+        old_layout=3,
+        new_layout=4,
+        base_array_layer=1,
+    )
+
+    assert render_second is render_first
+    assert barrier_second is barrier_first
+    assert screen_pass._render_pass_template_hits == 1
+    assert screen_pass._render_pass_template_misses == 1
+    assert screen_pass._image_barrier_template_hits == 1
+    assert screen_pass._image_barrier_template_misses == 1
 
 
 def test_projection_mip_lod_bias_defaults_and_clamps(monkeypatch) -> None:
@@ -1814,13 +1935,11 @@ def test_x_long_press_action_cycles_v25_glow_modes_not_room_lighting() -> None:
     presenter._filament_glow_intensity_multiplier = 0.0
 
     observed = []
-    for _ in range(6):
+    for _ in range(4):
         presenter._dispatch_controller_shortcut("cycle_environment_light")
         observed.append(presenter._filament_glow_mode)
 
-    assert observed == [
-        "surround", "glow", "glow2", "veil", "frosted", "off"
-    ]
+    assert observed == ["surround", "glow", "veil", "off"]
     assert presenter._filament_glow_intensity_multiplier == pytest.approx(0.0)
     assert presenter._filament_glow_shell_intensity_multiplier == pytest.approx(0.0)
     assert presenter._preset_name_overlay == "Off"
@@ -2374,6 +2493,99 @@ def test_controller_brand_switch_and_calibration_save_use_live_profile(
     assert presenter._controller_calibration_mode is False
 
 
+def test_none_controller_model_bypasses_filament_and_enables_vulkan_proxy(
+    capsys,
+) -> None:
+    presenter = OpenXrVulkanPresenter(
+        OpenXrVulkanConfig(
+            controller_model="None",
+            filament_bridge_path="must-not-be-loaded.dll",
+        )
+    )
+
+    presenter._initialize_filament_bridges()
+
+    assert presenter._vulkan_controller_proxy_enabled is True
+    assert presenter._controller_brand is None
+    assert presenter._controller_calibration_offset == pytest.approx((0.0, 0.0, 0.0))
+    assert presenter._controller_calibration_rotation_deg == pytest.approx(0.0)
+    assert presenter.filament_bridge is None
+    assert "Filament engine, controller GLB, and environment GLB are bypassed" in (
+        capsys.readouterr().out
+    )
+
+
+def test_vulkan_controller_proxy_packs_both_openxr_grip_poses() -> None:
+    presenter = OpenXrVulkanPresenter(OpenXrVulkanConfig(controller_model="None"))
+    presenter._frame_now = 12.0
+    presenter._laser_last_move_l = 11.0
+    presenter._laser_last_move_r = 11.0
+    presenter._grip_mat_l = np.eye(4, dtype=np.float32)
+    presenter._grip_mat_r = np.eye(4, dtype=np.float32)
+    presenter._aim_mat_l = np.eye(4, dtype=np.float32)
+    presenter._aim_mat_r = np.eye(4, dtype=np.float32)
+    presenter._grip_mat_l[:3, 3] = (1.0, 2.0, 3.0)
+    presenter._grip_mat_r[:3, 3] = (-1.0, -2.0, -3.0)
+    presenter._controller_interaction_ray = lambda hand: (
+        np.asarray((float(hand), 0.0, 0.0), dtype=np.float64),
+        np.asarray((0.0, 0.0, -1.0), dtype=np.float64),
+    )
+
+    payload = presenter._projection_controller_proxy_params()
+
+    assert payload is not None
+    assert len(payload) == VulkanProjectionScreenPass._CONTROLLER_OVERLAY_PARAM_SIZE
+    values = np.frombuffer(payload, dtype="<f4")
+    left = values[:16].reshape((4, 4), order="F")
+    right = values[16:32].reshape((4, 4), order="F")
+    assert left == pytest.approx(presenter._grip_mat_l)
+    assert right == pytest.approx(presenter._grip_mat_r)
+    assert values[64:66] == pytest.approx((1.0, 1.0))
+    assert values[68:71] == pytest.approx((12.0, 1.0, 1.0))
+
+    vertex_shader = (
+        Path(__file__).parents[1]
+        / "src"
+        / "shaders"
+        / "d2s_projection_controller_proxy_vert.vert"
+    ).read_text(encoding="utf-8")
+    fragment_shader = (
+        Path(__file__).parents[1]
+        / "src"
+        / "shaders"
+        / "d2s_projection_controller_proxy_frag.frag"
+    ).read_text(encoding="utf-8")
+    assert "CUBE_VERTEX_COUNT = 36" in vertex_shader
+    assert "face_position(face, corner) * 0.040" in vertex_shader
+    assert "if (face == 2) return vec3(a, 1.0, -b);" in vertex_shader
+    assert "if (face == 3) return vec3(a, -1.0, b);" in vertex_shader
+    assert "high_y ? (1.0 / 6.0) : 0.5" in vertex_shader
+    assert "laser_uv.y - laser_time * 0.4" in fragment_shader
+    assert "if (!gl_FrontFacing)" in fragment_shader
+    assert "noperspective in vec2 face_uv" in fragment_shader
+    assert "fwidth(nearest_edge) * 1.5" in fragment_shader
+    assert "mix(vec3(0.0), base_color, interior)" in fragment_shader
+
+    presenter._frame_now = 16.01
+    assert presenter._projection_controller_proxy_params() is None
+
+
+def test_vulkan_controller_proxy_uses_front_right_top_corner_for_b_anchor() -> None:
+    presenter = OpenXrVulkanPresenter(OpenXrVulkanConfig(controller_model="None"))
+    presenter._grip_mat_r = np.eye(4, dtype=np.float32)
+    presenter._grip_mat_r[:3, 3] = (1.0, 2.0, 3.0)
+
+    anchor = presenter._resolve_controller_b_button_local()
+
+    assert anchor == pytest.approx((0.040, 0.040, -0.040))
+    assert presenter._controller_b_button_world_position() == pytest.approx(
+        (1.040, 2.040, 2.960)
+    )
+    source = inspect.getsource(OpenXrVulkanPresenter._render_tool_quad_layers)
+    assert '"controller_proxy_callout"' in source
+    assert "build_controller_callout_rgba(lang=language)" in source
+
+
 def test_vulkan_shortcut_delegates_runtime_owned_actions() -> None:
     actions: list[str] = []
     presenter = OpenXrVulkanPresenter(
@@ -2710,8 +2922,8 @@ def test_projection_glow_state_preserves_legacy_screen_glow_parameters() -> None
     assert len(payload) == 96
     assert values[:4] == pytest.approx((0.0, 0.0, 0.0, 1.0))
     assert values[4:8] == pytest.approx((0.5, 0.25, 1.5, 0.0))
-    assert values[10:12] == pytest.approx((32.0, 31.0))
-    assert values[14:16] == pytest.approx((1.0, 0.5))
+    assert values[8:10] == pytest.approx((32.0, 31.0))
+    assert values[10:12] == pytest.approx((1.0, 0.5))
     assert values[22:24] == pytest.approx((2.4, 2.0))
 
 
@@ -2724,9 +2936,9 @@ def test_projection_glow_is_absent_when_mode_is_off() -> None:
 
 @pytest.mark.parametrize(
     ("mode", "mode_value"),
-    (("glow", 1), ("glow2", 2), ("veil", 3), ("frosted", 4), ("surround", 5)),
+    (("glow", 1), ("veil", 2), ("surround", 3)),
 )
-def test_projection_glow_maps_all_legacy_modes(mode: str, mode_value: int) -> None:
+def test_projection_glow_maps_supported_modes(mode: str, mode_value: int) -> None:
     presenter = OpenXrVulkanPresenter()
     presenter._filament_glow_environment_enabled = True
     presenter._filament_screen = ((0.0, 0.0, -2.0), 2.0, 1.0, (0.0, 0.0, 0.0))
@@ -2764,6 +2976,7 @@ def test_projection_glow_uses_reduced_surround_density_and_stable_order() -> Non
     source = inspect.getsource(
         OpenXrVulkanPresenter._render_vulkan_projection_composer
     )
+    assert "glow_state[0] == 3" in source
     assert "clear_target=not bool(filament_hdr_timeline)" in source
     assert "or filament_hdr_timeline" in source
     assert "or filament_wait_semaphores" in source

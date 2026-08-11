@@ -345,6 +345,7 @@ def build_fps_overlay_rgba(
     *,
     actual_fps,
     sbs_fps,
+    capture_fps,
     latency_ms,
     screen_width,
     screen_height,
@@ -355,7 +356,7 @@ def build_fps_overlay_rgba(
     controller_brand,
     environment_visible,
     font_type=None,
-    size=(768, 224),
+    size=(896, 224),
 ):
     ow, oh = int(size[0]), int(size[1])
     img = Image.new("RGBA", (ow, oh), (0, 0, 0, 0))
@@ -373,7 +374,10 @@ def build_fps_overlay_rgba(
     val_x = pad + max(_text_width(draw, label, label_font) for label in labels) + 10
 
     lat_str = f"{float(latency_ms):.0f}ms" if float(latency_ms or 0.0) > 0 else "N/A"
-    fps_str = f"XR {float(actual_fps):.0f} FPS   SBS {float(sbs_fps):.0f} FPS   Latency {lat_str}"
+    fps_str = (
+        f"XR {float(actual_fps):.0f} FPS   SBS {float(sbs_fps):.0f} FPS   "
+        f"Capture {float(capture_fps):.0f} FPS   Latency {lat_str}"
+    )
     _draw_status_row(
         draw,
         22,

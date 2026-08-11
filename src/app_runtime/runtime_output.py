@@ -331,9 +331,6 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
             ):
                 submit_kwargs = {
                     "mode": mode if gpu_glow_active else "screen_light",
-                    "frosted_lod": float(
-                        getattr(self.presenter, "_frosted_glow_lod", 5.4)
-                    ),
                 }
                 if gpu_glow_active:
                     submit_kwargs["temporal_smoothing_seconds"] = max(

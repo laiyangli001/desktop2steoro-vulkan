@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 import os
 import queue
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, is_dataclass, replace
+from pathlib import Path
 from typing import Callable
 
 from capture.types import CapturedFrame
@@ -106,6 +108,162 @@ def _runtime_diag_stage() -> str:
     if _env_flag("D2S_RUNTIME_DROP_ONLY"):
         return "raw"
     return str(os.environ.get("D2S_RUNTIME_DIAG_STAGE", "full") or "full").strip().lower()
+
+
+def _save_preprocess_image_diagnostic(
+    frame_rgb,
+    *,
+    capture_size,
+    render_size,
+    output_dir: str | Path,
+) -> tuple[Path, Path]:
+    """Save the exact RGB image consumed by inference for one-shot comparison."""
+    import cv2
+    import numpy as np
+
+    backend = str(getattr(frame_rgb, "_d2s_preprocess_backend", "unknown"))
+    value = frame_rgb.detach() if hasattr(frame_rgb, "detach") else frame_rgb
+    if getattr(value, "ndim", 0) == 4:
+        value = value[0]
+    if getattr(value, "ndim", 0) != 3:
+        raise ValueError(
+            "preprocess diagnostic requires a 3D RGB frame, "
+            f"got {getattr(value, 'shape', None)}"
+        )
+    if int(value.shape[0]) in (3, 4):
+        value = (
+            value[:3].permute(1, 2, 0)
+            if hasattr(value, "permute")
+            else np.moveaxis(value[:3], 0, -1)
+        )
+    else:
+        value = value[..., :3]
+    if hasattr(value, "cpu"):
+        value = value.cpu().numpy()
+    image_rgb = np.asarray(value)
+    if np.issubdtype(image_rgb.dtype, np.floating):
+        image_rgb = np.rint(np.clip(image_rgb, 0.0, 1.0) * 255.0).astype(np.uint8)
+    else:
+        image_rgb = np.clip(image_rgb, 0, 255).astype(np.uint8)
+
+    capture_width, capture_height = int(capture_size[0]), int(capture_size[1])
+    render_width, render_height = int(render_size[0]), int(render_size[1])
+    destination = Path(output_dir)
+    destination.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    stem = (
+        f"preprocess_{capture_width}x{capture_height}_to_"
+        f"{render_width}x{render_height}_{stamp}"
+    )
+    image_path = destination / f"{stem}.png"
+    manifest_path = destination / f"{stem}.json"
+    if not cv2.imwrite(str(image_path), cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)):
+        raise RuntimeError(f"failed to save preprocess diagnostic image: {image_path}")
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "stage": "after_capture_preprocess_before_inference",
+                "capture_size": [capture_width, capture_height],
+                "render_size": [render_width, render_height],
+                "image_size": [int(image_rgb.shape[1]), int(image_rgb.shape[0])],
+                "preprocess_backend": backend,
+                "image": image_path.name,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return image_path, manifest_path
+
+
+def _rcas_reference(image_rgb, sharpness: float = 0.35):
+    """Small CPU reference for comparing RCAS after area downsampling."""
+    import numpy as np
+
+    image = np.asarray(image_rgb, dtype=np.float32) * (1.0 / 255.0)
+    padded = np.pad(image, ((1, 1), (1, 1), (0, 0)), mode="edge")
+    center = padded[1:-1, 1:-1]
+    up = padded[:-2, 1:-1]
+    left = padded[1:-1, :-2]
+    right = padded[1:-1, 2:]
+    down = padded[2:, 1:-1]
+    minimum = np.minimum(np.minimum(up, left), np.minimum(right, down))
+    maximum = np.maximum(np.maximum(up, left), np.maximum(right, down))
+    hit_min = minimum / np.maximum(4.0 * maximum, 1.0e-6)
+    hit_max = (1.0 - maximum) / np.minimum(4.0 * minimum - 4.0, -1.0e-6)
+    lobe = np.maximum(-hit_min, hit_max)
+    lobe = np.maximum(-0.1875, np.minimum(lobe, 0.0))
+    lobe *= 2.0 ** (-max(0.0, float(sharpness)))
+    result = (lobe * (up + left + right + down) + center) / (4.0 * lobe + 1.0)
+    return np.rint(np.clip(result, 0.0, 1.0) * 255.0).astype(np.uint8)
+
+
+def _save_downsample_filter_comparison(
+    frame_raw,
+    *,
+    capture_size,
+    render_size,
+    output_dir: str | Path,
+) -> Path | None:
+    """Export multiple downsample candidates from the same untouched raw frame."""
+    import cv2
+    import numpy as np
+
+    capture_width, capture_height = int(capture_size[0]), int(capture_size[1])
+    render_width, render_height = int(render_size[0]), int(render_size[1])
+    if capture_width <= render_width or capture_height <= render_height:
+        return None
+    value = frame_raw.detach() if hasattr(frame_raw, "detach") else frame_raw
+    if getattr(value, "ndim", 0) == 4:
+        value = value[0]
+    if hasattr(value, "cpu"):
+        value = value.cpu().numpy()
+    raw = np.asarray(value)
+    if raw.ndim != 3 or raw.shape[-1] not in (3, 4):
+        raise ValueError(f"downsample comparison requires HWC BGR/BGRA input, got {raw.shape}")
+    source_rgb = cv2.cvtColor(
+        raw,
+        cv2.COLOR_BGRA2RGB if raw.shape[-1] == 4 else cv2.COLOR_BGR2RGB,
+    )
+    target = (render_width, render_height)
+    area = cv2.resize(source_rgb, target, interpolation=cv2.INTER_AREA)
+    lanczos4 = cv2.resize(source_rgb, target, interpolation=cv2.INTER_LANCZOS4)
+    bicubic = cv2.resize(source_rgb, target, interpolation=cv2.INTER_CUBIC)
+    area_rcas = _rcas_reference(area, 0.35)
+
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    comparison_dir = Path(output_dir) / (
+        f"downsample_compare_{capture_width}x{capture_height}_to_"
+        f"{render_width}x{render_height}_{stamp}"
+    )
+    comparison_dir.mkdir(parents=True, exist_ok=True)
+    images = {
+        "00_source_rgb.png": source_rgb,
+        "01_area.png": area,
+        "02_lanczos4.png": lanczos4,
+        "03_bicubic.png": bicubic,
+        "04_area_rcas_035.png": area_rcas,
+    }
+    for name, image_rgb in images.items():
+        path = comparison_dir / name
+        if not cv2.imwrite(str(path), cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)):
+            raise RuntimeError(f"failed to save downsample comparison image: {path}")
+    (comparison_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "stage": "same_raw_capture_downsample_comparison",
+                "capture_size": [capture_width, capture_height],
+                "render_size": [render_width, render_height],
+                "candidates": list(images),
+                "area_rcas_sharpness": 0.35,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return comparison_dir
 
 
 @dataclass(frozen=True)
@@ -243,7 +401,6 @@ def _unpack_raw_queue_item(item):
         return item.frame, item.target_height, item.timestamp, item
     frame_raw, size, capture_start_time = item
     return frame_raw, size, capture_start_time, None
-
 
 def _resolve_pipeline_render_size(size, config: RenderSizeConfig | None):
     if config is None:
@@ -705,6 +862,8 @@ class RuntimePipelineLoop:
         self._parallel_backoff_until = 0.0
         self._parallel_recovery_after = 0.0
         self._presenter_backpressure_active = False
+        self._preprocess_diagnostic_saved = False
+        self._preprocess_diagnostic_first_frame_time = None
 
     def _presenter_pressure_active(self) -> bool:
         ctx = self.context
@@ -1049,6 +1208,49 @@ class RuntimePipelineLoop:
                 ctx.set_preprocess_backend(
                     str(getattr(frame_rgb, "_d2s_preprocess_backend", "unknown"))
                 )
+                if _env_flag("D2S_PREPROCESS_IMAGE_DIAGNOSTIC") and not self._preprocess_diagnostic_saved:
+                    now = time.perf_counter()
+                    if self._preprocess_diagnostic_first_frame_time is None:
+                        self._preprocess_diagnostic_first_frame_time = now
+                    try:
+                        delay_s = max(
+                            0.0,
+                            float(os.environ.get("D2S_PREPROCESS_IMAGE_DIAGNOSTIC_DELAY_S", "3.0")),
+                        )
+                    except (TypeError, ValueError):
+                        delay_s = 3.0
+                    if now - self._preprocess_diagnostic_first_frame_time >= delay_s:
+                        try:
+                            output_dir = os.environ.get(
+                                "D2S_PREPROCESS_IMAGE_DIAGNOSTIC_DIR",
+                                str(Path(__file__).resolve().parents[2] / "artifacts"),
+                            )
+                            image_path, manifest_path = _save_preprocess_image_diagnostic(
+                                frame_rgb,
+                                capture_size=size,
+                                render_size=render_size,
+                                output_dir=output_dir,
+                            )
+                            comparison_dir = _save_downsample_filter_comparison(
+                                frame_raw,
+                                capture_size=size,
+                                render_size=render_size,
+                                output_dir=output_dir,
+                            )
+                            self._preprocess_diagnostic_saved = True
+                            print(
+                                "[RuntimePipeline] preprocess image diagnostic saved: "
+                                f"image={image_path} manifest={manifest_path} "
+                                f"comparison={comparison_dir or 'not_required'}",
+                                flush=True,
+                            )
+                        except Exception as exc:
+                            self._preprocess_diagnostic_saved = True
+                            print(
+                                "[RuntimePipeline] preprocess image diagnostic failed: "
+                                f"{type(exc).__name__}: {exc}",
+                                flush=True,
+                            )
                 if diag_stage == "preprocess":
                     ctx.source_stat_inc("runtime_diag_preprocess")
                     ctx.breakdown_inc("runtime_diag_preprocess")

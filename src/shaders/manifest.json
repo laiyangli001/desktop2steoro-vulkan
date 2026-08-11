@@ -189,6 +189,28 @@
       "precision": "fp32"
     },
     {
+      "name": "d2s_projection_controller_proxy_vert",
+      "source": "d2s_projection_controller_proxy_vert.vert",
+      "spirv": "d2s_projection_controller_proxy_vert.spv",
+      "stage": "vertex",
+      "entry": "main",
+      "descriptor_bindings": [
+        {"set": 0, "binding": 0, "kind": "storage_buffer", "access": "read_only", "format": null}
+      ],
+      "push_constants_size": 64,
+      "precision": "fp32"
+    },
+    {
+      "name": "d2s_projection_controller_proxy_frag",
+      "source": "d2s_projection_controller_proxy_frag.frag",
+      "spirv": "d2s_projection_controller_proxy_frag.spv",
+      "stage": "fragment",
+      "entry": "main",
+      "descriptor_bindings": [],
+      "push_constants_size": 0,
+      "precision": "fp32"
+    },
+    {
       "name": "d2s_projection_rcas_vert",
       "source": "d2s_projection_rcas_vert.vert",
       "spirv": "d2s_projection_rcas_vert.spv",

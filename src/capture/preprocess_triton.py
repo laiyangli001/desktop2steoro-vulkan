@@ -64,6 +64,63 @@ def _bgr_to_rgb_resize_norm_kernel(
     tl.store(out + offsets, value, mask=active)
 
 
+@triton.jit
+def _bgr_to_rgb_area_resize_norm_kernel(
+    src,
+    out,
+    total: tl.constexpr,
+    in_h: tl.constexpr,
+    in_w: tl.constexpr,
+    channels: tl.constexpr,
+    out_h: tl.constexpr,
+    out_w: tl.constexpr,
+    scale_y: tl.constexpr,
+    scale_x: tl.constexpr,
+    block: tl.constexpr,
+):
+    offsets = tl.program_id(0) * block + tl.arange(0, block)
+    active = offsets < total
+    pixels = out_h * out_w
+    channel = offsets // pixels
+    pixel = offsets - channel * pixels
+    oy = pixel // out_w
+    ox = pixel - oy * out_w
+
+    y_start = oy.to(tl.float32) * scale_y
+    y_end = y_start + scale_y
+    x_start = ox.to(tl.float32) * scale_x
+    x_end = x_start + scale_x
+    y0 = tl.floor(y_start).to(tl.int32)
+    x0 = tl.floor(x_start).to(tl.int32)
+    src_channel = 2 - channel
+
+    value = tl.zeros((block,), dtype=tl.float32)
+    for ky in tl.static_range(0, 3):
+        sy = y0 + ky
+        wy = tl.maximum(
+            0.0,
+            tl.minimum(y_end, sy.to(tl.float32) + 1.0)
+            - tl.maximum(y_start, sy.to(tl.float32)),
+        )
+        for kx in tl.static_range(0, 3):
+            sx = x0 + kx
+            wx = tl.maximum(
+                0.0,
+                tl.minimum(x_end, sx.to(tl.float32) + 1.0)
+                - tl.maximum(x_start, sx.to(tl.float32)),
+            )
+            src_offset = (sy * in_w + sx) * channels + src_channel
+            sample = tl.load(
+                src + src_offset,
+                mask=active & (sy < in_h) & (sx < in_w),
+                other=0.0,
+            ).to(tl.float32)
+            value += sample * wx * wy
+
+    value *= (1.0 / (scale_x * scale_y * 255.0))
+    tl.store(out + offsets, value, mask=active)
+
+
 def can_use_triton_preprocess(frame_raw: torch.Tensor) -> bool:
     return (
         triton is not None
@@ -91,7 +148,12 @@ def bgr_to_rgb_resize_norm(frame_raw: torch.Tensor, out_height: int, out_width: 
     total = out.numel()
     block = 256
     grid = (triton.cdiv(total, block),)
-    _bgr_to_rgb_resize_norm_kernel[grid](
+    scale_y = float(in_h) / float(out_height)
+    scale_x = float(in_w) / float(out_width)
+    kernel = _bgr_to_rgb_resize_norm_kernel
+    if 1.0 < scale_y <= 2.0 and 1.0 < scale_x <= 2.0:
+        kernel = _bgr_to_rgb_area_resize_norm_kernel
+    kernel[grid](
         frame_raw,
         out,
         total,
@@ -100,8 +162,8 @@ def bgr_to_rgb_resize_norm(frame_raw: torch.Tensor, out_height: int, out_width: 
         channels,
         out_height,
         out_width,
-        float(in_h) / float(out_height),
-        float(in_w) / float(out_width),
+        scale_y,
+        scale_x,
         block,
     )
     return out

@@ -9,10 +9,65 @@ from stereo_runtime.pipeline import (
     _enable_openxr_depth_cuda_graph_if_needed,
     _motion_sample,
     _motion_score,
+    _save_downsample_filter_comparison,
+    _save_preprocess_image_diagnostic,
     _runtime_motion_gate_enabled,
     _runtime_pending_depth_limit,
     _runtime_parallel_adaptive_backoff_enabled,
 )
+
+
+def test_save_preprocess_image_diagnostic_exports_exact_pre_inference_rgb(tmp_path):
+    import cv2
+    import numpy as np
+
+    frame = np.zeros((2, 3, 3), dtype=np.float32)
+    frame[..., 0] = 1.0
+    frame[..., 1] = 0.5
+
+    image_path, manifest_path = _save_preprocess_image_diagnostic(
+        frame,
+        capture_size=(3840, 2160),
+        render_size=(3, 2),
+        output_dir=tmp_path,
+    )
+
+    saved_rgb = cv2.cvtColor(cv2.imread(str(image_path)), cv2.COLOR_BGR2RGB)
+    assert saved_rgb.shape == (2, 3, 3)
+    assert tuple(saved_rgb[0, 0]) == (255, 128, 0)
+    manifest = manifest_path.read_text(encoding="utf-8")
+    assert '"stage": "after_capture_preprocess_before_inference"' in manifest
+    assert '"capture_size": [' in manifest
+    assert '"render_size": [' in manifest
+
+
+def test_save_downsample_filter_comparison_exports_same_frame_candidates(tmp_path):
+    import cv2
+    import numpy as np
+
+    frame_bgra = np.zeros((4, 6, 4), dtype=np.uint8)
+    frame_bgra[..., 0] = np.arange(6, dtype=np.uint8) * 30
+    frame_bgra[..., 1] = 80
+    frame_bgra[..., 2] = 160
+    frame_bgra[..., 3] = 255
+
+    comparison_dir = _save_downsample_filter_comparison(
+        frame_bgra,
+        capture_size=(6, 4),
+        render_size=(3, 2),
+        output_dir=tmp_path,
+    )
+
+    assert comparison_dir is not None
+    assert cv2.imread(str(comparison_dir / "00_source_rgb.png")).shape[:2] == (4, 6)
+    for name in (
+        "01_area.png",
+        "02_lanczos4.png",
+        "03_bicubic.png",
+        "04_area_rcas_035.png",
+    ):
+        assert cv2.imread(str(comparison_dir / name)).shape[:2] == (2, 3)
+    assert (comparison_dir / "manifest.json").is_file()
 
 
 def test_parallel_depth_scheduler_enforces_effective_submission_limit():

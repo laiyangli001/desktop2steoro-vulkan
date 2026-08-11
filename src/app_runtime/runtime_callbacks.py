@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 import time
 
 from utils.queue_utils import clear_nonblocking, drain_latest, put_latest
@@ -17,6 +18,7 @@ class RuntimeCallbacks:
         self._runtime_fps_started = time.perf_counter()
         self._runtime_fps_frames = 0.0
         self._runtime_fps = 0.0
+        self._capture_frame_ts = deque(maxlen=120)
 
     def stereo_warmup_key(self, rgb_frame):
         return self.context.stereo_warmup_tracker.key_for_frame(rgb_frame)
@@ -26,6 +28,10 @@ class RuntimeCallbacks:
 
     def breakdown_inc(self, name, amount=1):
         self.context.fps_breakdown.inc(name, amount)
+        if name == "capture":
+            now = time.perf_counter()
+            for _ in range(max(0, int(amount))):
+                self._capture_frame_ts.append(now)
         if name == "runtime":
             now = time.perf_counter()
             self._runtime_fps_frames += float(amount)
@@ -37,6 +43,16 @@ class RuntimeCallbacks:
 
     def runtime_fps(self):
         return self._runtime_fps
+
+    def capture_fps(self):
+        timestamps = tuple(self._capture_frame_ts)
+        if len(timestamps) < 2:
+            return 0.0
+        now = time.perf_counter()
+        if now - timestamps[-1] > 1.0:
+            return 0.0
+        span = timestamps[-1] - timestamps[0]
+        return (len(timestamps) - 1) / span if span > 0.0 else 0.0
 
     def breakdown_add_time(self, name, seconds):
         self.context.fps_breakdown.add_time(name, seconds)
