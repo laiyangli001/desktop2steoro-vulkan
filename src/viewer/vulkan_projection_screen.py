@@ -1182,7 +1182,13 @@ class VulkanProjectionScreenPass:
                         sType=vk.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
                         attachmentCount=1,
                         pAttachments=[vk.VkPipelineColorBlendAttachmentState(
-                            blendEnable=vk.VK_FALSE,
+                            blendEnable=vk.VK_TRUE,
+                            srcColorBlendFactor=vk.VK_BLEND_FACTOR_SRC_ALPHA,
+                            dstColorBlendFactor=vk.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+                            colorBlendOp=vk.VK_BLEND_OP_ADD,
+                            srcAlphaBlendFactor=vk.VK_BLEND_FACTOR_ONE,
+                            dstAlphaBlendFactor=vk.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+                            alphaBlendOp=vk.VK_BLEND_OP_ADD,
                             colorWriteMask=(
                                 vk.VK_COLOR_COMPONENT_R_BIT
                                 | vk.VK_COLOR_COMPONENT_G_BIT
@@ -1895,6 +1901,7 @@ class VulkanProjectionScreenPass:
         *,
         exposure_ev: float,
         wait_semaphores: list[Any] | tuple[Any, ...],
+        load_target: bool = False,
     ) -> int:
         """Resolve a layered Filament HDR frame into the two OpenXR targets."""
         if len(draws) != 2 or len(sources) != 2:
@@ -1929,7 +1936,7 @@ class VulkanProjectionScreenPass:
             target = item["target"]
             target_layer = int(item["array_layer"])
             _view, framebuffer = self._target_view_and_framebuffer(
-                target, target_layer
+                target, target_layer, overlay=bool(load_target)
             )
             prepared.append({
                 "source": source,
@@ -1941,6 +1948,9 @@ class VulkanProjectionScreenPass:
                 "descriptor_index": descriptor_index,
                 "target_old_layout": self.context.image_state(target.image).layout,
                 "source_ready_in_submission": True,
+                "render_pass": (
+                    self.overlay_render_pass if load_target else self.render_pass
+                ),
                 "pipeline": self.hdr_pipeline,
                 "pipeline_layout": self.hdr_pipeline_layout,
                 "payload": self.vk.ffi.new(

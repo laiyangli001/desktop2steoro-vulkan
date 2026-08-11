@@ -131,7 +131,7 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     ).read_text(encoding="utf-8")
 
 
-def test_controller_material_override_stays_profile_driven() -> None:
+def test_controller_material_override_is_not_enabled_by_default_profiles() -> None:
     root = Path(__file__).resolve().parents[1]
     facade = (root / "native/filament/bridge/filament_bridge.cpp").read_text(
         encoding="utf-8"
@@ -149,11 +149,17 @@ def test_controller_material_override_stays_profile_driven() -> None:
                 encoding="utf-8"
             )
         )["overrides"]
-        assert profile["material_roughness_factor"] == pytest.approx(0.08)
-        assert profile["material_metallic_factor"] == pytest.approx(0.85)
-        assert profile["material_specular_color_factor"] == pytest.approx(
-            [2.0, 2.0, 2.0]
-        )
+        assert "material_metallic_factor" not in profile
+        if brand == "PICO":
+            assert profile["material_roughness_factor"] == pytest.approx(0.0)
+            assert profile["material_specular_color_factor"] == pytest.approx(
+                [2.0, 2.0, 2.0]
+            )
+            assert profile["controller_head_light_cast_shadows"] is True
+            assert profile["controller_top_light_cast_shadows"] is True
+        else:
+            assert "material_roughness_factor" not in profile
+            assert "material_specular_color_factor" not in profile
 
 def test_legacy_filament_screen_texture_light_path_stays_removed() -> None:
     root = Path(__file__).resolve().parents[1]

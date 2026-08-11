@@ -47,6 +47,15 @@ void set_multiview_views(FilamentBridge* bridge, bool enabled) {
     eye.controller_guide_view->setPostProcessingEnabled(!enabled);
 }
 
+void set_renderer_clear_alpha(FilamentBridge* bridge, double alpha) {
+    if (!bridge || !bridge->renderer) return;
+    filament::Renderer::ClearOptions clear_options;
+    clear_options.clearColor = filament::math::double4{0.0, 0.0, 0.0, alpha};
+    clear_options.clear = true;
+    clear_options.discard = true;
+    bridge->renderer->setClearOptions(clear_options);
+}
+
 filament::math::mat4 matrix_from_columns(const float* values) {
     return filament::math::mat4(filament::math::mat4f(
             values[0], values[1], values[2], values[3],
@@ -147,6 +156,7 @@ int bridge_eye_create_target_swapchain(
     eye.controller_view->setViewport(filament::Viewport{0, 0, width, height});
     eye.controller_guide_view->setViewport(filament::Viewport{0, 0, width, height});
     bridge_eye_activate(bridge, eye_index);
+    set_renderer_clear_alpha(bridge, 1.0);
     return 1;
 }
 
@@ -215,6 +225,9 @@ int bridge_eye_create_stereo_swapchain_with_depth(
     set_multiview_views(bridge, true);
     bridge->multiview_active = true;
     bridge_eye_activate(bridge, 0);
+    // The private HDR producer is composited over SBS/Glow later. Its empty
+    // background must remain transparent while rendered geometry stays opaque.
+    set_renderer_clear_alpha(bridge, 0.0);
     std::fprintf(stderr,
             "[FilamentBridge] stereo swapchain created images=%u format=%d "
             "extent=%ux%u layers=2 depth=%p depth_format=%d\n",

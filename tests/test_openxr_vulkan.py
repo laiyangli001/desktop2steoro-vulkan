@@ -451,7 +451,7 @@ def test_controller_lighting_config_is_resolved_outside_native_bridge() -> None:
 
 
 @pytest.mark.parametrize("brand_name", ("HP", "INDEX", "PICO", "QUEST", "VIVE", "YVR"))
-def test_controller_material_override_is_consistent_across_brands(
+def test_controller_material_override_is_disabled_for_default_brands(
     brand_name: str,
 ) -> None:
     class Bridge:
@@ -469,11 +469,14 @@ def test_controller_material_override_is_consistent_across_brands(
         bridge, presenter._controller_brands[brand_name]
     )
 
-    assert bridge.config == {
-        "roughness_factor": pytest.approx(0.08),
-        "metallic_factor": pytest.approx(0.85),
-        "specular_color_factor": pytest.approx((2.0, 2.0, 2.0)),
-    }
+    if brand_name == "PICO":
+        assert bridge.config == {
+            "roughness_factor": pytest.approx(0.0),
+            "metallic_factor": None,
+            "specular_color_factor": pytest.approx((2.0, 2.0, 2.0)),
+        }
+    else:
+        assert bridge.config is None
 def test_controller_screen_light_tracks_linear_screen_color_in_foreground() -> None:
     class Bridge:
         def __init__(self) -> None:

@@ -4285,30 +4285,29 @@ class OpenXrVulkanPresenter(
                 queue_family_index=self.vulkan.queue_family_index,
                 queue_index=0,
             )
-            # Keep the current per-eye producer as the default until the
-            # layered Filament render itself has passed headset validation.
-            # The preceding red/green Projection diagnostic proved that VDXR
-            # routes imageArrayIndex 0/1 correctly; this second, explicit gate
-            # isolates Filament multiview from SBS/Glow composition.
+            # Use the validated layered Filament producer whenever the Vulkan
+            # Projection Composer is enabled. The diagnostic launcher only
+            # changes whether SBS/Glow are consumed; it must not select a
+            # different controller rendering path.
             self._multiview_active = bool(
-                self._filament_multiview_projection_diagnostic
+                self._vulkan_projection_composer_requested
                 and self._try_enable_filament_multiview(bridge)
             )
             if (
-                self._filament_multiview_projection_diagnostic
-                and not self._multiview_active
+                not self._multiview_active
             ):
                 print(
-                    "[OpenXRViewer] Filament multiview Projection diagnostic "
-                    "unavailable; using per-eye swapchains",
+                    "[OpenXRViewer] Filament multiview unavailable; "
+                    "using per-eye swapchains",
                     flush=True,
                 )
             elif self._multiview_active:
-                print(
-                    "[OpenXRViewer] Filament multiview Projection diagnostic active: "
-                    "one array_size=2 swapchain, SBS/Glow disabled",
-                    flush=True,
+                mode = (
+                    "diagnostic, SBS/Glow disabled"
+                    if self._filament_multiview_projection_diagnostic
+                    else "formal Projection Composer path"
                 )
+                print(f"[OpenXRViewer] Filament multiview active: {mode}", flush=True)
             if not self._multiview_active:
                 depth_create_abi = bool(
                     getattr(bridge, "depth_swapchain_abi_available", False)
@@ -4697,6 +4696,7 @@ class OpenXrVulkanPresenter(
         wait_semaphores: list[Any] | tuple[Any, ...],
         *,
         projection_draws: list[dict[str, Any]] | None = None,
+        load_target: bool = False,
     ) -> int:
         if (
             self.vulkan is None
@@ -4726,6 +4726,7 @@ class OpenXrVulkanPresenter(
             tuple(self._filament_multiview_current.layer_resources),
             exposure_ev=float(self._filament_scene_exposure),
             wait_semaphores=wait_semaphores,
+            load_target=bool(load_target),
         )
         self._filament_multiview_finished_consumed = True
         if self._filament_multiview_current_slot is not None:
@@ -4916,7 +4917,12 @@ class OpenXrVulkanPresenter(
                     time.perf_counter() - draw_prepare_started,
                 )
         filament_hdr_timeline = 0
-        if filament_hdr_sources:
+        defer_filament_resolve = bool(
+            filament_hdr_sources
+            and all("glow_source" in draw for draw in projection_draws)
+            and not self._filament_projection_only
+        )
+        if filament_hdr_sources and not defer_filament_resolve:
             filament_hdr_timeline = self._resolve_filament_multiview_hdr(
                 acquired_images,
                 filament_wait_semaphores,
@@ -4982,6 +4988,31 @@ class OpenXrVulkanPresenter(
                         f"{glow_error[0]}: {glow_error[1]}",
                         flush=True,
                     )
+        if (
+            not surround_requested
+            and all("glow_source" in draw for draw in projection_draws)
+        ):
+            # Formal ordering is controller/environment -> Glow -> SBS screen.
+            # Drawing Glow after the screen lets the translucent effect cover
+            # opaque controller pixels in the Filament multiview source.
+            try:
+                surround_timeline = self._vulkan_projection_screen_pass.submit_stereo_glow(
+                    projection_draws,
+                    wait_for_timeline=int(filament_hdr_timeline),
+                )
+                surround_active = True
+                self._last_vulkan_projection_glow_error = None
+                if self._on_breakdown_inc is not None:
+                    self._on_breakdown_inc("openxr_vulkan_composer_glow", 1)
+            except Exception as exc:
+                glow_error = (type(exc).__name__, str(exc))
+                if glow_error != self._last_vulkan_projection_glow_error:
+                    self._last_vulkan_projection_glow_error = glow_error
+                    print(
+                        "[OpenXRViewer] Vulkan projection Glow skipped: "
+                        f"{glow_error[0]}: {glow_error[1]}",
+                        flush=True,
+                    )
         if use_quality_mip:
             try:
                 timeline = self._vulkan_projection_screen_pass.try_submit_stereo_quality_mip(
@@ -4998,7 +5029,6 @@ class OpenXrVulkanPresenter(
                     wait_for_timeline=max(
                         int(surround_timeline),
                         int(depth_sampling_timeline),
-                        int(filament_hdr_timeline),
                     ),
                     extra_wait_semaphores=filament_wait_semaphores,
                 )
@@ -5022,33 +5052,23 @@ class OpenXrVulkanPresenter(
                     or filament_wait_semaphores
                     or depth_sampling_timeline
                 ),
+                extra_wait_semaphores=filament_wait_semaphores,
                 wait_for_timeline=max(
                     int(surround_timeline),
                     int(depth_sampling_timeline),
-                    int(filament_hdr_timeline),
                 ),
-                extra_wait_semaphores=filament_wait_semaphores,
             )
-        if (
-            not surround_requested
-            and all("glow_source" in draw for draw in projection_draws)
-        ):
-            try:
-                timeline = self._vulkan_projection_screen_pass.submit_stereo_glow(
-                    projection_draws, wait_for_timeline=int(timeline)
-                )
-                self._last_vulkan_projection_glow_error = None
-                if self._on_breakdown_inc is not None:
-                    self._on_breakdown_inc("openxr_vulkan_composer_glow", 1)
-            except Exception as exc:
-                glow_error = (type(exc).__name__, str(exc))
-                if glow_error != self._last_vulkan_projection_glow_error:
-                    self._last_vulkan_projection_glow_error = glow_error
-                    print(
-                        "[OpenXRViewer] Vulkan projection Glow skipped: "
-                        f"{glow_error[0]}: {glow_error[1]}",
-                        flush=True,
-                    )
+        if defer_filament_resolve:
+            # The formal foreground order is Glow -> SBS -> Filament
+            # controller/environment -> laser. Use the LOAD overlay pass so
+            # HDR resolve does not clear the already-composed screen.
+            filament_hdr_timeline = self._resolve_filament_multiview_hdr(
+                acquired_images,
+                filament_wait_semaphores,
+                projection_draws=projection_draws,
+                load_target=True,
+            )
+            filament_wait_semaphores = ()
         if any("laser_params" in draw for draw in projection_draws):
             try:
                 timeline = self._vulkan_projection_screen_pass.submit_stereo_laser(

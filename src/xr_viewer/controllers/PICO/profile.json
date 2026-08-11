@@ -3,8 +3,9 @@
     "overrides" : {
         "model_offset": [0.0, -0.02, -0.03],
         "model_rotation_deg": -20.0,
-        "material_roughness_factor": 0.08,
-        "material_metallic_factor": 0.85,
-        "material_specular_color_factor": [2.0, 2.0, 2.0]
+        "material_roughness_factor": 0.0,
+        "material_specular_color_factor": [2.0, 2.0, 2.0],
+        "controller_head_light_cast_shadows": true,
+        "controller_top_light_cast_shadows": true
     }
 }
