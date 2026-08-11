@@ -107,52 +107,43 @@ def _load_common_filament_defaults(src_root: Path) -> dict[str, object]:
     return filament if isinstance(filament, dict) else {}
 
 
-def _is_4k_processing_size(size: object) -> bool:
-    """Return whether the configured inference input is in the 4K tier."""
-    if isinstance(size, (tuple, list)) and len(size) == 2:
-        try:
-            width, height = int(size[0]), int(size[1])
-        except (TypeError, ValueError):
-            return False
-        short_side, long_side = min(width, height), max(width, height)
-        pixels = width * height
-        return (
-            (long_side >= 3840 and short_side >= 1600)
-            or (pixels >= 3840 * 2160 * 0.85 and long_side >= 3200 and short_side >= 1600)
-        )
-    try:
-        # Legacy scalar processing resolution means source-eye height.  2160p
-        # is the only GUI scalar that represents the 4K tier.
-        return int(size) >= 2000
-    except (TypeError, ValueError):
-        return False
-
-
 def _resolve_openxr_render_scale(
     settings: dict,
     processing_size: int | tuple[int, int] | None = None,
 ) -> float:
-    """Resolve projection scale, keeping non-4K inputs at native target size."""
+    """Resolve the explicit OpenXR projection override.
+
+    The GUI ``Render Scale`` belongs to capture/inference preprocessing.  It
+    must not resize the OpenXR projection target, otherwise a 4K capture
+    downscaled to 1K would take a different presentation path from native 1K.
+    ``processing_size`` remains accepted for compatibility with callers and
+    tests, but is intentionally not used for projection sizing.
+    """
     env_value = os.environ.get("D2S_OPENXR_RENDER_SCALE")
     if env_value:
         try:
             return max(0.25, min(1.5, float(env_value)))
         except ValueError:
             pass
-    if processing_size is not None and not _is_4k_processing_size(processing_size):
-        return 1.0
-    tiers = {
-        "4K / 100%": 1.0,
-        "3K / 85%": 0.85,
-        "2K / 75%": 0.75,
-        "1K / 50%": 0.5,
+    return 1.0
+
+
+def _openxr_projection_config(settings: dict) -> dict[str, object]:
+    """Resolve OpenXR presentation settings independently of Filament."""
+    return {
+        "render_scale": _resolve_openxr_render_scale(settings),
+        "swapchain_color_mode": str(
+            settings.get("OpenXR Color Mode", "sRGB")
+        ).strip().lower(),
+        "controller_model": str(settings.get("Controller Model", "PICO")),
+        "headset_model": str(
+            settings.get("XR Headset Model", DEFAULT_XR_HEADSET_MODEL)
+        ),
     }
-    return float(tiers.get(str(settings.get("Render Scale", "4K / 100%")), 1.0))
+
 
 def _openxr_filament_config(
     settings: dict,
-    *,
-    processing_size: int | tuple[int, int] | None = None,
 ) -> dict[str, object]:
     """Resolve the selected packaged Filament scene for direct OpenXR runs."""
     src_root = Path(__file__).resolve().parents[1]
@@ -176,16 +167,6 @@ def _openxr_filament_config(
     configured_glb = os.environ.get("D2S_FILAMENT_GLB")
     configured_profile = os.environ.get("D2S_FILAMENT_PROFILE")
     return {
-        "render_scale": _resolve_openxr_render_scale(settings, processing_size),
-        "swapchain_color_mode": str(
-            settings.get("OpenXR Color Mode", "sRGB")
-        ).strip().lower(),
-        "controller_model": str(settings.get("Controller Model", "PICO")),
-        # The GUI selection is the source of the headset sampling tier. The
-        # OpenXR runtime recommendation remains only the swapchain cap.
-        "headset_model": str(
-            settings.get("XR Headset Model", DEFAULT_XR_HEADSET_MODEL)
-        ),
         "filament_bridge_path": bridge_path,
         "filament_glb_path": configured_glb or (
             str(glb_path) if glb_path is not None else None
@@ -434,12 +415,10 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
                 OpenXrVulkanPresenter,
             )
 
-            filament_config = _openxr_filament_config(
-                settings,
-                processing_size=OUTPUT_RESOLUTION,
-            )
+            presenter_config = _openxr_projection_config(settings)
+            presenter_config.update(_openxr_filament_config(settings))
             presenter = OpenXrVulkanPresenter(
-                OpenXrVulkanConfig(**filament_config),
+                OpenXrVulkanConfig(**presenter_config),
                 on_headset_state=callbacks.on_openxr_headset_state,
                 on_controller_shortcut=callbacks.on_openxr_controller_shortcut,
                 on_breakdown_inc=callbacks.breakdown_inc,

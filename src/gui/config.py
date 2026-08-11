@@ -100,7 +100,11 @@ DEFAULTS = {
     "Window Title": "",
     "Show FPS": False,
     "Model List": DEFAULT_MODEL_LIST,
-    "Depth Model": DEFAULT_MODEL_LIST[0] if DEFAULT_MODEL_LIST else "",
+    "Depth Model": (
+        "Distill-Any-Depth-Base"
+        if "Distill-Any-Depth-Base" in DEFAULT_MODEL_LIST
+        else default_base_depth_model()
+    ),
     "Depth Strength": 0.25,
     "Depth Quick": "Standard",
     "Depth Resolution": 518,

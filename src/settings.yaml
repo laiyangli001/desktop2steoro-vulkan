@@ -3,6 +3,33 @@ Monitor Index: 1
 Window Title: ''
 Show FPS: false
 Model List:
+  Distill-Any-Depth-Small:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  Distill-Any-Depth-Base:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
+  Distill-Any-Depth-Large:
+    resolutions:
+    - 196
+    - 238
+    - 294
+    - 336
+    - 392
+    - 448
+    - 518
   Depth-Anything-V2-Small:
     resolutions:
     - 196
@@ -282,33 +309,6 @@ Model List:
     - 392
     - 448
     - 518
-  Distill-Any-Depth-Small:
-    resolutions:
-    - 196
-    - 238
-    - 294
-    - 336
-    - 392
-    - 448
-    - 518
-  Distill-Any-Depth-Base:
-    resolutions:
-    - 196
-    - 238
-    - 294
-    - 336
-    - 392
-    - 448
-    - 518
-  Distill-Any-Depth-Large:
-    resolutions:
-    - 196
-    - 238
-    - 294
-    - 336
-    - 392
-    - 448
-    - 518
   dpt-dinov2-small-kitti:
     resolutions:
     - 196
@@ -489,7 +489,7 @@ Auto Scene Reset: true
 Scene Reset Threshold: 0.22
 Edge Dilation: 1
 Mask Feather Radius: 1
-Hole Fill Mode: quality
+Hole Fill Mode: balanced
 Hole Fill Radius: 1
 Hole Fill Strength: 0.6
 Edge Threshold: 0.04
@@ -502,9 +502,9 @@ Color Gamma: 1.0
 Color Temperature: 0.0
 Color Tint: 0.0
 Vulkan Projection Min LOD: 0.0
-Vulkan Projection Max LOD: 0.3
-Vulkan Projection MIP LOD Bias: -0.25
-Vulkan Projection RCAS Sharpness: 1.0
+Vulkan Projection Max LOD: 0.35
+Vulkan Projection MIP LOD Bias: -0.35
+Vulkan Projection RCAS Sharpness: 0.5
 Display Mode: Half-SBS
 FP16: true
 torch.compile: true
@@ -523,15 +523,15 @@ Run Mode: OpenXR Link
 XR Headset Model: Pico 4 / 4 Ultra
 XR Preview Window: false
 VSync: false
-Target FPS: 60
+Target FPS: 0
 Processing Resolution: Auto
 Render Size Policy: scaled
-Render Scale: 4K / 100%
+Render Scale: 1K / 50%
 Render Fixed Width: 1920
 Render Fixed Height: 1080
 Render Max Pixels: 8294400
 Render Min Dimension: 480
-Render Align: 16
+Render Align: 1
 Upscaler: 'Off'
 Upscaler Sharpness: 0.0
 Stream Protocol: HLS
@@ -541,7 +541,7 @@ Stream Key: live
 Stereo Mix: null
 CRF: 20
 Audio Delay: -0.15
-Controller Model: PICO
+Controller Model: None
 Environment Model: Default
 Lossless Scaling Support: false
 Capture Tool: WindowsCaptureCUDA

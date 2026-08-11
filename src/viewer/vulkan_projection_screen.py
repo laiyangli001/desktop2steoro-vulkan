@@ -2013,6 +2013,10 @@ class VulkanProjectionScreenPass:
                         mip,
                         descriptor_index,
                         source_ready_in_submission=True,
+                        # Keep the EASU descriptor separate from the
+                        # quality-to-MIP copy descriptor. Otherwise the copy
+                        # update overwrites the EASU source before recording.
+                        descriptor_sets=self.rcas_descriptor_sets,
                     )
                 )
             screen_draw = self._prepare_draw(
@@ -2084,8 +2088,7 @@ class VulkanProjectionScreenPass:
                 self._complete_quality_mip_draw(quality, rcas, screen, timeline)
         else:
             for quality, copy_draw, screen in zip(quality_draws, rcas_draws, screen_draws):
-                self._complete_draw(quality, timeline)
-                self._complete_mip_draw(copy_draw, screen, timeline)
+                self._complete_quality_mip_draw(quality, copy_draw, screen, timeline)
         self.quality_slot_timelines[frame_slot] = int(timeline)
         self.mip_slot_timelines[frame_slot] = int(timeline)
         self._last_submit_timeline = int(timeline)
@@ -2211,6 +2214,7 @@ class VulkanProjectionScreenPass:
         descriptor_index: int,
         *,
         source_ready_in_submission: bool = False,
+        descriptor_sets: list[Any] | None = None,
     ) -> dict[str, Any]:
         if self.copy_pipeline is None or self.copy_pipeline_layout is None:
             raise RuntimeError("Vulkan projection mip copy pass is unavailable")
@@ -2224,7 +2228,7 @@ class VulkanProjectionScreenPass:
         # Native mip now records copy and RCAS in the same command buffer.
         # Keep their image bindings separate so the RCAS update cannot replace
         # the copy source before that draw executes.
-        descriptor_set = self.quality_descriptor_sets[descriptor_index]
+        descriptor_set = (descriptor_sets or self.quality_descriptor_sets)[descriptor_index]
         self.vk.vkUpdateDescriptorSets(
             self.context.device,
             1,

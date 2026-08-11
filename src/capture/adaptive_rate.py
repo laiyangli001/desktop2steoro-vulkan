@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import threading
 import time
 
@@ -49,21 +50,13 @@ class AdaptiveCaptureRate:
             return int(self._target_fps)
 
     def _bucket_for_sbs(self, sbs_fps: float) -> int:
-        if sbs_fps < 24.0:
-            return min(self.base_fps, 24)
-        if sbs_fps < 30.0:
-            return min(self.base_fps, 30)
-        return self.base_fps
+        measured = max(0.0, float(sbs_fps))
+        # Keep only a small capture headroom above the measured SBS rate.
+        # Capture backends accept arbitrary integer pacing targets, so fixed
+        # display-refresh buckets would waste work (for example 60 -> 120).
+        return min(self.base_fps, max(1, int(math.ceil(measured + 5.0))))
 
     def _next_target(self, average_sbs_fps: float) -> int:
-        if self._target_fps <= 24:
-            if average_sbs_fps >= 23.0:
-                return min(self.base_fps, 30)
-            return min(self.base_fps, 24)
-        if self._target_fps <= 30:
-            if average_sbs_fps < 24.0:
-                return min(self.base_fps, 24)
-            if average_sbs_fps >= 29.0:
-                return self.base_fps
-            return min(self.base_fps, 30)
+        # The averaging window already provides hysteresis. Keep only 5 FPS
+        # headroom instead of jumping to the monitor refresh rate.
         return self._bucket_for_sbs(average_sbs_fps)

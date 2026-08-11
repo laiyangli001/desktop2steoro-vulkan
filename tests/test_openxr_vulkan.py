@@ -1153,6 +1153,8 @@ def test_projection_quality_chain_bypasses_rcas_when_sharpness_is_zero() -> None
     assert "use_rcas = self.rcas_sharpness > 0.0" in mip_source
     assert "_record_rcas_draw" in mip_source
     assert "if use_rcas:" in mip_source
+    assert "descriptor_sets=self.rcas_descriptor_sets" in source
+    assert "self._complete_quality_mip_draw(quality, copy_draw, screen, timeline)" in source
 
 
 def test_projection_mip_recording_templates_are_reused() -> None:

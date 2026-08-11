@@ -1,6 +1,14 @@
 # Desktop2Stereo Vulkan 项目日志
 
 ## 2026-08-11
+- 修正重置默认值：电影模式对应的补洞模式恢复为“均衡”；仍使用 `Distill-Any-Depth-Base`、`Base` 和 `518` 深度细节。
+- 调整 GUI 重置默认值：深度模型固定优先使用 `Distill-Any-Depth` 的 `Base`，深度细节为 `518`；补洞模式默认设为“高质量”。
+- 修复 GUI 切换语言/刷新界面时覆盖捕获帧率选项的问题：初始化和动态刷新现在统一显示 `Auto` 及 5 FPS 到 90 FPS 的 5 FPS 间隔选项。
+- 自动捕获限频进一步改为严格 `平均 SBS + 5 FPS`，不再设置 24 FPS 的最低自动档位；只限制不超过显示器刷新率，低 SBS 也按实际吞吐量降低捕获频率。
+- GUI 手动捕获帧率选项统一为 5 FPS 间隔，从 5 FPS 到 90 FPS；保留 `Auto`，便于与自动 `SBS+5 FPS` 限频策略对照。
+- 修复 OpenXR 自动捕获限频过于激进的问题：自动模式现在根据 60 秒 SBS 平均帧率设置为 `SBS+5 FPS`，并限制在 24 FPS 与显示器刷新率之间；例如 SBS 约 60 FPS 时捕获约 65 FPS，不再直接跳到 120 Hz，减少无效捕获和待处理帧丢弃。
+- 修复 Vulkan Projection 在 RCAS=0 时黑屏闪烁的问题：EASU 绘制与 quality→MIP copy 不再复用同一 descriptor set，避免 copy 更新覆盖 EASU 的源纹理；关闭 RCAS 现在仍会稳定执行 EASU→MIP→屏幕提交。
+- 修复 4K 缩放到 1K 后 OpenXR Projection 仍被错误缩小的问题：将 Projection 配置与 Filament 场景配置分离，`Render Scale` 只控制捕获后的推理输入尺寸，Projection swapchain 默认保持头显原生目标尺寸；4K→1K 现在与原生 1K 共用同一条 EASU 后处理和投影路径。保留 `D2S_OPENXR_RENDER_SCALE` 作为显式诊断覆盖。
 - 修复“4K 缩放档”与 OpenXR 屏幕质量链的分流：投影 Composer 始终依据实际 SBS 左眼纹理尺寸选择采样策略，不再以原始 `capture_size` 覆盖已缩放的 1K/2K SBS 尺寸；OpenXR Projection render scale 仅在处理输入属于完整 4K 档时采用 GUI 缩放值，1K/2K 输入固定使用头显原生投影目标。3K（85%）也从错误的 `native_mip` 桶移入 `upscale_easu → RCAS → MIP` 路径；只有完整 4K SBS 可使用 `native_mip`。这样 4K 下采样得到的 1K、2K、3K SBS 与同尺寸原生输入复用同一最终质量链，避免二次缩小或错误 MIP 采样。
 - 4K 到低分辨率推理输入的 Triton 预处理补充面积下采样内核，并提供一次性预推理图像及同源下采样候选导出脚本，便于确认进入深度推理前的真实 RGB 尺寸和过滤结果；诊断默认关闭，不影响正常运行。
 - GUI“手柄模型”新增 `None` 性能隔离选项：选择后不创建 Filament Engine，不加载手柄或环境 GLB，Vulkan Projection Composer 在每眼同一次 draw 中使用未经品牌校正的 OpenXR grip/aim 姿态绘制左右两个 `8×8×8 cm` 本地立方体及双手激光；左手立方体使用固定不透明蓝色，右手使用固定不透明橙色，各面边界使用基于屏幕空间导数抗锯齿的黑色接缝线区分，颜色不受时间、背景或表面朝向影响，并在无深度附件的 overlay pass 中丢弃背面片元。修正立方体 `+Y/-Y` 面与法线相反的三角形绕序，避免背面过滤造成对称凹口和缺面。立方体与正式手柄一样在静止 5 秒后隐藏，激光保持彩色流动、旧版流向和尖端收窄几何，Tool Quad 的 B 键提示锚定到右手立方体的前右顶点。PICO 仍是默认值，该选项仅用于比较 Filament 与纯 Vulkan 代理的 XR/SBS 开销。

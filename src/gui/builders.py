@@ -555,7 +555,8 @@ class GUIBuilderMixin:
         self.local_vsync_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT,
             label="VSync", value=DEFAULTS.get("VSync", False))
         self.target_fps_label = ft.Text("Capture FPS:", size=FONT_SIZE, width=S(130))
-        self.target_fps_dd = CompactDropdown(options=["Auto", "24", "30", "60", "72", "80", "90", "120"],
+        self.target_fps_dd = CompactDropdown(
+            options=["Auto"] + [str(fps) for fps in range(5, 95, 5)],
             value="Auto", width=S(74))
         self.xr_preview_cb = ft.Checkbox(label="XR Preview Window",
             value=DEFAULTS.get("XR Preview Window", True))

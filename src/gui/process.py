@@ -15,7 +15,7 @@ import traceback
 import flet as ft
 from utils import OS_NAME, DEFAULT_PORT, shutdown_event, read_yaml
 from . import devices as devices_module
-from .config import DEFAULTS, default_base_depth_model, save_yaml
+from .config import DEFAULTS, DEFAULT_MODEL_LIST, default_base_depth_model, save_yaml
 from .paths import BASE_DIR, DIAG_LOG, LOG_DIR, LOG_FILE, STOP_REQUEST_FILE
 from .capture_sources import get_primary_monitor_index, list_windows
 from .localization import UI_MESSAGES
@@ -1028,7 +1028,14 @@ class GUIProcessMixin:
         is_nvidia_cuda = "CUDA" in (current_device_label or "") and not devices_module.IS_ROCM
         dynamic_defaults = DEFAULTS.copy()
         dynamic_defaults["Monitor Index"] = current_primary
-        dynamic_defaults["Depth Model"] = default_base_depth_model()
+        dynamic_defaults["Depth Model"] = (
+            "Distill-Any-Depth-Base"
+            if "Distill-Any-Depth-Base" in DEFAULT_MODEL_LIST
+            else default_base_depth_model()
+        )
+        # Reset selects the Cinema preset; keep its realtime balanced fill
+        # policy instead of the still-image high-quality mode.
+        dynamic_defaults["Hole Fill Mode"] = "balanced"
         dynamic_defaults["XR Preview Window"] = False
         if is_nvidia_cuda:
             dynamic_defaults["torch.compile"] = True

@@ -46,8 +46,26 @@ def test_openxr_filament_screen_geometry_follows_gui_headset_model() -> None:
 
     assert config["filament_screen_distance"] == 20.0
     assert config["filament_screen_width"] == 23.09
-    assert config["headset_model"] == "Pico 4 / 4 Ultra"
-    assert config["render_scale"] == 1.0
+    assert "headset_model" not in config
+    assert "render_scale" not in config
+
+
+def test_openxr_projection_config_is_separate_from_filament_config() -> None:
+    from app_runtime.runtime_entry import _openxr_filament_config, _openxr_projection_config
+
+    settings = {
+        "Environment Model": "Default",
+        "XR Headset Model": "Pico 4 / 4 Ultra",
+        "Controller Model": "PICO",
+        "Render Scale": "1K / 50%",
+    }
+    projection = _openxr_projection_config(settings)
+    filament = _openxr_filament_config(settings)
+
+    assert projection["headset_model"] == "Pico 4 / 4 Ultra"
+    assert projection["render_scale"] == 1.0
+    assert "render_scale" not in filament
+    assert "headset_model" not in filament
 
 
 def test_openxr_render_scale_keeps_non_4k_processing_inputs_at_native_projection_size():
@@ -60,11 +78,11 @@ def test_openxr_render_scale_keeps_non_4k_processing_inputs_at_native_projection
     assert _resolve_openxr_render_scale(settings, 1080) == 1.0
 
 
-def test_openxr_render_scale_applies_selected_tier_for_4k_processing_input():
+def test_openxr_render_scale_does_not_follow_inference_scale_for_4k_input():
     from app_runtime.runtime_entry import _resolve_openxr_render_scale
 
-    assert _resolve_openxr_render_scale({"Render Scale": "1K / 50%"}, (3840, 2160)) == 0.5
-    assert _resolve_openxr_render_scale({"Render Scale": "2K / 75%"}, 2160) == 0.75
+    assert _resolve_openxr_render_scale({"Render Scale": "1K / 50%"}, (3840, 2160)) == 1.0
+    assert _resolve_openxr_render_scale({"Render Scale": "2K / 75%"}, 2160) == 1.0
 
 def test_openxr_filament_color_defaults_come_from_common_json() -> None:
     from app_runtime.runtime_entry import _openxr_filament_config

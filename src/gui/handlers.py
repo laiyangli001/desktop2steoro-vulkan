@@ -703,7 +703,7 @@ class GUIHandlerMixin:
         self.local_vsync_cb.label = t.get("VSync", "VSync")
         self.target_fps_label.value = t.get("Capture FPS:", "Capture FPS:")
         target_fps_value = self._target_fps_from_display(self.target_fps_dd.value)
-        self.target_fps_dd.options = [t["Auto"], "24", "30", "60", "72", "80", "90", "120"]
+        self.target_fps_dd.options = [t["Auto"]] + [str(fps) for fps in range(5, 95, 5)]
         self.target_fps_dd.value = self._target_fps_to_display(target_fps_value)
         self.render_policy_label.value = t["Render Policy:"]
         self.render_policy_dd.options = ["Scaled"]
