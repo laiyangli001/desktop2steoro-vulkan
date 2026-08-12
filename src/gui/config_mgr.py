@@ -130,7 +130,15 @@ class GUIConfigMixin:
             self.lang_dd.value = "English" if self.locale == "EN" else "简体中文"
 
         saved_ctrl = cfg.get("Controller Model", DEFAULTS.get("Controller Model", "PICO"))
-        self.ctrl_model_dd.value = saved_ctrl if saved_ctrl in self.ctrl_model_dd.options else "PICO"
+        saved_ctrl_key = str(saved_ctrl).strip().casefold()
+        self.ctrl_model_dd.value = next(
+            (
+                option
+                for option in self.ctrl_model_dd.options
+                if str(option).strip().casefold() == saved_ctrl_key
+            ),
+            "PICO",
+        )
         saved_env = cfg.get("Environment Model", DEFAULTS.get("Environment Model", "Default"))
         if str(saved_env).strip().lower() == "none":
             saved_env = "Default"

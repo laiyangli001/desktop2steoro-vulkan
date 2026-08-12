@@ -15,8 +15,8 @@ import numpy as np
 class ControllerBrand:
     name: str
     root: Path
-    left_glb: Path
-    right_glb: Path
+    left_glb: Path | None
+    right_glb: Path | None
     offset: tuple[float, float, float]
     rotation_deg: float
     profile_id: str
@@ -43,7 +43,7 @@ def _optional_vector3(value) -> tuple[float, float, float] | None:
 
 
 def discover_controller_brands(root: str | Path) -> dict[str, ControllerBrand]:
-    """Discover every complete brand directory under controllers/."""
+    """Discover model-backed brands and profile-only controller modes."""
     base = Path(root)
     result: dict[str, ControllerBrand] = {}
     if not base.is_dir():
@@ -51,8 +51,6 @@ def discover_controller_brands(root: str | Path) -> dict[str, ControllerBrand]:
     for directory in sorted(item for item in base.iterdir() if item.is_dir()):
         left_glb = directory / "left.glb"
         right_glb = directory / "right.glb"
-        if not left_glb.is_file() or not right_glb.is_file():
-            continue
         profile = {}
         profile_path = directory / "profile.json"
         if profile_path.is_file():
@@ -60,14 +58,17 @@ def discover_controller_brands(root: str | Path) -> dict[str, ControllerBrand]:
                 profile = json.loads(profile_path.read_text(encoding="utf-8-sig"))
             except (OSError, ValueError):
                 profile = {}
+        has_models = left_glb.is_file() and right_glb.is_file()
+        if not has_models and not profile:
+            continue
         overrides = profile.get("overrides", {}) if isinstance(profile, dict) else {}
         if not isinstance(overrides, dict):
             overrides = {}
         result[directory.name] = ControllerBrand(
             name=directory.name,
             root=directory,
-            left_glb=left_glb,
-            right_glb=right_glb,
+            left_glb=left_glb if has_models else None,
+            right_glb=right_glb if has_models else None,
             offset=_vector3(overrides.get("model_offset")),
             rotation_deg=float(overrides.get("model_rotation_deg", 0.0)),
             profile_id=str(profile.get("profileId", directory.name))
@@ -94,8 +95,14 @@ def select_controller_brand(
 ) -> ControllerBrand | None:
     if not brands:
         return None
-    if requested and requested in brands:
-        return brands[requested]
+    if requested:
+        requested_key = str(requested).strip().casefold()
+        selected = next(
+            (brand for name, brand in brands.items() if name.casefold() == requested_key),
+            None,
+        )
+        if selected is not None:
+            return selected
     return brands[sorted(brands)[0]]
 
 

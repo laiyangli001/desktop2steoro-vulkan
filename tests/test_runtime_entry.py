@@ -113,13 +113,14 @@ def test_openxr_environment_uses_selected_folder_and_profile_glb(tmp_path: Path)
     )
     (room / "environment-custom.glb").write_bytes(b"glTF")
 
-    glb_path, profile_path = resolver(
+    glb_path, profile_path, panorama_path = resolver(
         {"Environment Model": "3D_Artemis"},
         tmp_path,
     )
 
     assert glb_path == room / "environment-custom.glb"
     assert profile_path == room / "profile.json"
+    assert panorama_path is None
 
 
 def test_openxr_environment_missing_profile_falls_back_to_default(
@@ -133,13 +134,14 @@ def test_openxr_environment_missing_profile_falls_back_to_default(
         encoding="utf-8",
     )
 
-    glb_path, profile_path = resolver(
+    glb_path, profile_path, panorama_path = resolver(
         {"Environment Model": "MissingRoom"},
         tmp_path,
     )
 
     assert glb_path is None
     assert profile_path == default / "profile.json"
+    assert panorama_path is None
 
 
 def test_openxr_environment_without_selection_uses_default(tmp_path: Path) -> None:
@@ -151,7 +153,27 @@ def test_openxr_environment_without_selection_uses_default(tmp_path: Path) -> No
         encoding="utf-8",
     )
 
-    glb_path, profile_path = resolver({}, tmp_path)
+    glb_path, profile_path, panorama_path = resolver({}, tmp_path)
 
     assert glb_path is None
     assert profile_path == default / "profile.json"
+    assert panorama_path is None
+
+
+def test_openxr_environment_resolves_hdr_panorama_image(tmp_path: Path) -> None:
+    resolver = _load_environment_resolver()
+    room = tmp_path / "xr_viewer/environments/hdr_room"
+    room.mkdir(parents=True)
+    (room / "profile.json").write_text(
+        json.dumps({"environment_type": "panorama", "background": {"image": "room.hdr"}, "glb": None}),
+        encoding="utf-8",
+    )
+    (room / "room.hdr").write_bytes(b"HDR")
+
+    glb_path, profile_path, panorama_path = resolver(
+        {"Environment Model": "hdr_room"}, tmp_path
+    )
+
+    assert glb_path is None
+    assert profile_path == room / "profile.json"
+    assert panorama_path == room / "room.hdr"

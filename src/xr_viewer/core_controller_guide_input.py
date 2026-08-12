@@ -41,7 +41,14 @@ class CoreControllerGuideInputMixin:
             if self._guide_ab_started_at <= 0.0:
                 self._guide_ab_started_at = now
             held = now - self._guide_ab_started_at
-            if held >= self._BRAND_SWITCH_SECONDS and not self._guide_brand_switch_fired:
+            controller_model_available = not bool(
+                getattr(self, "_vulkan_controller_proxy_enabled", False)
+            )
+            if (
+                controller_model_available
+                and held >= self._BRAND_SWITCH_SECONDS
+                and not self._guide_brand_switch_fired
+            ):
                 self._emit_guide_action("switch_controller_brand")
                 self._guide_brand_switch_fired = True
             if held >= self._CALIBRATION_SECONDS and not self._guide_calibration_fired:

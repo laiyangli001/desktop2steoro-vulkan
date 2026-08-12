@@ -1,5 +1,33 @@
 # Desktop2Stereo Vulkan 项目日志
 
+## 2026-08-13
+- 修复 OpenXR 3D 房间启动后实际视点稳定高于 Profile `view_pose` 约 1 米的问题：参考空间校准改为跨两个 XR tick 的闭环流程，首次建立临时座位空间，下一帧使用 VDXR 实际返回的头部姿态测量并抵消 STAGE 地面高度更新；同时持续跟踪子空间到原始 STAGE/LOCAL 的变换，避免二次校准混用坐标系。该修复不写死玩家身高，也不改变预览工具保存的座位坐标。
+- 对齐旧工程的 OpenXR 参考空间变更策略：普通带有固定 `view_pose` 的 3D 房间在 VDXR 后续发送地面/边界空间变化事件时保留已经校准的子空间，不再销毁空间并重新执行座位校准，消除运行一段时间后房间突然漂移；只有显式设置 `auto_center_on_screen=true` 的 Profile 才接受事件并重新定位。
+- 修正 OpenXR `3D_巨幕影院` 的默认屏幕朝向：`3d_cinema/profile.json` 中屏幕由错误的正面 `0°` 改为面向默认观众席的 `-180°`，避免从屏幕背面观看导致桌面内容水平镜像；屏幕位置和尺寸保持不变。
+- 修复 `NONE + 3D 房间` 启动后 Presenter 线程在 `set_controller_visible` 崩溃：环境专用 Filament Bridge 不再接收任何未加载手柄实体的可见性、姿态、输入、激光或指南调用；房间继续由 Filament 渲染，代理手柄与说明继续由 Vulkan Projection 绘制。
+- 修复选择 `NONE` 手柄后 OpenXR 3D 房间模型及纹理消失：无手柄模式现在只跳过左右手柄 GLB；选中 3D 房间时仍会初始化 Filament、读取并加载完整环境 GLB 及其材质纹理。只有 `NONE` 与空白环境同时使用时才跳过未使用的 Filament Engine。
+- 修复 `NONE/profile.json` 的手柄校正参数未作用于 Vulkan 代理手柄：无 GLB 模式现在与 Filament 手柄使用相同的 `grip × rotation × offset` 变换，`model_offset`、`model_rotation_deg` 和运行时校正会立即改变代理手柄姿态；B 键说明锚点同步使用校正后的模型矩阵。
+- GUI 手柄模型列表不再额外注入硬编码的 `None`，现在完全使用 `controllers/` 中实际发现的目录；`controllers/NONE/profile.json` 成为唯一的无模型选项。旧配置中的 `None` 会以大小写无关方式匹配扫描到的 `NONE`，不会错误回退到 `PICO`。
+- 手柄模型设为 `None` 时，正常发现并加载 `controllers/NONE/profile.json`；控制器 Profile 发现现已支持无 GLB 的 profile-only 模式及大小写无关选择，同时仍绕过 Filament/手柄 GLB。FPS/状态面板明确显示 `Model: None`，并将名称纳入纹理缓存键。
+- 手柄模型设为 `None`、Filament 未加载时，禁用长按右手柄 `A+B` 切换手柄品牌；快捷键输入层不再发出切换动作，执行层也拒绝无 Filament 的切换，避免只显示品牌信息却没有对应 GLB 模型。
+- 修复 Vulkan HDR 全景被诊断级 `1024×512` 降采样导致的严重模糊：Projection fallback 不再设置软件纹理上限或执行任何缩放，按 HDR 文件原始分辨率直接上传（包括 `8192×4096` 和 `10000×5000`）；只有源尺寸超过 Vulkan 设备硬件极限时才明确报错。
+- 重构 Vulkan HDR 全景的头部旋转映射：每个 XR tick 直接向 shader 传递 OpenXR 原始眼睛四元数和 FOV 切线，由 GPU 构造视线并进行四元数旋转，不再经过 CPU/GLSL 矩阵转置与投影符号约定；增加一次性中心采样 UV 诊断，用于区分运行时姿态未更新与 Projection 合成问题。
+
+## 2026-08-12
+- 新增 Vulkan Projection 全景 pass 的 GLSL/SPIR-V 基础 shader（equirectangular 方向采样）；后续 Composer 接入使用该 pass，不依赖 VDXR 的 equirect composition 扩展。
+- 接入 Projection pass 的全景 pipeline 创建、descriptor 绑定、资源状态跟踪和 draw 提交接口；现有屏幕/Glow/手柄路径保持不变，待 HDR Vulkan 源纹理上传完成后即可作为首个背景 draw。
+- 补充全景 draw 的源纹理 shader-read barrier，避免 HDR Vulkan 背景首次采样时布局不正确；现有 208 项 OpenXR 回归测试继续通过。
+- 接通 HDR Vulkan 源纹理的一次性上传、每眼 inverse view-projection 参数和 Composer 首个 panorama draw；后续屏幕/Glow/手柄 pass 通过时间线在其上叠加。
+- 修复 panorama draw 与屏幕 pass 共用 descriptor 时的提交竞态：背景 draw 完成后才允许后续 pass 更新 descriptor，避免 Composer 因 `VkErrorUnknown` 回退。
+- 修复 HDR 背景被屏幕 pass 清除：panorama timeline 现在参与 `load_target` 判断，后续屏幕、Glow 和手柄绘制均在 HDR 背景上 LOAD 叠加。
+- 修复 HDR 全景跟随头部平移：panorama inverse view-projection 仅使用头部旋转和每眼 FOV，移除位置平移，使环境保持世界锁定。
+- 加强全景世界锁定：不再从完整 view 矩阵清零平移，而是直接从 OpenXR 四元数重建纯旋转 view，排除眼位/重定位平移残留。
+- 修复 VDXR 不支持 equirect 时的日志刷屏：HDR 跳过原因现在每个会话只记录一次。
+- 移除无效的 VDXR 普通 Quad HDR fallback：它不是头部跟随的全景、可能遮挡 Projection 且会造成上传卡顿；VDXR 缺少 equirect 扩展时现在只记录一次并保持稳定 Projection，等待 Vulkan equirect pass。
+- 限制 HDR Quad fallback 的初始化成本：全景图先缩放到最长边 1024，再上传一次；初始化失败后不再每帧重试，避免 XR 只运行几帧和日志重复。
+- 补充 HDR 全景能力诊断：启动时记录运行时是否暴露并启用 `XR_KHR_composition_layer_equirect2`，全景 swapchain 添加采样用途；若 VDXR 不支持该扩展，会明确记录跳过原因。
+- 修复 OpenXR HDR 环境未显示：解析环境 profile 的 `background.image`，并在运行时启用可用的 `XR_KHR_composition_layer_equirect2`，将 HDR 全景作为独立背景层提交到 Projection 之前；保留 `D2S_FILAMENT_PANORAMA` 覆盖入口，缺少运行时扩展时安全回退并输出明确日志。
+
 ## 2026-08-11
 - 修正重置默认值：电影模式对应的补洞模式恢复为“均衡”；仍使用 `Distill-Any-Depth-Base`、`Base` 和 `518` 深度细节。
 - 调整 GUI 重置默认值：深度模型固定优先使用 `Distill-Any-Depth` 的 `Base`，深度细节为 `518`；补洞模式默认设为“高质量”。

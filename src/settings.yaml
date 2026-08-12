@@ -502,8 +502,8 @@ Color Gamma: 1.0
 Color Temperature: 0.0
 Color Tint: 0.0
 Vulkan Projection Min LOD: 0.0
-Vulkan Projection Max LOD: 0.35
-Vulkan Projection MIP LOD Bias: -0.35
+Vulkan Projection Max LOD: 0.7
+Vulkan Projection MIP LOD Bias: -0.7
 Vulkan Projection RCAS Sharpness: 0.5
 Display Mode: Half-SBS
 FP16: true
@@ -526,7 +526,7 @@ VSync: false
 Target FPS: 0
 Processing Resolution: Auto
 Render Size Policy: scaled
-Render Scale: 1K / 50%
+Render Scale: 4K / 100%
 Render Fixed Width: 1920
 Render Fixed Height: 1080
 Render Max Pixels: 8294400
@@ -541,8 +541,8 @@ Stream Key: live
 Stereo Mix: null
 CRF: 20
 Audio Delay: -0.15
-Controller Model: None
-Environment Model: Default
+Controller Model: NONE
+Environment Model: 3d_home
 Lossless Scaling Support: false
 Capture Tool: WindowsCaptureCUDA
 Fill 16:9: true

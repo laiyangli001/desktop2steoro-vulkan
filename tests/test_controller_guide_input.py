@@ -13,6 +13,7 @@ class GuideHost(CoreControllerGuideInputMixin, CoreControllerShortcutsMixin):
         self._grip_target_l = None
         self._grip_target_r = None
         self._controller_calibration_mode = False
+        self._vulkan_controller_proxy_enabled = False
         self.actions: list[tuple[str, dict]] = []
         self._init_controller_shortcuts()
         self._init_controller_guide_input()
@@ -38,6 +39,17 @@ def test_ab_chord_switches_brand_then_enters_calibration() -> None:
         "switch_controller_brand",
         "toggle_controller_calibration",
     ]
+
+
+def test_ab_chord_does_not_switch_brand_when_controller_model_is_none() -> None:
+    host = GuideHost()
+    host._vulkan_controller_proxy_enabled = True
+    buttons = {"a_button": 1.0, "b_button": 1.0}
+
+    host.update(right=buttons)
+    host.update(right=buttons, after=0.51)
+
+    assert host.actions == []
 
 
 def test_grip_sticks_match_screen_and_depth_guide_rows() -> None:

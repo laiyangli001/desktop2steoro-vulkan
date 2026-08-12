@@ -103,13 +103,13 @@
   "view_poses": [
     {
       "name": "Center View",
-      "x": 0.1516,
-      "y": 1.3226,
-      "z": 0.9823,
-      "angle": 179.16,
+      "x": -0.0985,
+      "y": 1.5062,
+      "z": 0.6189,
+      "angle": 179.64,
       "rotation_deg": [
-        179.16,
-        0.24,
+        179.64,
+        -0.36,
         0.0
       ]
     },
@@ -140,10 +140,10 @@
   ],
   "screen": {
     "allow_controller_move": true,
-    "width": 5.5743,
+    "width": 5.0411,
     "position": [
       0.0,
-      1.7667,
+      1.5344,
       3.8504
     ],
     "rotation_deg": [

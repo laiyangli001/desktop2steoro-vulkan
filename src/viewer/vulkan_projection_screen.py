@@ -119,6 +119,8 @@ class VulkanProjectionScreenPass:
         self.quality_pipeline = None
         self.hdr_pipeline_layout = None
         self.hdr_pipeline = None
+        self.panorama_pipeline_layout = None
+        self.panorama_pipeline = None
         self.image_views: dict[tuple[int, int], Any] = {}
         self.framebuffers: dict[tuple[int, int, int, int], Any] = {}
         self.overlay_framebuffers: dict[tuple[int, int, int, int], Any] = {}
@@ -284,6 +286,12 @@ class VulkanProjectionScreenPass:
         )
         hdr_fragment_module = self._create_shader_module(
             shader_root / "d2s_projection_hdr_frag.spv"
+        )
+        panorama_vertex_module = self._create_shader_module(
+            shader_root / "d2s_projection_panorama_vert.spv"
+        )
+        panorama_fragment_module = self._create_shader_module(
+            shader_root / "d2s_projection_panorama_frag.spv"
         )
         self.descriptor_set_layout = create_descriptor_set_layout(
             self.context,
@@ -1310,6 +1318,35 @@ class VulkanProjectionScreenPass:
             ],
             None,
         )[0]
+        self.panorama_pipeline_layout = vk.vkCreatePipelineLayout(
+            self.context.device,
+            vk.VkPipelineLayoutCreateInfo(
+                sType=vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+                setLayoutCount=1, pSetLayouts=[self.descriptor_set_layout],
+                pushConstantRangeCount=1,
+                pPushConstantRanges=[vk.VkPushConstantRange(
+                    stageFlags=(vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT),
+                    offset=0, size=32,
+                )],
+            ), None,
+        )
+        self.panorama_pipeline = vk.vkCreateGraphicsPipelines(
+            self.context.device, None, 1, [vk.VkGraphicsPipelineCreateInfo(
+                sType=vk.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+                stageCount=2,
+                pStages=[
+                    vk.VkPipelineShaderStageCreateInfo(sType=vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, stage=vk.VK_SHADER_STAGE_VERTEX_BIT, module=panorama_vertex_module, pName="main"),
+                    vk.VkPipelineShaderStageCreateInfo(sType=vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, stage=vk.VK_SHADER_STAGE_FRAGMENT_BIT, module=panorama_fragment_module, pName="main"),
+                ],
+                pVertexInputState=vk.VkPipelineVertexInputStateCreateInfo(sType=vk.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO),
+                pInputAssemblyState=vk.VkPipelineInputAssemblyStateCreateInfo(sType=vk.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO, topology=vk.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST),
+                pViewportState=vk.VkPipelineViewportStateCreateInfo(sType=vk.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, viewportCount=1, scissorCount=1),
+                pRasterizationState=vk.VkPipelineRasterizationStateCreateInfo(sType=vk.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO, polygonMode=vk.VK_POLYGON_MODE_FILL, cullMode=vk.VK_CULL_MODE_NONE, frontFace=vk.VK_FRONT_FACE_COUNTER_CLOCKWISE, lineWidth=1.0),
+                pMultisampleState=vk.VkPipelineMultisampleStateCreateInfo(sType=vk.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, rasterizationSamples=vk.VK_SAMPLE_COUNT_1_BIT),
+                pColorBlendState=vk.VkPipelineColorBlendStateCreateInfo(sType=vk.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, attachmentCount=1, pAttachments=[vk.VkPipelineColorBlendAttachmentState(blendEnable=vk.VK_FALSE, colorWriteMask=(vk.VK_COLOR_COMPONENT_R_BIT|vk.VK_COLOR_COMPONENT_G_BIT|vk.VK_COLOR_COMPONENT_B_BIT|vk.VK_COLOR_COMPONENT_A_BIT))]),
+                pDynamicState=vk.VkPipelineDynamicStateCreateInfo(sType=vk.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, dynamicStateCount=2, pDynamicStates=[vk.VK_DYNAMIC_STATE_VIEWPORT, vk.VK_DYNAMIC_STATE_SCISSOR]),
+                layout=self.panorama_pipeline_layout, renderPass=self.render_pass, subpass=0, basePipelineIndex=-1,
+            )], None)[0]
 
     def _target_view_and_framebuffer(
         self, target: Any, array_layer: int, *, overlay: bool = False
@@ -2196,6 +2233,61 @@ class VulkanProjectionScreenPass:
         self._last_submit_timeline = int(timeline)
         return int(timeline)
 
+    def submit_panorama(
+        self, draws: list[dict[str, Any]], source: Any,
+        *, wait_for_timeline: int = 0,
+    ) -> int:
+        """Render an equirectangular source into projection targets first."""
+        if len(draws) != 2 or self.panorama_pipeline is None:
+            return int(wait_for_timeline)
+        prepared = []
+        for index, item in enumerate(draws):
+            descriptor_index = (index * 3 + int(item.get("frame_slot", 0))) % self._DESCRIPTOR_COUNT
+            descriptor = self.descriptor_sets[descriptor_index]
+            self.vk.vkUpdateDescriptorSets(self.context.device, 1, [self.vk.VkWriteDescriptorSet(
+                sType=self.vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                dstSet=descriptor, dstBinding=0, descriptorCount=1,
+                descriptorType=self.vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                pImageInfo=[self.vk.VkDescriptorImageInfo(
+                    sampler=self.sampler, imageView=source.require_view(),
+                    imageLayout=self.vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                )],
+            )], 0, None)
+            target = item["target"]
+            _, framebuffer = self._target_view_and_framebuffer(target, int(item["array_layer"]))
+            prepared.append({
+                "source": source, "target": target,
+                "array_layer": int(item["array_layer"]),
+                "framebuffer": framebuffer, "descriptor_set": descriptor,
+                "descriptor_index": descriptor_index,
+                "pipeline": self.panorama_pipeline,
+                "pipeline_layout": self.panorama_pipeline_layout,
+                "vertex_count": 3, "push_constant_size": 32,
+                "payload": self.vk.ffi.new("char[]", item["panorama_push_constants"]),
+                "clear_color": tuple(item.get("clear_color", (0.0, 0.0, 0.0, 1.0))),
+                "target_old_layout": self.context.image_state(target.image).layout,
+                "source_ready_in_submission": True,
+            })
+        timeline = self.context.submit_on(
+            "graphics",
+            lambda command_buffer: [self._record_draw(command_buffer, draw) for draw in prepared],
+            wait_for_timeline=int(wait_for_timeline),
+        )
+        # Panorama currently uses the shared sampler descriptor pool. Wait for
+        # this one-time background draw before later screen/Glow submissions
+        # update those descriptors for the same frame.
+        self.context.wait_for_timeline(timeline)
+        for draw in prepared:
+            self.descriptor_timelines[draw["descriptor_index"]] = int(timeline)
+            self.context.register_image_state(draw["target"].image, ImageState(
+                layout=self.vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                access_mask=self.vk.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                stage_mask=self.vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                queue_family_index=self.context.queue_family_index,
+            ))
+        self._last_submit_timeline = int(timeline)
+        return int(timeline)
+
     def _supports_linear_blit(self, format_value: int) -> bool:
         properties = self.vk.vkGetPhysicalDeviceFormatProperties(
             self.context.physical_device, int(format_value)
@@ -2716,6 +2808,22 @@ class VulkanProjectionScreenPass:
 
     def _record_draw(self, command_buffer: Any, draw: dict[str, Any]) -> None:
         target = draw["target"]
+        source = draw.get("source")
+        if draw.get("panorama_source_ready") and source is not None:
+            source_state = self.context.image_state(source.image)
+            barrier = self._image_barrier_template(
+                source.image,
+                src_access=source_state.access_mask,
+                dst_access=self.vk.VK_ACCESS_SHADER_READ_BIT,
+                old_layout=source_state.layout,
+                new_layout=self.vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            )
+            self.vk.vkCmdPipelineBarrier(
+                command_buffer,
+                source_state.stage_mask or self.vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                self.vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                0, 0, None, 0, None, 1, barrier,
+            )
         old_layout = int(draw.get("target_old_layout", self.vk.VK_IMAGE_LAYOUT_UNDEFINED))
         old_access = (
             self.vk.VK_ACCESS_SHADER_READ_BIT
@@ -3022,6 +3130,8 @@ class VulkanProjectionScreenPass:
                 self.vk.vkDestroyPipeline(self.context.device, self.quality_pipeline, None)
             if self.hdr_pipeline is not None:
                 self.vk.vkDestroyPipeline(self.context.device, self.hdr_pipeline, None)
+            if self.panorama_pipeline is not None:
+                self.vk.vkDestroyPipeline(self.context.device, self.panorama_pipeline, None)
             if self.pipeline_layout is not None:
                 self.vk.vkDestroyPipelineLayout(
                     self.context.device, self.pipeline_layout, None
@@ -3049,6 +3159,10 @@ class VulkanProjectionScreenPass:
             if self.hdr_pipeline_layout is not None:
                 self.vk.vkDestroyPipelineLayout(
                     self.context.device, self.hdr_pipeline_layout, None
+                )
+            if self.panorama_pipeline_layout is not None:
+                self.vk.vkDestroyPipelineLayout(
+                    self.context.device, self.panorama_pipeline_layout, None
                 )
             if self.render_pass is not None:
                 self.vk.vkDestroyRenderPass(self.context.device, self.render_pass, None)
@@ -3100,6 +3214,8 @@ class VulkanProjectionScreenPass:
         self.rcas_descriptor_sets.clear()
         self.quality_descriptor_sets.clear()
         self.hdr_descriptor_sets.clear()
+        self.panorama_pipeline = None
+        self.panorama_pipeline_layout = None
         self.glow_descriptor_sets.clear()
         self.glow_param_buffers.clear()
         self.laser_descriptor_sets.clear()

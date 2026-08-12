@@ -638,7 +638,7 @@ class GUIBuilderMixin:
         if not ctrl_dirs:
             ctrl_dirs = ["PICO"]
         self.ctrl_model_dd = CompactDropdown(
-            options=["None", *ctrl_dirs], value="PICO", width=S(130)
+            options=ctrl_dirs, value="PICO", width=S(130)
         )
         self.environment_label = ft.Text("Environment:", size=FONT_SIZE, width=S(130))
         self.env_model_keys = get_environment_model_options(return_keys=True)

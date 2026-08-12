@@ -46,7 +46,7 @@ from .runtime_output import VulkanRuntimeOutputConsumer
 def _resolve_filament_environment_paths(
     settings: dict,
     src_root: Path,
-) -> tuple[Path | None, Path | None]:
+) -> tuple[Path | None, Path | None, Path | None]:
     environment_name = str(settings.get("Environment Model", "")).strip()
     selected_name = (
         "Default"
@@ -55,7 +55,7 @@ def _resolve_filament_environment_paths(
     )
     environments_root = src_root / "xr_viewer" / "environments"
 
-    def resolve(name: str) -> tuple[Path | None, Path]:
+    def resolve(name: str) -> tuple[Path | None, Path, Path | None]:
         room_dir = environments_root / name
         profile_path = room_dir / "profile.json"
         if not profile_path.is_file():
@@ -74,12 +74,26 @@ def _resolve_filament_environment_paths(
             )
 
         glb_value = profile.get("glb", "environment.glb")
+        background = profile.get("background")
+        background = background if isinstance(background, dict) else {}
+        image_value = (
+            background.get("image")
+            or background.get("path")
+            or background.get("file")
+            or profile.get("background_image")
+        )
+        panorama_path = None
+        if image_value:
+            candidate = room_dir / str(image_value)
+            if not candidate.is_file():
+                raise FileNotFoundError(f"OpenXR environment panorama not found: {candidate}")
+            panorama_path = candidate
         if glb_value in (None, "", False):
-            return None, profile_path
+            return None, profile_path, panorama_path
         glb_path = room_dir / str(glb_value)
         if not glb_path.is_file():
             raise FileNotFoundError(f"OpenXR environment GLB not found: {glb_path}")
-        return glb_path, profile_path
+        return glb_path, profile_path, panorama_path
 
     try:
         return resolve(selected_name)
@@ -155,7 +169,7 @@ def _openxr_filament_config(
         "Darwin": src_root / "xr_viewer" / "native" / "macos"
         / "libfilament_bridge.dylib",
     }.get(platform.system())
-    glb_path, profile_path = _resolve_filament_environment_paths(
+    glb_path, profile_path, panorama_path = _resolve_filament_environment_paths(
         settings,
         src_root,
     )
@@ -173,6 +187,8 @@ def _openxr_filament_config(
         ),
         "filament_profile_path": configured_profile
         or (str(profile_path) if profile_path is not None else None),
+        "filament_panorama_path": os.environ.get("D2S_FILAMENT_PANORAMA")
+        or (str(panorama_path) if panorama_path is not None else None),
         "filament_scene_exposure_ev": float(
             settings.get(
                 "Filament Scene Exposure",

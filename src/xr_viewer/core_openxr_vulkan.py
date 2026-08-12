@@ -516,6 +516,7 @@ class OpenXrVulkanConfig:
     filament_bridge_path: str | None = None
     filament_glb_path: str | None = None
     filament_profile_path: str | None = None
+    filament_panorama_path: str | None = None
     filament_scene_exposure_ev: float = 0.0
     filament_skybox_brightness: float = 1.0
     # Reuse the legacy headset preset for profiles without a screen. The
@@ -690,6 +691,15 @@ class OpenXrVulkanPresenter(
         self.vulkan: VulkanContext | None = None
         self.swapchain_format: int | None = None
         self.swapchains: list[_EyeSwapchain] = []
+        self._panorama_swapchain: _EyeSwapchain | None = None
+        self._panorama_staging: VulkanHostImage | None = None
+        self._panorama_size: tuple[int, int] | None = None
+        self._panorama_layer: Any = None
+        self._openxr_equirect_supported = False
+        self._panorama_skip_logged = False
+        self._panorama_failed = False
+        self._vulkan_panorama_image = None
+        self._vulkan_panorama_staging = None
         self._multiview_active = False
         self._filament_multiview_hdr_images: list[VulkanTransientImage] = []
         self._filament_multiview_ready_semaphores: list[Any] = []
@@ -800,7 +810,11 @@ class OpenXrVulkanPresenter(
         self._profile_head_transform: np.ndarray | None = None
         self._profile_initial_head: np.ndarray | None = None
         self._profile_space_applied = False
+        self._profile_space_calibration_pass = 0
+        self._profile_space_pose_in_reference = np.eye(4, dtype=np.float32)
         self._profile_view_name: str | None = None
+        self._profile_auto_center_on_screen = False
+        self._profile_reference_space_change_ignored_logged = False
         self._profile_alignment_logged = False
         self._head_position_w: np.ndarray | None = None
         self._head_forward_w: np.ndarray | None = None
@@ -913,13 +927,9 @@ class OpenXrVulkanPresenter(
         self._vulkan_controller_proxy_enabled = (
             str(requested_controller_model).strip().lower() == "none"
         )
-        self._controller_brand = (
-            None
-            if self._vulkan_controller_proxy_enabled
-            else select_controller_brand(
-                self._controller_brands,
-                requested_controller_model,
-            )
+        self._controller_brand = select_controller_brand(
+            self._controller_brands,
+            requested_controller_model,
         )
         self._controller_calibration_mode = False
         self._controller_calibration_offset = np.asarray(
@@ -1365,6 +1375,22 @@ class OpenXrVulkanPresenter(
                 f"OpenXR runtime does not expose {self._VULKAN_EXTENSION}"
             )
 
+        optional_equirect = getattr(
+            xr, "KHR_COMPOSITION_LAYER_EQUIRECT2_EXTENSION_NAME", None
+        )
+        enabled_extensions = [self._VULKAN_EXTENSION]
+        if optional_equirect and optional_equirect in available_extensions:
+            enabled_extensions.append(optional_equirect)
+            self._openxr_equirect_supported = hasattr(
+                xr, "CompositionLayerEquirect2KHR"
+            )
+        print(
+            "[OpenXRViewer] Equirect background capability: "
+            f"extension={bool(optional_equirect and optional_equirect in available_extensions)} "
+            f"binding={hasattr(xr, 'CompositionLayerEquirect2KHR')} "
+            f"active={self._openxr_equirect_supported}",
+            flush=True,
+        )
         try:
             self.instance = xr.create_instance(
                 xr.InstanceCreateInfo(
@@ -1375,7 +1401,7 @@ class OpenXrVulkanPresenter(
                         engine_version=1,
                         api_version=xr.Version(1, 0, 0),
                     ),
-                    enabled_extension_names=[self._VULKAN_EXTENSION],
+                    enabled_extension_names=enabled_extensions,
                 )
             )
             self.system_id = xr.get_system(
@@ -1440,16 +1466,25 @@ class OpenXrVulkanPresenter(
                 ):
                     self.exit_requested = True
             elif event.type == xr.StructureType.EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING:
-                # The legacy viewer rebuilt its base reference space and then
-                # reapplied the authored seat/profile transform. Keep the
-                # same two-step contract so controller poses, screen poses,
-                # and projection views share one calibrated space.
                 self._recreate_reference_space_after_runtime_change()
             elif event.type == xr.StructureType.EVENT_DATA_INSTANCE_LOSS_PENDING:
                 self.exit_requested = True
 
     def _recreate_reference_space_after_runtime_change(self) -> None:
         """Recreate the base XR space after a runtime relocation event."""
+        # Match the legacy viewer: an authored room seat remains locked across
+        # runtime floor/boundary changes. Recreating its calibrated child space
+        # here causes a visible room jump. Only profiles that explicitly opt
+        # into screen-relative auto centering may discard and reapply the seat.
+        if not self._profile_auto_center_on_screen:
+            if not self._profile_reference_space_change_ignored_logged:
+                print(
+                    "[OpenXRViewer] Reference space change ignored: authored "
+                    "profile view_pose remains locked",
+                    flush=True,
+                )
+                self._profile_reference_space_change_ignored_logged = True
+            return
         if self.xr is None or self.session is None or self._reference_space_type is None:
             self._profile_space_applied = False
             return
@@ -1474,10 +1509,17 @@ class OpenXrVulkanPresenter(
         self.reference_space = new_space
         self._xr_space = new_space
         self._profile_space_applied = False
+        self._profile_space_calibration_pass = 0
+        self._profile_space_pose_in_reference = np.eye(4, dtype=np.float32)
         self._profile_initial_head = None
         self._profile_alignment_logged = False
         self._head_position_w = None
         self._head_forward_w = None
+        print(
+            "[OpenXRViewer] Reference space change accepted: "
+            "auto_center_on_screen profile will be recalibrated",
+            flush=True,
+        )
         if old_space is not None:
             try:
                 self.xr.destroy_space(old_space)
@@ -1598,6 +1640,10 @@ class OpenXrVulkanPresenter(
                     | xr.ViewStateFlags.ORIENTATION_VALID_BIT
                 )
                 if view_state.view_state_flags & valid_flags == valid_flags:
+                    # The first rebase can race VDXR's STAGE-floor update. Apply at
+                    # most one calibration pass per XR tick so the final pass uses
+                    # the next frame's measured pose rather than another locate in
+                    # the same runtime tick.
                     if self._apply_profile_reference_space(views):
                         locate_call_started = time.perf_counter()
                         view_state, views = xr.locate_views(
@@ -1676,6 +1722,10 @@ class OpenXrVulkanPresenter(
                             )
                     if layer is not None:
                         layer_assembly_started = time.perf_counter()
+                        panorama_layer = self._prepare_panorama_layer()
+                        if panorama_layer is not None:
+                            layer_structures.insert(0, panorama_layer)
+                            layer_pointers.insert(0, ctypes.pointer(panorama_layer))
                         layer_structures.append(layer)
                         layer_pointers.append(ctypes.pointer(layer))
                         try:
@@ -2261,7 +2311,10 @@ class OpenXrVulkanPresenter(
         self._keyboard_position_offset += radial / distance * distance_delta
 
     def _switch_shortcut_controller_brand(self) -> None:
-        if not self._controller_brands:
+        if (
+            self._vulkan_controller_proxy_enabled
+            or not self._controller_brands
+        ):
             return
         names = sorted(self._controller_brands)
         current_name = getattr(self._controller_brand, "name", None)
@@ -2302,6 +2355,11 @@ class OpenXrVulkanPresenter(
             f"B-button anchor=({anchor_text})",
             flush=True,
         )
+
+    def _controller_model_display_name(self) -> str:
+        if self._vulkan_controller_proxy_enabled:
+            return str(getattr(self._controller_brand, "profile_id", "None") or "None").title()
+        return str(getattr(self._controller_brand, "name", "") or "Unknown")
 
     def _save_shortcut_controller_calibration(self) -> None:
         brand = self._controller_brand
@@ -3546,6 +3604,27 @@ class OpenXrVulkanPresenter(
         self._filament_multiview_finished_consumed = False
 
         if xr is not None:
+            if self._panorama_staging is not None:
+                try:
+                    self._panorama_staging.close()
+                except Exception:
+                    pass
+                self._panorama_staging = None
+            if self._panorama_swapchain is not None:
+                try:
+                    self._destroy_projection_swapchain(self._panorama_swapchain)
+                except Exception:
+                    pass
+                self._panorama_swapchain = None
+            for image in (self._vulkan_panorama_image, self._vulkan_panorama_staging):
+                if image is not None:
+                    try:
+                        image.close()
+                    except Exception:
+                        pass
+            self._vulkan_panorama_image = None
+            self._vulkan_panorama_staging = None
+            self._panorama_layer = None
             self._destroy_tool_quad_layers()
             self._destroy_quad_swapchains()
             for eye in reversed(self.swapchains):
@@ -3636,6 +3715,9 @@ class OpenXrVulkanPresenter(
         self._filament_animation_origin = None
         self._profile_initial_head = None
         self._profile_space_applied = False
+        self._profile_space_calibration_pass = 0
+        self._profile_space_pose_in_reference = np.eye(4, dtype=np.float32)
+        self._profile_reference_space_change_ignored_logged = False
         self._profile_alignment_logged = False
         self._reference_space_type = None
         self._presenter_thread_id = None
@@ -3889,13 +3971,16 @@ class OpenXrVulkanPresenter(
                 )
 
     def _create_projection_swapchain(
-        self, width: int, height: int, *, array_size: int = 1
+        self, width: int, height: int, *, array_size: int = 1,
+        sampled: bool = False,
     ) -> _EyeSwapchain:
         xr = self.xr
         usage_flags = (
             xr.SwapchainUsageFlags.COLOR_ATTACHMENT_BIT
             | xr.SwapchainUsageFlags.TRANSFER_DST_BIT
         )
+        if sampled:
+            usage_flags |= xr.SwapchainUsageFlags.SAMPLED_BIT
         if self._filament_multiview_layer_readback_requested and array_size >= 2:
             usage_flags |= xr.SwapchainUsageFlags.TRANSFER_SRC_BIT
         handle = xr.create_swapchain(
@@ -3927,6 +4012,257 @@ class OpenXrVulkanPresenter(
             resources=self._register_swapchain_images(images, width, height),
             array_size=array_size,
         )
+
+    def _prepare_panorama_layer(self) -> Any | None:
+        """Upload the selected equirectangular environment once and expose it as a background layer."""
+        if (
+            not self.config.filament_panorama_path
+            or self._panorama_failed
+            or not self._openxr_equirect_supported
+        ):
+            if (
+                self.config.filament_panorama_path
+                and not self._openxr_equirect_supported
+                and not self._panorama_skip_logged
+            ):
+                print(
+                    "[OpenXRViewer] HDR panorama deferred: runtime lacks "
+                    "XR_KHR_composition_layer_equirect2; Vulkan projection "
+                    "equirect pass required",
+                    flush=True,
+                )
+                self._panorama_skip_logged = True
+            return None
+        if self._panorama_layer is not None:
+            return self._panorama_layer
+        path = Path(self.config.filament_panorama_path)
+        try:
+            import imageio.v2 as imageio
+            # Keep startup bounded: the packaged 10k HDRs are reduced before
+            # any Vulkan allocation, avoiding a multi-hundred-MB upload on the
+            # XR presenter thread.
+            raw_image = np.asarray(imageio.imread(path))
+            raw_dtype = raw_image.dtype
+            is_float_image = raw_image.dtype.kind == "f"
+            image = np.asarray(raw_image, dtype=np.float32)
+            if image.ndim == 2:
+                image = np.repeat(image[..., None], 3, axis=2)
+            if image.shape[-1] > 3:
+                image = image[..., :3]
+            if is_float_image:
+                image = np.maximum(image, 0.0)
+                image = image / (1.0 + image)
+                image = np.power(np.clip(image, 0.0, 1.0), 1.0 / 2.2)
+            elif raw_image.dtype.itemsize > 1:
+                image = image / float(np.iinfo(raw_image.dtype).max)
+            if raw_dtype.kind == "u" and raw_dtype.itemsize == 1:
+                image = np.asarray(np.clip(image, 0.0, 255.0), dtype=np.uint8)
+            else:
+                image = np.asarray(np.clip(image * 255.0, 0.0, 255.0), dtype=np.uint8)
+            image = np.concatenate(
+                (image, np.full((*image.shape[:2], 1), 255, dtype=np.uint8)), axis=2
+            )
+            height, width = image.shape[:2]
+            if max(width, height) > 1024:
+                scale = 1024.0 / max(width, height)
+                width = max(1, int(round(width * scale)))
+                height = max(1, int(round(height * scale)))
+                from PIL import Image
+                image = np.asarray(
+                    Image.fromarray(image, "RGBA").resize((width, height), Image.Resampling.BILINEAR)
+                )
+            if self._panorama_layer is not None and self._panorama_size == (width, height):
+                return self._panorama_layer
+            if self._panorama_swapchain is not None:
+                self._destroy_projection_swapchain(self._panorama_swapchain)
+            self._panorama_staging = VulkanHostImage(
+                self.vulkan, width, height, format=int(self.swapchain_format),
+                label="openxr-panorama-hdr",
+            )
+            self._panorama_staging.upload(image)
+            self._panorama_swapchain = self._create_projection_swapchain(width, height)
+            with _acquired_swapchain_image(self.xr, self._panorama_swapchain) as index:
+                upload_timeline = self.vulkan.copy_image(
+                    self._panorama_staging.resource,
+                    self._panorama_swapchain.resources[index],
+                )
+                self.vulkan.wait_for_timeline(upload_timeline)
+            self._panorama_size = (width, height)
+            sub_image = self.xr.SwapchainSubImage(
+                swapchain=self._panorama_swapchain.handle,
+                image_rect=self.xr.Rect2Di(
+                    offset=self.xr.Offset2Di(x=0, y=0),
+                    extent=self.xr.Extent2Di(width=width, height=height),
+                ),
+                image_array_index=0,
+            )
+            if self._openxr_equirect_supported:
+                self._panorama_layer = self.xr.CompositionLayerEquirect2KHR(
+                    space=self.reference_space, sub_image=sub_image,
+                    pose=self.xr.Posef(), radius=0.0,
+                    central_horizontal_angle=float(math.tau),
+                    upper_vertical_angle=float(math.pi * 0.5),
+                    lower_vertical_angle=float(-math.pi * 0.5),
+                )
+            else:
+                # A flat Quad is not a valid panorama fallback: it is not
+                # head-locked, can occlude the SBS screen, and caused expensive
+                # per-session uploads without producing a visible HDR room.
+                # Leave the projection path untouched until the Vulkan
+                # equirect pass is available.
+                self._panorama_failed = True
+                if not self._panorama_skip_logged:
+                    print(
+                        "[OpenXRViewer] HDR panorama deferred: runtime lacks "
+                        "XR_KHR_composition_layer_equirect2; Vulkan projection "
+                        "equirect pass required",
+                        flush=True,
+                    )
+                    self._panorama_skip_logged = True
+                return None
+            print(
+                f"[OpenXRViewer] HDR panorama background active: {path} ({width}x{height})",
+                flush=True,
+            )
+            return self._panorama_layer
+        except Exception as exc:
+            self._panorama_failed = True
+            print(f"[OpenXRViewer] HDR panorama background unavailable: {type(exc).__name__}: {exc}", flush=True)
+            return None
+
+    def _ensure_vulkan_panorama_source(self):
+        """Upload the selected panorama once for the Vulkan Projection background pass."""
+        if self._vulkan_panorama_image is not None:
+            return self._vulkan_panorama_image.resource
+        path_value = self.config.filament_panorama_path
+        if not path_value or self.vulkan is None or self._vulkan_projection_screen_pass is None:
+            return None
+        try:
+            import imageio.v2 as imageio
+            raw = np.asarray(imageio.imread(path_value))
+            if raw.ndim == 2:
+                raw = np.repeat(raw[..., None], 3, axis=2)
+            raw = raw[..., :3]
+            if raw.dtype.kind == "f":
+                raw = np.clip(raw / (1.0 + np.maximum(raw, 0.0)), 0.0, 1.0) * 255.0
+            elif raw.dtype.itemsize > 1:
+                raw = raw.astype(np.float32) / float(np.iinfo(raw.dtype).max) * 255.0
+            rgba = np.concatenate((np.asarray(np.clip(raw, 0, 255), dtype=np.uint8),
+                                   np.full((*raw.shape[:2], 1), 255, dtype=np.uint8)), axis=2)
+            h, w = rgba.shape[:2]
+            device_limit = int(
+                self.vulkan.vk.vkGetPhysicalDeviceProperties(
+                    self.vulkan.physical_device
+                ).limits.maxImageDimension2D
+            )
+            if w > device_limit or h > device_limit:
+                raise RuntimeError(
+                    "panorama source exceeds Vulkan maxImageDimension2D: "
+                    f"source={w}x{h} device_limit={device_limit}"
+                )
+            fmt = int(self.swapchain_format)
+            self._vulkan_panorama_staging = VulkanHostImage(self.vulkan, w, h, format=fmt, label="panorama-staging")
+            self._vulkan_panorama_staging.upload(rgba)
+            self._vulkan_panorama_image = VulkanTransientImage(self.vulkan, w, h, format=fmt, label="panorama-source")
+            timeline = self.vulkan.copy_image(self._vulkan_panorama_staging.resource, self._vulkan_panorama_image.resource)
+            self.vulkan.wait_for_timeline(timeline)
+            print(
+                "[OpenXRViewer] Vulkan HDR panorama source uploaded: "
+                f"source={w}x{h} uploaded={w}x{h} scale=original",
+                flush=True,
+            )
+            return self._vulkan_panorama_image.resource
+        except Exception as exc:
+            self._panorama_failed = True
+            print(f"[OpenXRViewer] Vulkan HDR panorama upload failed: {type(exc).__name__}: {exc}", flush=True)
+            return None
+
+    def _panorama_push_constants(self, view: Any) -> bytes:
+        # Pass the OpenXR orientation and FOV directly. This avoids all CPU /
+        # GLSL matrix-major and projection-sign conventions: the vertex shader
+        # builds a view ray and rotates it into the stable reference space.
+        orientation = np.asarray((
+            float(view.pose.orientation.x),
+            float(view.pose.orientation.y),
+            float(view.pose.orientation.z),
+            float(view.pose.orientation.w),
+        ), dtype=np.float64)
+        length = float(np.linalg.norm(orientation))
+        if not math.isfinite(length) or length <= 1e-8:
+            orientation = np.asarray((0.0, 0.0, 0.0, 1.0), dtype=np.float64)
+        else:
+            orientation /= length
+        initial = getattr(self, "_panorama_initial_orientation", None)
+        if initial is None:
+            self._panorama_initial_orientation = orientation.copy()
+            self._panorama_initial_center_uv = self._panorama_center_uv(
+                view.fov, orientation
+            )
+            initial_uv = self._panorama_initial_center_uv
+            print(
+                "[OpenXRViewer] Vulkan panorama initial tracking: "
+                f"q=({orientation[0]:+.4f},{orientation[1]:+.4f},"
+                f"{orientation[2]:+.4f},{orientation[3]:+.4f}) "
+                f"center_uv=({initial_uv[0]:.4f},{initial_uv[1]:.4f})",
+                flush=True,
+            )
+        elif not getattr(self, "_panorama_live_rotation_logged", False):
+            dot = min(1.0, max(-1.0, abs(float(np.dot(initial, orientation)))))
+            delta_degrees = math.degrees(2.0 * math.acos(dot))
+            if delta_degrees >= 3.0:
+                self._panorama_live_rotation_logged = True
+                center_uv = self._panorama_center_uv(view.fov, orientation)
+                initial_uv = self._panorama_initial_center_uv
+                delta_u = ((center_uv[0] - initial_uv[0] + 0.5) % 1.0) - 0.5
+                print(
+                    "[OpenXRViewer] Vulkan panorama live head rotation: "
+                    f"delta={delta_degrees:.1f}deg "
+                    f"q=({orientation[0]:+.4f},{orientation[1]:+.4f},"
+                    f"{orientation[2]:+.4f},{orientation[3]:+.4f}) "
+                    f"center_uv=({center_uv[0]:.4f},{center_uv[1]:.4f}) "
+                    f"uv_delta=({delta_u:+.4f},"
+                    f"{center_uv[1] - initial_uv[1]:+.4f})",
+                    flush=True,
+                )
+        values = np.asarray((
+            math.tan(float(view.fov.angle_left)),
+            math.tan(float(view.fov.angle_right)),
+            math.tan(float(view.fov.angle_down)),
+            math.tan(float(view.fov.angle_up)),
+            *orientation,
+        ), dtype="<f4")
+        if not getattr(self, "_panorama_rotation_only_logged", False):
+            self._panorama_rotation_only_logged = True
+            print(
+                "[OpenXRViewer] Vulkan panorama mode: world-locked "
+                "direct-fov + OpenXR-orientation",
+                flush=True,
+            )
+        return values.tobytes()
+
+    @staticmethod
+    def _panorama_center_uv(fov: Any, orientation: np.ndarray) -> tuple[float, float]:
+        view_direction = np.asarray((
+            0.5 * (
+                math.tan(float(fov.angle_left))
+                + math.tan(float(fov.angle_right))
+            ),
+            0.5 * (
+                math.tan(float(fov.angle_down))
+                + math.tan(float(fov.angle_up))
+            ),
+            -1.0,
+        ), dtype=np.float64)
+        x, y, z, w = (float(value) for value in orientation)
+        q = np.asarray((x, y, z), dtype=np.float64)
+        world_direction = view_direction + 2.0 * np.cross(
+            q, np.cross(q, view_direction) + w * view_direction
+        )
+        world_direction /= max(float(np.linalg.norm(world_direction)), 1e-8)
+        u = math.atan2(float(world_direction[0]), -float(world_direction[2]))
+        u = (u / math.tau + 0.5) % 1.0
+        v = 0.5 - math.asin(min(1.0, max(-1.0, float(world_direction[1])))) / math.pi
+        return float(u), float(v)
 
     def _destroy_projection_swapchain(self, eye: _EyeSwapchain) -> None:
         for resource in reversed(eye.resources):
@@ -4258,13 +4594,19 @@ class OpenXrVulkanPresenter(
         self._release_output_frame(frame)
 
     def _initialize_filament_bridges(self) -> None:
-        if self._vulkan_controller_proxy_enabled:
+        if self._vulkan_controller_proxy_enabled and not self.config.filament_glb_path:
             print(
                 "[OpenXRViewer] Vulkan controller proxy active: "
-                "Filament engine, controller GLB, and environment GLB are bypassed",
+                "controller GLB and unused Filament engine are bypassed",
                 flush=True,
             )
             return
+        if self._vulkan_controller_proxy_enabled:
+            print(
+                "[OpenXRViewer] Vulkan controller proxy active: "
+                "controller GLB bypassed; Filament environment remains enabled",
+                flush=True,
+            )
         if self._vulkan_multiview_eye_diagnostic:
             print(
                 "[OpenXRViewer] Pure Vulkan multiview diagnostic: "
@@ -4437,6 +4779,8 @@ class OpenXrVulkanPresenter(
                 bridge.load_glb(asset_reads["environment"].result())
             if (
                 self._controller_brand is not None
+                and self._controller_brand.left_glb is not None
+                and self._controller_brand.right_glb is not None
                 and getattr(bridge, "controller_abi_available", True)
                 and hasattr(bridge, "load_controller")
             ):
@@ -4454,7 +4798,11 @@ class OpenXrVulkanPresenter(
                     flush=True,
                 )
             if (
-                getattr(bridge, "controller_guide_abi_available", False)
+                not self._vulkan_controller_proxy_enabled
+                and self._controller_brand is not None
+                and getattr(self._controller_brand, "left_glb", True) is not None
+                and getattr(self._controller_brand, "right_glb", True) is not None
+                and getattr(bridge, "controller_guide_abi_available", False)
                 and hasattr(bridge, "set_controller_guide_texture")
             ):
                 if self._controller_callout_rgba is None:
@@ -4663,9 +5011,16 @@ class OpenXrVulkanPresenter(
         return laser_matrix
 
     def _projection_controller_proxy_params(self) -> bytes | None:
-        """Pack both OpenXR grip poses for the local Vulkan cube proxy."""
+        """Pack both profile-calibrated OpenXR grip poses for the Vulkan proxy."""
         if not self._vulkan_controller_proxy_enabled:
             return None
+        offset = np.eye(4, dtype=np.float32)
+        offset[:3, 3] = np.asarray(
+            self._controller_calibration_offset, dtype=np.float32
+        )
+        rotation = euler_to_mat4(
+            0.0, math.radians(self._controller_calibration_rotation_deg), 0.0
+        ).astype(np.float32)
         values = np.zeros(72, dtype=np.float32)
         visible_count = 0
         for hand, grip_matrix in enumerate((self._grip_mat_l, self._grip_mat_r)):
@@ -4680,6 +5035,7 @@ class OpenXrVulkanPresenter(
             matrix = np.asarray(grip_matrix, dtype=np.float32)
             if matrix.shape != (4, 4) or not np.all(np.isfinite(matrix)):
                 continue
+            matrix = matrix @ rotation @ offset
             values[hand * 16 : (hand + 1) * 16] = matrix.reshape(-1, order="F")
             values[64 + hand] = 1.0
             visible_count += 1
@@ -4953,6 +5309,15 @@ class OpenXrVulkanPresenter(
                     "openxr_vulkan_composer_draw_prepare",
                     time.perf_counter() - draw_prepare_started,
                 )
+        panorama_source = self._ensure_vulkan_panorama_source()
+        panorama_timeline = 0
+        if panorama_source is not None:
+            for eye_index, draw in enumerate(projection_draws):
+                draw["panorama_push_constants"] = self._panorama_push_constants(views[eye_index])
+                draw["panorama_source_ready"] = True
+            panorama_timeline = self._vulkan_projection_screen_pass.submit_panorama(
+                projection_draws, panorama_source, wait_for_timeline=0
+            )
         filament_hdr_timeline = 0
         defer_filament_resolve = bool(
             filament_hdr_sources
@@ -5062,10 +5427,11 @@ class OpenXrVulkanPresenter(
                         or filament_hdr_timeline
                         or filament_wait_semaphores
                         or depth_sampling_timeline
+                        or panorama_timeline
                     ),
-                    wait_for_timeline=max(
-                        int(surround_timeline),
-                        int(depth_sampling_timeline),
+                        wait_for_timeline=max(
+                            int(surround_timeline),
+                        int(depth_sampling_timeline), int(panorama_timeline),
                     ),
                     extra_wait_semaphores=filament_wait_semaphores,
                 )
@@ -5088,11 +5454,12 @@ class OpenXrVulkanPresenter(
                     or filament_hdr_timeline
                     or filament_wait_semaphores
                     or depth_sampling_timeline
+                    or panorama_timeline
                 ),
                 extra_wait_semaphores=filament_wait_semaphores,
                 wait_for_timeline=max(
                     int(surround_timeline),
-                    int(depth_sampling_timeline),
+                    int(depth_sampling_timeline), int(panorama_timeline),
                 ),
             )
         if defer_filament_resolve:
@@ -5477,7 +5844,11 @@ class OpenXrVulkanPresenter(
             reads["environment"] = executor.submit(
                 Path(self.config.filament_glb_path).read_bytes
             )
-        if self._controller_brand is not None:
+        if (
+            self._controller_brand is not None
+            and self._controller_brand.left_glb is not None
+            and self._controller_brand.right_glb is not None
+        ):
             reads["controller_left"] = executor.submit(
                 self._controller_brand.left_glb.read_bytes
             )
@@ -5487,14 +5858,17 @@ class OpenXrVulkanPresenter(
         return executor, reads
 
     def _update_filament_controllers(self, bridge: Any) -> None:
-        self._update_filament_controller_guide(bridge)
         if (
-            self._controller_brand is None
+            self._vulkan_controller_proxy_enabled
+            or self._controller_brand is None
+            or getattr(self._controller_brand, "left_glb", True) is None
+            or getattr(self._controller_brand, "right_glb", True) is None
             or not getattr(bridge, "controller_abi_available", True)
             or not hasattr(bridge, "set_controller_pose")
             or not hasattr(bridge, "set_controller_inputs")
         ):
             return
+        self._update_filament_controller_guide(bridge)
         offset = np.eye(4, dtype=np.float32)
         offset[:3, 3] = np.asarray(
             self._controller_calibration_offset, dtype=np.float32
@@ -5685,6 +6059,9 @@ class OpenXrVulkanPresenter(
         transform[:3, 3] = np.asarray(glb_position, dtype=np.float32)
         self._profile_head_transform = transform
         self._profile_view_name = str(view_pose.get("name", "profile"))
+        self._profile_auto_center_on_screen = bool(
+            view_pose.get("auto_center_on_screen", False)
+        )
         self._profile_near_plane = max(0.001, float(profile.get("xr_projection_near", 0.05)))
         self._profile_far_plane = max(
             self._profile_near_plane + 1.0,
@@ -5837,7 +6214,7 @@ class OpenXrVulkanPresenter(
         return views
 
     def _apply_profile_reference_space(self, views: list[Any]) -> bool:
-        """Apply the saved seat pose once, keeping subsequent views world-locked."""
+        """Apply the saved seat pose, then close the loop on the measured XR pose."""
         if self._profile_space_applied or self._profile_head_transform is None:
             return False
         if len(views) < 2 or self.xr is None or self.session is None:
@@ -5845,10 +6222,15 @@ class OpenXrVulkanPresenter(
         eye_matrices = [_xr_view_pose_to_model_mat4(view.pose) for view in views[:2]]
         raw_head = eye_matrices[0].copy()
         raw_head[:3, 3] = (eye_matrices[0][:3, 3] + eye_matrices[1][:3, 3]) * 0.5
-        # Match the legacy environment path: keep the room level by removing
-        # headset pitch/roll from the initial pose, then place the saved
-        # profile pose in that stable world space.
-        reference_head = self._level_head_model_mat4(raw_head)
+        # Views are expressed in the currently active child reference space.
+        # Recover the head in the original STAGE/LOCAL reference before
+        # calculating the replacement space. This state is essential for the
+        # feedback pass; treating the second locate result as a base-space pose
+        # would mix two coordinate systems and retain the physical head height.
+        reference_head = (
+            self._profile_space_pose_in_reference.astype(np.float64) @ raw_head
+        )
+        reference_head = self._level_head_model_mat4(reference_head)
         space_pose = reference_head @ np.linalg.inv(self._profile_head_transform)
         try:
             new_space = self.xr.create_reference_space(
@@ -5868,14 +6250,21 @@ class OpenXrVulkanPresenter(
         self.reference_space = new_space
         # Controller action spaces must use the same calibrated world space.
         self._xr_space = new_space
-        self._profile_space_applied = True
+        self._profile_space_pose_in_reference = space_pose.astype(np.float32)
+        self._profile_space_calibration_pass += 1
+        self._profile_space_applied = self._profile_space_calibration_pass >= 2
         self._profile_initial_head = raw_head
         if old_space is not None:
             try:
                 self.xr.destroy_space(old_space)
             except Exception:
                 pass
-        print("[OpenXRViewer] Applied profile pose to stable OpenXR reference space", flush=True)
+        phase = "final" if self._profile_space_applied else "provisional"
+        print(
+            f"[OpenXRViewer] Applied {phase} profile pose to stable OpenXR "
+            f"reference space (pass={self._profile_space_calibration_pass})",
+            flush=True,
+        )
         return True
 
     @staticmethod
@@ -8091,6 +8480,7 @@ class OpenXrVulkanPresenter(
                 )
             )
         msdf_atlas = self._msdf_font_atlas
+        controller_model_name = self._controller_model_display_name()
         fps_key = (
             "fps", language, environment_mode, round(width, 3), round(height, 3),
             round(self._tool_overlay_xr_fps, 1), round(self._tool_overlay_sbs_fps, 1),
@@ -8099,6 +8489,7 @@ class OpenXrVulkanPresenter(
             round(self._tool_overlay_depth_strength, 3),
             vr_res,
             sbs_res,
+            controller_model_name,
         )
         if self._fps_overlay_visible or self._hand_fps_visible:
             rgba = self._tool_quad_texture_cache.get("fps")
@@ -8116,7 +8507,7 @@ class OpenXrVulkanPresenter(
                         depth_strength=self._tool_overlay_depth_strength,
                         vr_res=vr_res,
                         sbs_res=sbs_res,
-                        controller_brand=getattr(self._controller_brand, "name", ""),
+                        controller_brand=controller_model_name,
                         environment_visible=environment_mode,
                     )
                     if self._vulkan_msdf_quad_renderer is not None:
@@ -8143,7 +8534,7 @@ class OpenXrVulkanPresenter(
                         depth_strength=self._tool_overlay_depth_strength,
                         vr_res=vr_res,
                         sbs_res=sbs_res,
-                        controller_brand=getattr(self._controller_brand, "name", ""),
+                        controller_brand=controller_model_name,
                         environment_visible=environment_mode,
                     )
                 self._tool_quad_texture_cache["fps"] = rgba
@@ -8355,6 +8746,8 @@ class OpenXrVulkanPresenter(
         """Log the calibrated head pose against the authored GLB-local target once."""
         if self._profile_alignment_logged:
             return
+        if not self._profile_space_applied:
+            return
         if self._profile_head_transform is None or self._head_position_w is None:
             return
         target = np.asarray(self._profile_head_transform[:3, 3], dtype=np.float64)
@@ -8444,15 +8837,19 @@ class OpenXrVulkanPresenter(
             controller_button_local_position.cache_clear()
             self._controller_b_button_local = None
             self._controller_b_button_resolved = False
-        if self._controller_brand is None:
+        if self._vulkan_controller_proxy_enabled:
             self._controller_b_button_local = (
                 np.asarray((0.040, 0.040, -0.040), dtype=np.float64)
-                if self._vulkan_controller_proxy_enabled
-                else None
             )
             self._controller_b_button_resolved = True
             return self._controller_b_button_local
+        if self._controller_brand is None:
+            self._controller_b_button_local = None
+            self._controller_b_button_resolved = True
+            return None
         if not self._controller_b_button_resolved:
+            if self._controller_brand.right_glb is None:
+                return None
             resolved = controller_button_local_position(
                 str(self._controller_brand.right_glb), "b_button"
             )
@@ -8470,15 +8867,14 @@ class OpenXrVulkanPresenter(
             return None
 
         model_matrix = np.asarray(self._grip_mat_r, dtype=np.float64)
-        if not self._vulkan_controller_proxy_enabled:
-            offset = np.eye(4, dtype=np.float64)
-            offset[:3, 3] = np.asarray(
-                self._controller_calibration_offset, dtype=np.float64
-            )
-            rotation = euler_to_mat4(
-                0.0, math.radians(self._controller_calibration_rotation_deg), 0.0
-            ).astype(np.float64)
-            model_matrix = model_matrix @ rotation @ offset
+        offset = np.eye(4, dtype=np.float64)
+        offset[:3, 3] = np.asarray(
+            self._controller_calibration_offset, dtype=np.float64
+        )
+        rotation = euler_to_mat4(
+            0.0, math.radians(self._controller_calibration_rotation_deg), 0.0
+        ).astype(np.float64)
+        model_matrix = model_matrix @ rotation @ offset
         local = np.ones(4, dtype=np.float64)
         local[:3] = button_local
         return (model_matrix @ local)[:3]

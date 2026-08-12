@@ -1,0 +1,20 @@
+{
+  "profileId": "none",
+  "overrides": {
+    "model_offset": [
+      0.0,
+      -0.015778,
+      -0.046939
+    ],
+    "model_rotation_deg": -49,
+    "material_roughness_factor": 0.3,
+    "material_metallic_factor": 0.0,
+    "material_specular_color_factor": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "controller_head_light_cast_shadows": true,
+    "controller_top_light_cast_shadows": true
+  }
+}

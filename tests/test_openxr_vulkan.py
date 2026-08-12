@@ -52,7 +52,7 @@ from xr_viewer.overlay_textures import build_controller_callout_rgba, build_keyb
 from xr_viewer.msdf_font_atlas import MsdfFontAtlas
 from viewer.controller_help import get_controller_help_rows
 from viewer.vulkan_msdf_quad import VulkanMsdfQuadRequest
-from xr_viewer.xr_math import _xr_quat_to_mat4
+from xr_viewer.xr_math import _xr_quat_to_mat4, euler_to_mat4
 from utils.screen_resolution_policy import build_screen_sampling_plan
 
 
@@ -60,6 +60,49 @@ def test_vulkan_version_round_trip() -> None:
     packed = make_vulkan_version(1, 3, 275)
     assert unpack_vulkan_version(packed) == (1, 3, 275)
     assert format_vulkan_version(packed) == "1.3.275"
+
+
+def test_panorama_push_constants_are_translation_free_and_rotation_aware() -> None:
+    presenter = OpenXrVulkanPresenter.__new__(OpenXrVulkanPresenter)
+    presenter._profile_near_plane = 0.05
+    presenter._profile_far_plane = 100.0
+    presenter._panorama_rotation_only_logged = True
+    fov = xr.Fovf(
+        angle_left=-0.7, angle_right=0.7,
+        angle_up=0.7, angle_down=-0.7,
+    )
+
+    def payload(position, orientation):
+        view = SimpleNamespace(
+            pose=SimpleNamespace(position=position, orientation=orientation),
+            fov=fov,
+        )
+        return presenter._panorama_push_constants(view)
+
+    identity = xr.Quaternionf(x=0.0, y=0.0, z=0.0, w=1.0)
+    moved = payload(SimpleNamespace(x=4.0, y=-2.0, z=8.0), identity)
+    origin = payload(SimpleNamespace(x=0.0, y=0.0, z=0.0), identity)
+    yaw = math.radians(45.0) * 0.5
+    rotated = payload(
+        SimpleNamespace(x=0.0, y=0.0, z=0.0),
+        xr.Quaternionf(x=0.0, y=math.sin(yaw), z=0.0, w=math.cos(yaw)),
+    )
+
+    assert len(origin) == 32
+    assert moved == origin
+    assert rotated[:16] == origin[:16]
+    assert rotated[16:] != origin[16:]
+
+    initial_uv = presenter._panorama_center_uv(
+        fov, np.asarray((0.0, 0.0, 0.0, 1.0), dtype=np.float64)
+    )
+    rotated_uv = presenter._panorama_center_uv(
+        fov,
+        np.asarray((0.0, math.sin(yaw), 0.0, math.cos(yaw)), dtype=np.float64),
+    )
+    assert initial_uv == pytest.approx((0.5, 0.5), abs=1e-6)
+    assert rotated_uv[0] == pytest.approx(0.375, abs=1e-6)
+    assert rotated_uv[1] == pytest.approx(0.5, abs=1e-6)
 
 
 def test_timeline_feature_chain_returns_feature_node_and_sync_flag():
@@ -2495,7 +2538,7 @@ def test_controller_brand_switch_and_calibration_save_use_live_profile(
     assert presenter._controller_calibration_mode is False
 
 
-def test_none_controller_model_bypasses_filament_and_enables_vulkan_proxy(
+def test_none_controller_model_without_room_bypasses_filament_and_enables_vulkan_proxy(
     capsys,
 ) -> None:
     presenter = OpenXrVulkanPresenter(
@@ -2508,13 +2551,112 @@ def test_none_controller_model_bypasses_filament_and_enables_vulkan_proxy(
     presenter._initialize_filament_bridges()
 
     assert presenter._vulkan_controller_proxy_enabled is True
-    assert presenter._controller_brand is None
-    assert presenter._controller_calibration_offset == pytest.approx((0.0, 0.0, 0.0))
-    assert presenter._controller_calibration_rotation_deg == pytest.approx(0.0)
+    assert presenter._controller_brand.profile_id == "none"
+    assert presenter._controller_brand.left_glb is None
+    assert presenter._controller_brand.right_glb is None
+    assert presenter._controller_calibration_offset == pytest.approx(
+        presenter._controller_brand.offset
+    )
+    assert presenter._controller_calibration_rotation_deg == pytest.approx(
+        presenter._controller_brand.rotation_deg
+    )
     assert presenter.filament_bridge is None
-    assert "Filament engine, controller GLB, and environment GLB are bypassed" in (
+    assert "controller GLB and unused Filament engine are bypassed" in (
         capsys.readouterr().out
     )
+
+
+def test_none_controller_model_keeps_filament_room_enabled(monkeypatch, tmp_path) -> None:
+    room_path = tmp_path / "room.glb"
+    room_path.write_bytes(b"textured-room")
+    calls: list[tuple[str, object]] = []
+
+    class FakeBridge:
+        multiview_abi_available = False
+
+        def __init__(self, path):
+            calls.append(("bridge", path))
+
+        def create(self, **_kwargs):
+            calls.append(("create", None))
+
+        def create_eye_swapchain(self, eye_index, images, **_kwargs):
+            calls.append(("swapchain", (eye_index, list(images))))
+
+        def load_glb(self, data):
+            calls.append(("room", data))
+
+        def load_controller(self, *_args):
+            raise AssertionError("NONE must not load controller GLBs")
+
+        def set_scene_exposure(self, _value):
+            pass
+
+        def set_skybox_brightness(self, _value):
+            pass
+
+        def set_fill_light(self, _color, _intensity, _direction):
+            pass
+
+        def close(self):
+            pass
+
+    import xr_viewer.filament_vulkan_bridge as bridge_module
+
+    monkeypatch.setattr(bridge_module, "FilamentVulkanBridge", FakeBridge)
+    presenter = OpenXrVulkanPresenter(
+        OpenXrVulkanConfig(
+            controller_model="NONE",
+            filament_bridge_path="bridge.dll",
+            filament_glb_path=str(room_path),
+        )
+    )
+    presenter.vulkan = SimpleNamespace(
+        instance=1,
+        physical_device=2,
+        device=3,
+        queue_family_index=4,
+    )
+    presenter.swapchain_format = 43
+    presenter.swapchains = [
+        _EyeSwapchain("left", [SimpleNamespace(image="left")], 10, 20),
+        _EyeSwapchain("right", [SimpleNamespace(image="right")], 10, 20),
+    ]
+
+    presenter._initialize_filament_bridges()
+
+    assert presenter.filament_bridge is not None
+    assert ("room", b"textured-room") in calls
+
+
+def test_none_controller_model_never_updates_unloaded_filament_controllers() -> None:
+    presenter = OpenXrVulkanPresenter(OpenXrVulkanConfig(controller_model="NONE"))
+
+    class EnvironmentOnlyBridge:
+        controller_abi_available = True
+        controller_visibility_abi_available = True
+        controller_guide_abi_available = True
+
+        def __getattr__(self, name):
+            if name.startswith("set_controller"):
+                raise AssertionError(f"unexpected Filament controller call: {name}")
+            raise AttributeError(name)
+
+    presenter._update_filament_controllers(EnvironmentOnlyBridge())
+
+
+def test_none_controller_model_rejects_controller_brand_switch() -> None:
+    presenter = OpenXrVulkanPresenter(OpenXrVulkanConfig(controller_model="None"))
+
+    presenter._dispatch_controller_shortcut("switch_controller_brand")
+
+    assert presenter._controller_brand.profile_id == "none"
+
+
+def test_none_controller_model_has_explicit_fps_panel_name() -> None:
+    presenter = OpenXrVulkanPresenter(OpenXrVulkanConfig(controller_model="None"))
+
+    assert presenter._controller_model_display_name() == "None"
 
 
 def test_vulkan_controller_proxy_packs_both_openxr_grip_poses() -> None:
@@ -2540,8 +2682,13 @@ def test_vulkan_controller_proxy_packs_both_openxr_grip_poses() -> None:
     values = np.frombuffer(payload, dtype="<f4")
     left = values[:16].reshape((4, 4), order="F")
     right = values[16:32].reshape((4, 4), order="F")
-    assert left == pytest.approx(presenter._grip_mat_l)
-    assert right == pytest.approx(presenter._grip_mat_r)
+    offset = np.eye(4, dtype=np.float32)
+    offset[:3, 3] = presenter._controller_calibration_offset
+    rotation = euler_to_mat4(
+        0.0, math.radians(presenter._controller_calibration_rotation_deg), 0.0
+    )
+    assert left == pytest.approx(presenter._grip_mat_l @ rotation @ offset)
+    assert right == pytest.approx(presenter._grip_mat_r @ rotation @ offset)
     assert values[64:66] == pytest.approx((1.0, 1.0))
     assert values[68:71] == pytest.approx((12.0, 1.0, 1.0))
 
@@ -2580,9 +2727,15 @@ def test_vulkan_controller_proxy_uses_front_right_top_corner_for_b_anchor() -> N
     anchor = presenter._resolve_controller_b_button_local()
 
     assert anchor == pytest.approx((0.040, 0.040, -0.040))
-    assert presenter._controller_b_button_world_position() == pytest.approx(
-        (1.040, 2.040, 2.960)
+    offset = np.eye(4, dtype=np.float64)
+    offset[:3, 3] = presenter._controller_calibration_offset
+    rotation = euler_to_mat4(
+        0.0, math.radians(presenter._controller_calibration_rotation_deg), 0.0
+    ).astype(np.float64)
+    expected = presenter._grip_mat_r @ rotation @ offset @ np.asarray(
+        (0.040, 0.040, -0.040, 1.0), dtype=np.float64
     )
+    assert presenter._controller_b_button_world_position() == pytest.approx(expected[:3])
     source = inspect.getsource(OpenXrVulkanPresenter._render_tool_quad_layers)
     assert '"controller_proxy_callout"' in source
     assert "build_controller_callout_rgba(lang=language)" in source
@@ -2695,16 +2848,120 @@ def test_vulkan_copy_allows_srgb_unorm_quad_conversion() -> None:
     assert "or not formats_match" in source
 
 
-def test_profile_pose_is_applied_once_to_openxr_reference_space() -> None:
+def test_profile_pose_uses_two_frame_closed_loop_reference_space_calibration() -> None:
     source = (Path(__file__).resolve().parents[1] /
               "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
 
     assert "_apply_profile_reference_space(views)" in source
-    assert "self._profile_space_applied = True" in source
-    assert "reference_head = self._level_head_model_mat4(raw_head)" in source
+    assert "self._profile_space_calibration_pass >= 2" in source
+    assert "self._profile_space_pose_in_reference.astype(np.float64) @ raw_head" in source
     assert "space_pose = reference_head @ np.linalg.inv(self._profile_head_transform)" in source
     assert "xr.ReferenceSpaceType.STAGE" in source
     assert "enumerate_reference_spaces(self.session)" in source
+
+
+def test_profile_reference_space_feedback_removes_measured_stage_height() -> None:
+    created_poses = []
+
+    class FakeXr:
+        ReferenceSpaceType = xr.ReferenceSpaceType
+        ReferenceSpaceCreateInfo = xr.ReferenceSpaceCreateInfo
+
+        @staticmethod
+        def create_reference_space(_session, create_info):
+            created_poses.append(create_info.pose_in_reference_space)
+            return f"space-{len(created_poses)}"
+
+        @staticmethod
+        def destroy_space(_space):
+            pass
+
+    def views_at(y):
+        return [
+            SimpleNamespace(
+                pose=SimpleNamespace(
+                    position=SimpleNamespace(x=x, y=y, z=0.0),
+                    orientation=SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0),
+                )
+            )
+            for x in (-0.03, 0.03)
+        ]
+
+    presenter = OpenXrVulkanPresenter()
+    presenter.xr = FakeXr
+    presenter.session = object()
+    presenter.reference_space = "base"
+    presenter._xr_space = "base"
+    presenter._reference_space_type = xr.ReferenceSpaceType.STAGE
+    presenter._profile_head_transform = np.eye(4, dtype=np.float32)
+    presenter._profile_head_transform[1, 3] = 10.0
+
+    # The first startup locate can still report the provisional STAGE origin.
+    assert presenter._apply_profile_reference_space(views_at(0.0))
+    assert not presenter._profile_space_applied
+    assert created_poses[0].position.y == pytest.approx(-10.0)
+
+    # VDXR then settles one metre higher and reports target + physical height.
+    # The feedback pass recovers the base-space head through the provisional
+    # transform and compensates the measured metre without a fixed constant.
+    assert presenter._apply_profile_reference_space(views_at(11.0))
+    assert presenter._profile_space_applied
+    assert created_poses[1].position.y == pytest.approx(-9.0)
+    assert presenter._profile_space_calibration_pass == 2
+
+
+def test_authored_profile_ignores_runtime_reference_space_change() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter.reference_space = "calibrated-space"
+    presenter._xr_space = "calibrated-space"
+    presenter._profile_space_applied = True
+    presenter._profile_space_calibration_pass = 2
+    presenter._profile_auto_center_on_screen = False
+    presenter.xr = SimpleNamespace(
+        create_reference_space=lambda *_args: pytest.fail(
+            "authored room must retain its calibrated space"
+        )
+    )
+
+    presenter._recreate_reference_space_after_runtime_change()
+
+    assert presenter.reference_space == "calibrated-space"
+    assert presenter._xr_space == "calibrated-space"
+    assert presenter._profile_space_applied
+    assert presenter._profile_space_calibration_pass == 2
+
+
+def test_auto_center_profile_recalibrates_after_reference_space_change() -> None:
+    destroyed = []
+
+    class FakeXr:
+        ReferenceSpaceCreateInfo = xr.ReferenceSpaceCreateInfo
+
+        @staticmethod
+        def create_reference_space(_session, _create_info):
+            return "replacement-base-space"
+
+        @staticmethod
+        def destroy_space(space):
+            destroyed.append(space)
+
+    presenter = OpenXrVulkanPresenter()
+    presenter.xr = FakeXr
+    presenter.session = object()
+    presenter._reference_space_type = xr.ReferenceSpaceType.STAGE
+    presenter.reference_space = "calibrated-space"
+    presenter._xr_space = "calibrated-space"
+    presenter._profile_space_applied = True
+    presenter._profile_space_calibration_pass = 2
+    presenter._profile_auto_center_on_screen = True
+
+    presenter._recreate_reference_space_after_runtime_change()
+
+    assert presenter.reference_space == "replacement-base-space"
+    assert presenter._xr_space == "replacement-base-space"
+    assert not presenter._profile_space_applied
+    assert presenter._profile_space_calibration_pass == 0
+    assert destroyed == ["calibrated-space"]
 
 
 def test_filament_profile_keeps_glb_and_screen_positions_separate(tmp_path) -> None:
@@ -2791,6 +3048,17 @@ def test_packaged_default_profile_uses_neutral_filament_exposure() -> None:
     assert profile["lighting_presets"][0]["glow_shell_intensity_multiplier"] == 1.85
     assert profile["lighting_presets"][0]["glow_shell_radius"] == 20.0
     assert profile["lighting_presets"][0]["glow_shell_height"] == 9.5
+
+
+def test_3d_cinema_profile_screen_faces_the_default_audience() -> None:
+    profile_path = (
+        Path(__file__).resolve().parents[1]
+        / "src/xr_viewer/environments/3d_cinema/profile.json"
+    )
+    profile = json.loads(profile_path.read_text(encoding="utf-8"))
+
+    assert profile["display_name"]["CN"] == "3D_巨幕影院"
+    assert profile["screen"]["rotation_deg"] == [-180.0, 0.0, 0.0]
 
 
 def test_controller_profile_rotation_uses_local_x_axis() -> None:

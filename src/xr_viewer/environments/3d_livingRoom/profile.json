@@ -76,10 +76,15 @@
   "view_poses": [
     {
       "name": "Sofa Center",
-      "x": 0.0,
-      "y": 8.4286,
-      "z": -1.6129,
-      "angle": 0.0
+      "x": 0.5429,
+      "y": 0.3281,
+      "z": -9.5317,
+      "angle": 0.36,
+      "rotation_deg": [
+        0.36,
+        0.12,
+        0.0
+      ]
     },
     {
       "name": "Sofa Left",
@@ -97,11 +102,11 @@
     }
   ],
   "screen": {
-    "width": 10.0,
+    "width": 13.5464,
     "position": [
       0.4875,
-      1.5282,
-      -18.1929
+      3.7464,
+      -16.7749
     ],
     "rotation_deg": [
       0.0,
@@ -109,6 +114,7 @@
       0.0
     ],
     "curved": false,
-    "allow_curve": true
+    "allow_curve": true,
+    "name": "Preview Screen"
   }
 }

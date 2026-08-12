@@ -30,7 +30,8 @@ def test_parallel_inference_tooltip_warns_against_multiple_workers() -> None:
     assert tooltip == "实验用：不要开启两路或三路推理，多路推理效果更差。"
 
 
-def test_controller_model_options_include_filament_free_proxy() -> None:
+def test_controller_model_options_come_only_from_scanned_directories() -> None:
     source = BUILDERS_SOURCE.read_text(encoding="utf-8")
-    assert 'options=["None", *ctrl_dirs]' in source
+    assert "options=ctrl_dirs" in source
+    assert 'options=["None", *ctrl_dirs]' not in source
     assert 'value="PICO"' in source
