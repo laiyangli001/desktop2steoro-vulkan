@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections import deque
+from dataclasses import replace
+import os
 import time
 
 from utils.queue_utils import clear_nonblocking, drain_latest, put_latest
@@ -141,6 +143,11 @@ class RuntimeCallbacks:
 
     def on_openxr_controller_shortcut(self, action: str, **values) -> bool:
         """Apply renderer-independent depth shortcuts to runtime state."""
+        if action == "set_runtime_setting":
+            return self._set_openxr_runtime_setting(
+                str(values.get("name", "")), values.get("value"),
+                persist=bool(values.get("persist", False)),
+            )
         if action not in {
             "toggle_stereo",
             "reset_depth",
@@ -184,6 +191,48 @@ class RuntimeCallbacks:
             f"[OpenXRViewer] controller shortcut {action}: depth_strength={target:.3f}",
             flush=True,
         )
+        return True
+
+    def _set_openxr_runtime_setting(self, name: str, value, *, persist: bool) -> bool:
+        yaml_keys = {
+            "color_brightness": "Color Brightness",
+            "color_contrast": "Color Contrast",
+            "color_saturation": "Color Saturation",
+            "color_gamma": "Color Gamma",
+            "color_temperature": "Color Temperature",
+            "color_tint": "Color Tint",
+            "vulkan_projection_min_lod": "Vulkan Projection Min LOD",
+            "vulkan_projection_max_lod": "Vulkan Projection Max LOD",
+            "vulkan_projection_mip_lod_bias": "Vulkan Projection MIP LOD Bias",
+            "vulkan_projection_rcas_sharpness": "Vulkan Projection RCAS Sharpness",
+        }
+        if name not in yaml_keys:
+            return False
+        numeric = float(value)
+        current = self.context.openxr_state.runtime_settings_snapshot
+        snapshot = replace(
+            current,
+            version=int(current.version) + 1,
+            timestamp=time.time(),
+            source="openxr_settings_menu",
+            **{name: numeric},
+        )
+        self.update_openxr_runtime_config(snapshot=snapshot)
+        self.send_settings_snapshot(snapshot)
+        if not persist:
+            return True
+        try:
+            from gui.config import save_yaml
+            from stereo_runtime.hot_reload import read_yaml
+
+            settings_path = os.path.join(self.context.base_dir, "settings.yaml")
+            settings = read_yaml(settings_path)
+            settings[yaml_keys[name]] = numeric
+            ok, error = save_yaml(settings_path, settings)
+            if not ok:
+                raise OSError(error)
+        except Exception as exc:
+            print(f"[OpenXRViewer] settings menu save failed: {exc}", flush=True)
         return True
 
     def queue_put_latest(self, q, item):

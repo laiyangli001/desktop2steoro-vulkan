@@ -4751,6 +4751,25 @@ def test_tool_quad_layers_never_reuse_the_main_screen() -> None:
     assert "screen_present" in breakdown.validate_openxr_async().missing
 
 
+def test_settings_menu_uses_one_both_eye_cached_tool_quad() -> None:
+    presenter = OpenXrVulkanPresenter()
+    assert presenter._settings_menu.visible is False
+    presenter._head_position_w = np.asarray((0.0, 1.6, 0.0), dtype=np.float64)
+    presenter._head_forward_w = np.asarray((0.0, 0.0, -1.0), dtype=np.float64)
+    presenter._open_settings_menu()
+    assert presenter._settings_menu.visible is True
+    assert presenter._settings_menu_pose is not None
+    assert presenter._settings_menu_pose[0] == pytest.approx((0.0, 1.48, -1.1))
+
+
+def test_settings_menu_quad_is_submitted_before_laser_cursor() -> None:
+    source = inspect.getsource(OpenXrVulkanPresenter._render_tool_quad_layers)
+    menu = source.index('"settings_menu", menu_rgba')
+    cursor = source.index('self._cursor_overlay_specs')
+    assert menu < cursor
+    assert "if not self._settings_menu.visible" in source
+
+
 def test_tool_quad_format_is_enumerated_once_per_session() -> None:
     calls = 0
 

@@ -1,6 +1,8 @@
 # Desktop2Stereo Vulkan 项目日志
 
 ## 2026-08-13
+- 开始实现 OpenXR Quad 设置菜单首个可运行阶段：新增世界锁定、单 swapchain、双眼 `BOTH` 可见的三页签菜单，支持左右手柄在虚拟屏幕和键盘外短按 Trigger 唤出、菜单优先输入、首手锁定、页签/按钮/滑块命中以及菜单外关闭；画面页已接通亮度、对比度、饱和度、Gamma、色温、色调、Min/Max LOD、MIP Bias 和 RCAS 的实时完整快照更新与释放后原子保存，屏幕页已接通尺寸、高度和平面/曲面实时调整。菜单纹理与 swapchain 缓存复用，连续交互最多 `20 Hz` 重绘；房间 Profile 参数和 GPU MSDF 图元扩展保留到下一阶段。
+- 新增 `docs/11-openxr-quad-settings-menu-implementation-plan.md`：确定以单个双眼可见 OpenXR Quad 实现“画面/房间/屏幕”三页签设置菜单，定义屏幕外 Trigger 唤出、激光点击与滑块交互、GPU MSDF 图元渲染、运行时热更新、`settings.yaml`/房间 Profile 持久化、动态座位与灯光预设，以及分阶段测试验收标准。
 - 修复 OpenXR 3D 房间启动后实际视点稳定高于 Profile `view_pose` 约 1 米的问题：参考空间校准改为跨两个 XR tick 的闭环流程，首次建立临时座位空间，下一帧使用 VDXR 实际返回的头部姿态测量并抵消 STAGE 地面高度更新；同时持续跟踪子空间到原始 STAGE/LOCAL 的变换，避免二次校准混用坐标系。该修复不写死玩家身高，也不改变预览工具保存的座位坐标。
 - 对齐旧工程的 OpenXR 参考空间变更策略：普通带有固定 `view_pose` 的 3D 房间在 VDXR 后续发送地面/边界空间变化事件时保留已经校准的子空间，不再销毁空间并重新执行座位校准，消除运行一段时间后房间突然漂移；只有显式设置 `auto_center_on_screen=true` 的 Profile 才接受事件并重新定位。
 - 修正 OpenXR `3D_巨幕影院` 的默认屏幕朝向：`3d_cinema/profile.json` 中屏幕由错误的正面 `0°` 改为面向默认观众席的 `-180°`，避免从屏幕背面观看导致桌面内容水平镜像；屏幕位置和尺寸保持不变。

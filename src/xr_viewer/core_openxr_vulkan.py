@@ -76,8 +76,10 @@ from .overlay_textures import (
     build_keyboard_rgba,
     build_screen_adjust_osd_rgba,
     build_screen_preset_osd_rgba,
+    build_settings_menu_rgba,
     build_short_osd_rgba,
 )
+from .settings_menu import OpenXrSettingsMenu
 from .keyboard_layout import _KB_TEX_H, _KB_TEX_W
 from .msdf_font_atlas import MsdfFontAtlas
 from .windows_input import (
@@ -1024,6 +1026,14 @@ class OpenXrVulkanPresenter(
             else None
         )
         self._overlay_quad_entries: dict[str, dict[str, Any]] = {}
+        self._settings_menu = OpenXrSettingsMenu()
+        self._settings_menu_pose: tuple[tuple[float, ...], tuple[float, ...]] | None = None
+        self._settings_menu_cursor_uv: tuple[float, float] | None = None
+        self._settings_menu_values: dict[str, float | bool] = {}
+        self._settings_menu_last_redraw = 0.0
+        self._settings_menu_last_adjust = 0.0
+        self._settings_menu_trigger_down = [False, False]
+        self._settings_menu_allow_curve = True
         # Keep rasterized tool textures and their released swapchain image
         # alive. Static Quad layers must not perform a host upload every XR
         # frame; only the layer pose is rebuilt per frame.
@@ -1583,10 +1593,12 @@ class OpenXrVulkanPresenter(
             self._smooth_controller_poses()
             self._grip_l_now = bool(self._controller_input(0).get("grip", 0.0) > 0.5)
             self._grip_r_now = bool(self._controller_input(1).get("grip", 0.0) > 0.5)
-            self._handle_keyboard_input()
-            self._handle_vulkan_pointer_input()
-            self._handle_controller_shortcuts()
-            self._handle_controller_guide_input(self._last_frame_dt)
+            menu_consumed = self._handle_settings_menu_input()
+            if not menu_consumed:
+                self._handle_keyboard_input()
+                self._handle_vulkan_pointer_input()
+                self._handle_controller_shortcuts()
+                self._handle_controller_guide_input(self._last_frame_dt)
             self._last_controller_input_error = None
         except Exception as exc:
             # Keep one bad optional input path from terminating XR, but make
@@ -3390,6 +3402,205 @@ class OpenXrVulkanPresenter(
                     self._pointer_state[name] = "idle"
                 else:
                     _set_cursor_pos(int(hit[0] * _get_desktop_size()[0]), int(hit[1] * _get_desktop_size()[1]))
+
+    def _open_settings_menu(self) -> None:
+        if self._head_position_w is None or self._head_forward_w is None:
+            return
+        forward = np.asarray(self._head_forward_w, dtype=np.float64).copy()
+        forward[1] = 0.0
+        forward /= max(float(np.linalg.norm(forward)), 1e-8)
+        up = np.asarray((0.0, 1.0, 0.0), dtype=np.float64)
+        right = np.cross(forward, up)
+        right /= max(float(np.linalg.norm(right)), 1e-8)
+        panel_normal = -forward
+        basis = np.column_stack((right, up, panel_normal))
+        position = np.asarray(self._head_position_w, dtype=np.float64) + forward * 1.1
+        position[1] -= 0.12
+        self._settings_menu_pose = (
+            tuple(float(value) for value in position),
+            tuple(float(value) for value in _mat3_to_quat_xyzw(basis)),
+        )
+        self._refresh_settings_menu_values()
+        self._settings_menu.open()
+
+    def _refresh_settings_menu_values(self) -> None:
+        snapshot = None
+        callback = self._on_controller_shortcut
+        owner = getattr(callback, "__self__", None)
+        context = getattr(owner, "context", None)
+        state = getattr(context, "openxr_state", None)
+        snapshot = getattr(state, "runtime_settings_snapshot", None)
+        defaults = {
+            "color_brightness": 1.0, "color_contrast": 1.0,
+            "color_saturation": 1.0, "color_gamma": 1.0,
+            "color_temperature": 0.0, "color_tint": 0.0,
+            "vulkan_projection_min_lod": 0.0,
+            "vulkan_projection_max_lod": 0.35,
+            "vulkan_projection_mip_lod_bias": -0.35,
+            "vulkan_projection_rcas_sharpness": 0.5,
+        }
+        for key, default in defaults.items():
+            value = getattr(snapshot, key, None) if snapshot is not None else None
+            if value is not None:
+                self._settings_menu_values[key] = float(value)
+            else:
+                self._settings_menu_values.setdefault(key, default)
+        if self._filament_screen is not None and self._filament_screen_initial is not None:
+            self._settings_menu_values["screen:width"] = (
+                float(self._filament_screen[1])
+                / max(float(self._filament_screen_initial[1]), 1e-6)
+            )
+            self._settings_menu_values["screen:height"] = (
+                float(self._filament_screen[0][1])
+                - float(self._filament_screen_initial[0][1])
+            )
+        self._settings_menu_values["screen:curve"] = bool(self._screen_curved)
+        self._settings_menu_values["screen_allow_curve"] = bool(self._settings_menu_allow_curve)
+
+    def _settings_menu_ray_hit(self, hand: int) -> tuple[float, float] | None:
+        if not self._settings_menu.visible or self._settings_menu_pose is None:
+            return None
+        origin, direction = self._controller_interaction_ray(hand)
+        if origin is None or direction is None:
+            return None
+        position, quaternion = self._settings_menu_pose
+        qx, qy, qz, qw = quaternion
+        basis4 = _xr_quat_to_mat4(
+            self.xr.Quaternionf(x=qx, y=qy, z=qz, w=qw)
+        ).astype(np.float64)
+        normal = basis4[:3, 2]
+        denominator = float(np.dot(normal, direction))
+        if abs(denominator) < 1e-6:
+            return None
+        distance = float(np.dot(normal, np.asarray(position) - origin) / denominator)
+        if distance <= 0.0:
+            return None
+        world = np.asarray(origin) + np.asarray(direction) * distance
+        local = basis4[:3, :3].T @ (world - np.asarray(position))
+        u = float(local[0]) / 0.95 + 0.5
+        v = 0.5 - float(local[1]) / 0.71
+        if 0.0 <= u <= 1.0 and 0.0 <= v <= 1.0:
+            return u, v
+        return None
+
+    def _apply_settings_menu_control(self, control, uv, *, persist: bool = False) -> None:
+        key = control.key
+        if key.startswith("tab:"):
+            self._settings_menu.set_tab(key[4:])
+            return
+        if key == "close":
+            self._settings_menu.close()
+            return
+        if control.kind == "slider":
+            value = control.value_from_u(float(uv[0]))
+            if key.startswith("screen:"):
+                if self._filament_screen is None or self._filament_screen_initial is None:
+                    return
+                position, width, height, rotation = self._filament_screen
+                initial_position, initial_width, initial_height, _initial_rotation = self._filament_screen_initial
+                if key == "screen:width":
+                    width = float(initial_width) * value
+                    height = float(initial_height) * value
+                elif key == "screen:height":
+                    position = (position[0], float(initial_position[1]) + value, position[2])
+                self._filament_screen = (position, width, height, rotation)
+            elif not key.startswith("room:"):
+                if key == "vulkan_projection_min_lod":
+                    value = min(value, float(self._settings_menu_values.get("vulkan_projection_max_lod", 2.0)))
+                elif key == "vulkan_projection_max_lod":
+                    value = max(value, float(self._settings_menu_values.get("vulkan_projection_min_lod", 0.0)))
+                self._dispatch_controller_shortcut(
+                    "set_runtime_setting", name=key, value=value, persist=persist
+                )
+            self._settings_menu_values[key] = value
+            self._settings_menu.mark_dirty()
+        elif key == "screen:curve" and self._settings_menu_allow_curve:
+            self._screen_curved = not self._screen_curved
+            self._settings_menu_values[key] = self._screen_curved
+            self._settings_menu.mark_dirty()
+
+    def _handle_settings_menu_input(self) -> bool:
+        inputs = (self._controller_input(0), self._controller_input(1))
+        if not self._settings_menu.visible:
+            for hand in (0, 1):
+                trigger = float(inputs[hand].get("trigger", 0.0) or 0.0)
+                if self._settings_menu_trigger_down[hand]:
+                    if trigger <= 0.3:
+                        self._settings_menu_trigger_down[hand] = False
+                    continue
+                origin, direction = self._controller_interaction_ray(hand)
+                keyboard_hit = (
+                    self._keyboard_visible and origin is not None
+                    and self._keyboard_plane_hit(origin, direction) != (None, None)
+                )
+                outside = self._screen_ray_hit_for_hand(hand) is None and not keyboard_hit
+                if self._settings_menu.sample_trigger(
+                    hand, trigger,
+                    outside_targets=outside,
+                ):
+                    self._open_settings_menu()
+                    return True
+            return False
+
+        hits = (self._settings_menu_ray_hit(0), self._settings_menu_ray_hit(1))
+        hover = None
+        for hand in (0, 1):
+            if hits[hand] is not None:
+                hover = self._settings_menu.hit_test(
+                    hits[hand], allow_curve=self._settings_menu_allow_curve
+                )
+                break
+        next_hover = None if hover is None else hover.key
+        next_cursor = next((hit for hit in hits if hit is not None), None)
+        if next_cursor != self._settings_menu_cursor_uv:
+            self._settings_menu_cursor_uv = next_cursor
+            self._settings_menu.mark_dirty()
+        if next_hover != self._settings_menu.hover_key:
+            self._settings_menu.hover_key = next_hover
+            self._settings_menu.mark_dirty()
+        for hand in (0, 1):
+            trigger = float(inputs[hand].get("trigger", 0.0) or 0.0)
+            if not self._settings_menu_trigger_down[hand] and trigger >= 0.7:
+                if self._settings_menu.active_hand is None:
+                    self._settings_menu.active_hand = hand
+                    self._settings_menu.active_key = next_hover
+                    self._settings_menu_trigger_down[hand] = True
+                    if hits[hand] is None:
+                        self._settings_menu.close()
+                    elif hover is not None:
+                        self._apply_settings_menu_control(hover, hits[hand])
+            elif self._settings_menu_trigger_down[hand] and trigger <= 0.3:
+                self._settings_menu_trigger_down[hand] = False
+                if self._settings_menu.active_hand == hand:
+                    active_key = self._settings_menu.active_key
+                    if active_key and not active_key.startswith(("screen:", "room:")):
+                        active_control = next(
+                            (item for item in self._settings_menu.controls(
+                                allow_curve=self._settings_menu_allow_curve
+                            ) if item.key == active_key),
+                            None,
+                        )
+                        if active_control is not None and active_control.kind == "slider":
+                            self._dispatch_controller_shortcut(
+                                "set_runtime_setting",
+                                name=active_key,
+                                value=self._settings_menu_values[active_key],
+                                persist=True,
+                            )
+                    self._settings_menu.active_hand = None
+                    self._settings_menu.active_key = None
+            elif (
+                self._settings_menu_trigger_down[hand]
+                and self._settings_menu.active_hand == hand
+                and hits[hand] is not None
+            ):
+                control = self._settings_menu.hit_test(hits[hand], allow_curve=self._settings_menu_allow_curve)
+                if control is not None and control.kind == "slider" and control.key == self._settings_menu.active_key:
+                    now = time.perf_counter()
+                    if now - self._settings_menu_last_adjust >= 0.05:
+                        self._apply_settings_menu_control(control, hits[hand])
+                        self._settings_menu_last_adjust = now
+        return True
 
     def run(self, frame_limit: int | None = None) -> int:
         self.initialize()
@@ -6171,6 +6382,7 @@ class OpenXrVulkanPresenter(
                 "rotation_deg": [0.0, 0.0, 0.0],
             }
         if isinstance(screen, dict):
+            self._settings_menu_allow_curve = bool(screen.get("allow_curve", True))
             screen_position = screen.get("position", [0.0, 1.2, -2.0])
             rotation = screen.get("rotation_deg", [0.0, 0.0, 0.0])
             if (
@@ -8709,12 +8921,41 @@ class OpenXrVulkanPresenter(
             position, rotation = self._overlay_pose_from_matrix(screen_pose)
             specs.append(("aperture", rgba, position, (width * 0.24, height * 0.06), rotation))
 
-        cursor_rgba = self._tool_quad_texture_cache.get("laser_cursor")
-        if cursor_rgba is None:
-            cursor_rgba = build_cursor_rgba(64)
-            self._tool_quad_texture_cache["laser_cursor"] = cursor_rgba
-            self._tool_quad_texture_keys["laser_cursor"] = ("legacy_cursor_ring", 64)
-        specs.extend(self._cursor_overlay_specs(cursor_rgba, screen_pose, head))
+        if self._settings_menu.visible and self._settings_menu_pose is not None:
+            menu_now = time.perf_counter()
+            menu_rgba = self._tool_quad_texture_cache.get("settings_menu")
+            if (
+                menu_rgba is None
+                or (
+                    self._settings_menu.dirty
+                    and menu_now - self._settings_menu_last_redraw >= 0.05
+                )
+            ):
+                menu_rgba = build_settings_menu_rgba(
+                    self._settings_menu,
+                    self._settings_menu_values,
+                    hover_key=self._settings_menu.hover_key,
+                    cursor_uv=self._settings_menu_cursor_uv,
+                    lang=language,
+                )
+                self._tool_quad_texture_cache["settings_menu"] = menu_rgba
+                self._tool_quad_texture_keys["settings_menu"] = (
+                    "settings_menu", self._settings_menu.revision
+                )
+                self._settings_menu.dirty = False
+                self._settings_menu_last_redraw = menu_now
+            menu_position, menu_rotation = self._settings_menu_pose
+            specs.append((
+                "settings_menu", menu_rgba, menu_position, (0.95, 0.71), menu_rotation
+            ))
+
+        if not self._settings_menu.visible:
+            cursor_rgba = self._tool_quad_texture_cache.get("laser_cursor")
+            if cursor_rgba is None:
+                cursor_rgba = build_cursor_rgba(64)
+                self._tool_quad_texture_cache["laser_cursor"] = cursor_rgba
+                self._tool_quad_texture_keys["laser_cursor"] = ("legacy_cursor_ring", 64)
+            specs.extend(self._cursor_overlay_specs(cursor_rgba, screen_pose, head))
 
         specs_ready = time.perf_counter()
         layers = [self._upload_tool_quad(*spec) for spec in specs]

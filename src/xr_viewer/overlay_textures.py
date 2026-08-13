@@ -109,6 +109,47 @@ def load_overlay_font(size, font_type=None, *, prefer_cjk=False):
     return ImageFont.load_default()
 
 
+def build_settings_menu_rgba(menu, values, *, hover_key=None, cursor_uv=None, lang="EN"):
+    """Rasterize the first-stage XR settings menu into one cached Quad texture."""
+    width, height = 1024, 768
+    image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle((8, 8, width - 8, height - 8), radius=34, fill=(20, 22, 28, 238), outline=(86, 91, 105, 255), width=3)
+    title_font = load_overlay_font(30, prefer_cjk=True)
+    label_font = load_overlay_font(22, prefer_cjk=True)
+    value_font = load_overlay_font(20, prefer_cjk=True)
+    chinese = str(lang).upper().startswith("CN") or str(lang).lower().startswith("zh")
+    draw.text((42, 20), "OpenXR 设置" if chinese else "OpenXR Settings", font=title_font, fill=(245, 247, 252, 255))
+    tab_labels = {"picture": ("画面" if chinese else "Picture"), "room": ("房间" if chinese else "Room"), "screen": ("屏幕" if chinese else "Screen")}
+    controls = menu.controls(allow_curve=bool(values.get("screen_allow_curve", True)))
+    for control in controls:
+        x0, y0, x1, y1 = control.rect
+        box = (int(x0 * width), int(y0 * height), int(x1 * width), int(y1 * height))
+        selected = control.key == hover_key or (control.key.startswith("tab:") and control.key[4:] == menu.tab)
+        fill = (245, 181, 22, 245) if selected else ((70, 74, 84, 230) if control.enabled else (42, 44, 50, 180))
+        if control.kind == "slider":
+            draw.rounded_rectangle(box, radius=10, fill=(48, 51, 59, 255))
+            value = float(values.get(control.key, control.minimum))
+            fraction = max(0.0, min(1.0, (value - control.minimum) / max(control.maximum - control.minimum, 1e-9)))
+            fill_box = (box[0], box[1], int(box[0] + (box[2] - box[0]) * fraction), box[3])
+            draw.rounded_rectangle(fill_box, radius=10, fill=(245, 181, 22, 255))
+            draw.ellipse((fill_box[2] - 11, box[1] - 5, fill_box[2] + 11, box[3] + 5), fill=(250, 250, 250, 255))
+            draw.text((box[0], box[1] - 34), control.label, font=label_font, fill=(220, 224, 234, 255))
+            draw.text((box[2] - 80, box[1] - 34), f"{value:.2f}", font=value_font, fill=(245, 181, 22, 255))
+        else:
+            draw.rounded_rectangle(box, radius=14, fill=fill)
+            label = tab_labels.get(control.key[4:], control.label) if control.key.startswith("tab:") else control.label
+            bbox = draw.textbbox((0, 0), label, font=label_font)
+            draw.text(((box[0] + box[2] - (bbox[2] - bbox[0])) / 2, (box[1] + box[3] - (bbox[3] - bbox[1])) / 2 - 2), label, font=label_font, fill=((20, 22, 28, 255) if selected else (240, 242, 248, 255)))
+    if menu.tab == "room":
+        draw.text((82, 122), "房间参数将在下一阶段接通 Profile" if chinese else "Room profile controls (next stage)", font=label_font, fill=(160, 166, 180, 255))
+    if cursor_uv is not None:
+        cx, cy = int(cursor_uv[0] * width), int(cursor_uv[1] * height)
+        draw.ellipse((cx - 12, cy - 12, cx + 12, cy + 12), outline=(100, 225, 255, 255), width=5)
+        draw.ellipse((cx - 4, cy - 4, cx + 4, cy + 4), fill=(255, 255, 255, 255))
+    return np.ascontiguousarray(np.asarray(image, dtype=np.uint8))
+
+
 def build_keyboard_rgba(show_shifted, keyboard_width, keyboard_height, font_type=None, *, hover_indices=(), held_indices=(), locked_indices=(), hover_points=()):
     """Build the validated keyboard texture content for any renderer."""
     hover_indices = set(i for i in hover_indices if i is not None)

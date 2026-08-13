@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from app_runtime.runtime_callbacks import RuntimeCallbacks
+from stereo_runtime.settings_snapshot import RuntimeSettingsSnapshot
 
 
 class FakeOpenXrState:
@@ -95,3 +96,25 @@ def test_controller_shortcut_adjusts_depth_continuously_with_clamp() -> None:
         "adjust_depth_strength", delta=-20.0
     )
     assert callbacks.context.openxr_state.runtime_settings_snapshot.depth_strength == 0.0
+
+
+def test_settings_menu_runtime_value_updates_snapshot_without_persisting() -> None:
+    callbacks = _callbacks(0.6)
+    callbacks.context.openxr_state.runtime_settings_snapshot = RuntimeSettingsSnapshot(
+        version=4, timestamp=1.0, depth_strength=0.6
+    )
+    snapshots = []
+    callbacks.context.settings_update_q = SimpleNamespace(
+        put_nowait=lambda snapshot: snapshots.append(snapshot),
+        get_nowait=lambda: (_ for _ in ()).throw(Exception()),
+    )
+    callbacks.send_settings_snapshot = snapshots.append
+
+    assert callbacks.on_openxr_controller_shortcut(
+        "set_runtime_setting", name="color_brightness", value=1.4,
+        persist=False,
+    ) is True
+    snapshot = callbacks.context.openxr_state.updates[-1]["snapshot"]
+    assert snapshot.version == 5
+    assert snapshot.color_brightness == pytest.approx(1.4)
+    assert snapshots[-1] is snapshot
