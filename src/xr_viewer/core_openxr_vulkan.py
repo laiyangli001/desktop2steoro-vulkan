@@ -12,6 +12,7 @@ import queue
 import sys
 import threading
 import time
+import traceback
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -7870,7 +7871,8 @@ class OpenXrVulkanPresenter(
                         self._last_vulkan_projection_composer_fallback = fallback_status
                         print(
                             "[OpenXRViewer] Vulkan projection composer fallback: "
-                            f"{fallback_status[0]}: {fallback_status[1]}",
+                            f"{fallback_status[0]}: {fallback_status[1]}\n"
+                            f"{traceback.format_exc().rstrip()}",
                             flush=True,
                         )
                     if self._on_breakdown_inc is not None:

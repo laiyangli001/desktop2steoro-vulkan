@@ -1536,6 +1536,17 @@ def test_projection_composer_uses_direct_vulkan_rasterization_in_opaque_runtime(
     assert "self._vulkan_projection_composer_active" in source
 
 
+def test_projection_pass_reports_creation_stage_and_fallback_traceback() -> None:
+    pass_source = inspect.getsource(VulkanProjectionScreenPass)
+    presenter_source = inspect.getsource(OpenXrVulkanPresenter._render_projection_layer)
+
+    assert 'self.creation_stage = "create_shader_modules"' in pass_source
+    assert 'self.creation_stage = "create_screen_pipeline"' in pass_source
+    assert 'self.creation_stage = "create_panorama_pipeline"' in pass_source
+    assert "Vulkan projection pass creation failed:" in pass_source
+    assert "traceback.format_exc().rstrip()" in presenter_source
+
+
 def test_filament_screen_image_abi_is_absent_from_presenter() -> None:
     source = (Path(__file__).resolve().parents[1] /
               "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")

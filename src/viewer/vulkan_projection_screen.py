@@ -124,11 +124,17 @@ class VulkanProjectionScreenPass:
         self.image_views: dict[tuple[int, int], Any] = {}
         self.framebuffers: dict[tuple[int, int, int, int], Any] = {}
         self.overlay_framebuffers: dict[tuple[int, int, int, int], Any] = {}
+        self.creation_stage = "initializing"
         try:
             self._create()
-        except Exception:
+            self.creation_stage = "ready"
+        except Exception as exc:
+            failed_stage = self.creation_stage
             self.close()
-            raise
+            raise RuntimeError(
+                "Vulkan projection pass creation failed: "
+                f"stage={failed_stage} error={type(exc).__name__}: {exc}"
+            ) from exc
 
     @classmethod
     def _min_mip_lod_from_env(cls) -> float:
@@ -248,6 +254,7 @@ class VulkanProjectionScreenPass:
     def _create(self) -> None:
         vk = self.vk
         shader_root = Path(__file__).resolve().parents[1] / "shaders"
+        self.creation_stage = "create_shader_modules"
         vertex_module = self._create_shader_module(
             shader_root / "d2s_projection_screen_vert.spv"
         )
@@ -293,6 +300,7 @@ class VulkanProjectionScreenPass:
         panorama_fragment_module = self._create_shader_module(
             shader_root / "d2s_projection_panorama_frag.spv"
         )
+        self.creation_stage = "create_sampled_descriptor_layout"
         self.descriptor_set_layout = create_descriptor_set_layout(
             self.context,
             [
@@ -303,6 +311,7 @@ class VulkanProjectionScreenPass:
                 )
             ],
         )
+        self.creation_stage = "create_sampled_descriptor_pool"
         self.descriptor_pool = vk.vkCreateDescriptorPool(
             self.context.device,
             vk.VkDescriptorPoolCreateInfo(
@@ -318,6 +327,7 @@ class VulkanProjectionScreenPass:
             ),
             None,
         )
+        self.creation_stage = "allocate_sampled_descriptor_sets"
         allocated_descriptor_sets = list(
             vk.vkAllocateDescriptorSets(
                 self.context.device,
@@ -339,6 +349,7 @@ class VulkanProjectionScreenPass:
         self.hdr_descriptor_sets = allocated_descriptor_sets[
             self._DESCRIPTOR_COUNT * 3:self._DESCRIPTOR_COUNT * 4
         ]
+        self.creation_stage = "create_glow_descriptors"
         self.glow_descriptor_set_layout = create_descriptor_set_layout(
             self.context,
             [
@@ -417,6 +428,7 @@ class VulkanProjectionScreenPass:
                 0,
                 None,
             )
+        self.creation_stage = "create_laser_descriptors"
         self.laser_descriptor_set_layout = create_descriptor_set_layout(
             self.context,
             [
@@ -486,6 +498,7 @@ class VulkanProjectionScreenPass:
                 0,
                 None,
             )
+        self.creation_stage = "create_sampler"
         self.sampler = self._create_sampler()
         attachment = vk.VkAttachmentDescription(
             format=self.target_format,
@@ -510,6 +523,7 @@ class VulkanProjectionScreenPass:
             colorAttachmentCount=1,
             pColorAttachments=[color_reference],
         )
+        self.creation_stage = "create_clear_render_pass"
         self.render_pass = vk.vkCreateRenderPass(
             self.context.device,
             vk.VkRenderPassCreateInfo(
@@ -536,6 +550,7 @@ class VulkanProjectionScreenPass:
             colorAttachmentCount=1,
             pColorAttachments=[color_reference],
         )
+        self.creation_stage = "create_load_render_pass"
         self.overlay_render_pass = vk.vkCreateRenderPass(
             self.context.device,
             vk.VkRenderPassCreateInfo(
@@ -546,6 +561,7 @@ class VulkanProjectionScreenPass:
             ),
             None,
         )
+        self.creation_stage = "create_screen_pipeline_layout"
         self.pipeline_layout = vk.vkCreatePipelineLayout(
             self.context.device,
             vk.VkPipelineLayoutCreateInfo(
@@ -566,6 +582,7 @@ class VulkanProjectionScreenPass:
             ),
             None,
         )
+        self.creation_stage = "create_glow_pipeline_layout"
         self.glow_pipeline_layout = vk.vkCreatePipelineLayout(
             self.context.device,
             vk.VkPipelineLayoutCreateInfo(
@@ -600,6 +617,7 @@ class VulkanProjectionScreenPass:
                 pName="main",
             ),
         ]
+        self.creation_stage = "create_screen_pipeline"
         self.pipeline = vk.vkCreateGraphicsPipelines(
             self.context.device,
             None,
@@ -786,6 +804,7 @@ class VulkanProjectionScreenPass:
             additive=False,
             maximum=True,
         )
+        self.creation_stage = "create_laser_pipeline_layout"
         self.laser_pipeline_layout = vk.vkCreatePipelineLayout(
             self.context.device,
             vk.VkPipelineLayoutCreateInfo(
@@ -820,6 +839,7 @@ class VulkanProjectionScreenPass:
                 pName="main",
             ),
         ]
+        self.creation_stage = "create_laser_pipeline"
         self.laser_pipeline = vk.vkCreateGraphicsPipelines(
             self.context.device,
             None,
@@ -897,6 +917,7 @@ class VulkanProjectionScreenPass:
                 pName="main",
             ),
         ]
+        self.creation_stage = "create_controller_proxy_pipeline"
         self.controller_proxy_pipeline = vk.vkCreateGraphicsPipelines(
             self.context.device,
             None,
@@ -960,6 +981,7 @@ class VulkanProjectionScreenPass:
             ],
             None,
         )[0]
+        self.creation_stage = "create_rcas_pipeline_layout"
         self.rcas_pipeline_layout = vk.vkCreatePipelineLayout(
             self.context.device,
             vk.VkPipelineLayoutCreateInfo(
@@ -991,6 +1013,7 @@ class VulkanProjectionScreenPass:
                 pName="main",
             ),
         ]
+        self.creation_stage = "create_rcas_pipeline"
         self.rcas_pipeline = vk.vkCreateGraphicsPipelines(
             self.context.device,
             None,
@@ -1054,6 +1077,7 @@ class VulkanProjectionScreenPass:
             ],
             None,
         )[0]
+        self.creation_stage = "create_copy_pipeline_layout"
         self.copy_pipeline_layout = vk.vkCreatePipelineLayout(
             self.context.device,
             vk.VkPipelineLayoutCreateInfo(
@@ -1077,6 +1101,7 @@ class VulkanProjectionScreenPass:
                 pName="main",
             ),
         ]
+        self.creation_stage = "create_copy_pipeline"
         self.copy_pipeline = vk.vkCreateGraphicsPipelines(
             self.context.device,
             None,
@@ -1140,6 +1165,7 @@ class VulkanProjectionScreenPass:
             ],
             None,
         )[0]
+        self.creation_stage = "create_quality_pipeline_layout"
         self.quality_pipeline_layout = vk.vkCreatePipelineLayout(
             self.context.device,
             vk.VkPipelineLayoutCreateInfo(
@@ -1169,6 +1195,7 @@ class VulkanProjectionScreenPass:
                 pName="main",
             ),
         ]
+        self.creation_stage = "create_quality_pipeline"
         self.quality_pipeline = vk.vkCreateGraphicsPipelines(
             self.context.device,
             None,
@@ -1222,6 +1249,7 @@ class VulkanProjectionScreenPass:
             ],
             None,
         )[0]
+        self.creation_stage = "create_hdr_pipeline_layout"
         self.hdr_pipeline_layout = vk.vkCreatePipelineLayout(
             self.context.device,
             vk.VkPipelineLayoutCreateInfo(
@@ -1251,6 +1279,7 @@ class VulkanProjectionScreenPass:
                 pName="main",
             ),
         ]
+        self.creation_stage = "create_hdr_pipeline"
         self.hdr_pipeline = vk.vkCreateGraphicsPipelines(
             self.context.device,
             None,
@@ -1318,6 +1347,7 @@ class VulkanProjectionScreenPass:
             ],
             None,
         )[0]
+        self.creation_stage = "create_panorama_pipeline_layout"
         self.panorama_pipeline_layout = vk.vkCreatePipelineLayout(
             self.context.device,
             vk.VkPipelineLayoutCreateInfo(
@@ -1330,6 +1360,7 @@ class VulkanProjectionScreenPass:
                 )],
             ), None,
         )
+        self.creation_stage = "create_panorama_pipeline"
         self.panorama_pipeline = vk.vkCreateGraphicsPipelines(
             self.context.device, None, 1, [vk.VkGraphicsPipelineCreateInfo(
                 sType=vk.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
