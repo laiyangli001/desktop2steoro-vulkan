@@ -1159,6 +1159,20 @@ def test_projection_quality_chain_is_not_disabled_by_filament_waits() -> None:
     assert "and not filament_wait_semaphores" not in source
 
 
+def test_projection_panorama_survives_live_filament_foreground() -> None:
+    source = inspect.getsource(OpenXrVulkanPresenter._render_vulkan_projection_composer)
+
+    # GLB -> HDR hot switching intentionally keeps Filament alive for the
+    # controllers. Its transparent HDR resolve must LOAD the panorama pass
+    # instead of clearing the Projection target.
+    panorama = source.index("panorama_timeline = self._vulkan_projection_screen_pass.submit_panorama")
+    foreground = source.index("if filament_hdr_sources and not defer_filament_resolve:")
+    screen = source.index("if use_quality_mip:")
+    assert panorama < foreground < screen
+    foreground_block = source[foreground:screen]
+    assert "load_target=bool(panorama_timeline)" in foreground_block
+
+
 def test_filament_controller_overlay_runs_after_vulkan_composer() -> None:
     calls = []
 

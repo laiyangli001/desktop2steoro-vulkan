@@ -6297,10 +6297,15 @@ class OpenXrVulkanPresenter(
             and not self._filament_projection_only
         )
         if filament_hdr_sources and not defer_filament_resolve:
+            # A live GLB -> panorama switch keeps the Filament engine for
+            # controllers.  Preserve the panorama that was rendered into the
+            # Projection target before resolving that transparent foreground;
+            # the clear resolve is only valid when Filament is the first pass.
             filament_hdr_timeline = self._resolve_filament_multiview_hdr(
                 acquired_images,
                 filament_wait_semaphores,
                 projection_draws=projection_draws,
+                load_target=bool(panorama_timeline),
             )
             filament_wait_semaphores = ()
         if self._filament_projection_only and filament_hdr_timeline:

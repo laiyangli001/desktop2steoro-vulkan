@@ -2,6 +2,7 @@
 
 ## 2026-08-13
 
+- 修复 OpenXR 房间热切换的单向 HDR 丢失：从 GLB 房间切换到 HDR 全景时会保留仍用于手柄的 Filament Bridge，但其透明前景 resolve 现在对已绘制的 panorama 使用 LOAD 叠加，不再清空 HDR 背景；直接启动 HDR 与 `房间 → HDR` 现统一使用相同合成顺序。
 - 修复 Requirements Compliance CI 依赖：测试矩阵安装 `opencv-python-headless`，使图像诊断测试可正常导入 `cv2`，同时避免引入桌面 GUI 组件。
 - OpenXR 房间菜单接通 Presenter 线程内安全热切换：在帧边界预校验目标 Profile/GLB/全景文件，等待 Vulkan 与 Filament 空闲后原位替换 GLB 或卸载旧环境，释放旧 HDR GPU 资源并加载新 Profile，随后实时刷新座位、屏幕、灯光、Glow 条件和参考空间校准；支持 `Default ↔ GLB 房间 ↔ HDR 全景`，仅在成功后持久化 GUI 环境选择，失败时尝试恢复旧资源并保留当前会话。Native Bridge 新增只卸载房间资产、不销毁手柄和 Engine 的 `filament_bridge_unload_glb` ABI。
 - OpenXR 设置菜单房间页的环境选择列表由仅显示 GLB 房间扩展为同时显示 `Default` 和全景环境：凡 Profile 声明 `environment_type=panorama` 且配置有效 `background.image` 的 HDR/全景图片目录，都会使用自身 `display_name` 和 GUI 当前语言加入选择项；用户可从任意 GLB/HDR 环境直接切回 `Default`。
