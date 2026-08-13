@@ -133,6 +133,13 @@ int filament_bridge_load_glb(
     return bridge_scene_load_glb(bridge, bytes, byte_count);
 }
 
+int filament_bridge_unload_glb(FilamentBridge* bridge) {
+    if (!bridge || !bridge->engine) return 0;
+    bridge_scene_destroy(bridge);
+    bridge->engine->flushAndWait();
+    return 1;
+}
+
 int filament_bridge_load_controller(
         FilamentBridge* bridge, uint32_t hand,
         const uint8_t* bytes, uint32_t byte_count) {

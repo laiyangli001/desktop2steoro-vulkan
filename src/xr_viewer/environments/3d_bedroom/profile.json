@@ -77,6 +77,45 @@
       0.0
     ]
   },
+  "view_pose_index": 1,
+  "view_poses": [
+    {
+      "name": "Front",
+      "x": 0.6258,
+      "y": 1.137,
+      "z": -0.0392,
+      "angle": -90.36,
+      "rotation_deg": [
+        -90.36,
+        -13.28,
+        0.0
+      ]
+    },
+    {
+      "name": "Middle",
+      "x": 0.6258,
+      "y": 1.137,
+      "z": -0.0392,
+      "angle": -90.36,
+      "rotation_deg": [
+        -90.36,
+        -13.28,
+        0.0
+      ]
+    },
+    {
+      "name": "Back",
+      "x": 0.6258,
+      "y": 1.137,
+      "z": -0.0392,
+      "angle": -90.36,
+      "rotation_deg": [
+        -90.36,
+        -13.28,
+        0.0
+      ]
+    }
+  ],
   "view_pose_space": "scene",
   "screen": {
     "width": 0.7648,

@@ -136,10 +136,13 @@ def _resolve_openxr_render_scale(
     env_value = os.environ.get("D2S_OPENXR_RENDER_SCALE")
     if env_value:
         try:
-            return max(0.25, min(1.5, float(env_value)))
+            return max(0.5, min(2.0, float(env_value)))
         except ValueError:
             pass
-    return 1.0
+    try:
+        return max(0.5, min(2.0, float(settings.get("OpenXR Render Scale", 1.0))))
+    except (TypeError, ValueError):
+        return 1.0
 
 
 def _openxr_projection_config(settings: dict) -> dict[str, object]:

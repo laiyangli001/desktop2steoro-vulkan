@@ -118,3 +118,54 @@ def test_settings_menu_runtime_value_updates_snapshot_without_persisting() -> No
     assert snapshot.version == 5
     assert snapshot.color_brightness == pytest.approx(1.4)
     assert snapshots[-1] is snapshot
+
+
+def test_settings_menu_can_reset_all_picture_values_in_one_snapshot() -> None:
+    callbacks = _callbacks(0.6)
+    callbacks.context.openxr_state.runtime_settings_snapshot = RuntimeSettingsSnapshot(
+        version=7, timestamp=1.0, depth_strength=0.6
+    )
+    snapshots = []
+    callbacks.send_settings_snapshot = snapshots.append
+    values = {"color_brightness": 1.0, "vulkan_projection_rcas_sharpness": 0.5}
+
+    assert callbacks.on_openxr_controller_shortcut(
+        "set_runtime_settings", settings=values, persist=False
+    ) is True
+    snapshot = callbacks.context.openxr_state.updates[-1]["snapshot"]
+    assert snapshot.version == 8
+    assert snapshot.color_brightness == 1.0
+    assert snapshot.vulkan_projection_rcas_sharpness == 0.5
+    assert snapshots == [snapshot]
+
+
+def test_settings_menu_updates_depth_and_cross_eyed_together() -> None:
+    callbacks = _callbacks(0.6)
+    callbacks.context.openxr_state.runtime_settings_snapshot = RuntimeSettingsSnapshot(
+        version=9, timestamp=1.0, depth_strength=0.6, cross_eyed=True
+    )
+    snapshots = []
+    callbacks.send_settings_snapshot = snapshots.append
+
+    assert callbacks.on_openxr_controller_shortcut(
+        "set_runtime_settings",
+        settings={"depth_strength": 0.25, "cross_eyed": False},
+        persist=False,
+    ) is True
+    snapshot = callbacks.context.openxr_state.updates[-1]["snapshot"]
+    assert snapshot.depth_strength == pytest.approx(0.25)
+    assert snapshot.cross_eyed is False
+
+
+def test_settings_menu_persists_dedicated_openxr_render_scale(
+    tmp_path, monkeypatch
+) -> None:
+    callbacks = _callbacks(0.6)
+    callbacks.context.base_dir = str(tmp_path)
+    settings_path = tmp_path / "settings.yaml"
+    settings_path.write_text("OpenXR Render Scale: 1.0\n", encoding="utf-8")
+
+    assert callbacks.on_openxr_controller_shortcut(
+        "persist_openxr_render_scale", value=1.75
+    ) is True
+    assert "OpenXR Render Scale: 1.75" in settings_path.read_text(encoding="utf-8")

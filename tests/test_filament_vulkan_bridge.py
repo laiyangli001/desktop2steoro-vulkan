@@ -126,6 +126,9 @@ def test_native_bridge_keeps_modular_resource_lifetimes_explicit() -> None:
     assert "filament_bridge_create_eye_swapchain_with_depth" in facade
     assert "filament_bridge_create_stereo_swapchain_with_depth" in facade
     assert "filament_bridge_multiview_abi_available() { return 3; }" in facade
+    assert "filament_bridge_unload_glb" in facade
+    assert "filament_bridge_unload_glb" in header
+    assert "bridge_scene_destroy(bridge);" in facade
     assert "bundle.depth = swapchain->depth" in (
         bridge_dir / "bridge_internal.h"
     ).read_text(encoding="utf-8")

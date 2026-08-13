@@ -13,7 +13,7 @@ import sys
 import threading
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -79,7 +79,11 @@ from .overlay_textures import (
     build_settings_menu_rgba,
     build_short_osd_rgba,
 )
-from .settings_menu import OpenXrSettingsMenu
+from .settings_menu import (
+    OpenXrSettingsMenu,
+    PICTURE_DEFAULTS,
+    SETTINGS_MENU_WORLD_SIZE,
+)
 from .keyboard_layout import _KB_TEX_H, _KB_TEX_W
 from .msdf_font_atlas import MsdfFontAtlas
 from .windows_input import (
@@ -93,6 +97,12 @@ from .windows_input import (
     _get_desktop_size,
 )
 from utils import LANG
+from gui.localization import normalize_locale
+from gui.config import (
+    discover_environment_keys,
+    environment_display_label,
+    load_environment_display_names,
+)
 from utils.xr_headset_presets import resolve_xr_headset_preset
 from utils.screen_resolution_policy import (
     ScreenSamplingPlan,
@@ -815,11 +825,16 @@ class OpenXrVulkanPresenter(
         self._profile_space_calibration_pass = 0
         self._profile_space_pose_in_reference = np.eye(4, dtype=np.float32)
         self._profile_view_name: str | None = None
+        self._filament_profile_data: dict[str, Any] = {}
+        self._filament_view_poses: tuple[dict[str, Any], ...] = ()
+        self._filament_view_pose_index = 0
+        self._room_seat_height_offset = 0.0
         self._profile_auto_center_on_screen = False
         self._profile_reference_space_change_ignored_logged = False
         self._profile_alignment_logged = False
         self._head_position_w: np.ndarray | None = None
         self._head_forward_w: np.ndarray | None = None
+        self._head_model_matrix: np.ndarray | None = None
         self._initial_head_y = 0.0
         self._profile_near_plane = 0.05
         self._profile_far_plane = 1000.0
@@ -919,6 +934,8 @@ class OpenXrVulkanPresenter(
         self._filament_screen_profile_authored = False
         self._filament_screen_head_initialized = False
         self._screen_curved = False
+        self._screen_curve_half_angle = 0.0
+        self._screen_initial_curve_half_angle = 0.0
         self._passthrough_backdrop = False
         self._controllers_root = Path(__file__).resolve().parent / "controllers"
         self._controller_brands = discover_controller_brands(self._controllers_root)
@@ -1034,6 +1051,12 @@ class OpenXrVulkanPresenter(
         self._settings_menu_last_adjust = 0.0
         self._settings_menu_trigger_down = [False, False]
         self._settings_menu_allow_curve = True
+        self._settings_menu_grab_hand: int | None = None
+        self._settings_menu_grab_relative: np.ndarray | None = None
+        self._settings_menu_grip_down = [False, False]
+        self._openxr_render_scale = max(0.5, min(2.0, float(self.config.render_scale)))
+        self._pending_openxr_render_scale: float | None = None
+        self._view_configuration_views: tuple[Any, ...] = ()
         # Keep rasterized tool textures and their released swapchain image
         # alive. Static Quad layers must not perform a host upload every XR
         # frame; only the layer pose is rebuilt per frame.
@@ -1553,6 +1576,9 @@ class OpenXrVulkanPresenter(
             return True
 
         xr = self.xr
+        # Apply a released menu slider at the frame boundary, before the next
+        # xrWaitFrame/xrBeginFrame pair. Swapchain dimensions are immutable.
+        self._apply_pending_openxr_render_scale()
         wait_started = time.perf_counter()
         frame_state = xr.wait_frame(self.session)
         if self._on_breakdown_add_time is not None:
@@ -1888,6 +1914,10 @@ class OpenXrVulkanPresenter(
                 else "off"
             )
         next_mode = modes[(modes.index(current) + 1) % len(modes)]
+        self._set_filament_glow_mode(next_mode)
+
+    def _set_filament_glow_mode(self, mode: str) -> None:
+        next_mode = self._normalize_filament_glow_mode(mode)
         self._filament_glow_mode = next_mode
         if next_mode == "off":
             self._filament_glow_intensity_multiplier = 0.0
@@ -2131,6 +2161,7 @@ class OpenXrVulkanPresenter(
             self._cycle_shortcut_screen_preset()
         elif action == "toggle_screen_shape":
             self._screen_curved = not self._screen_curved
+            self._screen_curve_half_angle = 0.72 if self._screen_curved else 0.0
             self._preset_name_overlay = (
                 "Curved Screen" if self._screen_curved else "Flat Screen"
             )
@@ -2561,11 +2592,14 @@ class OpenXrVulkanPresenter(
             * float(np.dot(right_axis, direction))
             * (1.0 - math.cos(angle))
         )
-        if has_smoothed_ray:
+        if has_smoothed_ray and not self._settings_menu.visible:
             # The smoothed ray may leave the finite screen by a small amount
             # while the unsmoothed hand pose is still close to an edge. Copy
             # the legacy edge constraint so the visible laser and interaction
             # hit remain latched to the nearest edge instead of disappearing.
+            # A visible settings Quad has input priority over the screen. Its
+            # cursor must follow the real controller ray instead of inheriting
+            # the screen-only edge attraction behind the panel.
             if self._screen_ray_hit(aim_matrix, raw_origin, direction) is None:
                 raw_direction = (-aim_matrix[:3, 2]).astype(np.float64)
                 raw_direction /= max(float(np.linalg.norm(raw_direction)), 1e-8)
@@ -2661,7 +2695,7 @@ class OpenXrVulkanPresenter(
             # screen mesh. Analytic roots avoid a frame-dependent scan.
             half_width = float(width) / 2.0
             half_height = float(height) / 2.0
-            half_angle = min(0.72, math.pi / 2.0)
+            half_angle = min(self._screen_curve_half_angle, math.pi / 2.0)
             radius = half_width / max(half_angle, 1e-8)
             local_origin = pose[:3, :3].T @ (origin - pose[:3, 3])
             local_direction = pose[:3, :3].T @ direction
@@ -2721,7 +2755,7 @@ class OpenXrVulkanPresenter(
         ).astype(np.float64)
         pose[:3, 3] = np.asarray(position, dtype=np.float64)
         if self._screen_curved:
-            half_angle = min(0.72, math.pi / 2.0)
+            half_angle = min(self._screen_curve_half_angle, math.pi / 2.0)
             radius = float(width) / 2.0 / max(half_angle, 1e-8)
             angle = -half_angle + 2.0 * half_angle * float(u)
             local = np.asarray(
@@ -2940,7 +2974,7 @@ class OpenXrVulkanPresenter(
         half_height = float(height) * 0.5
         if self._screen_curved:
             segments = 48
-            half_angle = 0.72
+            half_angle = self._screen_curve_half_angle
             radius = half_width / half_angle
             points = []
             for segment in range(segments + 1):
@@ -3404,24 +3438,351 @@ class OpenXrVulkanPresenter(
                     _set_cursor_pos(int(hit[0] * _get_desktop_size()[0]), int(hit[1] * _get_desktop_size()[1]))
 
     def _open_settings_menu(self) -> None:
-        if self._head_position_w is None or self._head_forward_w is None:
+        if self._head_position_w is None or self._head_model_matrix is None:
             return
-        forward = np.asarray(self._head_forward_w, dtype=np.float64).copy()
-        forward[1] = 0.0
-        forward /= max(float(np.linalg.norm(forward)), 1e-8)
-        up = np.asarray((0.0, 1.0, 0.0), dtype=np.float64)
-        right = np.cross(forward, up)
-        right /= max(float(np.linalg.norm(right)), 1e-8)
-        panel_normal = -forward
+        head_basis = np.asarray(self._head_model_matrix[:3, :3], dtype=np.float64)
+        right = head_basis[:, 0]
+        up = head_basis[:, 1]
+        panel_normal = head_basis[:, 2]
+        forward = -panel_normal
         basis = np.column_stack((right, up, panel_normal))
         position = np.asarray(self._head_position_w, dtype=np.float64) + forward * 1.1
-        position[1] -= 0.12
+        position -= up * 0.12
         self._settings_menu_pose = (
             tuple(float(value) for value in position),
             tuple(float(value) for value in _mat3_to_quat_xyzw(basis)),
         )
         self._refresh_settings_menu_values()
         self._settings_menu.open()
+
+    def _settings_menu_matrix(self) -> np.ndarray | None:
+        if self._settings_menu_pose is None:
+            return None
+        position, quaternion = self._settings_menu_pose
+        qx, qy, qz, qw = quaternion
+        quaternion_value = type(
+            "MenuQuaternion", (), {"x": qx, "y": qy, "z": qz, "w": qw}
+        )()
+        matrix = _xr_quat_to_mat4(quaternion_value).astype(np.float64)
+        matrix[:3, 3] = np.asarray(position, dtype=np.float64)
+        return matrix
+
+    def _set_settings_menu_matrix(self, matrix: np.ndarray) -> None:
+        self._settings_menu_pose = (
+            tuple(float(value) for value in matrix[:3, 3]),
+            tuple(float(value) for value in _mat3_to_quat_xyzw(matrix[:3, :3])),
+        )
+
+    def _resolve_environment_selection(
+        self, model: str
+    ) -> tuple[Path | None, Path, Path | None]:
+        environments_root = Path(__file__).resolve().parent / "environments"
+        requested = str(model or "Default").strip() or "Default"
+        canonical = next(
+            (key for key in discover_environment_keys() if key.lower() == requested.lower()),
+            requested,
+        )
+        room_dir = environments_root / canonical
+        profile_path = room_dir / "profile.json"
+        if not profile_path.is_file():
+            raise FileNotFoundError(f"environment profile not found: {profile_path}")
+        profile = json.loads(profile_path.read_text(encoding="utf-8-sig"))
+        if not isinstance(profile, dict):
+            raise ValueError(f"environment profile root must be an object: {profile_path}")
+        glb_value = profile.get("glb", "environment.glb")
+        glb_path = None
+        if glb_value not in (None, "", False):
+            glb_path = room_dir / str(glb_value)
+            if not glb_path.is_file():
+                raise FileNotFoundError(f"environment GLB not found: {glb_path}")
+        background = profile.get("background")
+        background = background if isinstance(background, dict) else {}
+        image_value = (
+            background.get("image") or background.get("path")
+            or background.get("file") or profile.get("background_image")
+        )
+        panorama_path = None
+        if image_value:
+            panorama_path = room_dir / str(image_value)
+            if not panorama_path.is_file():
+                raise FileNotFoundError(
+                    f"environment panorama not found: {panorama_path}"
+                )
+        if glb_path is None and panorama_path is None and canonical != "Default":
+            raise ValueError(f"environment has neither GLB nor panorama: {canonical}")
+        return glb_path, profile_path, panorama_path
+
+    def _release_panorama_sources(self) -> None:
+        if self._panorama_staging is not None:
+            self._panorama_staging.close()
+            self._panorama_staging = None
+        if self._panorama_swapchain is not None:
+            self._destroy_projection_swapchain(self._panorama_swapchain)
+            self._panorama_swapchain = None
+        for attribute in ("_vulkan_panorama_image", "_vulkan_panorama_staging"):
+            image = getattr(self, attribute)
+            if image is not None:
+                image.close()
+                setattr(self, attribute, None)
+        self._panorama_size = None
+        self._panorama_layer = None
+        self._panorama_failed = False
+        self._panorama_skip_logged = False
+        if hasattr(self, "_panorama_initial_orientation"):
+            del self._panorama_initial_orientation
+
+    def _reset_environment_profile_state(self) -> None:
+        self._filament_profile_data = {}
+        self._filament_view_poses = ()
+        self._filament_view_pose_index = 0
+        self._room_seat_height_offset = 0.0
+        self._filament_lighting_presets = ()
+        self._filament_lighting_preset_index = 0
+        self._profile_near_plane = 0.05
+        self._profile_far_plane = 1000.0
+        self._filament_scene_exposure = self.config.filament_scene_exposure_ev
+        self._filament_skybox_brightness = self.config.filament_skybox_brightness
+        self._filament_ambient_light_color = self.config.filament_ambient_light_color
+        self._controller_ambient_light_color_override = None
+        self._controller_hdr_ambient_light_color_override = None
+        self._filament_ambient_light_intensity_lux = (
+            self.config.filament_ambient_light_intensity_lux
+        )
+        self._controller_ambient_light_intensity_lux = (
+            self.config.filament_controller_ambient_light_intensity_lux
+        )
+        self._controller_hdr_ambient_light_intensity_lux = (
+            self.config.filament_controller_hdr_ambient_light_intensity_lux
+        )
+        self._controller_light_intensity_candela = (
+            self.config.filament_controller_light_intensity_candela
+        )
+        self._filament_fill_light_color = self.config.filament_fill_light_color
+        self._filament_fill_light_intensity = self.config.filament_fill_light_intensity
+        self._filament_fill_light_direction = self.config.filament_fill_light_direction
+        self._controller_head_light_weight = self.config.filament_controller_head_light_weight
+        self._controller_top_light_weight = self.config.filament_controller_top_light_weight
+        self._controller_top_light_color = self.config.filament_controller_top_light_color
+        self._controller_head_light_offset = self.config.filament_controller_head_light_offset
+        self._controller_top_light_offset = self.config.filament_controller_top_light_offset
+        self._controller_head_light_falloff = self.config.filament_controller_head_light_falloff
+        self._controller_top_light_falloff = self.config.filament_controller_top_light_falloff
+        self._controller_head_light_cast_shadows = (
+            self.config.filament_controller_head_light_cast_shadows
+        )
+        self._controller_top_light_cast_shadows = (
+            self.config.filament_controller_top_light_cast_shadows
+        )
+        self._controller_screen_light_enabled = (
+            self.config.filament_controller_screen_light_enabled
+        )
+        self._controller_screen_light_intensity_lux = (
+            self.config.filament_controller_screen_light_intensity_lux
+        )
+        self._controller_screen_light_saturation = (
+            self.config.filament_controller_screen_light_saturation
+        )
+        self._controller_screen_light_max_luminance = (
+            self.config.filament_controller_screen_light_max_luminance
+        )
+        self._controller_screen_light_smoothing_seconds = (
+            self.config.filament_controller_screen_light_smoothing_seconds
+        )
+        self._controller_screen_light_sample_hz = (
+            self.config.filament_controller_screen_light_sample_hz
+        )
+        self._controller_screen_light_cast_shadows = (
+            self.config.filament_controller_screen_light_cast_shadows
+        )
+        self._filament_glow_sample_hz = self.config.filament_glow_sample_hz
+        self._filament_glow_smoothing_seconds = (
+            self.config.filament_glow_smoothing_seconds
+        )
+        self._controller_hdr_lighting = False
+        self._filament_screen = None
+        self._filament_screen_initial = None
+        self._filament_screen_profile_authored = False
+        self._filament_screen_head_initialized = False
+        self._settings_menu_allow_curve = True
+        self._screen_curved = False
+        self._screen_curve_half_angle = 0.0
+        self._screen_initial_curve_half_angle = 0.0
+        self._filament_glow_mode = "off"
+        self._filament_glow_intensity = 0.175
+        self._filament_glow_width = 0.75
+        self._filament_glow_default_multiplier = 1.5
+        self._filament_glow_intensity_multiplier = 0.0
+        self._filament_glow_shell_default_multiplier = 1.85
+        self._filament_glow_shell_intensity_multiplier = 0.0
+        self._filament_glow_shell_radius = 20.0
+        self._filament_glow_shell_height = 9.5
+        self._veil_intensity = 1.5
+        self._veil_alpha = 1.0
+
+    def _hot_switch_environment(self, model: str) -> bool:
+        try:
+            glb_path, profile_path, panorama_path = (
+                self._resolve_environment_selection(model)
+            )
+            glb_data = glb_path.read_bytes() if glb_path is not None else None
+        except Exception as exc:
+            self._preset_name_overlay = f"Room switch failed: {exc}"
+            self._preset_osd_show_t = time.perf_counter()
+            print(f"[OpenXRViewer] Environment hot switch rejected: {exc}", flush=True)
+            return False
+
+        old_config = self.config
+        old_paths = (
+            old_config.filament_glb_path,
+            old_config.filament_profile_path,
+            old_config.filament_panorama_path,
+        )
+        old_glb_data = None
+        if old_paths[0]:
+            try:
+                old_glb_data = Path(old_paths[0]).read_bytes()
+            except OSError:
+                pass
+        previous_head_transform = (
+            None if self._profile_head_transform is None
+            else np.asarray(self._profile_head_transform, dtype=np.float64).copy()
+        )
+        try:
+            if self.vulkan is not None:
+                self.vulkan.wait_idle()
+            bridge = self.filament_bridge
+            if bridge is not None:
+                bridge.wait_for_idle()
+                if glb_data is None:
+                    bridge.unload_glb()
+                else:
+                    bridge.load_glb(glb_data)
+            self._release_panorama_sources()
+            self.config = replace(
+                self.config,
+                filament_glb_path=(str(glb_path) if glb_path is not None else None),
+                filament_profile_path=str(profile_path),
+                filament_panorama_path=(
+                    str(panorama_path) if panorama_path is not None else None
+                ),
+            )
+            self._reset_environment_profile_state()
+            self._load_filament_profile()
+            self._filament_glow_environment_enabled = bool(
+                glb_path is None and panorama_path is None
+            )
+            if bridge is None and glb_path is not None:
+                self._initialize_filament_bridges()
+                bridge = self.filament_bridge
+                if bridge is None:
+                    raise RuntimeError(
+                        "Filament Bridge is unavailable for the selected GLB room"
+                    )
+            if bridge is not None:
+                bridge.set_scene_exposure(self._filament_scene_exposure)
+                bridge.set_skybox_brightness(self._filament_skybox_brightness)
+                self._apply_filament_bridge_lighting(bridge)
+            self._move_settings_menu_with_profile_head(previous_head_transform)
+            self._profile_space_applied = False
+            self._profile_space_calibration_pass = 0
+            self._profile_reference_space_change_ignored_logged = False
+            self._profile_alignment_logged = False
+            selected = profile_path.parent.name
+            self._settings_menu_values["room:model"] = selected
+            self._refresh_settings_menu_values()
+            self._dispatch_controller_shortcut(
+                "select_environment_model", model=selected
+            )
+            self._preset_name_overlay = f"Room: {selected}"
+            self._preset_osd_show_t = time.perf_counter()
+            self._settings_menu.mark_dirty()
+            print(
+                "[OpenXRViewer] Environment hot switch complete: "
+                f"model={selected} glb={glb_path} panorama={panorama_path}",
+                flush=True,
+            )
+            return True
+        except Exception as exc:
+            print(
+                f"[OpenXRViewer] Environment hot switch failed: "
+                f"{type(exc).__name__}: {exc}; restoring previous environment",
+                flush=True,
+            )
+            self.config = old_config
+            try:
+                if self.filament_bridge is not None:
+                    self.filament_bridge.wait_for_idle()
+                    if old_glb_data is None:
+                        self.filament_bridge.unload_glb()
+                    else:
+                        self.filament_bridge.load_glb(old_glb_data)
+                self._release_panorama_sources()
+                self._reset_environment_profile_state()
+                self._load_filament_profile()
+                self._apply_filament_bridge_lighting()
+            except Exception as rollback_exc:
+                print(
+                    "[OpenXRViewer] Environment rollback failed: "
+                    f"{type(rollback_exc).__name__}: {rollback_exc}",
+                    flush=True,
+                )
+            self._preset_name_overlay = f"Room switch failed: {type(exc).__name__}"
+            self._preset_osd_show_t = time.perf_counter()
+            self._settings_menu.mark_dirty()
+            return False
+
+    def _move_settings_menu_with_profile_head(
+        self, previous_head_transform: np.ndarray | None
+    ) -> None:
+        if (
+            previous_head_transform is None
+            or self._profile_head_transform is None
+        ):
+            return
+        menu_matrix = self._settings_menu_matrix()
+        if menu_matrix is None:
+            return
+        seat_delta = (
+            np.asarray(self._profile_head_transform, dtype=np.float64)
+            @ np.linalg.inv(np.asarray(previous_head_transform, dtype=np.float64))
+        )
+        self._set_settings_menu_matrix(seat_delta @ menu_matrix)
+
+    def _handle_settings_menu_grip_drag(
+        self, inputs, hits: tuple[tuple[float, float] | None, ...]
+    ) -> None:
+        grip_matrices = (self._grip_mat_l, self._grip_mat_r)
+        for hand in (0, 1):
+            pressed = float(inputs[hand].get("grip", 0.0) or 0.0) > 0.5
+            if pressed and not self._settings_menu_grip_down[hand]:
+                self._settings_menu_grip_down[hand] = True
+                if (
+                    self._settings_menu_grab_hand is None
+                    and hits[hand] is not None
+                    and grip_matrices[hand] is not None
+                ):
+                    menu_matrix = self._settings_menu_matrix()
+                    if menu_matrix is not None:
+                        self._settings_menu_grab_hand = hand
+                        self._settings_menu_grab_relative = (
+                            np.linalg.inv(np.asarray(grip_matrices[hand], dtype=np.float64))
+                            @ menu_matrix
+                        )
+            elif not pressed and self._settings_menu_grip_down[hand]:
+                self._settings_menu_grip_down[hand] = False
+                if self._settings_menu_grab_hand == hand:
+                    self._settings_menu_grab_hand = None
+                    self._settings_menu_grab_relative = None
+        hand = self._settings_menu_grab_hand
+        if (
+            hand is not None
+            and self._settings_menu_grab_relative is not None
+            and grip_matrices[hand] is not None
+        ):
+            self._set_settings_menu_matrix(
+                np.asarray(grip_matrices[hand], dtype=np.float64)
+                @ self._settings_menu_grab_relative
+            )
 
     def _refresh_settings_menu_values(self) -> None:
         snapshot = None
@@ -3445,6 +3806,63 @@ class OpenXrVulkanPresenter(
                 self._settings_menu_values[key] = float(value)
             else:
                 self._settings_menu_values.setdefault(key, default)
+        self._settings_menu_values.setdefault(
+            "openxr_render_scale", self._openxr_render_scale
+        )
+        depth_value = getattr(snapshot, "depth_strength", None) if snapshot is not None else None
+        if depth_value is not None:
+            self._settings_menu_values["depth_strength"] = float(depth_value)
+        else:
+            self._settings_menu_values.setdefault("depth_strength", 0.25)
+        cross_eyed = getattr(snapshot, "cross_eyed", None) if snapshot is not None else None
+        if cross_eyed is not None:
+            self._settings_menu_values["cross_eyed"] = bool(cross_eyed)
+        else:
+            self._settings_menu_values.setdefault("cross_eyed", False)
+        locale = self._overlay_language()
+        environment_keys = discover_environment_keys()
+        display_names = load_environment_display_names(environment_keys)
+        environments_root = Path(__file__).resolve().parent / "environments"
+        room_keys = []
+        for key in environment_keys:
+            try:
+                profile = json.loads(
+                    (environments_root / key / "profile.json").read_text(
+                        encoding="utf-8-sig"
+                    )
+                )
+            except (OSError, ValueError):
+                continue
+            background = profile.get("background") if isinstance(profile, dict) else None
+            has_panorama = (
+                isinstance(background, dict)
+                and background.get("image") not in (None, "", False)
+                and str(profile.get("environment_type", "")).strip().lower()
+                == "panorama"
+            )
+            if isinstance(profile, dict) and (
+                key.lower() == "default"
+                or
+                profile.get("glb") not in (None, "", False) or has_panorama
+            ):
+                room_keys.append(key)
+        self._settings_menu.room_models = tuple(
+            (key, environment_display_label(key, locale, display_names))
+            for key in room_keys
+        )
+        self._settings_menu_values["room:model"] = (
+            Path(self.config.filament_profile_path).parent.name
+            if self.config.filament_profile_path else "Default"
+        )
+        self._settings_menu_values["room:seat_index"] = int(
+            self._filament_view_pose_index
+        )
+        self._settings_menu_values["room:seat_height"] = float(
+            self._room_seat_height_offset
+        )
+        self._settings_menu_values["room:exposure"] = float(
+            self._filament_scene_exposure
+        )
         if self._filament_screen is not None and self._filament_screen_initial is not None:
             self._settings_menu_values["screen:width"] = (
                 float(self._filament_screen[1])
@@ -3454,8 +3872,29 @@ class OpenXrVulkanPresenter(
                 float(self._filament_screen[0][1])
                 - float(self._filament_screen_initial[0][1])
             )
+            head = np.asarray(
+                self._head_position_w if self._head_position_w is not None
+                else (0.0, 0.0, 0.0),
+                dtype=np.float64,
+            )
+            initial_position = np.asarray(self._filament_screen_initial[0], dtype=np.float64)
+            current_position = np.asarray(self._filament_screen[0], dtype=np.float64)
+            self._settings_menu_values["screen:distance"] = float(
+                np.linalg.norm(current_position - head)
+                / max(float(np.linalg.norm(initial_position - head)), 1e-6)
+            )
         self._settings_menu_values["screen:curve"] = bool(self._screen_curved)
+        self._settings_menu_values["screen:curve_half_angle"] = float(
+            self._screen_curve_half_angle
+        )
         self._settings_menu_values["screen_allow_curve"] = bool(self._settings_menu_allow_curve)
+        show_glow = bool(self._filament_glow_environment_enabled)
+        self._settings_menu_values["show_glow_tab"] = show_glow
+        self._settings_menu_values["glow:mode"] = self._normalize_filament_glow_mode(
+            self._filament_glow_mode
+        )
+        if self._settings_menu.tab == "glow" and not show_glow:
+            self._settings_menu.set_tab("picture")
 
     def _settings_menu_ray_hit(self, hand: int) -> tuple[float, float] | None:
         if not self._settings_menu.visible or self._settings_menu_pose is None:
@@ -3465,9 +3904,10 @@ class OpenXrVulkanPresenter(
             return None
         position, quaternion = self._settings_menu_pose
         qx, qy, qz, qw = quaternion
-        basis4 = _xr_quat_to_mat4(
-            self.xr.Quaternionf(x=qx, y=qy, z=qz, w=qw)
-        ).astype(np.float64)
+        quaternion_value = type(
+            "MenuQuaternion", (), {"x": qx, "y": qy, "z": qz, "w": qw}
+        )()
+        basis4 = _xr_quat_to_mat4(quaternion_value).astype(np.float64)
         normal = basis4[:3, 2]
         denominator = float(np.dot(normal, direction))
         if abs(denominator) < 1e-6:
@@ -3477,8 +3917,8 @@ class OpenXrVulkanPresenter(
             return None
         world = np.asarray(origin) + np.asarray(direction) * distance
         local = basis4[:3, :3].T @ (world - np.asarray(position))
-        u = float(local[0]) / 0.95 + 0.5
-        v = 0.5 - float(local[1]) / 0.71
+        u = float(local[0]) / SETTINGS_MENU_WORLD_SIZE[0] + 0.5
+        v = 0.5 - float(local[1]) / SETTINGS_MENU_WORLD_SIZE[1]
         if 0.0 <= u <= 1.0 and 0.0 <= v <= 1.0:
             return u, v
         return None
@@ -3488,8 +3928,133 @@ class OpenXrVulkanPresenter(
         if key.startswith("tab:"):
             self._settings_menu.set_tab(key[4:])
             return
+        if key.startswith("step:"):
+            _prefix, operation, target_key = key.split(":", 2)
+            target = next(
+                (
+                    item for item in self._settings_menu.controls(
+                        allow_curve=self._settings_menu_allow_curve,
+                        show_glow=self._filament_glow_environment_enabled,
+                        lang=self._overlay_language(),
+                    )
+                    if item.key == target_key and item.kind == "slider"
+                ),
+                None,
+            )
+            if target is None:
+                return
+            current = float(
+                self._settings_menu_values.get(
+                    target_key, 0.0 if target.minimum <= 0.0 <= target.maximum
+                    else target.minimum
+                )
+            )
+            direction = -1.0 if operation == "minus" else 1.0
+            value = max(
+                target.minimum,
+                min(target.maximum, current + direction * target.step),
+            )
+            value = round(value / target.step) * target.step
+            fraction = (value - target.minimum) / max(
+                target.maximum - target.minimum, 1e-9
+            )
+            slider_u = target.rect[0] + fraction * (
+                target.rect[2] - target.rect[0]
+            )
+            self._apply_settings_menu_control(
+                target, (slider_u, uv[1]), persist=True
+            )
+            if target_key == "openxr_render_scale":
+                self._pending_openxr_render_scale = float(
+                    self._settings_menu_values[target_key]
+                )
+                self._dispatch_controller_shortcut(
+                    "persist_openxr_render_scale",
+                    value=self._settings_menu_values[target_key],
+                )
+            return
         if key == "close":
             self._settings_menu.close()
+            return
+        if key == "picture:reset_defaults":
+            self._settings_menu_values.update(PICTURE_DEFAULTS)
+            self._pending_openxr_render_scale = float(
+                PICTURE_DEFAULTS["openxr_render_scale"]
+            )
+            self._dispatch_controller_shortcut(
+                "set_runtime_settings",
+                settings={
+                    name: value for name, value in PICTURE_DEFAULTS.items()
+                    if name != "openxr_render_scale"
+                },
+                persist=True,
+            )
+            self._dispatch_controller_shortcut(
+                "persist_openxr_render_scale",
+                value=self._pending_openxr_render_scale,
+            )
+            self._settings_menu.mark_dirty()
+            return
+        if key == "depth:toggle_stereo":
+            self._dispatch_controller_shortcut("toggle_stereo")
+            callback_depth = self._controller_callback_depth_strength()
+            if callback_depth is not None:
+                self._settings_menu_values["depth_strength"] = callback_depth
+            self._settings_menu.mark_dirty()
+            return
+        if key == "depth:toggle_cross_eyed":
+            value = not bool(self._settings_menu_values.get("cross_eyed", False))
+            self._settings_menu_values["cross_eyed"] = value
+            self._dispatch_controller_shortcut(
+                "set_runtime_setting", name="cross_eyed", value=value, persist=True
+            )
+            self._settings_menu.mark_dirty()
+            return
+        if key == "depth:reset_defaults":
+            self._settings_menu_values.update({
+                "depth_strength": 0.25,
+                "cross_eyed": False,
+            })
+            self._dispatch_controller_shortcut(
+                "set_runtime_settings",
+                settings={"depth_strength": 0.25, "cross_eyed": False},
+                persist=True,
+            )
+            self._settings_menu.mark_dirty()
+            return
+        if key.startswith("glow:"):
+            if not self._filament_glow_environment_enabled:
+                return
+            self._set_filament_glow_mode(key.split(":", 1)[1])
+            self._settings_menu_values["glow:mode"] = self._filament_glow_mode
+            self._settings_menu.mark_dirty()
+            return
+        if key.startswith("room:model:"):
+            model = key.split(":", 2)[2]
+            self._hot_switch_environment(model)
+            return
+        if key.startswith("room:seat:"):
+            indices = {"front": 0, "middle": 1, "back": 2}
+            self._apply_settings_menu_seat(indices[key.rsplit(":", 1)[1]])
+            return
+        if key == "screen:reset_defaults":
+            if self._filament_screen_initial is not None:
+                self._filament_screen = self._filament_screen_initial
+            self._screen_curve_half_angle = self._screen_initial_curve_half_angle
+            self._screen_curved = self._screen_curve_half_angle > 1e-6
+            self._refresh_settings_menu_values()
+            self._settings_menu.mark_dirty()
+            return
+        if key.startswith("screen:rotate:"):
+            if self._filament_screen is None:
+                return
+            delta = -90.0 if key.endswith("-90") else 90.0
+            position, width, height, rotation = self._filament_screen
+            self._filament_screen = (
+                position, width, height,
+                (float(rotation[0]), float(rotation[1]), float(rotation[2]) + delta),
+            )
+            self._settings_menu.mark_dirty()
             return
         if control.kind == "slider":
             value = control.value_from_u(float(uv[0]))
@@ -3503,21 +4068,122 @@ class OpenXrVulkanPresenter(
                     height = float(initial_height) * value
                 elif key == "screen:height":
                     position = (position[0], float(initial_position[1]) + value, position[2])
+                elif key == "screen:distance":
+                    head = np.asarray(
+                        self._head_position_w if self._head_position_w is not None
+                        else (0.0, 0.0, 0.0),
+                        dtype=np.float64,
+                    )
+                    initial_vector = np.asarray(initial_position, dtype=np.float64) - head
+                    initial_length = max(float(np.linalg.norm(initial_vector)), 1e-6)
+                    position = tuple(
+                        float(component) for component in (
+                            head + initial_vector / initial_length * initial_length * value
+                        )
+                    )
                 self._filament_screen = (position, width, height, rotation)
+            elif key == "room:seat_height":
+                self._apply_settings_menu_seat_height(value)
+            elif key == "room:exposure":
+                self._filament_scene_exposure = float(value)
+                if self.filament_bridge is not None:
+                    self.filament_bridge.set_scene_exposure(value)
             elif not key.startswith("room:"):
                 if key == "vulkan_projection_min_lod":
                     value = min(value, float(self._settings_menu_values.get("vulkan_projection_max_lod", 2.0)))
                 elif key == "vulkan_projection_max_lod":
                     value = max(value, float(self._settings_menu_values.get("vulkan_projection_min_lod", 0.0)))
-                self._dispatch_controller_shortcut(
-                    "set_runtime_setting", name=key, value=value, persist=persist
-                )
+                if key != "openxr_render_scale":
+                    self._dispatch_controller_shortcut(
+                        "set_runtime_setting", name=key, value=value, persist=persist
+                    )
             self._settings_menu_values[key] = value
             self._settings_menu.mark_dirty()
-        elif key == "screen:curve" and self._settings_menu_allow_curve:
-            self._screen_curved = not self._screen_curved
-            self._settings_menu_values[key] = self._screen_curved
+        elif key.startswith("screen:type:"):
+            levels = {
+                "screen:type:flat": 0.0,
+                "screen:type:subtle": math.radians(20.0),
+                "screen:type:medium": math.radians(30.0),
+                "screen:type:deep": 0.72,
+            }
+            half_angle = levels[key]
+            if half_angle > 0.0 and not self._settings_menu_allow_curve:
+                return
+            self._screen_curve_half_angle = half_angle
+            self._screen_curved = half_angle > 0.0
+            self._settings_menu_values["screen:curve_half_angle"] = half_angle
+            self._settings_menu_values["screen:curve"] = self._screen_curved
             self._settings_menu.mark_dirty()
+
+    def _apply_settings_menu_seat(self, index: int) -> None:
+        if not self._filament_view_poses:
+            return
+        previous_head_transform = (
+            None if self._profile_head_transform is None
+            else np.asarray(self._profile_head_transform, dtype=np.float64).copy()
+        )
+        index = int(index) % min(3, len(self._filament_view_poses))
+        self._filament_view_pose_index = index
+        pose = self._filament_view_poses[index]
+        self._set_profile_head_transform_from_view_pose(
+            pose, self._filament_profile_data
+        )
+        self._move_settings_menu_with_profile_head(previous_head_transform)
+        self._room_seat_height_offset = 0.0
+        self._profile_space_applied = False
+        self._profile_space_calibration_pass = 0
+        self._settings_menu_values["room:seat_index"] = index
+        self._settings_menu_values["room:seat_height"] = 0.0
+        self._settings_menu.mark_dirty()
+
+    def _apply_settings_menu_seat_height(self, offset: float) -> None:
+        if self._profile_head_transform is None:
+            return
+        previous_head_transform = np.asarray(
+            self._profile_head_transform, dtype=np.float64
+        ).copy()
+        delta = float(offset) - float(self._room_seat_height_offset)
+        self._profile_head_transform[1, 3] += delta
+        self._move_settings_menu_with_profile_head(previous_head_transform)
+        self._room_seat_height_offset = float(offset)
+        self._profile_space_applied = False
+        self._profile_space_calibration_pass = 0
+
+    def _set_profile_head_transform_from_view_pose(
+        self, view_pose: dict[str, Any], profile: dict[str, Any]
+    ) -> None:
+        model_position = profile.get("model_position", [0.0, 0.0, 0.0])
+        model_rotation_deg = profile.get("model_rotation_deg", [0.0, 0.0, 0.0])
+        model_scale = profile.get("model_scale", [1.0, 1.0, 1.0])
+        world = np.asarray(
+            [float(view_pose[key]) for key in ("x", "y", "z")],
+            dtype=np.float32,
+        )
+        rotation_deg = view_pose.get("rotation_deg")
+        if not isinstance(rotation_deg, (list, tuple)) or len(rotation_deg) < 3:
+            rotation_deg = [float(view_pose.get("angle", 0.0)), 0.0, 0.0]
+        pose_space = str(view_pose.get(
+            "view_pose_space", view_pose.get(
+                "pose_space", profile.get("view_pose_space", "world")
+            )
+        )).strip().lower()
+        if pose_space in {"scene", "glb", "local"}:
+            position = world
+        else:
+            model = euler_to_mat4(*(
+                math.radians(float(value)) for value in model_rotation_deg[:3]
+            )).astype(np.float32)
+            model[:3, 3] = np.asarray(model_position[:3], dtype=np.float32)
+            model[:3, :3] = model[:3, :3] @ np.diag(
+                np.asarray(model_scale[:3], dtype=np.float32)
+            )
+            position = (np.linalg.inv(model) @ np.append(world, 1.0))[:3]
+        transform = euler_to_mat4(*(
+            math.radians(float(value)) for value in rotation_deg[:3]
+        )).astype(np.float32)
+        transform[:3, 3] = position
+        self._profile_head_transform = transform
+        self._profile_view_name = str(view_pose.get("name", "profile"))
 
     def _handle_settings_menu_input(self) -> bool:
         inputs = (self._controller_input(0), self._controller_input(1))
@@ -3543,11 +4209,16 @@ class OpenXrVulkanPresenter(
             return False
 
         hits = (self._settings_menu_ray_hit(0), self._settings_menu_ray_hit(1))
+        self._handle_settings_menu_grip_drag(inputs, hits)
+        if self._settings_menu_grab_hand is not None:
+            hits = (self._settings_menu_ray_hit(0), self._settings_menu_ray_hit(1))
         hover = None
         for hand in (0, 1):
             if hits[hand] is not None:
                 hover = self._settings_menu.hit_test(
-                    hits[hand], allow_curve=self._settings_menu_allow_curve
+                    hits[hand], allow_curve=self._settings_menu_allow_curve,
+                    show_glow=self._filament_glow_environment_enabled,
+                    lang=self._overlay_language(),
                 )
                 break
         next_hover = None if hover is None else hover.key
@@ -3576,17 +4247,28 @@ class OpenXrVulkanPresenter(
                     if active_key and not active_key.startswith(("screen:", "room:")):
                         active_control = next(
                             (item for item in self._settings_menu.controls(
-                                allow_curve=self._settings_menu_allow_curve
+                                allow_curve=self._settings_menu_allow_curve,
+                                show_glow=self._filament_glow_environment_enabled,
+                                lang=self._overlay_language(),
                             ) if item.key == active_key),
                             None,
                         )
                         if active_control is not None and active_control.kind == "slider":
-                            self._dispatch_controller_shortcut(
-                                "set_runtime_setting",
-                                name=active_key,
-                                value=self._settings_menu_values[active_key],
-                                persist=True,
-                            )
+                            if active_key == "openxr_render_scale":
+                                self._pending_openxr_render_scale = float(
+                                    self._settings_menu_values[active_key]
+                                )
+                                self._dispatch_controller_shortcut(
+                                    "persist_openxr_render_scale",
+                                    value=self._settings_menu_values[active_key],
+                                )
+                            else:
+                                self._dispatch_controller_shortcut(
+                                    "set_runtime_setting",
+                                    name=active_key,
+                                    value=self._settings_menu_values[active_key],
+                                    persist=True,
+                                )
                     self._settings_menu.active_hand = None
                     self._settings_menu.active_key = None
             elif (
@@ -3594,7 +4276,11 @@ class OpenXrVulkanPresenter(
                 and self._settings_menu.active_hand == hand
                 and hits[hand] is not None
             ):
-                control = self._settings_menu.hit_test(hits[hand], allow_curve=self._settings_menu_allow_curve)
+                control = self._settings_menu.hit_test(
+                    hits[hand], allow_curve=self._settings_menu_allow_curve,
+                    show_glow=self._filament_glow_environment_enabled,
+                    lang=self._overlay_language(),
+                )
                 if control is not None and control.kind == "slider" and control.key == self._settings_menu.active_key:
                     now = time.perf_counter()
                     if now - self._settings_menu_last_adjust >= 0.05:
@@ -4142,17 +4828,26 @@ class OpenXrVulkanPresenter(
                 f"PRIMARY_STEREO returned {len(view_configs)} view(s)"
             )
 
+        self._view_configuration_views = tuple(view_configs[:2])
+        self._create_projection_swapchains_for_scale(self._openxr_render_scale)
+
+    def _create_projection_swapchains_for_scale(self, render_scale: float) -> None:
+        view_configs = self._view_configuration_views
+        if len(view_configs) < 2:
+            raise OpenXrVulkanUnavailableError(
+                "PRIMARY_STEREO view configuration is unavailable"
+            )
         eye_extents = []
         for view_config in view_configs[:2]:
             width = _scaled_dimension(
                 view_config.recommended_image_rect_width,
                 view_config.max_image_rect_width,
-                self.config.render_scale,
+                render_scale,
             )
             height = _scaled_dimension(
                 view_config.recommended_image_rect_height,
                 view_config.max_image_rect_height,
-                self.config.render_scale,
+                render_scale,
             )
             eye_extents.append((width, height))
         if (
@@ -4180,6 +4875,72 @@ class OpenXrVulkanPresenter(
                 self.swapchains.append(
                     self._create_projection_swapchain(width, height)
                 )
+
+    def _release_projection_render_targets(self) -> None:
+        if self.vulkan is None:
+            return
+        self.vulkan.wait_idle()
+        if self.filament_bridge is not None:
+            self.filament_bridge.close()
+            self.filament_bridge = None
+        for attachment in self._filament_depth_attachments:
+            attachment.close()
+        self._filament_depth_attachments.clear()
+        self._filament_depth_attachments_bound = False
+        for image in self._filament_multiview_hdr_images:
+            image.close()
+        self._filament_multiview_hdr_images.clear()
+        for semaphore in self._filament_multiview_ready_semaphores:
+            self.vulkan.vk.vkDestroySemaphore(self.vulkan.device, semaphore, None)
+        self._filament_multiview_ready_semaphores.clear()
+        self._filament_multiview_slot_timelines.clear()
+        self._filament_multiview_current = None
+        self._filament_multiview_current_slot = None
+        self._filament_multiview_finished_consumed = False
+        self._multiview_active = False
+        if self._vulkan_projection_screen_pass is not None:
+            self._vulkan_projection_screen_pass.close()
+            self._vulkan_projection_screen_pass = None
+        if self._vulkan_multiview_diagnostic_pass is not None:
+            self._vulkan_multiview_diagnostic_pass.close()
+            self._vulkan_multiview_diagnostic_pass = None
+        for eye in reversed(self.swapchains):
+            self._destroy_projection_swapchain(eye)
+        self.swapchains.clear()
+
+    def _apply_pending_openxr_render_scale(self) -> None:
+        requested = self._pending_openxr_render_scale
+        if requested is None:
+            return
+        requested = max(0.5, min(2.0, float(requested)))
+        self._pending_openxr_render_scale = None
+        if abs(requested - self._openxr_render_scale) < 1e-6:
+            return
+        previous = self._openxr_render_scale
+        try:
+            self._release_projection_render_targets()
+            self._create_projection_swapchains_for_scale(requested)
+            self._openxr_render_scale = requested
+            self._settings_menu_values["openxr_render_scale"] = requested
+            self._last_vulkan_projection_composer_status = None
+            self._initialize_filament_bridges()
+            extents = self._projection_eye_extents()
+            print(
+                "[OpenXRViewer] Projection render scale rebuilt: "
+                f"scale={requested:.2f} extents={extents}",
+                flush=True,
+            )
+        except Exception as exc:
+            print(
+                "[OpenXRViewer] Projection render scale rebuild failed: "
+                f"requested={requested:.2f} {type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            self._release_projection_render_targets()
+            self._create_projection_swapchains_for_scale(previous)
+            self._openxr_render_scale = previous
+            self._settings_menu_values["openxr_render_scale"] = previous
+            self._initialize_filament_bridges()
 
     def _create_projection_swapchain(
         self, width: int, height: int, *, array_size: int = 1,
@@ -5075,7 +5836,7 @@ class OpenXrVulkanPresenter(
             np.asarray((
                 float(width) * 0.5,
                 float(height) * 0.5,
-                0.72 if self._screen_curved else 0.0,
+                self._screen_curve_half_angle if self._screen_curved else 0.0,
                 sampling_values[3],
             ), dtype=np.float32),
         )).astype("<f4", copy=False)
@@ -6184,6 +6945,7 @@ class OpenXrVulkanPresenter(
             profile = json.load(handle)
         if not isinstance(profile, dict):
             raise ValueError("Filament profile root must be an object")
+        self._filament_profile_data = profile
 
         presets = profile.get("lighting_presets")
         self._filament_lighting_presets = tuple(
@@ -6206,6 +6968,29 @@ class OpenXrVulkanPresenter(
         if isinstance(view_poses, list) and view_poses:
             index = int(profile.get("view_pose_index", 0)) % len(view_poses)
             view_pose = view_poses[index]
+            valid_poses = [item for item in view_poses if isinstance(item, dict)]
+            named_poses = {}
+            for item in valid_poses:
+                name = str(item.get("name", "")).strip().lower()
+                if "front" in name or "前" in name:
+                    named_poses.setdefault("front", item)
+                elif "back" in name or "后" in name:
+                    named_poses.setdefault("back", item)
+                elif "middle" in name or "center" in name or "中" in name:
+                    named_poses.setdefault("middle", item)
+            self._filament_view_poses = tuple(
+                named_poses.get(name, valid_poses[position])
+                if position < len(valid_poses) else valid_poses[0]
+                for position, name in enumerate(("front", "middle", "back"))
+            )
+            self._filament_view_pose_index = next(
+                (
+                    position for position, item
+                    in enumerate(self._filament_view_poses)
+                    if item is view_pose or item == view_pose
+                ),
+                min(index, max(0, len(self._filament_view_poses) - 1)),
+            )
         if not isinstance(view_pose, dict):
             # Default and panorama environments intentionally have no authored
             # room-space seat. Rebase identity to the initial leveled headset
@@ -6383,6 +7168,27 @@ class OpenXrVulkanPresenter(
             }
         if isinstance(screen, dict):
             self._settings_menu_allow_curve = bool(screen.get("allow_curve", True))
+            profile_curved = bool(screen.get("curved", False))
+            try:
+                profile_half_angle = float(
+                    screen.get(
+                        "curve_half_angle_rad",
+                        0.72 if profile_curved else 0.0,
+                    )
+                )
+            except (TypeError, ValueError):
+                profile_half_angle = 0.72 if profile_curved else 0.0
+            self._screen_curve_half_angle = max(
+                0.0,
+                min(profile_half_angle, math.pi / 2.0),
+            )
+            self._screen_curved = (
+                self._settings_menu_allow_curve
+                and self._screen_curve_half_angle > 1e-6
+            )
+            if not self._screen_curved:
+                self._screen_curve_half_angle = 0.0
+            self._screen_initial_curve_half_angle = self._screen_curve_half_angle
             screen_position = screen.get("position", [0.0, 1.2, -2.0])
             rotation = screen.get("rotation_deg", [0.0, 0.0, 0.0])
             if (
@@ -8226,8 +9032,7 @@ class OpenXrVulkanPresenter(
             )
 
     def _overlay_language(self) -> str:
-        value = str(LANG or "EN").strip().upper()
-        return "CN" if value.startswith(("CN", "ZH")) else "EN"
+        return normalize_locale(LANG)
 
     def _filament_screen_pose_mat4(self) -> np.ndarray:
         position, _width, _height, rotation = self._filament_screen or (
@@ -8337,7 +9142,7 @@ class OpenXrVulkanPresenter(
                 )
                 matrix = screen_pose.copy()
                 if self._screen_curved:
-                    half_angle = min(0.72, math.pi / 2.0)
+                    half_angle = min(self._screen_curve_half_angle, math.pi / 2.0)
                     angle = -half_angle + 2.0 * half_angle * u
                     tangent = np.asarray(
                         (math.cos(angle), 0.0, math.sin(angle)),
@@ -8946,7 +9751,8 @@ class OpenXrVulkanPresenter(
                 self._settings_menu_last_redraw = menu_now
             menu_position, menu_rotation = self._settings_menu_pose
             specs.append((
-                "settings_menu", menu_rgba, menu_position, (0.95, 0.71), menu_rotation
+                "settings_menu", menu_rgba, menu_position,
+                SETTINGS_MENU_WORLD_SIZE, menu_rotation
             ))
 
         if not self._settings_menu.visible:
@@ -8969,6 +9775,7 @@ class OpenXrVulkanPresenter(
         if len(views) < 2:
             self._head_position_w = None
             self._head_forward_w = None
+            self._head_model_matrix = None
             return
         eye_positions = [
             np.asarray(
@@ -8979,6 +9786,7 @@ class OpenXrVulkanPresenter(
         ]
         self._head_position_w = (eye_positions[0] + eye_positions[1]) * 0.5
         head_matrix = _xr_view_pose_to_model_mat4(views[0].pose)
+        self._head_model_matrix = np.asarray(head_matrix, dtype=np.float64)
         self._head_forward_w = -head_matrix[:3, 2].astype(np.float64)
         if self._head_position_w is not None:
             self._initial_head_y = float(self._head_position_w[1])

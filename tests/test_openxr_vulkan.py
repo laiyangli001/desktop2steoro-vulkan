@@ -308,6 +308,32 @@ def test_render_scale_is_bounded_by_runtime_limit() -> None:
     assert _scaled_dimension(1, 1, 0.1) == 1
 
 
+def test_projection_swapchains_use_runtime_recommendation_times_render_scale() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._view_configuration_views = (
+        SimpleNamespace(
+            recommended_image_rect_width=1000,
+            recommended_image_rect_height=800,
+            max_image_rect_width=1800,
+            max_image_rect_height=1400,
+        ),
+        SimpleNamespace(
+            recommended_image_rect_width=900,
+            recommended_image_rect_height=700,
+            max_image_rect_width=1800,
+            max_image_rect_height=1400,
+        ),
+    )
+    created = []
+    presenter._create_projection_swapchain = lambda width, height, **_kwargs: (
+        created.append((width, height)) or SimpleNamespace()
+    )
+
+    presenter._create_projection_swapchains_for_scale(1.5)
+
+    assert created == [(1500, 1200), (1350, 1050)]
+
+
 def test_presenter_validates_configuration() -> None:
     with pytest.raises(ValueError):
         OpenXrVulkanPresenter(OpenXrVulkanConfig(render_scale=0))
@@ -2979,6 +3005,25 @@ def test_filament_profile_keeps_glb_and_screen_positions_separate(tmp_path) -> N
     assert presenter._filament_screen[0] == (10.0, 20.0, 30.0)
 
 
+def test_filament_profile_restores_authored_screen_curve(tmp_path) -> None:
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_text(json.dumps({
+        "screen": {
+            "position": [0.0, 1.2, -2.0],
+            "curved": True,
+            "curve_half_angle_rad": math.radians(30.0),
+        },
+    }), encoding="utf-8")
+    presenter = OpenXrVulkanPresenter(OpenXrVulkanConfig(
+        filament_profile_path=str(profile_path),
+    ))
+
+    presenter._load_filament_profile()
+
+    assert presenter._screen_curved is True
+    assert presenter._screen_curve_half_angle == pytest.approx(math.radians(30.0))
+
+
 def test_filament_profile_view_pose_is_converted_to_glb_local_space(tmp_path) -> None:
     profile_path = tmp_path / "profile.json"
     profile_path.write_text(json.dumps({
@@ -4756,10 +4801,393 @@ def test_settings_menu_uses_one_both_eye_cached_tool_quad() -> None:
     assert presenter._settings_menu.visible is False
     presenter._head_position_w = np.asarray((0.0, 1.6, 0.0), dtype=np.float64)
     presenter._head_forward_w = np.asarray((0.0, 0.0, -1.0), dtype=np.float64)
+    presenter._head_model_matrix = np.eye(4, dtype=np.float64)
     presenter._open_settings_menu()
     assert presenter._settings_menu.visible is True
     assert presenter._settings_menu_pose is not None
     assert presenter._settings_menu_pose[0] == pytest.approx((0.0, 1.48, -1.1))
+
+
+def test_settings_menu_grip_drag_preserves_controller_relative_pose() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._settings_menu_pose = ((0.0, 1.0, -1.0), (0.0, 0.0, 0.0, 1.0))
+    presenter._settings_menu.visible = True
+    presenter._grip_mat_l = np.eye(4, dtype=np.float64)
+    inputs = ({"grip": 1.0}, {"grip": 0.0})
+    presenter._handle_settings_menu_grip_drag(inputs, ((0.5, 0.5), None))
+    presenter._grip_mat_l[:3, 3] = (0.25, 0.1, -0.2)
+    presenter._handle_settings_menu_grip_drag(inputs, ((0.5, 0.5), None))
+    assert presenter._settings_menu_pose[0] == pytest.approx((0.25, 1.1, -1.2))
+
+
+def test_settings_menu_render_scale_defers_rebuild_until_slider_release() -> None:
+    presenter = OpenXrVulkanPresenter()
+    control = next(
+        item for item in presenter._settings_menu.controls()
+        if item.key == "openxr_render_scale"
+    )
+
+    presenter._apply_settings_menu_control(control, (control.rect[2], 0.5))
+
+    assert presenter._settings_menu_values["openxr_render_scale"] == 2.0
+    assert presenter._pending_openxr_render_scale is None
+
+
+def test_settings_menu_plus_button_applies_exact_slider_step() -> None:
+    calls = []
+    presenter = OpenXrVulkanPresenter(
+        on_controller_shortcut=lambda action, **values: calls.append(
+            (action, values)
+        ) or True
+    )
+    presenter._settings_menu_values["color_brightness"] = 1.0
+    plus = next(
+        item for item in presenter._settings_menu.controls()
+        if item.key == "step:plus:color_brightness"
+    )
+
+    presenter._apply_settings_menu_control(plus, (0.0, 0.0))
+
+    assert presenter._settings_menu_values["color_brightness"] == pytest.approx(1.1)
+    assert calls[-1] == (
+        "set_runtime_setting",
+        {"name": "color_brightness", "value": pytest.approx(1.1), "persist": True},
+    )
+
+
+def test_settings_menu_depth_toggle_and_cross_eyed_are_dispatched() -> None:
+    calls = []
+    presenter = OpenXrVulkanPresenter(
+        on_controller_shortcut=lambda action, **values: calls.append(
+            (action, values)
+        ) or True
+    )
+    presenter._settings_menu.set_tab("depth")
+    presenter._settings_menu_values.update({
+        "depth_strength": 0.25, "cross_eyed": False,
+    })
+    controls = {item.key: item for item in presenter._settings_menu.controls()}
+
+    presenter._apply_settings_menu_control(
+        controls["depth:toggle_stereo"], (0.0, 0.0)
+    )
+    presenter._apply_settings_menu_control(
+        controls["depth:toggle_cross_eyed"], (0.0, 0.0)
+    )
+
+    assert calls[0][0] == "toggle_stereo"
+    assert calls[1] == (
+        "set_runtime_setting",
+        {"name": "cross_eyed", "value": True, "persist": True},
+    )
+
+
+def test_settings_menu_glow_mode_uses_existing_runtime_state_machine() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_glow_environment_enabled = True
+    presenter._settings_menu.set_tab("glow")
+    controls = {
+        item.key: item for item in presenter._settings_menu.controls(show_glow=True)
+    }
+
+    presenter._apply_settings_menu_control(
+        controls["glow:surround"], (0.0, 0.0)
+    )
+    assert presenter._filament_glow_mode == "surround"
+    assert presenter._filament_glow_intensity_multiplier == 0.0
+    assert presenter._filament_glow_shell_intensity_multiplier > 0.0
+
+    presenter._apply_settings_menu_control(controls["glow:off"], (0.0, 0.0))
+    assert presenter._filament_glow_mode == "off"
+    assert presenter._filament_glow_intensity_multiplier == 0.0
+    assert presenter._filament_glow_shell_intensity_multiplier == 0.0
+
+
+def test_settings_menu_glow_control_is_ignored_outside_default_environment() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_glow_environment_enabled = False
+    presenter._filament_glow_mode = "off"
+    presenter._apply_settings_menu_control(
+        type("Control", (), {"key": "glow:glow"})(), (0.0, 0.0)
+    )
+    assert presenter._filament_glow_mode == "off"
+
+
+def test_settings_menu_room_exposure_updates_filament_immediately() -> None:
+    presenter = OpenXrVulkanPresenter()
+    calls = []
+    presenter.filament_bridge = type(
+        "Bridge", (), {"set_scene_exposure": lambda _self, value: calls.append(value)}
+    )()
+    presenter._settings_menu.set_tab("room")
+    control = next(
+        item for item in presenter._settings_menu.controls()
+        if item.key == "room:exposure"
+    )
+    presenter._apply_settings_menu_control(control, (control.rect[2], 0.5))
+    assert presenter._filament_scene_exposure == pytest.approx(8.0)
+    assert calls == [pytest.approx(8.0)]
+
+
+def test_settings_menu_room_model_requests_hot_switch(monkeypatch) -> None:
+    calls = []
+    presenter = OpenXrVulkanPresenter()
+    monkeypatch.setattr(
+        presenter, "_hot_switch_environment",
+        lambda model: calls.append(model) or True,
+    )
+    control = type(
+        "Control", (), {"key": "room:model:3d_theater", "label": "Theater"}
+    )()
+    presenter._apply_settings_menu_control(control, (0.0, 0.0))
+    assert calls == ["3d_theater"]
+
+
+def test_settings_menu_room_list_includes_glb_and_panorama_profiles() -> None:
+    presenter = OpenXrVulkanPresenter()
+
+    presenter._refresh_settings_menu_values()
+
+    room_keys = {key for key, _label in presenter._settings_menu.room_models}
+    assert "3d_theater" in room_keys
+    assert "hdr_lakesky" in room_keys
+    assert "hdr_universe" in room_keys
+    assert "Default" in room_keys
+
+
+def test_environment_hot_switch_unloads_glb_for_panorama_and_then_persists(
+    tmp_path, monkeypatch
+) -> None:
+    old_profile = tmp_path / "old" / "profile.json"
+    old_glb = tmp_path / "old" / "environment.glb"
+    new_profile = tmp_path / "hdr" / "profile.json"
+    panorama = tmp_path / "hdr" / "sky.hdr"
+    old_profile.parent.mkdir()
+    new_profile.parent.mkdir()
+    old_profile.write_text(json.dumps({"glb": "environment.glb"}), encoding="utf-8")
+    old_glb.write_bytes(b"old-glb")
+    new_profile.write_text(json.dumps({
+        "environment_type": "panorama",
+        "background": {"image": "sky.hdr"},
+        "glb": None,
+    }), encoding="utf-8")
+    panorama.write_bytes(b"hdr")
+
+    class Bridge:
+        def __init__(self):
+            self.calls = []
+        def wait_for_idle(self): self.calls.append("idle")
+        def unload_glb(self): self.calls.append("unload")
+        def load_glb(self, data): self.calls.append(("load", bytes(data)))
+        def set_scene_exposure(self, value): self.calls.append(("exposure", value))
+        def set_skybox_brightness(self, value): self.calls.append(("skybox", value))
+
+    persisted = []
+    presenter = OpenXrVulkanPresenter(OpenXrVulkanConfig(
+        filament_glb_path=str(old_glb),
+        filament_profile_path=str(old_profile),
+    ))
+    bridge = Bridge()
+    presenter.filament_bridge = bridge
+    monkeypatch.setattr(
+        presenter, "_resolve_environment_selection",
+        lambda _model: (None, new_profile, panorama),
+    )
+    monkeypatch.setattr(presenter, "_apply_filament_bridge_lighting", lambda *_args: None)
+    monkeypatch.setattr(presenter, "_refresh_settings_menu_values", lambda: None)
+    monkeypatch.setattr(
+        presenter, "_dispatch_controller_shortcut",
+        lambda action, **values: persisted.append((action, values)),
+    )
+
+    assert presenter._hot_switch_environment("hdr") is True
+    assert bridge.calls[:2] == ["idle", "unload"]
+    assert presenter.config.filament_glb_path is None
+    assert presenter.config.filament_panorama_path == str(panorama)
+    assert persisted == [("select_environment_model", {"model": "hdr"})]
+
+
+def test_environment_hot_switch_rolls_back_glb_and_does_not_persist_on_failure(
+    tmp_path, monkeypatch
+) -> None:
+    old_profile = tmp_path / "old" / "profile.json"
+    old_glb = tmp_path / "old" / "environment.glb"
+    new_profile = tmp_path / "new" / "profile.json"
+    new_glb = tmp_path / "new" / "environment.glb"
+    old_profile.parent.mkdir()
+    new_profile.parent.mkdir()
+    old_profile.write_text(json.dumps({"glb": "environment.glb"}), encoding="utf-8")
+    old_glb.write_bytes(b"old-glb")
+    new_profile.write_text(json.dumps({"glb": "environment.glb"}), encoding="utf-8")
+    new_glb.write_bytes(b"new-glb")
+
+    class Bridge:
+        def __init__(self): self.loads = []
+        def wait_for_idle(self): pass
+        def load_glb(self, data):
+            payload = bytes(data)
+            self.loads.append(payload)
+            if payload == b"new-glb":
+                raise RuntimeError("target rejected")
+        def unload_glb(self): pass
+
+    persisted = []
+    presenter = OpenXrVulkanPresenter(OpenXrVulkanConfig(
+        filament_glb_path=str(old_glb),
+        filament_profile_path=str(old_profile),
+    ))
+    bridge = Bridge()
+    presenter.filament_bridge = bridge
+    monkeypatch.setattr(
+        presenter, "_resolve_environment_selection",
+        lambda _model: (new_glb, new_profile, None),
+    )
+    monkeypatch.setattr(presenter, "_apply_filament_bridge_lighting", lambda *_args: None)
+    monkeypatch.setattr(
+        presenter, "_dispatch_controller_shortcut",
+        lambda action, **values: persisted.append((action, values)),
+    )
+
+    assert presenter._hot_switch_environment("new") is False
+    assert bridge.loads == [b"new-glb", b"old-glb"]
+    assert presenter.config.filament_glb_path == str(old_glb)
+    assert persisted == []
+
+
+def test_settings_menu_three_seat_switch_restarts_profile_calibration() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_profile_data = {
+        "model_position": [0.0, 0.0, 0.0],
+        "model_rotation_deg": [0.0, 0.0, 0.0],
+        "model_scale": [1.0, 1.0, 1.0],
+    }
+    presenter._filament_view_poses = (
+        {"name": "Front", "x": 0.0, "y": 1.0, "z": -1.0},
+        {"name": "Middle", "x": 0.0, "y": 1.2, "z": 0.0},
+        {"name": "Back", "x": 0.0, "y": 1.4, "z": 1.0},
+    )
+    presenter._profile_space_applied = True
+    presenter._profile_space_calibration_pass = 2
+    presenter._profile_head_transform = np.eye(4, dtype=np.float32)
+    presenter._profile_head_transform[:3, 3] = (0.0, 1.2, 0.0)
+    presenter._settings_menu_pose = (
+        (0.25, 1.0, -1.0), (0.0, 0.0, 0.0, 1.0)
+    )
+
+    presenter._apply_settings_menu_seat(2)
+
+    assert presenter._filament_view_pose_index == 2
+    assert presenter._profile_view_name == "Back"
+    assert presenter._profile_head_transform[:3, 3] == pytest.approx(
+        (0.0, 1.4, 1.0)
+    )
+    assert presenter._profile_space_applied is False
+    assert presenter._profile_space_calibration_pass == 0
+    assert presenter._settings_menu_pose[0] == pytest.approx((0.25, 1.2, 0.0))
+
+
+def test_settings_menu_follows_live_seat_height_change() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._profile_head_transform = np.eye(4, dtype=np.float32)
+    presenter._profile_head_transform[:3, 3] = (2.0, 1.5, -3.0)
+    presenter._settings_menu_pose = (
+        (2.25, 1.2, -4.0), (0.0, 0.0, 0.0, 1.0)
+    )
+
+    presenter._apply_settings_menu_seat_height(0.75)
+
+    assert presenter._profile_head_transform[:3, 3] == pytest.approx(
+        (2.0, 2.25, -3.0)
+    )
+    assert presenter._settings_menu_pose[0] == pytest.approx((2.25, 1.95, -4.0))
+
+
+def test_settings_menu_screen_rotation_and_reset_restore_profile_pose() -> None:
+    presenter = OpenXrVulkanPresenter()
+    initial = ((1.0, 2.0, -3.0), 4.0, 2.25, (10.0, 20.0, 30.0))
+    presenter._filament_screen_initial = initial
+    presenter._filament_screen = initial
+    presenter._screen_initial_curve_half_angle = math.radians(20.0)
+    presenter._settings_menu.set_tab("screen")
+    controls = {item.key: item for item in presenter._settings_menu.controls()}
+
+    presenter._apply_settings_menu_control(
+        controls["screen:rotate:+90"], (0.0, 0.0)
+    )
+    assert presenter._filament_screen[3] == pytest.approx((10.0, 20.0, 120.0))
+
+    presenter._apply_settings_menu_control(
+        controls["screen:reset_defaults"], (0.0, 0.0)
+    )
+    assert presenter._filament_screen == initial
+    assert presenter._screen_curve_half_angle == pytest.approx(math.radians(20.0))
+
+
+def test_settings_menu_render_scale_step_schedules_one_rebuild() -> None:
+    calls = []
+    presenter = OpenXrVulkanPresenter(
+        on_controller_shortcut=lambda action, **values: calls.append(
+            (action, values)
+        ) or True
+    )
+    presenter._settings_menu_values["openxr_render_scale"] = 1.0
+    minus = next(
+        item for item in presenter._settings_menu.controls()
+        if item.key == "step:minus:openxr_render_scale"
+    )
+
+    presenter._apply_settings_menu_control(minus, (0.0, 0.0))
+
+    assert presenter._settings_menu_values["openxr_render_scale"] == pytest.approx(0.95)
+    assert presenter._pending_openxr_render_scale == pytest.approx(0.95)
+    assert calls[-1][0] == "persist_openxr_render_scale"
+
+
+def test_visible_settings_menu_disables_screen_edge_ray_attraction() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._settings_menu.visible = True
+    presenter._aim_mat_l = np.eye(4, dtype=np.float64)
+    presenter._grip_mat_l = np.eye(4, dtype=np.float64)
+    presenter._get_smoothed_ray = lambda _hand: (
+        np.asarray((0.0, 0.0, 0.0), dtype=np.float64),
+        np.asarray((0.0, 0.0, -1.0), dtype=np.float64),
+    )
+    presenter._screen_ray_hit = lambda *_args: None
+    presenter._screen_plane_uv = lambda *_args: (1.02, 0.5)
+    presenter._screen_uv_to_world = lambda *_args: np.asarray(
+        (0.1, 0.0, -1.0), dtype=np.float64
+    )
+
+    _origin, direction = presenter._controller_interaction_ray(0)
+
+    expected = presenter._normalize_interaction_ray(
+        np.asarray((0.0, 0.0, -1.0), dtype=np.float64)
+        * math.cos(math.radians(12.0))
+        + np.cross(
+            np.asarray((1.0, 0.0, 0.0), dtype=np.float64),
+            np.asarray((0.0, 0.0, -1.0), dtype=np.float64),
+        )
+        * math.sin(math.radians(12.0))
+    )
+    assert direction == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    ("key", "half_angle"),
+    (
+        ("screen:type:flat", 0.0),
+        ("screen:type:subtle", math.radians(20.0)),
+        ("screen:type:medium", math.radians(30.0)),
+        ("screen:type:deep", 0.72),
+    ),
+)
+def test_settings_menu_screen_type_sets_real_curve_half_angle(key, half_angle):
+    presenter = OpenXrVulkanPresenter()
+    presenter._settings_menu.set_tab("screen")
+    control = next(item for item in presenter._settings_menu.controls() if item.key == key)
+    presenter._apply_settings_menu_control(control, (0.5, 0.5))
+    assert presenter._screen_curve_half_angle == pytest.approx(half_angle)
+    assert presenter._screen_curved is (half_angle > 0.0)
 
 
 def test_settings_menu_quad_is_submitted_before_laser_cursor() -> None:

@@ -84,6 +84,15 @@ def test_openxr_render_scale_does_not_follow_inference_scale_for_4k_input():
     assert _resolve_openxr_render_scale({"Render Scale": "1K / 50%"}, (3840, 2160)) == 1.0
     assert _resolve_openxr_render_scale({"Render Scale": "2K / 75%"}, 2160) == 1.0
 
+
+def test_openxr_render_scale_uses_dedicated_persisted_setting(monkeypatch):
+    from app_runtime.runtime_entry import _resolve_openxr_render_scale
+
+    monkeypatch.delenv("D2S_OPENXR_RENDER_SCALE", raising=False)
+    assert _resolve_openxr_render_scale({"OpenXR Render Scale": 0.5}) == 0.5
+    assert _resolve_openxr_render_scale({"OpenXR Render Scale": 2.0}) == 2.0
+    assert _resolve_openxr_render_scale({"OpenXR Render Scale": 8.0}) == 2.0
+
 def test_openxr_filament_color_defaults_come_from_common_json() -> None:
     from app_runtime.runtime_entry import _openxr_filament_config
 

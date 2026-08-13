@@ -86,6 +86,7 @@ class FilamentVulkanBridge:
         self._background_frame_abi_available = False
         self._async_submit_abi_available = False
         self._stereo_batch_submit_abi_available = False
+        self._environment_unload_abi_available = False
         self._multiview_abi_version = 0
         self._multiview_depth_swapchain_abi_available = False
         self._configure_abi()
@@ -546,6 +547,15 @@ class FilamentVulkanBridge:
             ),
             "load_glb",
         )
+
+    def unload_glb(self) -> None:
+        self._ensure_loaded()
+        function = getattr(self._library, "filament_bridge_unload_glb", None)
+        if function is None:
+            raise FilamentBridgeError(
+                "Filament environment unload ABI is unavailable; update the Bridge DLL"
+            )
+        self._check_result(function(self._handle), "unload_glb")
 
     def load_controller(self, hand: int, data: bytes | bytearray | memoryview) -> None:
         self._ensure_loaded()
@@ -1088,6 +1098,11 @@ class FilamentVulkanBridge:
             ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32
         ]
         library.filament_bridge_load_glb.restype = ctypes.c_int
+        unload_glb = getattr(library, "filament_bridge_unload_glb", None)
+        if unload_glb is not None:
+            unload_glb.argtypes = [ctypes.c_void_p]
+            unload_glb.restype = ctypes.c_int
+            self._environment_unload_abi_available = True
         controller_functions = (
             "filament_bridge_load_controller",
             "filament_bridge_set_controller_pose",

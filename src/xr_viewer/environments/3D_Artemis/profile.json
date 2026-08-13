@@ -96,36 +96,41 @@
       ]
     }
   ],
-  "view_pose_index": 1,
+  "view_pose_index": 2,
   "view_poses": [
     {
-      "name": "Bridge Approach",
-      "x": 0.0,
-      "y": 110.0,
-      "z": -650.0,
-      "angle": 0.0
-    },
-    {
-      "name": "Model Center",
+      "name": "Front",
       "x": -24.5209,
       "y": 900.768,
       "z": -961.2054,
-      "angle": 179.04,
+      "angle": 179.52,
       "rotation_deg": [
-        179.04,
-        3.04,
+        179.52,
+        1.6,
         0.0
       ]
     },
     {
-      "name": "Wide Overview",
-      "x": 0.0,
-      "y": 1550.0,
-      "z": -3600.0,
-      "angle": 0.0,
+      "name": "Middle",
+      "x": -24.4262,
+      "y": 903.4513,
+      "z": -967.751,
+      "angle": -179.64,
       "rotation_deg": [
-        0.0,
-        -18.0,
+        -179.64,
+        -5.24,
+        0.0
+      ]
+    },
+    {
+      "name": "Back",
+      "x": -24.4787,
+      "y": 906.0007,
+      "z": -978.5634,
+      "angle": -179.16,
+      "rotation_deg": [
+        -179.16,
+        -0.2,
         0.0
       ]
     }

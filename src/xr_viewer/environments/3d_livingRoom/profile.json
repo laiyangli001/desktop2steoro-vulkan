@@ -72,10 +72,10 @@
     "z": -1.6129,
     "angle": 0.0
   },
-  "view_pose_index": 0,
+  "view_pose_index": 1,
   "view_poses": [
     {
-      "name": "Sofa Center",
+      "name": "Front",
       "x": 0.5429,
       "y": 0.3281,
       "z": -9.5317,
@@ -87,18 +87,28 @@
       ]
     },
     {
-      "name": "Sofa Left",
-      "x": -1.2,
-      "y": 8.4286,
-      "z": -1.6129,
-      "angle": 8.0
+      "name": "Middle",
+      "x": 0.5429,
+      "y": 0.3281,
+      "z": -9.5317,
+      "angle": 0.36,
+      "rotation_deg": [
+        0.36,
+        0.12,
+        0.0
+      ]
     },
     {
-      "name": "Sofa Right",
-      "x": 1.2,
-      "y": 8.4286,
-      "z": -1.6129,
-      "angle": -8.0
+      "name": "Back",
+      "x": 0.5429,
+      "y": 0.3281,
+      "z": -9.5317,
+      "angle": 0.36,
+      "rotation_deg": [
+        0.36,
+        0.12,
+        0.0
+      ]
     }
   ],
   "screen": {

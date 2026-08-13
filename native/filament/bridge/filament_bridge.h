@@ -117,6 +117,7 @@ FILAMENT_BRIDGE_API int filament_bridge_wait_for_idle(FilamentBridge* bridge);
 
 FILAMENT_BRIDGE_API int filament_bridge_load_glb(
         FilamentBridge* bridge, const uint8_t* bytes, uint32_t byte_count);
+FILAMENT_BRIDGE_API int filament_bridge_unload_glb(FilamentBridge* bridge);
 
 // Controller assets are loaded into the same Filament scene as the environment.
 FILAMENT_BRIDGE_API int filament_bridge_load_controller(

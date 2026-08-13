@@ -106,52 +106,52 @@
       ]
     }
   ],
-  "view_pose_index": 0,
+  "view_pose_index": 2,
   "view_poses": [
     {
-      "name": "Center View",
-      "x": -2.2214,
+      "name": "Front",
+      "x": -9.7916,
       "y": 101.153,
-      "z": -0.7809,
-      "angle": 179.64,
+      "z": 5.4425,
+      "angle": -127.08,
       "rotation_deg": [
-        179.64,
-        -6.68,
+        -127.08,
+        -8.0,
         0.0
       ]
     },
     {
-      "name": "Front View",
-      "x": -1,
-      "y": 169,
-      "z": 274,
-      "angle": 180,
+      "name": "Middle",
+      "x": 5.7329,
+      "y": 101.153,
+      "z": -0.3866,
+      "angle": -178.44,
       "rotation_deg": [
-        180,
-        0,
-        0
+        -178.44,
+        -0.68,
+        0.0
       ]
     },
     {
-      "name": "Overview",
-      "x": -1,
-      "y": 408,
-      "z": 377,
-      "angle": 180,
+      "name": "Back",
+      "x": -2.2256,
+      "y": 101.153,
+      "z": -0.6808,
+      "angle": -178.08,
       "rotation_deg": [
-        180,
-        -22,
-        0
+        -178.08,
+        0.04,
+        0.0
       ]
     }
   ],
   "screen": {
     "allow_controller_move": true,
-    "width": 24.1168,
+    "width": 20.8361,
     "position": [
       -2.5956,
       102.8784,
-      20.0805
+      11.8229
     ],
     "rotation_deg": [
       -180.0,

@@ -143,9 +143,46 @@ class RuntimeCallbacks:
 
     def on_openxr_controller_shortcut(self, action: str, **values) -> bool:
         """Apply renderer-independent depth shortcuts to runtime state."""
+        if action == "select_environment_model":
+            try:
+                from gui.config import save_yaml
+                from stereo_runtime.hot_reload import read_yaml
+
+                model = str(values.get("model", "Default") or "Default")
+                settings_path = os.path.join(self.context.base_dir, "settings.yaml")
+                settings = read_yaml(settings_path)
+                settings["Environment Model"] = model
+                ok, error = save_yaml(settings_path, settings)
+                if not ok:
+                    raise OSError(error)
+                return True
+            except Exception as exc:
+                print(f"[OpenXRViewer] room selection save failed: {exc}", flush=True)
+                return False
+        if action == "persist_openxr_render_scale":
+            try:
+                numeric = max(0.5, min(2.0, float(values.get("value", 1.0))))
+                from gui.config import save_yaml
+                from stereo_runtime.hot_reload import read_yaml
+
+                settings_path = os.path.join(self.context.base_dir, "settings.yaml")
+                settings = read_yaml(settings_path)
+                settings["OpenXR Render Scale"] = numeric
+                ok, error = save_yaml(settings_path, settings)
+                if not ok:
+                    raise OSError(error)
+                return True
+            except Exception as exc:
+                print(f"[OpenXRViewer] render scale save failed: {exc}", flush=True)
+                return False
         if action == "set_runtime_setting":
             return self._set_openxr_runtime_setting(
                 str(values.get("name", "")), values.get("value"),
+                persist=bool(values.get("persist", False)),
+            )
+        if action == "set_runtime_settings":
+            return self._set_openxr_runtime_settings(
+                dict(values.get("settings") or {}),
                 persist=bool(values.get("persist", False)),
             )
         if action not in {
@@ -194,7 +231,13 @@ class RuntimeCallbacks:
         return True
 
     def _set_openxr_runtime_setting(self, name: str, value, *, persist: bool) -> bool:
+        return self._set_openxr_runtime_settings({name: value}, persist=persist)
+
+    def _set_openxr_runtime_settings(self, values: dict, *, persist: bool) -> bool:
         yaml_keys = {
+            "openxr_render_scale": "OpenXR Render Scale",
+            "depth_strength": "Depth Strength",
+            "cross_eyed": "Cross Eyed",
             "color_brightness": "Color Brightness",
             "color_contrast": "Color Contrast",
             "color_saturation": "Color Saturation",
@@ -206,16 +249,19 @@ class RuntimeCallbacks:
             "vulkan_projection_mip_lod_bias": "Vulkan Projection MIP LOD Bias",
             "vulkan_projection_rcas_sharpness": "Vulkan Projection RCAS Sharpness",
         }
-        if name not in yaml_keys:
+        if not values or any(name not in yaml_keys for name in values):
             return False
-        numeric = float(value)
+        numeric_values = {
+            name: (bool(value) if name == "cross_eyed" else float(value))
+            for name, value in values.items()
+        }
         current = self.context.openxr_state.runtime_settings_snapshot
         snapshot = replace(
             current,
             version=int(current.version) + 1,
             timestamp=time.time(),
             source="openxr_settings_menu",
-            **{name: numeric},
+            **numeric_values,
         )
         self.update_openxr_runtime_config(snapshot=snapshot)
         self.send_settings_snapshot(snapshot)
@@ -227,7 +273,8 @@ class RuntimeCallbacks:
 
             settings_path = os.path.join(self.context.base_dir, "settings.yaml")
             settings = read_yaml(settings_path)
-            settings[yaml_keys[name]] = numeric
+            for name, numeric in numeric_values.items():
+                settings[yaml_keys[name]] = numeric
             ok, error = save_yaml(settings_path, settings)
             if not ok:
                 raise OSError(error)

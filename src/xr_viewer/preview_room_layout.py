@@ -21,6 +21,7 @@ ENVIRONMENTS_DIR = APP_DIR / "xr_viewer" / "environments"
 PREVIEW_MOVE_SPEED_MPS = 1.0
 PREVIEW_FAST_MOVE_SPEED_MPS = 5.0
 PREVIEW_SLOW_MOVE_SPEED_MPS = 0.5
+VIEW_POSE_NAMES = ("Front", "Middle", "Back")
 sys.path.insert(0, str(APP_DIR))
 os.chdir(APP_DIR)
 warnings.filterwarnings(
@@ -56,6 +57,36 @@ def _active_view_pose(profile: dict) -> dict:
             return view_poses[idx]
     view = profile.get("view_pose", profile.get("camera", {}))
     return view if isinstance(view, dict) else {}
+
+
+def _ensure_three_view_poses(profile: dict) -> list[dict]:
+    """Return canonical front/middle/back seats, preserving authored poses."""
+    source = profile.get("view_poses")
+    source = [item for item in source if isinstance(item, dict)] if isinstance(source, list) else []
+    fallback = _active_view_pose(profile) or {
+        "x": 0.0, "y": 1.2, "z": 0.0, "angle": 0.0,
+        "rotation_deg": [0.0, 0.0, 0.0],
+    }
+    named = {}
+    for pose in source:
+        name = str(pose.get("name", "")).strip().lower()
+        if "front" in name or "前" in name:
+            named.setdefault("Front", pose)
+        elif "back" in name or "后" in name:
+            named.setdefault("Back", pose)
+        elif "middle" in name or "center" in name or "中" in name:
+            named.setdefault("Middle", pose)
+    poses = []
+    for index, name in enumerate(VIEW_POSE_NAMES):
+        pose = dict(named.get(name, source[index] if index < len(source) else fallback))
+        pose["name"] = name
+        poses.append(pose)
+    profile["view_poses"] = poses
+    try:
+        profile["view_pose_index"] = int(profile.get("view_pose_index", 0)) % 3
+    except (TypeError, ValueError):
+        profile["view_pose_index"] = 0
+    return poses
 
 
 def _pose_position(view: dict, default):
@@ -235,9 +266,9 @@ def main():
     os.chdir(APP_DIR)
     room_dir, profile_path, profile, glb_path = _load_profile(args.room)
     projection_near, projection_far = _profile_projection_planes(profile)
-    view_pose = _active_view_pose(profile)
-    if not view_pose:
-        view_pose = profile.setdefault("view_pose", {})
+    view_poses = _ensure_three_view_poses(profile)
+    view_pose_index = int(profile["view_pose_index"])
+    view_pose = view_poses[view_pose_index]
     screen = profile.setdefault("screen", {})
     screen.setdefault("name", "Preview Screen")
     screen.setdefault("width", 2.4)
@@ -302,6 +333,7 @@ def main():
     skybox_key_cooldown = 0.0
     edit_target = "SCREEN"
     tab_was_down = False
+    v_was_down = False
     mouse_look = False
     last_mouse = (0.0, 0.0)
 
@@ -317,7 +349,8 @@ def main():
         f"Ctrl={PREVIEW_SLOW_MOVE_SPEED_MPS:.1f}m/s"
     )
     print("Controls:")
-    print("  Tab: switch edit target SCREEN/VIEW")
+    print("  Tab: cycle VIEW seat Front/Middle/Back")
+    print("  V: switch edit target SCREEN/VIEW")
     print("  SCREEN: Arrow=screen X/Y, PageUp/PageDown=screen Z, +/-=width")
     print("  GLOBAL: [ / ]=seat exposure down/up, , / .=skybox brightness down/up")
     print("  SCREEN: 1=27in monitor, 2=65in TV, 3=100in projector, 4=cinema")
@@ -387,8 +420,21 @@ def main():
 
         tab_down = glfw.get_key(window, glfw.KEY_TAB) == glfw.PRESS
         if tab_down and not tab_was_down:
-            edit_target = "VIEW" if edit_target == "SCREEN" else "SCREEN"
+            view_pose_index = (view_pose_index + 1) % len(view_poses)
+            profile["view_pose_index"] = view_pose_index
+            view_pose = view_poses[view_pose_index]
+            view_pos = _pose_position_in_scene(profile, view_pose)
+            view_rot_deg = [
+                _normalize_angle_deg(value)
+                for value in _pose_rotation_deg(view_pose, [0.0, 0.0, 0.0])
+            ]
+            view_rot = [math.radians(value) for value in view_rot_deg]
+            edit_target = "VIEW"
         tab_was_down = tab_down
+        v_down = glfw.get_key(window, glfw.KEY_V) == glfw.PRESS
+        if v_down and not v_was_down:
+            edit_target = "VIEW" if edit_target == "SCREEN" else "SCREEN"
+        v_was_down = v_down
 
         pos = _vec3(screen.get("position"), [0.0, 1.2, -2.0])
         rot = [_normalize_angle_deg(value) for value in _vec3(screen.get("rotation_deg"), [0.0, 0.0, 0.0])]
@@ -501,9 +547,9 @@ def main():
         if glfw.get_key(window, glfw.KEY_R) == glfw.PRESS:
             _room_dir, _profile_path, profile, _glb_path = _load_profile(args.room)
             projection_near, projection_far = _profile_projection_planes(profile)
-            view_pose = _active_view_pose(profile)
-            if not view_pose:
-                view_pose = profile.setdefault("view_pose", {})
+            view_poses = _ensure_three_view_poses(profile)
+            view_pose_index = int(profile["view_pose_index"])
+            view_pose = view_poses[view_pose_index]
             screen = profile.setdefault("screen", {})
             view_pos = _pose_position_in_scene(profile, view_pose)
             view_rot_deg = [_normalize_angle_deg(value) for value in _pose_rotation_deg(view_pose, [0.0, 0.0, 0.0])]
@@ -524,7 +570,8 @@ def main():
             glfw.set_window_should_close(window, True)
 
         title = (
-            f"{args.room} | {edit_target} | {screen.get('name', 'Screen')} | "
+            f"{args.room} | {edit_target} | Seat={VIEW_POSE_NAMES[view_pose_index]} "
+            f"({view_pose_index + 1}/3) | {screen.get('name', 'Screen')} | "
             f"exposure={preview_exposure:.2f}EV skybox={skybox_brightness:.2f} | view={view_pos} {view_rot_deg} | "
             f"pos={screen.get('position')} rot={screen.get('rotation_deg')} "
             f"w={float(screen.get('width', 2.4)):.3f}m"
