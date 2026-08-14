@@ -14,9 +14,20 @@ class FilamentBridgeError(RuntimeError):
 
 
 _GLB_JSON_CHUNK = 0x4E4F534A
+_DYNAMIC_LIGHT_MATERIAL_PREFIX = "D2S_REFLECTIVE__"
 _PRESERVE_UNLIT_NAME_PARTS = (
     "skybox", "fakelight", "screen", "logo", "fire", "emmi",
     "emissive", "neon", "warning", "glass", "clock", "maxanimate",
+)
+_UNLIT_ONLY_MATERIAL_EXTENSIONS = (
+    "KHR_materials_clearcoat",
+    "KHR_materials_dispersion",
+    "KHR_materials_ior",
+    "KHR_materials_pbrSpecularGlossiness",
+    "KHR_materials_sheen",
+    "KHR_materials_specular",
+    "KHR_materials_transmission",
+    "KHR_materials_volume",
 )
 
 
@@ -75,8 +86,16 @@ def _prepare_environment_glb_for_dynamic_lighting(
         if preserve:
             continue
         extensions.pop("KHR_materials_unlit", None)
+        # These inputs were ignored by the authored unlit material. Normalize
+        # the converted surface to the small metallic/roughness contract that
+        # the native custom provider exposes to glTFio.
+        for extension_name in _UNLIT_ONLY_MATERIAL_EXTENSIONS:
+            extensions.pop(extension_name, None)
         if not extensions:
             material.pop("extensions", None)
+        pbr.pop("metallicRoughnessTexture", None)
+        material.pop("normalTexture", None)
+        material.pop("occlusionTexture", None)
         pbr.setdefault("metallicFactor", 0.0)
         pbr.setdefault("roughnessFactor", 0.85)
         # These rooms were authored as baked unlit scenes. Removing the unlit
@@ -86,6 +105,11 @@ def _prepare_environment_glb_for_dynamic_lighting(
         # segmented screen lights through the newly enabled PBR response.
         material.setdefault("emissiveTexture", dict(pbr["baseColorTexture"]))
         material.setdefault("emissiveFactor", [1.0, 1.0, 1.0])
+        # The native MaterialProvider receives the glTF material label before
+        # ResourceLoader binds its textures. Prefix only the converted baked
+        # room surfaces so it can select the Lit custom-surface material while
+        # preserving glTFio's normal texture upload and binding path.
+        material["name"] = _DYNAMIC_LIGHT_MATERIAL_PREFIX + name
         converted.append(name)
 
     if not converted:

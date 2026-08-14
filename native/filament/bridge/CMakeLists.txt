@@ -95,6 +95,7 @@ add_library(filament_bridge SHARED
     bridge_text_overlay.cpp
     bridge_laser.cpp
     bridge_material.cpp
+    bridge_material_provider.cpp
     preview_bridge.cpp)
 target_compile_features(filament_bridge PRIVATE cxx_std_20)
 target_compile_definitions(filament_bridge PRIVATE FILAMENT_BRIDGE_BUILD=1)

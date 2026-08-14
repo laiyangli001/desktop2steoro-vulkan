@@ -58,7 +58,12 @@ def test_environment_glb_converts_room_surfaces_but_preserves_emissive_unlit() -
             {
                 "name": "M_Wall_gltf_unlit",
                 "extensions": {"KHR_materials_unlit": {}},
-                "pbrMetallicRoughness": {"baseColorTexture": {"index": 0}},
+                "pbrMetallicRoughness": {
+                    "baseColorTexture": {"index": 0},
+                    "metallicRoughnessTexture": {"index": 2},
+                },
+                "normalTexture": {"index": 3},
+                "occlusionTexture": {"index": 4},
             },
             {
                 "name": "M_fakelight_gltf_unlit",
@@ -85,9 +90,30 @@ def test_environment_glb_converts_room_surfaces_but_preserves_emissive_unlit() -
     assert wall["pbrMetallicRoughness"]["roughnessFactor"] == 0.85
     assert wall["emissiveTexture"] == {"index": 0}
     assert wall["emissiveFactor"] == [1.0, 1.0, 1.0]
+    assert wall["name"] == "D2S_REFLECTIVE__M_Wall_gltf_unlit"
+    assert "metallicRoughnessTexture" not in wall["pbrMetallicRoughness"]
+    assert "normalTexture" not in wall
+    assert "occlusionTexture" not in wall
     assert "KHR_materials_unlit" in result["materials"][1]["extensions"]
     assert "KHR_materials_unlit" in result["materials"][2]["extensions"]
     assert result["extensionsUsed"] == ["KHR_materials_unlit"]
+
+
+def test_environment_reflection_material_uses_custom_lit_surface_shading() -> None:
+    root = Path(__file__).resolve().parents[1]
+    source = (
+        root / "native/filament/bridge/bridge_material_provider.cpp"
+    ).read_text(encoding="utf-8")
+    context = (
+        root / "native/filament/bridge/bridge_context.cpp"
+    ).read_text(encoding="utf-8")
+
+    assert 'constexpr char kReflectivePrefix[] = "D2S_REFLECTIVE__"' in source
+    assert ".customSurfaceShading(true)" in source
+    assert "vec3 surfaceShading(" in source
+    assert "material.baseColor.rgb * materialParams.emissiveFactor" in source
+    assert "lightData.NdotL * lightData.attenuation" in source
+    assert "bridge_create_material_provider(bridge->engine)" in context
 
 
 def test_remote_filament_build_enables_multiview_without_stale_sdk_cache() -> None:

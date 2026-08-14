@@ -2,6 +2,7 @@
 
 ## 2026-08-14
 
+- OpenXR 房间屏幕反射光改用专用 Filament `Lit + customSurfaceShading` 材质：运行时只标记由烘焙 unlit 转换的墙面、地面和座椅，glTFio 继续原样绑定 baseColor 纹理；原纹理作为单次 emissive 亮度基线保持房间原貌，自定义表面着色仅叠加现有 24 段屏幕点光的颜色、法线响应、距离衰减与可见性，避免普通 PBR 光照过弱及按灯重复累加基线。
 - OpenXR 房间“场景亮度”改为严格的会话态设置：滑块只影响本次运行，不写入 `settings.yaml` 或房间 Profile；每次启动及热切换到任意 GLB 房间时，均在 Profile 和灯光预设加载完成后恢复到菜单 `0 EV` 中间刻度。
 - 精简 OpenXR 房间热切换成功日志：仅输出 `Environment hot switch complete: model=<房间>`，不再附带冗长的 GLB 与 panorama 完整路径。
 - 修复 Artemis 等烘焙 `unlit` 房间在启用屏幕反射 PBR 后于 `0 EV` 下接近全黑、与天空盒亮度严重断层：运行时转换房间表面时同步复用原 baseColor 纹理作为 emissive 烘焙亮度基线，在保留原场景默认观感的同时继续叠加 Filament 环境光与 24 段屏幕反射光；天空盒、屏幕及原始 GLB 文件不变。

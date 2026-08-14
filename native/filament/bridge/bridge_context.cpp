@@ -5,6 +5,7 @@
 #include "bridge_eye.h"
 #include "bridge_laser.h"
 #include "bridge_material.h"
+#include "bridge_material_provider.h"
 #include "bridge_scene.h"
 #include "bridge_text_overlay.h"
 
@@ -65,7 +66,7 @@ FilamentBridge* bridge_context_create(
             filament::Engine::StereoscopicType::MULTIVIEW);
     bridge->scene = bridge->engine->createScene();
     bridge->foreground_scene = bridge->engine->createScene();
-    bridge->materials = filament::gltfio::createJitShaderProvider(bridge->engine);
+    bridge->materials = bridge_create_material_provider(bridge->engine);
     bridge->texture_provider = filament::gltfio::createStbProvider(bridge->engine);
     if (!bridge->scene || !bridge->foreground_scene || !bridge->materials ||
             !bridge->texture_provider) {
