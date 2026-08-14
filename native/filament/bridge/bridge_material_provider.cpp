@@ -6,6 +6,7 @@
 #include <filament/MaterialInstance.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <utility>
@@ -208,6 +209,11 @@ private:
                 .build(*engine_);
         if (material) {
             cache_.push_back(CachedMaterial{*config, *uvmap, material});
+            std::fprintf(stderr,
+                    "[FilamentBridge] reflective room material active: "
+                    "label=%s base_texture=%d emissive_texture=%d\n",
+                    label ? label : "", config->hasBaseColorTexture ? 1 : 0,
+                    config->hasEmissiveTexture ? 1 : 0);
         }
         return material;
     }

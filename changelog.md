@@ -2,6 +2,7 @@
 
 ## 2026-08-14
 
+- 针对小房间 `3d_theater` 屏幕反射光不可见的问题，确认 GLB 墙面、地面与天花板具备法线/切线且处于分段灯有效范围；新增房间 Profile 独立表面增益并将该场景设为 `8.0`、falloff 设为 `5.5 m`，同时增加反射材质创建和 24 段点光强度/位置的一次性原生诊断日志，便于实机直接确认材质与灯光两端均已生效。
 - OpenXR 房间屏幕反射光改用专用 Filament `Lit + customSurfaceShading` 材质：运行时只标记由烘焙 unlit 转换的墙面、地面和座椅，glTFio 继续原样绑定 baseColor 纹理；原纹理作为单次 emissive 亮度基线保持房间原貌，自定义表面着色仅叠加现有 24 段屏幕点光的颜色、法线响应、距离衰减与可见性，避免普通 PBR 光照过弱及按灯重复累加基线。
 - OpenXR 房间“场景亮度”改为严格的会话态设置：滑块只影响本次运行，不写入 `settings.yaml` 或房间 Profile；每次启动及热切换到任意 GLB 房间时，均在 Profile 和灯光预设加载完成后恢复到菜单 `0 EV` 中间刻度。
 - 精简 OpenXR 房间热切换成功日志：仅输出 `Environment hot switch complete: model=<房间>`，不再附带冗长的 GLB 与 panorama 完整路径。

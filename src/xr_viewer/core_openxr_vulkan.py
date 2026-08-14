@@ -922,6 +922,7 @@ class OpenXrVulkanPresenter(
         self._environment_screen_light_intensity_candela = (
             self.config.filament_environment_screen_light_intensity_candela
         )
+        self._environment_screen_light_surface_gain = 1.0
         self._environment_screen_light_saturation = (
             self.config.filament_environment_screen_light_saturation
         )
@@ -1497,7 +1498,11 @@ class OpenXrVulkanPresenter(
                 (1.0 - saturation) + saturation * chroma
                 if luminance > 0.0 else np.zeros(3)
             )))
-            intensities.append(intensity_scale * luminance)
+            intensities.append(
+                intensity_scale
+                * max(0.0, float(self._environment_screen_light_surface_gain))
+                * luminance
+            )
         applied = setter(
             positions, tuple(colors), tuple(intensities),
             falloff=max(0.01, float(self._environment_screen_light_falloff)),
@@ -1512,7 +1517,11 @@ class OpenXrVulkanPresenter(
             self._environment_screen_light_status = status
             print(
                 "[OpenXRViewer] Filament room screen reflection active: "
-                f"sample={status} segments=24 environment_only=True",
+                f"sample={status} segments=24 "
+                f"gain={self._environment_screen_light_surface_gain:.2f} "
+                f"max_cd={max(intensities, default=0.0):.2f} "
+                f"falloff={self._environment_screen_light_falloff:.2f} "
+                "environment_only=True",
                 flush=True,
             )
 
@@ -3754,6 +3763,7 @@ class OpenXrVulkanPresenter(
         self._environment_screen_light_intensity_candela = (
             self.config.filament_environment_screen_light_intensity_candela
         )
+        self._environment_screen_light_surface_gain = 1.0
         self._environment_screen_light_saturation = (
             self.config.filament_environment_screen_light_saturation
         )
@@ -7334,6 +7344,7 @@ class OpenXrVulkanPresenter(
             ("controller_screen_light_smoothing_seconds", "_controller_screen_light_smoothing_seconds"),
             ("controller_screen_light_sample_hz", "_controller_screen_light_sample_hz"),
             ("environment_screen_light_intensity_candela", "_environment_screen_light_intensity_candela"),
+            ("environment_screen_light_surface_gain", "_environment_screen_light_surface_gain"),
             ("environment_screen_light_saturation", "_environment_screen_light_saturation"),
             ("environment_screen_light_max_luminance", "_environment_screen_light_max_luminance"),
             ("environment_screen_light_smoothing_seconds", "_environment_screen_light_smoothing_seconds"),

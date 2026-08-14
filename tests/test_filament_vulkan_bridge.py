@@ -113,6 +113,7 @@ def test_environment_reflection_material_uses_custom_lit_surface_shading() -> No
     assert "vec3 surfaceShading(" in source
     assert "material.baseColor.rgb * materialParams.emissiveFactor" in source
     assert "lightData.NdotL * lightData.attenuation" in source
+    assert "reflective room material active" in source
     assert "bridge_create_material_provider(bridge->engine)" in context
 
 

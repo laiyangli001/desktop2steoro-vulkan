@@ -2,7 +2,9 @@
 #include "bridge_internal.h"
 #include "bridge_eye.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdio>
 
 namespace {
 
@@ -497,6 +499,18 @@ int bridge_material_set_environment_screen_lights(
     bridge->environment_screen_light_count = count;
     bridge->environment_screen_light_falloff = falloff;
     bridge->environment_screen_light_cast_shadows = shadow_enabled;
+    if (recreate) {
+        float maximum_intensity = 0.0f;
+        for (uint32_t index = 0; index < count; ++index) {
+            maximum_intensity = std::max(
+                    maximum_intensity, intensity_candela[index]);
+        }
+        std::fprintf(stderr,
+                "[FilamentBridge] room screen lights active: count=%u "
+                "max_cd=%.3f falloff=%.3f first_position=(%.3f,%.3f,%.3f)\n",
+                count, maximum_intensity, falloff,
+                positions_xyz[0], positions_xyz[1], positions_xyz[2]);
+    }
     return 1;
 }
 

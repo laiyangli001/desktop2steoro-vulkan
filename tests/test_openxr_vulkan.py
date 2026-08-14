@@ -607,6 +607,7 @@ def test_environment_screen_reflection_maps_24_edge_samples_around_screen() -> N
     )
     presenter._environment_screen_light_saturation = 1.0
     presenter._environment_screen_light_intensity_candela = 100.0
+    presenter._environment_screen_light_surface_gain = 2.0
     presenter._environment_screen_light_offset = 0.1
     bridge = Bridge()
     samples = tuple((1.0, 0.0, 0.0) for _ in range(24))
@@ -623,7 +624,7 @@ def test_environment_screen_reflection_maps_24_edge_samples_around_screen() -> N
     assert positions[7] == pytest.approx((1.75, 1.0, -2.9))
     assert positions[12] == pytest.approx((1.75, -1.0, -2.9))
     assert colors[0] == pytest.approx((1.0, 0.0, 0.0))
-    assert intensities[0] == pytest.approx(21.26)
+    assert intensities[0] == pytest.approx(42.52)
     assert options == {
         "falloff": pytest.approx(4.0),
         "cast_shadows": False,
