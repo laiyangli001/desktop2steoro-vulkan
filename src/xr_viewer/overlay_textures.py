@@ -152,7 +152,8 @@ def build_settings_menu_rgba(menu, values, *, hover_key=None, cursor_uv=None, la
     label_font = load_overlay_font(21, prefer_cjk=True)
     tab_font = load_overlay_font(32, prefer_cjk=True, bold=True)
     value_font = load_overlay_font(19, prefer_cjk=True)
-    small_font = load_overlay_font(17, prefer_cjk=True)
+    section_font = load_overlay_font(21, prefer_cjk=True, bold=True)
+    reset_font = load_overlay_font(17, prefer_cjk=True)
     locale = normalize_locale(lang)
     translate = lambda message: gettext_for(locale, message)
     controls = menu.controls(
@@ -260,7 +261,11 @@ def build_settings_menu_rgba(menu, values, *, hover_key=None, cursor_uv=None, la
                     y = arc_y + depth * (1.0 - (2.0 * t - 1.0) ** 2)
                     points.append((x, y))
                 draw.line(points, fill=arc_color, width=4)
-            control_font = tab_font if control.key.startswith("tab:") else label_font
+            control_font = (
+                tab_font if control.key.startswith("tab:")
+                else reset_font if control.key == "section:reset_defaults"
+                else label_font
+            )
             bbox = draw.textbbox((0, 0), label, font=control_font)
             text_color = colors["blue_hover"] if active else (colors["text"] if control.enabled else colors["disabled"])
             draw.text(
@@ -268,31 +273,28 @@ def build_settings_menu_rgba(menu, values, *, hover_key=None, cursor_uv=None, la
                  (box[1] + box[3] - (bbox[3] - bbox[1])) / 2 + (28 if control.key.startswith("screen:type:") else -2)),
                 label, font=control_font, fill=text_color,
             )
-    if menu.tab == "room":
-        draw.text(
-            (82, 114), translate("Scene controls"),
-            font=small_font, fill=colors["muted"],
-        )
-    elif menu.tab == "picture":
-        draw.text(
-            (82, 114), translate("Video appearance"),
-            font=small_font, fill=colors["muted"],
-        )
-    elif menu.tab == "depth":
-        draw.text(
-            (82, 114), translate("Stereo depth"),
-            font=small_font, fill=colors["muted"],
-        )
-    elif menu.tab == "glow":
-        draw.text(
-            (82, 114), translate("Glow effects"),
-            font=small_font, fill=colors["muted"],
-        )
-    else:
-        draw.text(
-            (82, 114), translate("Screen geometry"),
-            font=small_font, fill=colors["muted"],
-        )
+    section_labels = {
+        "picture": "Video appearance",
+        "depth": "Stereo depth",
+        "glow": "Glow effects",
+        "room": "Scene controls",
+        "screen": "Screen geometry",
+    }
+    draw.text(
+        (82, 112), translate(section_labels[menu.tab]),
+        font=section_font, fill=colors["text"],
+    )
+    separator_y = {
+        "picture": (250, 346, 441, 537, 633, 729),
+        "depth": (318,),
+        "glow": (405,),
+        "room": (315, 405, 574, 735),
+        "screen": (310, 405, 520, 635, 750),
+    }
+    for y in separator_y[menu.tab]:
+        draw.line((70, y, width - 70, y), fill=colors["border"], width=1)
+    if menu.tab == "picture":
+        draw.line((512, 175, 512, height - 45), fill=colors["border"], width=1)
     if cursor_uv is not None:
         cx, cy = int(cursor_uv[0] * width), int(cursor_uv[1] * height)
         draw.ellipse((cx - 11, cy - 11, cx + 11, cy + 11), outline=colors["blue_hover"], width=4)

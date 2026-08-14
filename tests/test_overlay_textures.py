@@ -29,11 +29,8 @@ def test_settings_menu_canvas_has_room_below_bottom_controls():
     assert rgba.shape[:2] == (
         SETTINGS_MENU_TEXTURE_SIZE[1], SETTINGS_MENU_TEXTURE_SIZE[0]
     )
-    reset = next(
-        control for control in menu.controls()
-        if control.key == "screen:reset_defaults"
-    )
-    assert int(reset.rect[3] * rgba.shape[0]) < rgba.shape[0] - 18
+    reset = next(control for control in menu.controls() if control.key == "section:reset_defaults")
+    assert int(reset.rect[3] * rgba.shape[0]) < int(0.20 * rgba.shape[0])
 
 
 def test_screen_preset_osd_matches_legacy_colors_and_centering():

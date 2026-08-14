@@ -284,6 +284,10 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
             self._glow_environment_enabled()
             and mode not in {"off", "none", "false", "0"}
         )
+        edge_light_active = bool(
+            getattr(self.presenter, "_environment_screen_light_enabled", False)
+            and getattr(self.presenter.config, "filament_glb_path", None)
+        )
         if self.backend_name != "cuda":
             self._set_glow_gpu_status(f"cpu_fallback backend={self.backend_name}")
             return {}
@@ -320,8 +324,10 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
             now = time.monotonic()
             sample_hz = max(1.0, float(getattr(
                 self.presenter,
-                "_filament_glow_sample_hz" if gpu_glow_active
-                else "_controller_screen_light_sample_hz",
+                "_filament_glow_sample_hz" if gpu_glow_active else (
+                    "_environment_screen_light_sample_hz" if edge_light_active
+                    else "_controller_screen_light_sample_hz"
+                ),
                 30.0 if gpu_glow_active else 12.0,
             )))
             submit_interval = 1.0 / sample_hz
@@ -330,18 +336,22 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
                 and now - self._glow_gpu_last_submit >= submit_interval
             ):
                 submit_kwargs = {
-                    "mode": mode if gpu_glow_active else "screen_light",
+                    "mode": mode if gpu_glow_active else (
+                        "surround" if edge_light_active else "screen_light"
+                    ),
                 }
-                if gpu_glow_active:
+                if gpu_glow_active or edge_light_active:
                     submit_kwargs["temporal_smoothing_seconds"] = max(
                         0.0,
                         float(getattr(
                             self.presenter,
-                            "_filament_glow_smoothing_seconds",
+                            "_environment_screen_light_smoothing_seconds"
+                            if edge_light_active and not gpu_glow_active
+                            else "_filament_glow_smoothing_seconds",
                             0.10,
                         )),
                     )
-                if not gpu_glow_active:
+                if not gpu_glow_active and not edge_light_active:
                     submit_kwargs["screen_light_only"] = True
                 submitted = backend.submit(source, **submit_kwargs)
                 if submitted:
@@ -354,6 +364,7 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
                     if key in {
                         "screen_light_linear_rgb",
                         "screen_light_sample_path",
+                        "screen_edge_light_linear_rgb",
                         "_vulkan_glow_release",
                     }
                 }

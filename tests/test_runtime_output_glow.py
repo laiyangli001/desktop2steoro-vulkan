@@ -60,6 +60,43 @@ def test_cuda_adapter_keeps_vulkan_screen_light_sampling_in_glb_environment() ->
     assert adapter._glow_cpu_metadata() == {}
 
 
+def test_cuda_adapter_uses_surround_sampling_for_room_edge_reflection() -> None:
+    class Backend:
+        def poll(self) -> None:
+            return None
+
+        def submit(
+            self, source, *, mode, temporal_smoothing_seconds,
+            screen_light_only=False,
+        ) -> bool:
+            assert source == "cuda-source"
+            assert mode == "surround"
+            assert temporal_smoothing_seconds == 0.18
+            assert screen_light_only is False
+            return True
+
+        def acquire(self, frame_id: int):
+            return {
+                "glow_vulkan_image": SimpleNamespace(width=320, height=180),
+                "screen_edge_light_linear_rgb": tuple(
+                    (0.1, 0.2, 0.3) for _ in range(24)
+                ),
+                "_vulkan_glow_release": lambda _frame_id: None,
+            }
+
+    adapter = _adapter_with_backend(Backend())
+    adapter.presenter._filament_glow_environment_enabled = False
+    adapter.presenter._environment_screen_light_enabled = True
+    adapter.presenter._environment_screen_light_sample_hz = 12.0
+    adapter.presenter._environment_screen_light_smoothing_seconds = 0.18
+    adapter.presenter.config = SimpleNamespace(filament_glb_path="room.glb")
+
+    metadata = adapter._update_glow_gpu_source("cuda-source", frame_id=2)
+
+    assert "glow_vulkan_image" not in metadata
+    assert len(metadata["screen_edge_light_linear_rgb"]) == 24
+
+
 def test_cuda_adapter_reuses_completed_glow_while_new_dispatch_runs() -> None:
     resource = SimpleNamespace(width=320, height=180)
 

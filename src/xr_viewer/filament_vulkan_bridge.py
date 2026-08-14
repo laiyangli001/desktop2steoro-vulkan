@@ -80,6 +80,7 @@ class FilamentVulkanBridge:
         self._controller_ambient_light_abi_available = False
         self._lighting_config_abi_available = False
         self._controller_screen_light_abi_available = False
+        self._environment_screen_lights_abi_available = False
         self._finished_drawing_semaphore_abi_available = False
         self._image_ready_semaphore_abi_available = False
         self._controller_overlay_abi_available = False
@@ -120,6 +121,10 @@ class FilamentVulkanBridge:
     @property
     def controller_material_override_abi_available(self) -> bool:
         return self._controller_material_override_abi_available
+
+    @property
+    def environment_screen_lights_abi_available(self) -> bool:
+        return self._environment_screen_lights_abi_available
 
     @property
     def vulkan_external_image_abi_available(self) -> bool:
@@ -885,6 +890,42 @@ class FilamentVulkanBridge:
         )
         return True
 
+    def set_environment_screen_lights(
+        self, positions, colors, intensities, *, falloff: float,
+        cast_shadows: bool, enabled: bool,
+    ) -> bool:
+        self._ensure_loaded()
+        if not self._environment_screen_lights_abi_available:
+            return False
+        position_values = tuple(
+            float(value) for position in positions for value in position
+        )
+        color_values = tuple(
+            float(value) for color in colors for value in color
+        )
+        intensity_values = tuple(float(value) for value in intensities)
+        count = len(intensity_values)
+        if len(position_values) != count * 3 or len(color_values) != count * 3:
+            raise ValueError("environment screen light arrays have different sizes")
+        if count > 24:
+            raise ValueError("environment screen light count exceeds 24")
+        float_array = ctypes.c_float * max(1, count * 3)
+        intensity_array = ctypes.c_float * max(1, count)
+        self._check_result(
+            self._library.filament_bridge_set_environment_screen_lights(
+                self._handle,
+                float_array(*position_values) if count else float_array(),
+                float_array(*color_values) if count else float_array(),
+                intensity_array(*intensity_values) if count else intensity_array(),
+                count,
+                float(falloff),
+                int(bool(cast_shadows)),
+                int(bool(enabled)),
+            ),
+            "set_environment_screen_lights",
+        )
+        return True
+
     @property
     def finished_drawing_semaphore_abi_available(self) -> bool:
         return self._finished_drawing_semaphore_abi_available
@@ -1247,6 +1288,22 @@ class FilamentVulkanBridge:
             ]
             set_controller_screen_light.restype = ctypes.c_int
             self._controller_screen_light_abi_available = True
+        set_environment_screen_lights = getattr(
+            library, "filament_bridge_set_environment_screen_lights", None
+        )
+        if set_environment_screen_lights is not None:
+            set_environment_screen_lights.argtypes = [
+                ctypes.c_void_p,
+                ctypes.POINTER(ctypes.c_float),
+                ctypes.POINTER(ctypes.c_float),
+                ctypes.POINTER(ctypes.c_float),
+                ctypes.c_uint32,
+                ctypes.c_float,
+                ctypes.c_int,
+                ctypes.c_int,
+            ]
+            set_environment_screen_lights.restype = ctypes.c_int
+            self._environment_screen_lights_abi_available = True
         library.filament_bridge_set_fill_light.argtypes = [
             ctypes.c_void_p,
             ctypes.c_float, ctypes.c_float, ctypes.c_float,

@@ -242,6 +242,12 @@ void bridge_context_destroy(FilamentBridge* bridge) {
     if (!bridge->controller_screen_light.isNull() && bridge->engine) {
         bridge->engine->destroy(bridge->controller_screen_light);
     }
+    for (auto& light : bridge->environment_screen_lights) {
+        if (!light.isNull() && bridge->engine) {
+            bridge->engine->destroy(light);
+            light = {};
+        }
+    }
     if (bridge->indirect_light && bridge->engine) {
         if (bridge->scene) bridge->scene->setIndirectLight(nullptr);
         bridge->engine->destroy(bridge->indirect_light);

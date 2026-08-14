@@ -561,6 +561,15 @@ class OpenXrVulkanConfig:
     filament_controller_screen_light_smoothing_seconds: float = 0.18
     filament_controller_screen_light_sample_hz: float = 12.0
     filament_controller_screen_light_cast_shadows: bool = False
+    filament_environment_screen_light_enabled: bool = True
+    filament_environment_screen_light_intensity_candela: float = 120.0
+    filament_environment_screen_light_saturation: float = 0.70
+    filament_environment_screen_light_max_luminance: float = 0.40
+    filament_environment_screen_light_smoothing_seconds: float = 0.18
+    filament_environment_screen_light_sample_hz: float = 12.0
+    filament_environment_screen_light_falloff: float = 4.0
+    filament_environment_screen_light_offset: float = 0.08
+    filament_environment_screen_light_cast_shadows: bool = False
     filament_glow_sample_hz: float = 30.0
     filament_glow_smoothing_seconds: float = 0.10
     openxr_no_headset_retry_interval: float = 3.0
@@ -905,6 +914,35 @@ class OpenXrVulkanPresenter(
         self._controller_screen_light_smoothed_intensity = 0.0
         self._controller_screen_light_status = None
         self._controller_screen_light_applied = False
+        self._environment_screen_light_enabled = (
+            self.config.filament_environment_screen_light_enabled
+        )
+        self._environment_screen_light_intensity_candela = (
+            self.config.filament_environment_screen_light_intensity_candela
+        )
+        self._environment_screen_light_saturation = (
+            self.config.filament_environment_screen_light_saturation
+        )
+        self._environment_screen_light_max_luminance = (
+            self.config.filament_environment_screen_light_max_luminance
+        )
+        self._environment_screen_light_smoothing_seconds = (
+            self.config.filament_environment_screen_light_smoothing_seconds
+        )
+        self._environment_screen_light_sample_hz = (
+            self.config.filament_environment_screen_light_sample_hz
+        )
+        self._environment_screen_light_falloff = (
+            self.config.filament_environment_screen_light_falloff
+        )
+        self._environment_screen_light_offset = (
+            self.config.filament_environment_screen_light_offset
+        )
+        self._environment_screen_light_cast_shadows = (
+            self.config.filament_environment_screen_light_cast_shadows
+        )
+        self._environment_screen_light_applied = False
+        self._environment_screen_light_status = None
         self._filament_lighting_presets: tuple[dict[str, Any], ...] = ()
         self._filament_lighting_preset_index = 0
         self._filament_glow_mode = "off"
@@ -1389,6 +1427,90 @@ class OpenXrVulkanPresenter(
             print(
                 "Filament controller screen light active: "
                 f"sample={status} foreground_only=True",
+                flush=True,
+            )
+
+    def _update_environment_screen_lights(
+        self, frame: VulkanStereoOutputFrame | None, bridge: Any
+    ) -> None:
+        setter = getattr(bridge, "set_environment_screen_lights", None)
+        metadata = dict(getattr(frame, "metadata", None) or {})
+        samples = metadata.get("screen_edge_light_linear_rgb")
+        active = bool(
+            callable(setter)
+            and self._environment_screen_light_enabled
+            and self.config.filament_glb_path
+            and self._filament_screen is not None
+            and isinstance(samples, (list, tuple))
+            and len(samples) == 24
+        )
+        if not callable(setter):
+            return
+        if not active:
+            if self._environment_screen_light_applied:
+                setter((), (), (), falloff=1.0, cast_shadows=False, enabled=False)
+            self._environment_screen_light_applied = False
+            return
+
+        screen_pose = self._filament_screen_pose_mat4().astype(np.float64)
+        center = screen_pose[:3, 3]
+        right = screen_pose[:3, 0]
+        up = screen_pose[:3, 1]
+        normal = screen_pose[:3, 2]
+        width = float(self._filament_screen[1])
+        height = float(self._filament_screen[2])
+        offset = max(0.0, float(self._environment_screen_light_offset))
+        perimeter_uv = (
+            tuple(((index + 0.5) / 8.0, 1.0) for index in range(8))
+            + tuple((1.0, (index + 0.5) / 6.0) for index in range(4, 0, -1))
+            + tuple(((index + 0.5) / 8.0, 0.0) for index in range(7, -1, -1))
+            + tuple((0.0, (index + 0.5) / 6.0) for index in range(1, 5))
+        )
+        positions = tuple(
+            tuple(float(value) for value in (
+                center + right * ((u - 0.5) * width)
+                + up * ((v - 0.5) * height) + normal * offset
+            ))
+            for u, v in perimeter_uv
+        )
+        saturation = max(0.0, min(
+            1.0, float(self._environment_screen_light_saturation)
+        ))
+        max_luminance = max(
+            0.0, float(self._environment_screen_light_max_luminance)
+        )
+        intensity_scale = max(
+            0.0, float(self._environment_screen_light_intensity_candela)
+        )
+        colors = []
+        intensities = []
+        for sample in samples:
+            rgb = np.maximum(0.0, np.asarray(sample[:3], dtype=np.float64))
+            luminance = min(
+                float(np.dot(rgb, (0.2126, 0.7152, 0.0722))), max_luminance
+            )
+            maximum = float(np.max(rgb))
+            chroma = rgb / maximum if maximum > 1e-6 else np.zeros(3)
+            colors.append(tuple(float(value) for value in (
+                (1.0 - saturation) + saturation * chroma
+                if luminance > 0.0 else np.zeros(3)
+            )))
+            intensities.append(intensity_scale * luminance)
+        applied = setter(
+            positions, tuple(colors), tuple(intensities),
+            falloff=max(0.01, float(self._environment_screen_light_falloff)),
+            cast_shadows=bool(self._environment_screen_light_cast_shadows),
+            enabled=True,
+        )
+        if not applied:
+            return
+        self._environment_screen_light_applied = True
+        status = str(metadata.get("screen_light_sample_path", "unknown"))
+        if status != self._environment_screen_light_status:
+            self._environment_screen_light_status = status
+            print(
+                "[OpenXRViewer] Filament room screen reflection active: "
+                f"sample={status} segments=24 environment_only=True",
                 flush=True,
             )
 
@@ -1973,6 +2095,13 @@ class OpenXrVulkanPresenter(
             ("controller_screen_light_max_luminance", "_controller_screen_light_max_luminance"),
             ("controller_screen_light_smoothing_seconds", "_controller_screen_light_smoothing_seconds"),
             ("controller_screen_light_sample_hz", "_controller_screen_light_sample_hz"),
+            ("environment_screen_light_intensity_candela", "_environment_screen_light_intensity_candela"),
+            ("environment_screen_light_saturation", "_environment_screen_light_saturation"),
+            ("environment_screen_light_max_luminance", "_environment_screen_light_max_luminance"),
+            ("environment_screen_light_smoothing_seconds", "_environment_screen_light_smoothing_seconds"),
+            ("environment_screen_light_sample_hz", "_environment_screen_light_sample_hz"),
+            ("environment_screen_light_falloff", "_environment_screen_light_falloff"),
+            ("environment_screen_light_offset", "_environment_screen_light_offset"),
             ("glow_sample_hz", "_filament_glow_sample_hz"),
             ("glow_smoothing_seconds", "_filament_glow_smoothing_seconds"),
         ):
@@ -2003,6 +2132,8 @@ class OpenXrVulkanPresenter(
             ("controller_top_light_cast_shadows", "_controller_top_light_cast_shadows"),
             ("controller_screen_light_enabled", "_controller_screen_light_enabled"),
             ("controller_screen_light_cast_shadows", "_controller_screen_light_cast_shadows"),
+            ("environment_screen_light_enabled", "_environment_screen_light_enabled"),
+            ("environment_screen_light_cast_shadows", "_environment_screen_light_cast_shadows"),
         ):
             if key in preset:
                 setattr(self, attribute, bool(preset[key]))
@@ -2043,6 +2174,27 @@ class OpenXrVulkanPresenter(
         )
         self._controller_screen_light_sample_hz = max(
             1.0, float(self._controller_screen_light_sample_hz)
+        )
+        self._environment_screen_light_intensity_candela = max(
+            0.0, float(self._environment_screen_light_intensity_candela)
+        )
+        self._environment_screen_light_saturation = max(
+            0.0, min(1.0, float(self._environment_screen_light_saturation))
+        )
+        self._environment_screen_light_max_luminance = max(
+            0.0, float(self._environment_screen_light_max_luminance)
+        )
+        self._environment_screen_light_smoothing_seconds = max(
+            0.0, float(self._environment_screen_light_smoothing_seconds)
+        )
+        self._environment_screen_light_sample_hz = max(
+            1.0, float(self._environment_screen_light_sample_hz)
+        )
+        self._environment_screen_light_falloff = max(
+            0.01, float(self._environment_screen_light_falloff)
+        )
+        self._environment_screen_light_offset = max(
+            0.0, float(self._environment_screen_light_offset)
         )
         self._filament_glow_sample_hz = max(
             1.0, float(self._filament_glow_sample_hz)
@@ -3595,6 +3747,33 @@ class OpenXrVulkanPresenter(
         self._controller_screen_light_cast_shadows = (
             self.config.filament_controller_screen_light_cast_shadows
         )
+        self._environment_screen_light_enabled = (
+            self.config.filament_environment_screen_light_enabled
+        )
+        self._environment_screen_light_intensity_candela = (
+            self.config.filament_environment_screen_light_intensity_candela
+        )
+        self._environment_screen_light_saturation = (
+            self.config.filament_environment_screen_light_saturation
+        )
+        self._environment_screen_light_max_luminance = (
+            self.config.filament_environment_screen_light_max_luminance
+        )
+        self._environment_screen_light_smoothing_seconds = (
+            self.config.filament_environment_screen_light_smoothing_seconds
+        )
+        self._environment_screen_light_sample_hz = (
+            self.config.filament_environment_screen_light_sample_hz
+        )
+        self._environment_screen_light_falloff = (
+            self.config.filament_environment_screen_light_falloff
+        )
+        self._environment_screen_light_offset = (
+            self.config.filament_environment_screen_light_offset
+        )
+        self._environment_screen_light_cast_shadows = (
+            self.config.filament_environment_screen_light_cast_shadows
+        )
         self._filament_glow_sample_hz = self.config.filament_glow_sample_hz
         self._filament_glow_smoothing_seconds = (
             self.config.filament_glow_smoothing_seconds
@@ -3977,7 +4156,7 @@ class OpenXrVulkanPresenter(
         if key == "close":
             self._settings_menu.close()
             return
-        if key == "picture:reset_defaults":
+        if key == "section:reset_defaults" and self._settings_menu.tab == "picture":
             self._settings_menu_values.update(PICTURE_DEFAULTS)
             self._pending_openxr_render_scale = float(
                 PICTURE_DEFAULTS["openxr_render_scale"]
@@ -4011,7 +4190,7 @@ class OpenXrVulkanPresenter(
             )
             self._settings_menu.mark_dirty()
             return
-        if key == "depth:reset_defaults":
+        if key == "section:reset_defaults" and self._settings_menu.tab == "depth":
             self._settings_menu_values.update({
                 "depth_strength": 0.25,
                 "cross_eyed": False,
@@ -4038,7 +4217,7 @@ class OpenXrVulkanPresenter(
             indices = {"front": 0, "middle": 1, "back": 2}
             self._apply_settings_menu_seat(indices[key.rsplit(":", 1)[1]])
             return
-        if key == "screen:reset_defaults":
+        if key == "section:reset_defaults" and self._settings_menu.tab == "screen":
             if self._filament_screen_initial is not None:
                 self._filament_screen = self._filament_screen_initial
             self._screen_curve_half_angle = self._screen_initial_curve_half_angle
@@ -7121,6 +7300,13 @@ class OpenXrVulkanPresenter(
             ("controller_screen_light_max_luminance", "_controller_screen_light_max_luminance"),
             ("controller_screen_light_smoothing_seconds", "_controller_screen_light_smoothing_seconds"),
             ("controller_screen_light_sample_hz", "_controller_screen_light_sample_hz"),
+            ("environment_screen_light_intensity_candela", "_environment_screen_light_intensity_candela"),
+            ("environment_screen_light_saturation", "_environment_screen_light_saturation"),
+            ("environment_screen_light_max_luminance", "_environment_screen_light_max_luminance"),
+            ("environment_screen_light_smoothing_seconds", "_environment_screen_light_smoothing_seconds"),
+            ("environment_screen_light_sample_hz", "_environment_screen_light_sample_hz"),
+            ("environment_screen_light_falloff", "_environment_screen_light_falloff"),
+            ("environment_screen_light_offset", "_environment_screen_light_offset"),
             ("glow_sample_hz", "_filament_glow_sample_hz"),
             ("glow_smoothing_seconds", "_filament_glow_smoothing_seconds"),
         ):
@@ -7150,6 +7336,14 @@ class OpenXrVulkanPresenter(
         self._controller_screen_light_cast_shadows = bool(profile.get(
             "controller_screen_light_cast_shadows",
             self._controller_screen_light_cast_shadows,
+        ))
+        self._environment_screen_light_enabled = bool(profile.get(
+            "environment_screen_light_enabled",
+            self._environment_screen_light_enabled,
+        ))
+        self._environment_screen_light_cast_shadows = bool(profile.get(
+            "environment_screen_light_cast_shadows",
+            self._environment_screen_light_cast_shadows,
         ))
         self._controller_hdr_lighting = bool(
             profile.get("controller_hdr_lighting", False)
@@ -7724,6 +7918,9 @@ class OpenXrVulkanPresenter(
             # both eye Views. Updating them twice adds owner-thread work
             # without changing either eye's scene state.
             self._update_controller_screen_light(
+                presentation_frame, self.filament_bridge
+            )
+            self._update_environment_screen_lights(
                 presentation_frame, self.filament_bridge
             )
             self._update_filament_controllers(self.filament_bridge)

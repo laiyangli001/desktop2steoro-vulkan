@@ -246,6 +246,15 @@ int filament_bridge_set_controller_screen_light(
             direction_x, direction_y, direction_z, cast_shadows, enabled);
 }
 
+int filament_bridge_set_environment_screen_lights(
+        FilamentBridge* bridge, const float* positions_xyz,
+        const float* linear_rgb, const float* intensity_candela,
+        uint32_t count, float falloff, int cast_shadows, int enabled) {
+    return bridge_material_set_environment_screen_lights(
+            bridge, positions_xyz, linear_rgb, intensity_candela,
+            count, falloff, cast_shadows, enabled);
+}
+
 int filament_bridge_set_fill_light(
         FilamentBridge* bridge,
         float red, float green, float blue,

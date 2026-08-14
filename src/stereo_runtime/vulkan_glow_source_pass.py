@@ -53,6 +53,9 @@ class VulkanGlowSourcePass:
                 DescriptorBinding(
                     binding=3, descriptor_type=vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
                 ),
+                DescriptorBinding(
+                    binding=4, descriptor_type=vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
+                ),
             ],
             push_constants_size=self.PUSH_CONSTANTS_SIZE,
         )
@@ -60,7 +63,7 @@ class VulkanGlowSourcePass:
             context,
             DescriptorBudget(
                 max_sets=self.slot_count,
-                storage_buffers_per_set=3,
+                storage_buffers_per_set=4,
                 storage_images_per_set=1,
             ),
         )
@@ -89,6 +92,7 @@ class VulkanGlowSourcePass:
         source_buffer: Any,
         output_image: Any,
         screen_light_buffer: Any,
+        edge_light_buffer: Any,
         history_buffer: Any,
         source_width: int,
         source_height: int,
@@ -103,6 +107,10 @@ class VulkanGlowSourcePass:
             raise ValueError("screen-light buffer belongs to a different Vulkan context")
         if int(screen_light_buffer.size) < 16:
             raise ValueError("screen-light buffer must contain one vec4")
+        if edge_light_buffer.context is not self.context:
+            raise ValueError("edge-light buffer belongs to a different Vulkan context")
+        if int(edge_light_buffer.size) < 24 * 16:
+            raise ValueError("edge-light buffer must contain 24 vec4 values")
         if history_buffer.context is not self.context:
             raise ValueError("Glow history buffer belongs to a different Vulkan context")
         if int(history_buffer.size) < self.target_width * self.target_height * 16:
@@ -124,6 +132,7 @@ class VulkanGlowSourcePass:
             descriptor_set, 2, screen_light_buffer
         )
         self.descriptor_arena.update_storage_buffer(descriptor_set, 3, history_buffer)
+        self.descriptor_arena.update_storage_buffer(descriptor_set, 4, edge_light_buffer)
         push_constants = struct.pack(
             "<IIIIfIfI",
             int(source_width),

@@ -306,6 +306,10 @@ struct FilamentBridge {
     utils::Entity controller_top_light;
     utils::Entity controller_screen_light;
     bool controller_screen_light_cast_shadows = false;
+    std::array<utils::Entity, 24> environment_screen_lights{};
+    uint32_t environment_screen_light_count = 0;
+    float environment_screen_light_falloff = 0.0f;
+    bool environment_screen_light_cast_shadows = false;
     filament::IndirectLight* indirect_light = nullptr;
     filament::IndirectLight* controller_indirect_light = nullptr;
     filament::Scene* foreground_scene = nullptr;

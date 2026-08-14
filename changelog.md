@@ -1,5 +1,10 @@
 # Desktop2Stereo Vulkan 项目日志
 
+## 2026-08-14
+
+- 新增 OpenXR Filament 房间墙面屏幕反光：GPU Glow 采样现在额外输出与 Surround Glow 相同的 8×6 外圈 24 段时间平滑颜色，Presenter 将四边分段映射为仅作用于房间几何光照通道的局部点光源，不影响手柄和 Glow 图层；亮度、饱和度、上限、采样频率、平滑时间、照射范围、屏幕前偏移及阴影均可由环境 `common.json` 或房间 `profile.json` 覆盖。
+- 重排 OpenXR 设置菜单内容区：放大“视频画面 / 立体深度 / 辉光特效 / 场景设置 / 屏幕设置”标题并与普通选项保持一致；画面、深度和屏幕页移除底部“恢复默认”，在各自标题右侧统一提供 i18n“重置为默认值”操作且仅重置当前页；按设置分组加入细分割线，画面双栏增加纵向分隔。
+
 ## 2026-08-13
 
 - 增强 Vulkan Projection Composer 偶发首帧 `VkErrorUnknown` 诊断：初始化过程现在记录 shader、descriptor、render pass 及每条 graphics pipeline 的精确创建阶段，fallback 同时输出完整 Python 调用栈；保留下一帧自动重试恢复行为，后续实机日志可直接定位具体失败的 Vulkan API。

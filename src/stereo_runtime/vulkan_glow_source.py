@@ -33,6 +33,7 @@ class _GlowSlot:
     compute_fence: Any
     graphics_fence: Any
     screen_light_buffer: VulkanStorageBuffer
+    edge_light_buffer: VulkanStorageBuffer
     input_buffer: VulkanExportableBuffer | None = None
     input_ready: VulkanExportableSemaphore | None = None
     state: str = "free"
@@ -107,6 +108,7 @@ class VulkanGlowSourceComputeBackend:
                         compute_fence=self._create_fence(signaled=True),
                         graphics_fence=self._create_fence(signaled=True),
                         screen_light_buffer=VulkanStorageBuffer(context, 16),
+                        edge_light_buffer=VulkanStorageBuffer(context, 24 * 16),
                     )
                 )
         except Exception:
@@ -121,6 +123,7 @@ class VulkanGlowSourceComputeBackend:
         self._reuse_count = 0
         self._budget_skip_count = 0
         self._screen_light_rgb = (0.18, 0.18, 0.18)
+        self._edge_light_rgb = tuple((0.0, 0.0, 0.0) for _ in range(24))
         self._history_key: tuple[object, ...] | None = None
         self._history_last_submit = 0.0
         self._closed = False
@@ -300,6 +303,7 @@ class VulkanGlowSourceComputeBackend:
             source_buffer=slot.input_buffer,
             output_image=slot.image.resource,
             screen_light_buffer=slot.screen_light_buffer,
+            edge_light_buffer=slot.edge_light_buffer,
             history_buffer=self.history_buffer,
             source_width=source_width,
             source_height=source_height,
@@ -310,6 +314,10 @@ class VulkanGlowSourceComputeBackend:
         )
         self._record_screen_light_host_barrier(
             slot.compute_command, slot.screen_light_buffer
+        )
+        self._record_screen_light_host_barrier(
+            slot.compute_command, slot.edge_light_buffer,
+            size=slot.edge_light_buffer.size,
         )
         self.vk.vkEndCommandBuffer(slot.compute_command)
         self._submit_queue(
@@ -360,7 +368,7 @@ class VulkanGlowSourceComputeBackend:
         )
 
     def _record_screen_light_host_barrier(
-        self, command: Any, buffer: VulkanStorageBuffer
+        self, command: Any, buffer: VulkanStorageBuffer, *, size: int = 16
     ) -> None:
         vk = self.vk
         barrier = vk.VkBufferMemoryBarrier(
@@ -371,7 +379,7 @@ class VulkanGlowSourceComputeBackend:
             dstQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
             buffer=buffer.buffer,
             offset=0,
-            size=16,
+            size=int(size),
         )
         vk.vkCmdPipelineBarrier(
             command,
@@ -392,6 +400,12 @@ class VulkanGlowSourceComputeBackend:
             self._screen_light_rgb = tuple(
                 max(0.0, min(8.0, float(value))) for value in values[:3]
             )
+        edge_values = struct.unpack("<96f", slot.edge_light_buffer.read_bytes(24 * 16))
+        self._edge_light_rgb = tuple(
+            tuple(max(0.0, min(8.0, float(edge_values[index * 4 + channel])))
+                  for channel in range(3))
+            for index in range(24)
+        )
 
     def _record_image_barrier(
         self, command: Any, slot: _GlowSlot, *, to_sampling: bool
@@ -559,6 +573,7 @@ class VulkanGlowSourceComputeBackend:
             "glow_budget_skip": self._budget_skip_count,
             "screen_light_linear_rgb": self._screen_light_rgb,
             "screen_light_sample_path": "vulkan_compute_reduction",
+            "screen_edge_light_linear_rgb": self._edge_light_rgb,
             "_vulkan_glow_release": self.release_frame,
         }
 
@@ -589,6 +604,7 @@ class VulkanGlowSourceComputeBackend:
                 if slot.input_buffer is not None:
                     slot.input_buffer.close()
                 slot.screen_light_buffer.close()
+                slot.edge_light_buffer.close()
                 slot.compute_done.close()
                 slot.image.close()
                 self.vk.vkDestroyFence(self.context.device, slot.compute_fence, None)

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdint.h>
+
 struct FilamentBridge;
 struct FilamentBridgeLightingConfig;
 struct FilamentPreview;
@@ -28,6 +30,10 @@ int bridge_material_set_controller_screen_light(
         FilamentBridge* bridge, float red, float green, float blue,
         float intensity_lux, float direction_x, float direction_y,
         float direction_z, int cast_shadows, int enabled);
+int bridge_material_set_environment_screen_lights(
+        FilamentBridge* bridge, const float* positions_xyz,
+        const float* linear_rgb, const float* intensity_candela,
+        uint32_t count, float falloff, int cast_shadows, int enabled);
 int bridge_material_set_fill_light(
         FilamentBridge* bridge,
         float red, float green, float blue, float intensity,

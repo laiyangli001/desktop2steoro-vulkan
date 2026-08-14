@@ -270,6 +270,33 @@ def _openxr_filament_config(
         "filament_controller_screen_light_cast_shadows": bool(
             common_filament.get("controller_screen_light_cast_shadows", False)
         ),
+        "filament_environment_screen_light_enabled": bool(
+            common_filament.get("environment_screen_light_enabled", True)
+        ),
+        "filament_environment_screen_light_intensity_candela": float(
+            common_filament.get("environment_screen_light_intensity_candela", 120.0)
+        ),
+        "filament_environment_screen_light_saturation": float(
+            common_filament.get("environment_screen_light_saturation", 0.70)
+        ),
+        "filament_environment_screen_light_max_luminance": float(
+            common_filament.get("environment_screen_light_max_luminance", 0.40)
+        ),
+        "filament_environment_screen_light_smoothing_seconds": float(
+            common_filament.get("environment_screen_light_smoothing_seconds", 0.18)
+        ),
+        "filament_environment_screen_light_sample_hz": float(
+            common_filament.get("environment_screen_light_sample_hz", 12.0)
+        ),
+        "filament_environment_screen_light_falloff": float(
+            common_filament.get("environment_screen_light_falloff", 4.0)
+        ),
+        "filament_environment_screen_light_offset": float(
+            common_filament.get("environment_screen_light_offset", 0.08)
+        ),
+        "filament_environment_screen_light_cast_shadows": bool(
+            common_filament.get("environment_screen_light_cast_shadows", False)
+        ),
         "filament_glow_sample_hz": float(
             common_filament.get("glow_sample_hz", 30.0)
         ),

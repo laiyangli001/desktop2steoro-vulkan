@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+from dataclasses import replace
 import inspect
 import json
 import math
@@ -585,6 +586,48 @@ def test_controller_screen_light_tracks_linear_screen_color_in_foreground() -> N
     _color, distant_intensity, distant_direction, *_rest = bridge.calls[-1]
     assert distant_intensity == pytest.approx(500.0 * 0.0722)
     assert distant_direction == pytest.approx((0.0, 0.0, 1.0))
+
+
+def test_environment_screen_reflection_maps_24_edge_samples_around_screen() -> None:
+    class Bridge:
+        def __init__(self) -> None:
+            self.call = None
+
+        def set_environment_screen_lights(
+            self, positions, colors, intensities, **options
+        ) -> bool:
+            self.call = (positions, colors, intensities, options)
+            return True
+
+    presenter = OpenXrVulkanPresenter()
+    presenter.config = replace(presenter.config, filament_glb_path="room.glb")
+    presenter._filament_screen = (
+        (0.0, 0.0, -3.0), 4.0, 2.0, (0.0, 0.0, 0.0)
+    )
+    presenter._environment_screen_light_saturation = 1.0
+    presenter._environment_screen_light_intensity_candela = 100.0
+    presenter._environment_screen_light_offset = 0.1
+    bridge = Bridge()
+    samples = tuple((1.0, 0.0, 0.0) for _ in range(24))
+    frame = SimpleNamespace(metadata={
+        "screen_edge_light_linear_rgb": samples,
+        "screen_light_sample_path": "vulkan_compute_reduction",
+    })
+
+    presenter._update_environment_screen_lights(frame, bridge)
+
+    positions, colors, intensities, options = bridge.call
+    assert len(positions) == len(colors) == len(intensities) == 24
+    assert positions[0] == pytest.approx((-1.75, 1.0, -2.9))
+    assert positions[7] == pytest.approx((1.75, 1.0, -2.9))
+    assert positions[12] == pytest.approx((1.75, -1.0, -2.9))
+    assert colors[0] == pytest.approx((1.0, 0.0, 0.0))
+    assert intensities[0] == pytest.approx(21.26)
+    assert options == {
+        "falloff": pytest.approx(4.0),
+        "cast_shadows": False,
+        "enabled": True,
+    }
 
 
 def test_controller_button_position_does_not_require_opengl_renderer(
@@ -5142,7 +5185,7 @@ def test_settings_menu_screen_rotation_and_reset_restore_profile_pose() -> None:
     assert presenter._filament_screen[3] == pytest.approx((10.0, 20.0, 120.0))
 
     presenter._apply_settings_menu_control(
-        controls["screen:reset_defaults"], (0.0, 0.0)
+        controls["section:reset_defaults"], (0.0, 0.0)
     )
     assert presenter._filament_screen == initial
     assert presenter._screen_curve_half_angle == pytest.approx(math.radians(20.0))

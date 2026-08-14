@@ -105,6 +105,7 @@ def test_glow_frame_lease_is_counted_once_and_released() -> None:
     backend._reuse_count = 0
     backend._budget_skip_count = 0
     backend._screen_light_rgb = (0.1, 0.2, 0.3)
+    backend._edge_light_rgb = tuple((0.1, 0.2, 0.3) for _ in range(24))
     backend.poll = lambda: None
 
     first = backend.acquire(8)
@@ -113,6 +114,7 @@ def test_glow_frame_lease_is_counted_once_and_released() -> None:
     assert second["glow_vulkan_serial"] == 3
     assert first["screen_light_linear_rgb"] == (0.1, 0.2, 0.3)
     assert first["screen_light_sample_path"] == "vulkan_compute_reduction"
+    assert len(first["screen_edge_light_linear_rgb"]) == 24
     assert slot.lease_count == 1
 
     backend.release_frame(8)
@@ -144,6 +146,9 @@ def test_glow_shader_and_spirv_are_checked_in_together() -> None:
     assert "ScreenLightBuffer" in source
     assert "reduce_screen_light_linear" in source
     assert "GlowHistoryBuffer" in source
+    assert "EdgeLightBuffer" in source
+    assert "edge_light_linear[24]" in source
+    assert "clockwise: top 8, right 4, bottom 8, left 4" in source
     assert "float temporal_alpha;" in source
     assert "uint write_glow;" in source
     assert "params.write_glow == 0u" in source

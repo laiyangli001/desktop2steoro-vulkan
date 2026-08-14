@@ -171,6 +171,12 @@ FILAMENT_BRIDGE_API int filament_bridge_set_controller_screen_light(
         FilamentBridge* bridge, float red, float green, float blue,
         float intensity_lux, float direction_x, float direction_y,
         float direction_z, int cast_shadows, int enabled);
+// Apply up to 24 screen-edge samples as local point lights on environment
+// channel 0. Positions and linear RGB colors contain count packed vec3 values.
+FILAMENT_BRIDGE_API int filament_bridge_set_environment_screen_lights(
+        FilamentBridge* bridge, const float* positions_xyz,
+        const float* linear_rgb, const float* intensity_candela,
+        uint32_t count, float falloff, int cast_shadows, int enabled);
 FILAMENT_BRIDGE_API int filament_bridge_set_fill_light(
         FilamentBridge* bridge,
         float red, float green, float blue,

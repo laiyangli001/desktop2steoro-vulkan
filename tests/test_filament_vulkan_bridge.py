@@ -206,7 +206,9 @@ def test_artemis_controller_lighting_matches_legacy_head_light() -> None:
     assert "config->head_light_intensity_candela" in native_lighting
     assert "config->top_light_intensity_candela" in native_lighting
     assert "bridge_material_set_controller_screen_light" in native_lighting
+    assert "bridge_material_set_environment_screen_lights" in native_lighting
     assert ".lightChannel(0, false).lightChannel(1, true)" in native_lighting
+    assert ".lightChannel(0, true).lightChannel(1, false)" in native_lighting
     material_header = (root / "native/filament/bridge/bridge_material.h").read_text(
         encoding="utf-8"
     )
@@ -222,6 +224,9 @@ def test_artemis_controller_lighting_matches_legacy_head_light() -> None:
     assert common["controller_screen_light_enabled"] is True
     assert common["controller_screen_light_intensity_lux"] == pytest.approx(500.0)
     assert common["controller_screen_light_sample_hz"] == pytest.approx(12.0)
+    assert common["environment_screen_light_enabled"] is True
+    assert common["environment_screen_light_intensity_candela"] == pytest.approx(120.0)
+    assert common["environment_screen_light_sample_hz"] == pytest.approx(12.0)
     assert common["glow_sample_hz"] == pytest.approx(30.0)
     assert common["glow_smoothing_seconds"] == pytest.approx(0.10)
 

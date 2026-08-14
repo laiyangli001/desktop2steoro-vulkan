@@ -73,7 +73,7 @@ def test_depth_tab_exposes_runtime_depth_controls():
     keys = {control.key for control in menu.controls()}
     assert {
         "depth_strength", "depth:toggle_stereo",
-        "depth:toggle_cross_eyed", "depth:reset_defaults",
+        "depth:toggle_cross_eyed", "section:reset_defaults",
     } <= keys
     depth = next(control for control in menu.controls() if control.key == "depth_strength")
     assert (depth.minimum, depth.maximum, depth.step) == (0.0, 1.0, 0.05)
@@ -119,7 +119,7 @@ def test_screen_tab_exposes_distance_rotation_and_reset():
     keys = {control.key for control in menu.controls()}
     assert {
         "screen:distance", "screen:rotate:-90",
-        "screen:rotate:+90", "screen:reset_defaults",
+        "screen:rotate:+90", "section:reset_defaults",
     } <= keys
     height = next(control for control in menu.controls() if control.key == "screen:height")
     assert (height.minimum, height.maximum, height.step) == (-10.0, 10.0, 0.05)
@@ -143,11 +143,13 @@ def test_room_tab_exposes_models_three_seats_and_live_sliders():
     ] == ["Front", "Middle", "Back"]
 
 
-def test_picture_layout_reserves_header_tabs_and_reset_rows():
+def test_picture_layout_places_one_reset_action_beside_section_heading():
     menu = OpenXrSettingsMenu()
     controls = {control.key: control for control in menu.controls()}
     assert controls["tab:picture"].rect[3] < controls["color_brightness"].rect[1]
-    assert controls["vulkan_projection_rcas_sharpness"].rect[3] < controls["picture:reset_defaults"].rect[1]
+    assert controls["section:reset_defaults"].rect[1] < controls["color_brightness"].rect[1]
+    assert controls["section:reset_defaults"].label == "Reset to default values"
+    assert not any("reset_defaults" in key for key in controls if key != "section:reset_defaults")
     assert set(PICTURE_DEFAULTS) == {
         key for key, control in controls.items() if control.kind == "slider"
     }

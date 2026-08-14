@@ -140,17 +140,21 @@ class OpenXrSettingsMenu:
                 f"tab:{tab}", tab.title(), (x0, 0.035, x0 + tab_width, 0.11)
             ))
             x0 += tab_width + gap
+        if self.tab in {"picture", "depth", "screen"}:
+            controls.append(MenuControl(
+                "section:reset_defaults", "Reset to default values",
+                (0.70, 0.125, 0.92, 0.18),
+            ))
         if self.tab == "picture":
             for index, (key, label, minimum, maximum, step) in enumerate(PICTURE_CONTROLS):
                 column, row = divmod(index, 6)
-                y0 = 0.17 + row * 0.12
+                y0 = 0.20 + row * 0.115
                 x0 = 0.08 + column * 0.47
                 self._append_slider_controls(
                     controls, key, label,
                     (x0, y0 + 0.045, x0 + 0.38, y0 + 0.09),
                     minimum, maximum, step,
                 )
-            controls.append(MenuControl("picture:reset_defaults", "Restore defaults", (0.35, 0.895, 0.65, 0.965)))
         elif self.tab == "depth":
             self._append_slider_controls(
                 controls, "depth_strength", "Depth strength",
@@ -159,7 +163,6 @@ class OpenXrSettingsMenu:
             controls.extend((
                 MenuControl("depth:toggle_stereo", "2D / 3D", (0.12, 0.46, 0.44, 0.58)),
                 MenuControl("depth:toggle_cross_eyed", "Cross eyed", (0.56, 0.46, 0.88, 0.58)),
-                MenuControl("depth:reset_defaults", "Restore defaults", (0.35, 0.78, 0.65, 0.88)),
             ))
         elif self.tab == "glow" and show_glow:
             controls.extend((
@@ -199,9 +202,8 @@ class OpenXrSettingsMenu:
             self._append_slider_controls(controls, "screen:height", "Screen height", (0.12, 0.65, 0.88, 0.72), -10.0, 10.0, 0.05)
             self._append_slider_controls(controls, "screen:distance", "Screen distance", (0.12, 0.79, 0.88, 0.86), 0.25, 2.0, 0.05)
             controls.extend((
-                MenuControl("screen:rotate:-90", "-90°", (0.16, 0.89, 0.34, 0.965)),
-                MenuControl("screen:reset_defaults", "Restore defaults", (0.37, 0.89, 0.63, 0.965)),
-                MenuControl("screen:rotate:+90", "+90°", (0.66, 0.89, 0.84, 0.965)),
+                MenuControl("screen:rotate:-90", "-90°", (0.25, 0.89, 0.45, 0.965)),
+                MenuControl("screen:rotate:+90", "+90°", (0.55, 0.89, 0.75, 0.965)),
             ))
         return tuple(controls)
 

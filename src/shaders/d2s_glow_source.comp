@@ -10,6 +10,9 @@ layout(set = 0, binding = 2, std430) writeonly buffer ScreenLightBuffer {
 layout(set = 0, binding = 3, std430) buffer GlowHistoryBuffer {
     vec4 glow_history[];
 };
+layout(set = 0, binding = 4, std430) writeonly buffer EdgeLightBuffer {
+    vec4 edge_light_linear[24];
+};
 
 layout(push_constant) uniform GlowSourceParams {
     uint source_width;
@@ -150,5 +153,20 @@ void main() {
         );
     }
     glow_history[history_index] = vec4(smoothed, 1.0);
+    // Publish the same GPU-smoothed colors used by Surround Glow. The order
+    // is clockwise: top 8, right 4, bottom 8, left 4.
+    if (params.surround_region_average != 0u) {
+        uvec2 region = uvec2(floor(clamp(output_uv, vec2(0.0), vec2(0.999999)) * vec2(8.0, 6.0)));
+        uvec2 representative = uvec2(floor((vec2(region) + vec2(0.5)) *
+                vec2(params.target_width, params.target_height) / vec2(8.0, 6.0)));
+        if (all(equal(output_pixel, representative))) {
+            uint edge_index = 24u;
+            if (region.y == 5u) edge_index = region.x;
+            else if (region.x == 7u && region.y >= 1u && region.y <= 4u) edge_index = 12u - region.y;
+            else if (region.y == 0u) edge_index = 12u + (7u - region.x);
+            else if (region.x == 0u && region.y >= 1u && region.y <= 4u) edge_index = 20u + region.y - 1u;
+            if (edge_index < 24u) edge_light_linear[edge_index] = vec4(smoothed, 1.0);
+        }
+    }
     imageStore(glow_image, ivec2(output_pixel), vec4(smoothed, 1.0));
 }

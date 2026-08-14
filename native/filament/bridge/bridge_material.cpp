@@ -427,6 +427,79 @@ int bridge_material_set_controller_screen_light(
     return 1;
 }
 
+int bridge_material_set_environment_screen_lights(
+        FilamentBridge* bridge, const float* positions_xyz,
+        const float* linear_rgb, const float* intensity_candela,
+        uint32_t count, float falloff, int cast_shadows, int enabled) {
+    constexpr uint32_t kMaximumLights = 24;
+    if (!bridge || !bridge->engine || !bridge->scene ||
+            !std::isfinite(falloff) || falloff <= 0.0f ||
+            count > kMaximumLights ||
+            (enabled != 0 && count > 0 &&
+                    (!positions_xyz || !linear_rgb || !intensity_candela))) {
+        return 0;
+    }
+    const bool active = enabled != 0 && count > 0;
+    const bool shadow_enabled = cast_shadows != 0;
+    if (active) {
+        for (uint32_t index = 0; index < count; ++index) {
+            const float* position = positions_xyz + index * 3;
+            const float* color = linear_rgb + index * 3;
+            const float intensity = intensity_candela[index];
+            if (!valid_vec3(position) || !valid_color(color) ||
+                    !std::isfinite(intensity) || intensity < 0.0f) {
+                return 0;
+            }
+        }
+    }
+    const bool recreate = active && (
+            bridge->environment_screen_light_count != count ||
+            bridge->environment_screen_light_cast_shadows != shadow_enabled ||
+            std::abs(bridge->environment_screen_light_falloff - falloff) > 1e-5f);
+    if (!active || recreate) {
+        for (auto& light : bridge->environment_screen_lights) {
+            if (!light.isNull()) {
+                bridge->scene->remove(light);
+                bridge->engine->destroy(light);
+                light = {};
+            }
+        }
+        bridge->environment_screen_light_count = 0;
+    }
+    if (!active) return 1;
+
+    auto& lights = bridge->engine->getLightManager();
+    for (uint32_t index = 0; index < count; ++index) {
+        const float* position = positions_xyz + index * 3;
+        const float* color = linear_rgb + index * 3;
+        const float intensity = intensity_candela[index];
+        auto& light = bridge->environment_screen_lights[index];
+        if (light.isNull()) {
+            light = utils::EntityManager::get().create();
+            filament::LightManager::Builder(filament::LightManager::Type::POINT)
+                    .color(filament::LinearColor{color[0], color[1], color[2]})
+                    .intensityCandela(intensity)
+                    .position({position[0], position[1], position[2]})
+                    .falloff(falloff)
+                    .lightChannel(0, true).lightChannel(1, false)
+                    .castShadows(shadow_enabled)
+                    .build(*bridge->engine, light);
+            bridge->scene->addEntity(light);
+            continue;
+        }
+        const auto instance = lights.getInstance(light);
+        if (!instance.isValid()) return 0;
+        lights.setColor(instance, filament::LinearColor{
+                color[0], color[1], color[2]});
+        lights.setIntensityCandela(instance, intensity);
+        lights.setPosition(instance, {position[0], position[1], position[2]});
+    }
+    bridge->environment_screen_light_count = count;
+    bridge->environment_screen_light_falloff = falloff;
+    bridge->environment_screen_light_cast_shadows = shadow_enabled;
+    return 1;
+}
+
 int bridge_material_set_fill_light(
         FilamentBridge* bridge,
         float red, float green, float blue,
