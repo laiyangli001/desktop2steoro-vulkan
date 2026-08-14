@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import ctypes
+import json
+import struct
 import sys
 import threading
 from pathlib import Path
@@ -9,6 +11,111 @@ from typing import Any, Iterable
 
 class FilamentBridgeError(RuntimeError):
     pass
+
+
+_GLB_JSON_CHUNK = 0x4E4F534A
+_PRESERVE_UNLIT_NAME_PARTS = (
+    "skybox", "fakelight", "screen", "logo", "fire", "emmi",
+    "emissive", "neon", "warning", "glass", "clock", "maxanimate",
+)
+
+
+def _prepare_environment_glb_for_dynamic_lighting(
+    data: bytes,
+) -> tuple[bytes, tuple[str, ...]]:
+    """Make baked room surfaces lit while retaining authored emissive assets."""
+    payload = bytes(data)
+    if len(payload) < 20 or payload[:4] != b"glTF":
+        return payload, ()
+    magic, version, declared_length = struct.unpack_from("<4sII", payload, 0)
+    if version != 2 or declared_length != len(payload):
+        return payload, ()
+
+    chunks: list[tuple[int, bytes]] = []
+    document = None
+    json_chunk_index = None
+    offset = 12
+    while offset + 8 <= len(payload):
+        chunk_length, chunk_type = struct.unpack_from("<II", payload, offset)
+        chunk_start = offset + 8
+        chunk_end = chunk_start + chunk_length
+        if chunk_end > len(payload):
+            return payload, ()
+        chunk = payload[chunk_start:chunk_end]
+        if chunk_type == _GLB_JSON_CHUNK and document is None:
+            try:
+                document = json.loads(chunk.decode("utf-8").rstrip("\x00 "))
+            except (UnicodeDecodeError, ValueError):
+                return payload, ()
+            json_chunk_index = len(chunks)
+        chunks.append((chunk_type, chunk))
+        offset = chunk_end
+    if offset != len(payload) or document is None or json_chunk_index is None:
+        return payload, ()
+
+    converted = []
+    for index, material in enumerate(document.get("materials", ())):
+        if not isinstance(material, dict):
+            continue
+        extensions = material.get("extensions")
+        if not isinstance(extensions, dict) or "KHR_materials_unlit" not in extensions:
+            continue
+        name = str(material.get("name", f"material_{index}"))
+        lowered = name.casefold()
+        pbr = material.get("pbrMetallicRoughness")
+        has_base_texture = isinstance(pbr, dict) and isinstance(
+            pbr.get("baseColorTexture"), dict
+        )
+        preserve = (
+            not has_base_texture
+            or any(part in lowered for part in _PRESERVE_UNLIT_NAME_PARTS)
+            or lowered.startswith("line_")
+            or "_light_" in lowered
+        )
+        if preserve:
+            continue
+        extensions.pop("KHR_materials_unlit", None)
+        if not extensions:
+            material.pop("extensions", None)
+        pbr.setdefault("metallicFactor", 0.0)
+        pbr.setdefault("roughnessFactor", 0.85)
+        # These rooms were authored as baked unlit scenes. Removing the unlit
+        # extension without retaining that baked contribution makes the room
+        # nearly black beside its still-unlit skybox. Reuse the authored base
+        # texture as the emissive baseline, then let Filament add ambient and
+        # segmented screen lights through the newly enabled PBR response.
+        material.setdefault("emissiveTexture", dict(pbr["baseColorTexture"]))
+        material.setdefault("emissiveFactor", [1.0, 1.0, 1.0])
+        converted.append(name)
+
+    if not converted:
+        return payload, ()
+    still_uses_unlit = any(
+        isinstance(material, dict)
+        and "KHR_materials_unlit" in material.get("extensions", {})
+        for material in document.get("materials", ())
+    )
+    if not still_uses_unlit:
+        for key in ("extensionsUsed", "extensionsRequired"):
+            values = document.get(key)
+            if isinstance(values, list):
+                document[key] = [
+                    value for value in values if value != "KHR_materials_unlit"
+                ]
+                if not document[key]:
+                    document.pop(key, None)
+
+    json_data = json.dumps(
+        document, ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")
+    json_data += b" " * ((-len(json_data)) % 4)
+    chunks[json_chunk_index] = (_GLB_JSON_CHUNK, json_data)
+    rebuilt = bytearray(struct.pack("<4sII", magic, version, 0))
+    for chunk_type, chunk in chunks:
+        rebuilt += struct.pack("<II", len(chunk), chunk_type)
+        rebuilt += chunk
+    struct.pack_into("<I", rebuilt, 8, len(rebuilt))
+    return bytes(rebuilt), tuple(converted)
 
 
 class _VulkanCreateInfo(ctypes.Structure):
@@ -545,6 +652,15 @@ class FilamentVulkanBridge:
         payload = bytes(data)
         if not payload:
             raise ValueError("GLB payload must not be empty")
+        payload, converted_materials = _prepare_environment_glb_for_dynamic_lighting(
+            payload
+        )
+        if converted_materials:
+            print(
+                "[FilamentBridge] Environment dynamic-light materials enabled: "
+                f"converted={len(converted_materials)}",
+                flush=True,
+            )
         buffer = ctypes.create_string_buffer(payload)
         self._check_result(
             self._library.filament_bridge_load_glb(

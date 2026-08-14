@@ -150,6 +150,7 @@ def build_settings_menu_rgba(menu, values, *, hover_key=None, cursor_uv=None, la
         fill=colors["card"], outline=colors["border"], width=2,
     )
     label_font = load_overlay_font(21, prefer_cjk=True)
+    button_font = load_overlay_font(23, prefer_cjk=True, bold=True)
     tab_font = load_overlay_font(32, prefer_cjk=True, bold=True)
     value_font = load_overlay_font(19, prefer_cjk=True)
     section_font = load_overlay_font(21, prefer_cjk=True, bold=True)
@@ -161,6 +162,19 @@ def build_settings_menu_rgba(menu, values, *, hover_key=None, cursor_uv=None, la
         show_glow=bool(values.get("show_glow_tab", False)),
         lang=locale,
     )
+    # Separators belong to the card background. Drawing them before controls
+    # prevents the lines from crossing localized labels, tracks, or buttons.
+    separator_y = {
+        "picture": (250, 346, 441, 537, 633, 729),
+        "depth": (318,),
+        "glow": (405,),
+        "room": (310, 405, 510, 625, 755),
+        "screen": (310, 424, 540, 648, 756),
+    }
+    for y in separator_y[menu.tab]:
+        draw.line((70, y, width - 70, y), fill=colors["border"], width=1)
+    if menu.tab == "picture":
+        draw.line((512, 175, 512, height - 45), fill=colors["border"], width=1)
     controls_by_key = {control.key: control for control in controls}
     for control in controls:
         if control.kind == "slider_step":
@@ -193,6 +207,8 @@ def build_settings_menu_rgba(menu, values, *, hover_key=None, cursor_uv=None, la
             active = control.key == (
                 f"room:seat:{seat_keys[int(values.get('room:seat_index', 0)) % 3]}"
             )
+        elif control.key == "room:toggle_screen_reflection":
+            active = bool(values.get("room:screen_reflection_enabled", True))
         label = translate(control.label)
         if control.kind == "slider":
             value = float(values.get(control.key, control.minimum))
@@ -264,7 +280,8 @@ def build_settings_menu_rgba(menu, values, *, hover_key=None, cursor_uv=None, la
             control_font = (
                 tab_font if control.key.startswith("tab:")
                 else reset_font if control.key == "section:reset_defaults"
-                else label_font
+                else label_font if control.key.startswith("room:model:")
+                else button_font
             )
             bbox = draw.textbbox((0, 0), label, font=control_font)
             text_color = colors["blue_hover"] if active else (colors["text"] if control.enabled else colors["disabled"])
@@ -284,17 +301,6 @@ def build_settings_menu_rgba(menu, values, *, hover_key=None, cursor_uv=None, la
         (82, 112), translate(section_labels[menu.tab]),
         font=section_font, fill=colors["text"],
     )
-    separator_y = {
-        "picture": (250, 346, 441, 537, 633, 729),
-        "depth": (318,),
-        "glow": (405,),
-        "room": (315, 405, 574, 735),
-        "screen": (310, 405, 520, 635, 750),
-    }
-    for y in separator_y[menu.tab]:
-        draw.line((70, y, width - 70, y), fill=colors["border"], width=1)
-    if menu.tab == "picture":
-        draw.line((512, 175, 512, height - 45), fill=colors["border"], width=1)
     if cursor_uv is not None:
         cx, cy = int(cursor_uv[0] * width), int(cursor_uv[1] * height)
         draw.ellipse((cx - 11, cy - 11, cx + 11, cy + 11), outline=colors["blue_hover"], width=4)

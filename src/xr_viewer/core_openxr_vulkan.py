@@ -834,6 +834,8 @@ class OpenXrVulkanPresenter(
         self._profile_space_applied = False
         self._profile_space_calibration_pass = 0
         self._profile_space_pose_in_reference = np.eye(4, dtype=np.float32)
+        self._profile_reference_head_anchor: np.ndarray | None = None
+        self._profile_space_preserve_anchor = False
         self._profile_view_name: str | None = None
         self._filament_profile_data: dict[str, Any] = {}
         self._filament_view_poses: tuple[dict[str, Any], ...] = ()
@@ -1628,19 +1630,6 @@ class OpenXrVulkanPresenter(
 
     def _recreate_reference_space_after_runtime_change(self) -> None:
         """Recreate the base XR space after a runtime relocation event."""
-        # Match the legacy viewer: an authored room seat remains locked across
-        # runtime floor/boundary changes. Recreating its calibrated child space
-        # here causes a visible room jump. Only profiles that explicitly opt
-        # into screen-relative auto centering may discard and reapply the seat.
-        if not self._profile_auto_center_on_screen:
-            if not self._profile_reference_space_change_ignored_logged:
-                print(
-                    "[OpenXRViewer] Reference space change ignored: authored "
-                    "profile view_pose remains locked",
-                    flush=True,
-                )
-                self._profile_reference_space_change_ignored_logged = True
-            return
         if self.xr is None or self.session is None or self._reference_space_type is None:
             self._profile_space_applied = False
             return
@@ -1667,13 +1656,15 @@ class OpenXrVulkanPresenter(
         self._profile_space_applied = False
         self._profile_space_calibration_pass = 0
         self._profile_space_pose_in_reference = np.eye(4, dtype=np.float32)
+        self._profile_reference_head_anchor = None
+        self._profile_space_preserve_anchor = False
         self._profile_initial_head = None
         self._profile_alignment_logged = False
         self._head_position_w = None
         self._head_forward_w = None
         print(
             "[OpenXRViewer] Reference space change accepted: "
-            "auto_center_on_screen profile will be recalibrated",
+            "runtime recenter will be combined with the active room seat",
             flush=True,
         )
         if old_space is not None:
@@ -1989,6 +1980,17 @@ class OpenXrVulkanPresenter(
                 self._filament_skybox_brightness
             )
 
+    def _apply_filament_scene_exposure_to_bridge(self, bridge=None) -> None:
+        """Apply exposure only when Filament owns the final color pipeline."""
+        bridge = self.filament_bridge if bridge is None else bridge
+        if bridge is None or self._multiview_active:
+            # The layered producer must keep Filament post-processing disabled;
+            # VulkanProjectionScreenPass applies this exposure once during the
+            # final HDR resolve. Calling the native setter here would rebuild
+            # ColorGrading and force the multiview room View back to PP=true.
+            return
+        bridge.set_scene_exposure(self._filament_scene_exposure)
+
     @staticmethod
     def _normalize_filament_glow_mode(value: Any) -> str:
         mode = str(value or "off").strip().lower()
@@ -2079,7 +2081,6 @@ class OpenXrVulkanPresenter(
             return
         for key, attribute in (
             ("preview_exposure", "_filament_scene_exposure"),
-            ("env_exposure", "_filament_scene_exposure"),
             ("preview_skybox_brightness", "_filament_skybox_brightness"),
             ("controller_head_light_intensity", "_filament_fill_light_intensity"),
             ("env_ambient_light_intensity_lux", "_filament_ambient_light_intensity_lux"),
@@ -2206,7 +2207,7 @@ class OpenXrVulkanPresenter(
         if not apply_bridge or self.filament_bridge is None:
             return
         bridge = self.filament_bridge
-        bridge.set_scene_exposure(self._filament_scene_exposure)
+        self._apply_filament_scene_exposure_to_bridge(bridge)
         bridge.set_skybox_brightness(self._filament_skybox_brightness)
         self._apply_filament_bridge_lighting(bridge)
 
@@ -3830,6 +3831,10 @@ class OpenXrVulkanPresenter(
         try:
             if self.vulkan is not None:
                 self.vulkan.wait_idle()
+            panorama_mode_changed = bool(old_paths[2]) != bool(panorama_path)
+            if panorama_mode_changed and self._vulkan_projection_screen_pass is not None:
+                self._vulkan_projection_screen_pass.close()
+                self._vulkan_projection_screen_pass = None
             bridge = self.filament_bridge
             if bridge is not None:
                 bridge.wait_for_idle()
@@ -3859,12 +3864,15 @@ class OpenXrVulkanPresenter(
                         "Filament Bridge is unavailable for the selected GLB room"
                     )
             if bridge is not None:
-                bridge.set_scene_exposure(self._filament_scene_exposure)
+                self._apply_filament_scene_exposure_to_bridge(bridge)
                 bridge.set_skybox_brightness(self._filament_skybox_brightness)
                 self._apply_filament_bridge_lighting(bridge)
             self._move_settings_menu_with_profile_head(previous_head_transform)
             self._profile_space_applied = False
             self._profile_space_calibration_pass = 0
+            self._profile_space_preserve_anchor = bool(
+                self._profile_reference_head_anchor is not None
+            )
             self._profile_reference_space_change_ignored_logged = False
             self._profile_alignment_logged = False
             selected = profile_path.parent.name
@@ -3877,8 +3885,7 @@ class OpenXrVulkanPresenter(
             self._preset_osd_show_t = time.perf_counter()
             self._settings_menu.mark_dirty()
             print(
-                "[OpenXRViewer] Environment hot switch complete: "
-                f"model={selected} glb={glb_path} panorama={panorama_path}",
+                f"[OpenXRViewer] Environment hot switch complete: model={selected}",
                 flush=True,
             )
             return True
@@ -4042,6 +4049,9 @@ class OpenXrVulkanPresenter(
         )
         self._settings_menu_values["room:exposure"] = float(
             self._filament_scene_exposure
+        )
+        self._settings_menu_values["room:screen_reflection_enabled"] = bool(
+            self._environment_screen_light_enabled
         )
         if self._filament_screen is not None and self._filament_screen_initial is not None:
             self._settings_menu_values["screen:width"] = (
@@ -4217,6 +4227,18 @@ class OpenXrVulkanPresenter(
             indices = {"front": 0, "middle": 1, "back": 2}
             self._apply_settings_menu_seat(indices[key.rsplit(":", 1)[1]])
             return
+        if key == "room:toggle_screen_reflection":
+            enabled = not bool(self._environment_screen_light_enabled)
+            self._environment_screen_light_enabled = enabled
+            self._settings_menu_values[
+                "room:screen_reflection_enabled"
+            ] = enabled
+            if not enabled and self.filament_bridge is not None:
+                self._update_environment_screen_lights(
+                    None, self.filament_bridge
+                )
+            self._settings_menu.mark_dirty()
+            return
         if key == "section:reset_defaults" and self._settings_menu.tab == "screen":
             if self._filament_screen_initial is not None:
                 self._filament_screen = self._filament_screen_initial
@@ -4266,8 +4288,7 @@ class OpenXrVulkanPresenter(
                 self._apply_settings_menu_seat_height(value)
             elif key == "room:exposure":
                 self._filament_scene_exposure = float(value)
-                if self.filament_bridge is not None:
-                    self.filament_bridge.set_scene_exposure(value)
+                self._apply_filament_scene_exposure_to_bridge()
             elif not key.startswith("room:"):
                 if key == "vulkan_projection_min_lod":
                     value = min(value, float(self._settings_menu_values.get("vulkan_projection_max_lod", 2.0)))
@@ -4312,6 +4333,9 @@ class OpenXrVulkanPresenter(
         self._room_seat_height_offset = 0.0
         self._profile_space_applied = False
         self._profile_space_calibration_pass = 0
+        self._profile_space_preserve_anchor = bool(
+            self._profile_reference_head_anchor is not None
+        )
         self._settings_menu_values["room:seat_index"] = index
         self._settings_menu_values["room:seat_height"] = 0.0
         self._settings_menu.mark_dirty()
@@ -4328,6 +4352,9 @@ class OpenXrVulkanPresenter(
         self._room_seat_height_offset = float(offset)
         self._profile_space_applied = False
         self._profile_space_calibration_pass = 0
+        self._profile_space_preserve_anchor = bool(
+            self._profile_reference_head_anchor is not None
+        )
 
     def _set_profile_head_transform_from_view_pose(
         self, view_pose: dict[str, Any], profile: dict[str, Any]
@@ -4794,6 +4821,8 @@ class OpenXrVulkanPresenter(
         self._profile_space_applied = False
         self._profile_space_calibration_pass = 0
         self._profile_space_pose_in_reference = np.eye(4, dtype=np.float32)
+        self._profile_reference_head_anchor = None
+        self._profile_space_preserve_anchor = False
         self._profile_reference_space_change_ignored_logged = False
         self._profile_alignment_logged = False
         self._reference_space_type = None
@@ -5964,7 +5993,7 @@ class OpenXrVulkanPresenter(
                     "Filament controller guide loaded: projection_layer=True",
                     flush=True,
                 )
-            bridge.set_scene_exposure(self._filament_scene_exposure)
+            self._apply_filament_scene_exposure_to_bridge(bridge)
             bridge.set_skybox_brightness(self._filament_skybox_brightness)
             self._apply_filament_bridge_lighting(bridge)
             self.filament_bridge = bridge
@@ -6247,7 +6276,9 @@ class OpenXrVulkanPresenter(
         target_format = int(acquired_images[0][0].resources[0].format)
         if self._vulkan_projection_screen_pass is None:
             self._vulkan_projection_screen_pass = VulkanProjectionScreenPass(
-                self.vulkan, target_format
+                self.vulkan,
+                target_format,
+                enable_panorama=bool(self.config.filament_panorama_path),
             )
         if projection_draws is None:
             projection_draws = []
@@ -6350,7 +6381,9 @@ class OpenXrVulkanPresenter(
         target_format = int(acquired_images[0][0].resources[0].format)
         if self._vulkan_projection_screen_pass is None:
             self._vulkan_projection_screen_pass = VulkanProjectionScreenPass(
-                self.vulkan, target_format
+                self.vulkan,
+                target_format,
+                enable_panorama=bool(self.config.filament_panorama_path),
             )
         depth_sampling_timeline = 0
         depth_sampling_active = False
@@ -7355,6 +7388,11 @@ class OpenXrVulkanPresenter(
                 ],
                 apply_bridge=False,
             )
+        if profile.get("glb") or self.config.filament_glb_path:
+            # Room exposure is an OpenXR session-only adjustment. Never inherit
+            # a previous run or an authored preview EV as the menu starting
+            # point; every GLB room starts at the neutral zero tick.
+            self._filament_scene_exposure = 0.0
         screen = profile.get("screen")
         self._filament_screen_profile_authored = isinstance(screen, dict)
         if not isinstance(screen, dict):
@@ -7445,10 +7483,30 @@ class OpenXrVulkanPresenter(
         # calculating the replacement space. This state is essential for the
         # feedback pass; treating the second locate result as a base-space pose
         # would mix two coordinate systems and retain the physical head height.
-        reference_head = (
+        measured_reference_head = (
             self._profile_space_pose_in_reference.astype(np.float64) @ raw_head
         )
-        reference_head = self._level_head_model_mat4(reference_head)
+        measured_reference_head = self._level_head_model_mat4(
+            measured_reference_head
+        )
+        preserve_anchor = bool(
+            self._profile_space_preserve_anchor
+            and self._profile_reference_head_anchor is not None
+        )
+        if preserve_anchor:
+            # A live seat selection is normally made while the user is looking
+            # at the settings menu. Reusing that instantaneous gaze as the new
+            # calibration origin makes the room counter-rotate away from the
+            # menu. Keep the stable anchor captured at startup/recenter and
+            # only replace the authored target seat transform.
+            reference_head = np.asarray(
+                self._profile_reference_head_anchor, dtype=np.float64
+            )
+        else:
+            reference_head = measured_reference_head
+            self._profile_reference_head_anchor = reference_head.astype(
+                np.float32
+            )
         space_pose = reference_head @ np.linalg.inv(self._profile_head_transform)
         try:
             new_space = self.xr.create_reference_space(
@@ -7469,8 +7527,13 @@ class OpenXrVulkanPresenter(
         # Controller action spaces must use the same calibrated world space.
         self._xr_space = new_space
         self._profile_space_pose_in_reference = space_pose.astype(np.float32)
-        self._profile_space_calibration_pass += 1
-        self._profile_space_applied = self._profile_space_calibration_pass >= 2
+        if preserve_anchor:
+            self._profile_space_calibration_pass = 2
+            self._profile_space_applied = True
+            self._profile_space_preserve_anchor = False
+        else:
+            self._profile_space_calibration_pass += 1
+            self._profile_space_applied = self._profile_space_calibration_pass >= 2
         self._profile_initial_head = raw_head
         if old_space is not None:
             try:

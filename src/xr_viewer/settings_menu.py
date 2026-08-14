@@ -143,7 +143,7 @@ class OpenXrSettingsMenu:
         if self.tab in {"picture", "depth", "screen"}:
             controls.append(MenuControl(
                 "section:reset_defaults", "Reset to default values",
-                (0.70, 0.125, 0.92, 0.18),
+                (0.70, 0.135, 0.92, 0.17),
             ))
         if self.tab == "picture":
             for index, (key, label, minimum, maximum, step) in enumerate(PICTURE_CONTROLS):
@@ -178,19 +178,23 @@ class OpenXrSettingsMenu:
             for index, (model_key, model_label) in enumerate(self.room_models):
                 column, row = index % columns, index // columns
                 x0 = 0.08 + column * model_width
-                y0 = 0.155 + row * 0.072
+                y0 = 0.19 + row * 0.06
                 controls.append(MenuControl(
                     f"room:model:{model_key}", model_label,
-                    (x0, y0, x0 + model_width - 0.008, y0 + 0.055),
+                    (x0, y0, x0 + model_width - 0.008, y0 + 0.048),
                 ))
             seat_y = 0.39
             controls.extend((
                 MenuControl("room:seat:front", "Front", (0.08, seat_y, 0.31, seat_y + 0.08)),
                 MenuControl("room:seat:middle", "Middle", (0.385, seat_y, 0.615, seat_y + 0.08)),
                 MenuControl("room:seat:back", "Back", (0.69, seat_y, 0.92, seat_y + 0.08)),
+                MenuControl(
+                    "room:toggle_screen_reflection", "Screen reflection light",
+                    (0.31, 0.52, 0.69, 0.60),
+                ),
             ))
-            self._append_slider_controls(controls, "room:seat_height", "Seat height", (0.12, 0.61, 0.88, 0.67), -3.0, 3.0, 0.05)
-            self._append_slider_controls(controls, "room:exposure", "Scene brightness", (0.12, 0.80, 0.88, 0.86), -8.0, 8.0, 0.1)
+            self._append_slider_controls(controls, "room:seat_height", "Seat height", (0.12, 0.68, 0.88, 0.73), -3.0, 3.0, 0.05)
+            self._append_slider_controls(controls, "room:exposure", "Scene brightness", (0.12, 0.84, 0.88, 0.89), -8.0, 8.0, 0.1)
         else:
             controls.extend((
                 MenuControl("screen:type:flat", "Flat", (0.07, 0.18, 0.27, 0.35), enabled=True),
@@ -198,13 +202,13 @@ class OpenXrSettingsMenu:
                 MenuControl("screen:type:medium", "Medium", (0.51, 0.18, 0.71, 0.35), enabled=allow_curve),
                 MenuControl("screen:type:deep", "Deep", (0.73, 0.18, 0.93, 0.35), enabled=allow_curve),
             ))
-            self._append_slider_controls(controls, "screen:width", "Screen size", (0.12, 0.51, 0.88, 0.58), 0.25, 2.0, 0.01)
-            self._append_slider_controls(controls, "screen:height", "Screen height", (0.12, 0.65, 0.88, 0.72), -10.0, 10.0, 0.05)
-            self._append_slider_controls(controls, "screen:distance", "Screen distance", (0.12, 0.79, 0.88, 0.86), 0.25, 2.0, 0.05)
             controls.extend((
-                MenuControl("screen:rotate:-90", "-90°", (0.25, 0.89, 0.45, 0.965)),
-                MenuControl("screen:rotate:+90", "+90°", (0.55, 0.89, 0.75, 0.965)),
+                MenuControl("screen:rotate:-90", "-90°", (0.25, 0.405, 0.45, 0.49)),
+                MenuControl("screen:rotate:+90", "+90°", (0.55, 0.405, 0.75, 0.49)),
             ))
+            self._append_slider_controls(controls, "screen:width", "Screen size", (0.12, 0.58, 0.88, 0.63), 0.25, 2.0, 0.01)
+            self._append_slider_controls(controls, "screen:height", "Screen height", (0.12, 0.71, 0.88, 0.76), -10.0, 10.0, 0.05)
+            self._append_slider_controls(controls, "screen:distance", "Screen distance", (0.12, 0.84, 0.88, 0.89), 0.25, 2.0, 0.05)
         return tuple(controls)
 
     @staticmethod

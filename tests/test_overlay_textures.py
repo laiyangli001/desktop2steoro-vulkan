@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from gui.localization import MESSAGE_CATALOGS, gettext_for, normalize_locale
 from xr_viewer.overlay_textures import (
@@ -15,6 +16,7 @@ def test_openxr_settings_menu_text_uses_every_gui_locale_catalog():
     keys = (
         "Picture", "Depth", "Glow", "Room", "Screen",
         "Surround Glow", "Veil", "OFF", "Glow effects",
+        "Screen reflection light",
     )
     for locale, catalog in MESSAGE_CATALOGS.items():
         assert all(key in catalog for key in keys), locale
@@ -31,6 +33,38 @@ def test_settings_menu_canvas_has_room_below_bottom_controls():
     )
     reset = next(control for control in menu.controls() if control.key == "section:reset_defaults")
     assert int(reset.rect[3] * rgba.shape[0]) < int(0.20 * rgba.shape[0])
+
+
+@pytest.mark.parametrize(
+    ("tab", "separator_pixels"),
+    (
+        ("picture", (250, 346, 441, 537, 633, 729)),
+        ("depth", (318,)),
+        ("glow", (405,)),
+        ("room", (310, 405, 510, 625, 755)),
+        ("screen", (310, 424, 540, 648, 756)),
+    ),
+)
+def test_menu_separators_stay_between_controls(tab, separator_pixels) -> None:
+    menu = OpenXrSettingsMenu()
+    menu.room_models = tuple(
+        (f"room_{index}", f"Room {index}") for index in range(15)
+    )
+    menu.set_tab(tab)
+    controls = {
+        control.key: control for control in menu.controls(show_glow=True)
+    }
+    separator_rows = tuple(
+        row / SETTINGS_MENU_TEXTURE_SIZE[1] for row in separator_pixels
+    )
+    substantive = tuple(
+        control for control in controls.values()
+        if control.kind != "slider_step"
+    )
+    assert all(
+        not any(control.rect[1] <= row <= control.rect[3] for control in substantive)
+        for row in separator_rows
+    )
 
 
 def test_screen_preset_osd_matches_legacy_colors_and_centering():

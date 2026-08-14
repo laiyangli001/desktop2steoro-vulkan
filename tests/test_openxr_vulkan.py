@@ -38,6 +38,7 @@ from xr_viewer.core_openxr_vulkan import (
     OpenXrVulkanPresenter,
     OpenXrVulkanUnavailableError,
     _EyeSwapchain,
+    _xr_view_pose_to_model_mat4,
     _layout_msdf_osd_runs,
     _build_msdf_help_panel,
     _scaled_dimension,
@@ -53,7 +54,7 @@ from xr_viewer.overlay_textures import build_controller_callout_rgba, build_keyb
 from xr_viewer.msdf_font_atlas import MsdfFontAtlas
 from viewer.controller_help import get_controller_help_rows
 from viewer.vulkan_msdf_quad import VulkanMsdfQuadRequest
-from xr_viewer.xr_math import _xr_quat_to_mat4, euler_to_mat4
+from xr_viewer.xr_math import _xr_quat_to_mat4, euler_to_mat4, mat4_to_xr_posef
 from utils.screen_resolution_policy import build_screen_sampling_plan
 
 
@@ -1581,11 +1582,17 @@ def test_projection_composer_uses_direct_vulkan_rasterization_in_opaque_runtime(
 
 def test_projection_pass_reports_creation_stage_and_fallback_traceback() -> None:
     pass_source = inspect.getsource(VulkanProjectionScreenPass)
+    create_source = inspect.getsource(VulkanProjectionScreenPass._create)
+    composer_source = inspect.getsource(
+        OpenXrVulkanPresenter._render_vulkan_projection_composer
+    )
     presenter_source = inspect.getsource(OpenXrVulkanPresenter._render_projection_layer)
 
     assert 'self.creation_stage = "create_shader_modules"' in pass_source
     assert 'self.creation_stage = "create_screen_pipeline"' in pass_source
     assert 'self.creation_stage = "create_panorama_pipeline"' in pass_source
+    assert "if self.panorama_enabled:" in create_source
+    assert "enable_panorama=bool(self.config.filament_panorama_path)" in composer_source
     assert "Vulkan projection pass creation failed:" in pass_source
     assert "traceback.format_exc().rstrip()" in presenter_source
 
@@ -3004,25 +3011,39 @@ def test_profile_reference_space_feedback_removes_measured_stage_height() -> Non
     assert presenter._profile_space_calibration_pass == 2
 
 
-def test_authored_profile_ignores_runtime_reference_space_change() -> None:
+def test_authored_profile_accepts_runtime_reference_space_change() -> None:
+    destroyed = []
+
+    class FakeXr:
+        ReferenceSpaceCreateInfo = xr.ReferenceSpaceCreateInfo
+
+        @staticmethod
+        def create_reference_space(_session, _create_info):
+            return "replacement-base-space"
+
+        @staticmethod
+        def destroy_space(space):
+            destroyed.append(space)
+
     presenter = OpenXrVulkanPresenter()
+    presenter.xr = FakeXr
+    presenter.session = object()
+    presenter._reference_space_type = xr.ReferenceSpaceType.STAGE
     presenter.reference_space = "calibrated-space"
     presenter._xr_space = "calibrated-space"
     presenter._profile_space_applied = True
     presenter._profile_space_calibration_pass = 2
     presenter._profile_auto_center_on_screen = False
-    presenter.xr = SimpleNamespace(
-        create_reference_space=lambda *_args: pytest.fail(
-            "authored room must retain its calibrated space"
-        )
-    )
+    presenter._profile_reference_head_anchor = np.eye(4, dtype=np.float32)
 
     presenter._recreate_reference_space_after_runtime_change()
 
-    assert presenter.reference_space == "calibrated-space"
-    assert presenter._xr_space == "calibrated-space"
-    assert presenter._profile_space_applied
-    assert presenter._profile_space_calibration_pass == 2
+    assert presenter.reference_space == "replacement-base-space"
+    assert presenter._xr_space == "replacement-base-space"
+    assert not presenter._profile_space_applied
+    assert presenter._profile_space_calibration_pass == 0
+    assert presenter._profile_reference_head_anchor is None
+    assert destroyed == ["calibrated-space"]
 
 
 def test_auto_center_profile_recalibrates_after_reference_space_change() -> None:
@@ -3090,6 +3111,24 @@ def test_filament_profile_restores_authored_screen_curve(tmp_path) -> None:
 
     assert presenter._screen_curved is True
     assert presenter._screen_curve_half_angle == pytest.approx(math.radians(30.0))
+
+
+def test_glb_room_exposure_always_starts_at_zero_for_new_session(tmp_path) -> None:
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_text(json.dumps({
+        "glb": "environment.glb",
+        "preview_exposure": 4.0,
+        "lighting_presets": [{"preview_exposure": -3.0}],
+    }), encoding="utf-8")
+    presenter = OpenXrVulkanPresenter(OpenXrVulkanConfig(
+        filament_profile_path=str(profile_path),
+        filament_glb_path=str(tmp_path / "environment.glb"),
+        filament_scene_exposure_ev=6.0,
+    ))
+
+    presenter._load_filament_profile()
+
+    assert presenter._filament_scene_exposure == pytest.approx(0.0)
 
 
 def test_filament_profile_view_pose_is_converted_to_glb_local_space(tmp_path) -> None:
@@ -3161,6 +3200,37 @@ def test_packaged_default_profile_uses_neutral_filament_exposure() -> None:
     assert profile["lighting_presets"][0]["glow_shell_intensity_multiplier"] == 1.85
     assert profile["lighting_presets"][0]["glow_shell_radius"] == 20.0
     assert profile["lighting_presets"][0]["glow_shell_height"] == 9.5
+
+
+def test_packaged_3d_room_profiles_use_neutral_filament_exposure() -> None:
+    environments_dir = (
+        Path(__file__).resolve().parents[1] / "src/xr_viewer/environments"
+    )
+    room_profiles = []
+    for profile_path in environments_dir.glob("*/profile.json"):
+        profile = json.loads(profile_path.read_text(encoding="utf-8"))
+        if profile.get("glb"):
+            room_profiles.append((profile_path.parent.name, profile))
+
+    assert room_profiles
+    for room_name, profile in room_profiles:
+        assert profile.get("preview_exposure") == 0.0, room_name
+        assert profile.get("preview_skybox_brightness") == 1.0, room_name
+
+
+def test_legacy_environment_exposure_does_not_override_filament_ev() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_scene_exposure = 1.25
+
+    presenter._apply_filament_lighting_preset(
+        {"env_exposure": 0.5}, apply_bridge=False
+    )
+    assert presenter._filament_scene_exposure == pytest.approx(1.25)
+
+    presenter._apply_filament_lighting_preset(
+        {"preview_exposure": -0.75}, apply_bridge=False
+    )
+    assert presenter._filament_scene_exposure == pytest.approx(-0.75)
 
 
 def test_3d_cinema_profile_screen_faces_the_default_audience() -> None:
@@ -4984,6 +5054,30 @@ def test_settings_menu_glow_control_is_ignored_outside_default_environment() -> 
 def test_settings_menu_room_exposure_updates_filament_immediately() -> None:
     presenter = OpenXrVulkanPresenter()
     calls = []
+    persisted = []
+    presenter.filament_bridge = type(
+        "Bridge", (), {"set_scene_exposure": lambda _self, value: calls.append(value)}
+    )()
+    presenter._dispatch_controller_shortcut = (
+        lambda action, **values: persisted.append((action, values))
+    )
+    presenter._settings_menu.set_tab("room")
+    control = next(
+        item for item in presenter._settings_menu.controls()
+        if item.key == "room:exposure"
+    )
+    presenter._apply_settings_menu_control(
+        control, (control.rect[2], 0.5), persist=True
+    )
+    assert presenter._filament_scene_exposure == pytest.approx(8.0)
+    assert calls == [pytest.approx(8.0)]
+    assert persisted == []
+
+
+def test_settings_menu_room_exposure_uses_only_vulkan_resolve_in_multiview() -> None:
+    calls = []
+    presenter = OpenXrVulkanPresenter()
+    presenter._multiview_active = True
     presenter.filament_bridge = type(
         "Bridge", (), {"set_scene_exposure": lambda _self, value: calls.append(value)}
     )()
@@ -4992,9 +5086,51 @@ def test_settings_menu_room_exposure_updates_filament_immediately() -> None:
         item for item in presenter._settings_menu.controls()
         if item.key == "room:exposure"
     )
+
     presenter._apply_settings_menu_control(control, (control.rect[2], 0.5))
-    assert presenter._filament_scene_exposure == pytest.approx(8.0)
-    assert calls == [pytest.approx(8.0)]
+    presenter._apply_settings_menu_control(control, (
+        (control.rect[0] + control.rect[2]) * 0.5, 0.5
+    ))
+
+    assert presenter._filament_scene_exposure == pytest.approx(0.0)
+    assert calls == []
+
+
+def test_multiview_hdr_resolve_consumes_current_room_exposure() -> None:
+    source = inspect.getsource(OpenXrVulkanPresenter._resolve_filament_multiview_hdr)
+
+    assert "exposure_ev=float(self._filament_scene_exposure)" in source
+
+
+def test_settings_menu_room_screen_reflection_toggle_removes_lights_immediately() -> None:
+    calls = []
+
+    class Bridge:
+        def set_environment_screen_lights(self, *args, **kwargs):
+            calls.append((args, kwargs))
+            return True
+
+    presenter = OpenXrVulkanPresenter()
+    presenter.filament_bridge = Bridge()
+    presenter._environment_screen_light_enabled = True
+    presenter._environment_screen_light_applied = True
+    presenter._settings_menu.set_tab("room")
+    control = next(
+        item for item in presenter._settings_menu.controls()
+        if item.key == "room:toggle_screen_reflection"
+    )
+
+    presenter._apply_settings_menu_control(control, (0.0, 0.0))
+
+    assert presenter._environment_screen_light_enabled is False
+    assert presenter._environment_screen_light_applied is False
+    assert presenter._settings_menu_values[
+        "room:screen_reflection_enabled"
+    ] is False
+    assert calls[-1][1]["enabled"] is False
+
+    presenter._apply_settings_menu_control(control, (0.0, 0.0))
+    assert presenter._environment_screen_light_enabled is True
 
 
 def test_settings_menu_room_model_requests_hot_switch(monkeypatch) -> None:
@@ -5024,7 +5160,7 @@ def test_settings_menu_room_list_includes_glb_and_panorama_profiles() -> None:
 
 
 def test_environment_hot_switch_unloads_glb_for_panorama_and_then_persists(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, capsys
 ) -> None:
     old_profile = tmp_path / "old" / "profile.json"
     old_glb = tmp_path / "old" / "environment.glb"
@@ -5057,6 +5193,13 @@ def test_environment_hot_switch_unloads_glb_for_panorama_and_then_persists(
     ))
     bridge = Bridge()
     presenter.filament_bridge = bridge
+
+    class ProjectionPass:
+        def __init__(self): self.closed = False
+        def close(self): self.closed = True
+
+    projection_pass = ProjectionPass()
+    presenter._vulkan_projection_screen_pass = projection_pass
     monkeypatch.setattr(
         presenter, "_resolve_environment_selection",
         lambda _model: (None, new_profile, panorama),
@@ -5072,7 +5215,16 @@ def test_environment_hot_switch_unloads_glb_for_panorama_and_then_persists(
     assert bridge.calls[:2] == ["idle", "unload"]
     assert presenter.config.filament_glb_path is None
     assert presenter.config.filament_panorama_path == str(panorama)
+    assert projection_pass.closed is True
+    assert presenter._vulkan_projection_screen_pass is None
     assert persisted == [("select_environment_model", {"model": "hdr"})]
+    output = capsys.readouterr().out
+    assert "[OpenXRViewer] Environment hot switch complete: model=hdr\n" in output
+    assert not any(
+        " glb=" in line or " panorama=" in line
+        for line in output.splitlines()
+        if "Environment hot switch complete:" in line
+    )
 
 
 def test_environment_hot_switch_rolls_back_glb_and_does_not_persist_on_failure(
@@ -5138,6 +5290,7 @@ def test_settings_menu_three_seat_switch_restarts_profile_calibration() -> None:
     presenter._profile_space_calibration_pass = 2
     presenter._profile_head_transform = np.eye(4, dtype=np.float32)
     presenter._profile_head_transform[:3, 3] = (0.0, 1.2, 0.0)
+    presenter._profile_reference_head_anchor = np.eye(4, dtype=np.float32)
     presenter._settings_menu_pose = (
         (0.25, 1.0, -1.0), (0.0, 0.0, 0.0, 1.0)
     )
@@ -5151,7 +5304,56 @@ def test_settings_menu_three_seat_switch_restarts_profile_calibration() -> None:
     )
     assert presenter._profile_space_applied is False
     assert presenter._profile_space_calibration_pass == 0
+    assert presenter._profile_space_preserve_anchor is True
     assert presenter._settings_menu_pose[0] == pytest.approx((0.25, 1.2, 0.0))
+
+
+def test_live_seat_switch_does_not_bake_current_menu_gaze_into_space() -> None:
+    created_poses = []
+
+    class FakeXr:
+        ReferenceSpaceType = xr.ReferenceSpaceType
+        ReferenceSpaceCreateInfo = xr.ReferenceSpaceCreateInfo
+
+        @staticmethod
+        def create_reference_space(_session, create_info):
+            created_poses.append(create_info.pose_in_reference_space)
+            return "seat-space"
+
+        @staticmethod
+        def destroy_space(_space):
+            pass
+
+    presenter = OpenXrVulkanPresenter()
+    presenter.xr = FakeXr
+    presenter.session = object()
+    presenter.reference_space = "old-seat-space"
+    presenter._xr_space = "old-seat-space"
+    presenter._reference_space_type = xr.ReferenceSpaceType.STAGE
+    presenter._profile_reference_head_anchor = np.eye(4, dtype=np.float32)
+    presenter._profile_space_preserve_anchor = True
+    presenter._profile_head_transform = euler_to_mat4(
+        math.radians(90.0), 0.0, 0.0
+    ).astype(np.float32)
+
+    gaze = euler_to_mat4(math.radians(30.0), 0.0, 0.0)
+    gaze_quat = mat4_to_xr_posef(gaze).orientation
+    views = [
+        SimpleNamespace(
+            pose=SimpleNamespace(
+                position=SimpleNamespace(x=x, y=0.0, z=0.0),
+                orientation=gaze_quat,
+            )
+        )
+        for x in (-0.03, 0.03)
+    ]
+
+    assert presenter._apply_profile_reference_space(views)
+    created = _xr_view_pose_to_model_mat4(created_poses[0])
+    expected = np.linalg.inv(presenter._profile_head_transform)
+    assert created == pytest.approx(expected, abs=1e-5)
+    assert presenter._profile_space_applied
+    assert not presenter._profile_space_preserve_anchor
 
 
 def test_settings_menu_follows_live_seat_height_change() -> None:

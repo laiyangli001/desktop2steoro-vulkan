@@ -23,6 +23,8 @@
   "env_gamma": 2.2,
   "env_emissive_strength": 0.75,
   "env_khr_light_scale": 0.72,
+  "preview_exposure": 0.0,
+  "preview_skybox_brightness": 1.0,
   "env_ambient_color": [
     0.085,
     0.085,
@@ -69,10 +71,10 @@
   "view_pose": {
     "x": 0.6258,
     "y": 1.137,
-    "z": -0.0392,
-    "angle": -90.36,
+    "z": 0.0,
+    "angle": -90,
     "rotation_deg": [
-      -90.36,
+      -90,
       -13.28,
       0.0
     ]
@@ -83,10 +85,10 @@
       "name": "Front",
       "x": 0.6258,
       "y": 1.137,
-      "z": -0.0392,
-      "angle": -90.36,
+      "z": 0.0,
+      "angle": -90,
       "rotation_deg": [
-        -90.36,
+        -90,
         -13.28,
         0.0
       ]
@@ -95,10 +97,10 @@
       "name": "Middle",
       "x": 0.6258,
       "y": 1.137,
-      "z": -0.0392,
-      "angle": -90.36,
+      "z": 0.0,
+      "angle": -90,
       "rotation_deg": [
-        -90.36,
+        -90,
         -13.28,
         0.0
       ]
@@ -107,10 +109,10 @@
       "name": "Back",
       "x": 0.6258,
       "y": 1.137,
-      "z": -0.0392,
-      "angle": -90.36,
+      "z": 0.0,
+      "angle": -90,
       "rotation_deg": [
-        -90.36,
+        -90,
         -13.28,
         0.0
       ]

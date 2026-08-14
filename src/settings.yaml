@@ -1,5 +1,5 @@
 Capture Mode: Monitor
-Monitor Index: 1
+Monitor Index: 2
 Window Title: ''
 Show FPS: false
 Model List:
@@ -466,7 +466,7 @@ Model List:
     resolutions:
     - 1536
 Depth Model: Distill-Any-Depth-Base
-Depth Strength: 0.25
+Depth Strength: 0.3
 Depth Quick: Standard
 Depth Resolution: 518
 Anti-aliasing: 1
@@ -502,8 +502,8 @@ Color Gamma: 1.0
 Color Temperature: 0.0
 Color Tint: 0.0
 Vulkan Projection Min LOD: 0.0
-Vulkan Projection Max LOD: 0.7
-Vulkan Projection MIP LOD Bias: -0.7
+Vulkan Projection Max LOD: 0.0
+Vulkan Projection MIP LOD Bias: 0.0
 Vulkan Projection RCAS Sharpness: 0.5
 Display Mode: Half-SBS
 FP16: true
@@ -541,14 +541,15 @@ Stream Key: live
 Stereo Mix: null
 CRF: 20
 Audio Delay: -0.15
-Controller Model: NONE
-Environment Model: 3d_home
+Controller Model: PICO
+Environment Model: 3d_artemis
 Lossless Scaling Support: false
 Capture Tool: WindowsCaptureCUDA
 Fill 16:9: true
 Fix Viewer Aspect: false
-Stereo Output: 2
+Stereo Output: 1
 Show Log Panel: true
 OpenVINO: null
 OpenXR Color Mode: sRGB
 Synthetic View: quality_4k
+OpenXR Render Scale: 1.05

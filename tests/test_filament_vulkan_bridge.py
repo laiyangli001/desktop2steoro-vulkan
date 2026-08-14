@@ -16,6 +16,7 @@ from xr_viewer.filament_vulkan_bridge import (
     _FilamentLightingConfig,
     _VulkanCreateInfo,
     _as_pointer_value,
+    _prepare_environment_glb_for_dynamic_lighting,
     default_bridge_path,
 )
 
@@ -29,6 +30,64 @@ def test_default_bridge_path_matches_platform() -> None:
     path = default_bridge_path()
     assert path.parent.name in {"windows", "linux", "macos"}
     assert path.name.startswith(("filament_bridge", "libfilament_bridge"))
+
+
+def _make_test_glb(document: dict, binary: bytes = b"\x00\x01\x02\x03") -> bytes:
+    encoded = json.dumps(document, separators=(",", ":")).encode("utf-8")
+    encoded += b" " * ((-len(encoded)) % 4)
+    binary += b"\x00" * ((-len(binary)) % 4)
+    total = 12 + 8 + len(encoded) + 8 + len(binary)
+    return (
+        struct.pack("<4sII", b"glTF", 2, total)
+        + struct.pack("<II", len(encoded), 0x4E4F534A) + encoded
+        + struct.pack("<II", len(binary), 0x004E4942) + binary
+    )
+
+
+def _read_test_glb_json(payload: bytes) -> dict:
+    length, chunk_type = struct.unpack_from("<II", payload, 12)
+    assert chunk_type == 0x4E4F534A
+    return json.loads(payload[20:20 + length].decode("utf-8").rstrip("\x00 "))
+
+
+def test_environment_glb_converts_room_surfaces_but_preserves_emissive_unlit() -> None:
+    document = {
+        "asset": {"version": "2.0"},
+        "extensionsUsed": ["KHR_materials_unlit"],
+        "materials": [
+            {
+                "name": "M_Wall_gltf_unlit",
+                "extensions": {"KHR_materials_unlit": {}},
+                "pbrMetallicRoughness": {"baseColorTexture": {"index": 0}},
+            },
+            {
+                "name": "M_fakelight_gltf_unlit",
+                "extensions": {"KHR_materials_unlit": {}},
+                "pbrMetallicRoughness": {"baseColorTexture": {"index": 1}},
+            },
+            {
+                "name": "Solid_emissive_color",
+                "extensions": {"KHR_materials_unlit": {}},
+                "pbrMetallicRoughness": {"baseColorFactor": [1, 0, 0, 1]},
+            },
+        ],
+    }
+
+    converted, names = _prepare_environment_glb_for_dynamic_lighting(
+        _make_test_glb(document)
+    )
+    result = _read_test_glb_json(converted)
+
+    assert names == ("M_Wall_gltf_unlit",)
+    wall = result["materials"][0]
+    assert "extensions" not in wall
+    assert wall["pbrMetallicRoughness"]["metallicFactor"] == 0.0
+    assert wall["pbrMetallicRoughness"]["roughnessFactor"] == 0.85
+    assert wall["emissiveTexture"] == {"index": 0}
+    assert wall["emissiveFactor"] == [1.0, 1.0, 1.0]
+    assert "KHR_materials_unlit" in result["materials"][1]["extensions"]
+    assert "KHR_materials_unlit" in result["materials"][2]["extensions"]
+    assert result["extensionsUsed"] == ["KHR_materials_unlit"]
 
 
 def test_remote_filament_build_enables_multiview_without_stale_sdk_cache() -> None:

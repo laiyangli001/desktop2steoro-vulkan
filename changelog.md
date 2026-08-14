@@ -2,6 +2,16 @@
 
 ## 2026-08-14
 
+- OpenXR 房间“场景亮度”改为严格的会话态设置：滑块只影响本次运行，不写入 `settings.yaml` 或房间 Profile；每次启动及热切换到任意 GLB 房间时，均在 Profile 和灯光预设加载完成后恢复到菜单 `0 EV` 中间刻度。
+- 精简 OpenXR 房间热切换成功日志：仅输出 `Environment hot switch complete: model=<房间>`，不再附带冗长的 GLB 与 panorama 完整路径。
+- 修复 Artemis 等烘焙 `unlit` 房间在启用屏幕反射 PBR 后于 `0 EV` 下接近全黑、与天空盒亮度严重断层：运行时转换房间表面时同步复用原 baseColor 纹理作为 emissive 烘焙亮度基线，在保留原场景默认观感的同时继续叠加 Filament 环境光与 24 段屏幕反射光；天空盒、屏幕及原始 GLB 文件不变。
+- 恢复全部内置 OpenXR 3D 房间的原始灯光基线：还原 `3D_Artemis` 被误改的补光、环境光和日夜预设颜色，并为卧室、客厅补齐中性的 `preview_exposure=0 EV` 与天空盒亮度；灯光预设中的旧 `env_exposure` 恢复为旧工程的材质乘数语义，不再错误覆盖 Filament/Vulkan 场景 EV，菜单亮度回到 `0` 时所有房间均回归中性基线。
+- 修复 OpenXR 房间亮度调节后回到 `0 EV` 仍无法恢复、且房间与天空盒亮度失配：Filament Multiview 路径不再调用会重新开启 Post Processing 的 Native ColorGrading 曝光接口，房间与天空盒统一只在最终 Vulkan HDR Resolve 中应用一次曝光；逐眼回退路径继续使用 Native 曝光，避免重复处理与残留渲染状态。
+- 修复 OpenXR 菜单切换前排/中排/后排时房间向菜单反方向旋转，以及 Pico 系统键重置朝向无效：首次稳定校准或系统重置时保存独立头部朝向锚点，实时换座和座位高度调整只替换目标座位 Pose，不再把点击菜单瞬间的侧向注视烘焙进新 Reference Space；运行时 `REFERENCE_SPACE_CHANGE_PENDING` 现在对带作者视点的房间同样生效，并在新基础空间上重新应用当前座位。
+- 修复未选择 HDR 时普通 OpenXR 房间仍无条件创建全景管线并偶发触发 `create_panorama_pipeline / VkErrorUnknown`：Panorama shader 与 graphics pipeline 现在只在全景环境启用，GLB 房间与 HDR 热切换时会在 Vulkan 空闲后按能力变化安全重建 Projection pass，普通屏幕渲染不再被未使用的 HDR 可选管线拖入 fallback。
+- 系统重排 OpenXR 设置菜单五个页签的垂直布局：顶部“重置为默认值”按钮收进标题安全区；所有分割线改为在控件和文字之前绘制并严格落在相邻控件之间；屏幕页将 `-90° / +90°` 移到三条滑轨上方，房间页按模型、座位、居中反射光按钮、座位高度、场景亮度顺序留出独立间距，普通操作按钮统一使用更大的粗体文字。
+- 修复 OpenXR 房间屏幕反射光对多数内置场景完全无效：运行时加载环境 GLB 时，将带 baseColor 纹理的墙面、地面、座椅等烘焙 `KHR_materials_unlit` 表面选择性转为非金属高粗糙 PBR，使其接收 24 段屏幕反射点光；天空盒、假灯、屏幕、Logo、火焰、玻璃和无纹理发光色块继续保持 unlit，原始 GLB 文件及手柄材质不修改。
+- OpenXR 设置菜单“房间”页新增 i18n“屏幕反射光”即时开关：开启状态以蓝色选中显示；关闭时立即从 Filament 房间场景移除 24 段屏幕边缘采样点光源并停止其 GPU 采样，重新开启后从下一帧恢复，仅影响房间几何，不影响手柄、Glow 或屏幕。
 - 新增 OpenXR Filament 房间墙面屏幕反光：GPU Glow 采样现在额外输出与 Surround Glow 相同的 8×6 外圈 24 段时间平滑颜色，Presenter 将四边分段映射为仅作用于房间几何光照通道的局部点光源，不影响手柄和 Glow 图层；亮度、饱和度、上限、采样频率、平滑时间、照射范围、屏幕前偏移及阴影均可由环境 `common.json` 或房间 `profile.json` 覆盖。
 - 重排 OpenXR 设置菜单内容区：放大“视频画面 / 立体深度 / 辉光特效 / 场景设置 / 屏幕设置”标题并与普通选项保持一致；画面、深度和屏幕页移除底部“恢复默认”，在各自标题右侧统一提供 i18n“重置为默认值”操作且仅重置当前页；按设置分组加入细分割线，画面双栏增加纵向分隔。
 

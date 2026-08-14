@@ -41,10 +41,13 @@ class VulkanProjectionScreenPass:
     _DEFAULT_MAX_MIP_LOD = 0.35
     _DEFAULT_RCAS_SHARPNESS = 0.5
 
-    def __init__(self, context: Any, target_format: int) -> None:
+    def __init__(
+        self, context: Any, target_format: int, *, enable_panorama: bool = False
+    ) -> None:
         self.context = context
         self.vk = context.vk
         self.target_format = int(target_format)
+        self.panorama_enabled = bool(enable_panorama)
         self.min_mip_lod = self._min_mip_lod_from_env()
         self.mip_lod_bias = self._mip_lod_bias_from_env()
         self.max_mip_lod = self._max_mip_lod_from_env()
@@ -294,12 +297,15 @@ class VulkanProjectionScreenPass:
         hdr_fragment_module = self._create_shader_module(
             shader_root / "d2s_projection_hdr_frag.spv"
         )
-        panorama_vertex_module = self._create_shader_module(
-            shader_root / "d2s_projection_panorama_vert.spv"
-        )
-        panorama_fragment_module = self._create_shader_module(
-            shader_root / "d2s_projection_panorama_frag.spv"
-        )
+        panorama_vertex_module = None
+        panorama_fragment_module = None
+        if self.panorama_enabled:
+            panorama_vertex_module = self._create_shader_module(
+                shader_root / "d2s_projection_panorama_vert.spv"
+            )
+            panorama_fragment_module = self._create_shader_module(
+                shader_root / "d2s_projection_panorama_frag.spv"
+            )
         self.creation_stage = "create_sampled_descriptor_layout"
         self.descriptor_set_layout = create_descriptor_set_layout(
             self.context,
@@ -1347,37 +1353,38 @@ class VulkanProjectionScreenPass:
             ],
             None,
         )[0]
-        self.creation_stage = "create_panorama_pipeline_layout"
-        self.panorama_pipeline_layout = vk.vkCreatePipelineLayout(
-            self.context.device,
-            vk.VkPipelineLayoutCreateInfo(
-                sType=vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-                setLayoutCount=1, pSetLayouts=[self.descriptor_set_layout],
-                pushConstantRangeCount=1,
-                pPushConstantRanges=[vk.VkPushConstantRange(
-                    stageFlags=(vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT),
-                    offset=0, size=32,
-                )],
-            ), None,
-        )
-        self.creation_stage = "create_panorama_pipeline"
-        self.panorama_pipeline = vk.vkCreateGraphicsPipelines(
-            self.context.device, None, 1, [vk.VkGraphicsPipelineCreateInfo(
-                sType=vk.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-                stageCount=2,
-                pStages=[
-                    vk.VkPipelineShaderStageCreateInfo(sType=vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, stage=vk.VK_SHADER_STAGE_VERTEX_BIT, module=panorama_vertex_module, pName="main"),
-                    vk.VkPipelineShaderStageCreateInfo(sType=vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, stage=vk.VK_SHADER_STAGE_FRAGMENT_BIT, module=panorama_fragment_module, pName="main"),
-                ],
-                pVertexInputState=vk.VkPipelineVertexInputStateCreateInfo(sType=vk.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO),
-                pInputAssemblyState=vk.VkPipelineInputAssemblyStateCreateInfo(sType=vk.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO, topology=vk.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST),
-                pViewportState=vk.VkPipelineViewportStateCreateInfo(sType=vk.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, viewportCount=1, scissorCount=1),
-                pRasterizationState=vk.VkPipelineRasterizationStateCreateInfo(sType=vk.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO, polygonMode=vk.VK_POLYGON_MODE_FILL, cullMode=vk.VK_CULL_MODE_NONE, frontFace=vk.VK_FRONT_FACE_COUNTER_CLOCKWISE, lineWidth=1.0),
-                pMultisampleState=vk.VkPipelineMultisampleStateCreateInfo(sType=vk.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, rasterizationSamples=vk.VK_SAMPLE_COUNT_1_BIT),
-                pColorBlendState=vk.VkPipelineColorBlendStateCreateInfo(sType=vk.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, attachmentCount=1, pAttachments=[vk.VkPipelineColorBlendAttachmentState(blendEnable=vk.VK_FALSE, colorWriteMask=(vk.VK_COLOR_COMPONENT_R_BIT|vk.VK_COLOR_COMPONENT_G_BIT|vk.VK_COLOR_COMPONENT_B_BIT|vk.VK_COLOR_COMPONENT_A_BIT))]),
-                pDynamicState=vk.VkPipelineDynamicStateCreateInfo(sType=vk.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, dynamicStateCount=2, pDynamicStates=[vk.VK_DYNAMIC_STATE_VIEWPORT, vk.VK_DYNAMIC_STATE_SCISSOR]),
-                layout=self.panorama_pipeline_layout, renderPass=self.render_pass, subpass=0, basePipelineIndex=-1,
-            )], None)[0]
+        if self.panorama_enabled:
+            self.creation_stage = "create_panorama_pipeline_layout"
+            self.panorama_pipeline_layout = vk.vkCreatePipelineLayout(
+                self.context.device,
+                vk.VkPipelineLayoutCreateInfo(
+                    sType=vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+                    setLayoutCount=1, pSetLayouts=[self.descriptor_set_layout],
+                    pushConstantRangeCount=1,
+                    pPushConstantRanges=[vk.VkPushConstantRange(
+                        stageFlags=(vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT),
+                        offset=0, size=32,
+                    )],
+                ), None,
+            )
+            self.creation_stage = "create_panorama_pipeline"
+            self.panorama_pipeline = vk.vkCreateGraphicsPipelines(
+                self.context.device, None, 1, [vk.VkGraphicsPipelineCreateInfo(
+                    sType=vk.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+                    stageCount=2,
+                    pStages=[
+                        vk.VkPipelineShaderStageCreateInfo(sType=vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, stage=vk.VK_SHADER_STAGE_VERTEX_BIT, module=panorama_vertex_module, pName="main"),
+                        vk.VkPipelineShaderStageCreateInfo(sType=vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, stage=vk.VK_SHADER_STAGE_FRAGMENT_BIT, module=panorama_fragment_module, pName="main"),
+                    ],
+                    pVertexInputState=vk.VkPipelineVertexInputStateCreateInfo(sType=vk.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO),
+                    pInputAssemblyState=vk.VkPipelineInputAssemblyStateCreateInfo(sType=vk.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO, topology=vk.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST),
+                    pViewportState=vk.VkPipelineViewportStateCreateInfo(sType=vk.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, viewportCount=1, scissorCount=1),
+                    pRasterizationState=vk.VkPipelineRasterizationStateCreateInfo(sType=vk.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO, polygonMode=vk.VK_POLYGON_MODE_FILL, cullMode=vk.VK_CULL_MODE_NONE, frontFace=vk.VK_FRONT_FACE_COUNTER_CLOCKWISE, lineWidth=1.0),
+                    pMultisampleState=vk.VkPipelineMultisampleStateCreateInfo(sType=vk.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, rasterizationSamples=vk.VK_SAMPLE_COUNT_1_BIT),
+                    pColorBlendState=vk.VkPipelineColorBlendStateCreateInfo(sType=vk.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, attachmentCount=1, pAttachments=[vk.VkPipelineColorBlendAttachmentState(blendEnable=vk.VK_FALSE, colorWriteMask=(vk.VK_COLOR_COMPONENT_R_BIT|vk.VK_COLOR_COMPONENT_G_BIT|vk.VK_COLOR_COMPONENT_B_BIT|vk.VK_COLOR_COMPONENT_A_BIT))]),
+                    pDynamicState=vk.VkPipelineDynamicStateCreateInfo(sType=vk.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, dynamicStateCount=2, pDynamicStates=[vk.VK_DYNAMIC_STATE_VIEWPORT, vk.VK_DYNAMIC_STATE_SCISSOR]),
+                    layout=self.panorama_pipeline_layout, renderPass=self.render_pass, subpass=0, basePipelineIndex=-1,
+                )], None)[0]
 
     def _target_view_and_framebuffer(
         self, target: Any, array_layer: int, *, overlay: bool = False

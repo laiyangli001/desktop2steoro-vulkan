@@ -116,13 +116,20 @@ def test_localized_tabs_have_compact_gaps_and_adaptive_minimum_width():
 def test_screen_tab_exposes_distance_rotation_and_reset():
     menu = OpenXrSettingsMenu()
     menu.set_tab("screen")
-    keys = {control.key for control in menu.controls()}
+    controls = {control.key: control for control in menu.controls()}
+    keys = set(controls)
     assert {
         "screen:distance", "screen:rotate:-90",
         "screen:rotate:+90", "section:reset_defaults",
     } <= keys
     height = next(control for control in menu.controls() if control.key == "screen:height")
     assert (height.minimum, height.maximum, height.step) == (-10.0, 10.0, 0.05)
+    rotations = [
+        controls[key] for key in ("screen:rotate:-90", "screen:rotate:+90")
+    ]
+    assert max(control.rect[3] for control in rotations) < (
+        controls["screen:width"].rect[1] - 0.05
+    )
 
 
 def test_room_tab_exposes_models_three_seats_and_live_sliders():
@@ -134,6 +141,7 @@ def test_room_tab_exposes_models_three_seats_and_live_sliders():
         "room:model:3d_a", "room:model:3d_b",
         "room:seat:front", "room:seat:middle", "room:seat:back",
         "room:seat_height", "room:exposure",
+        "room:toggle_screen_reflection",
     } <= controls.keys()
     assert (controls["room:seat_height"].minimum, controls["room:seat_height"].maximum) == (-3.0, 3.0)
     assert (controls["room:exposure"].minimum, controls["room:exposure"].maximum) == (-8.0, 8.0)
@@ -143,11 +151,38 @@ def test_room_tab_exposes_models_three_seats_and_live_sliders():
     ] == ["Front", "Middle", "Back"]
 
 
+def test_room_tab_keeps_three_model_rows_above_seat_and_live_controls():
+    menu = OpenXrSettingsMenu()
+    menu.room_models = tuple(
+        (f"room_{index}", f"Room {index}") for index in range(15)
+    )
+    menu.set_tab("room")
+    controls = {control.key: control for control in menu.controls()}
+    model_bottom = max(
+        control.rect[3] for key, control in controls.items()
+        if key.startswith("room:model:")
+    )
+    seat_top = min(
+        controls[f"room:seat:{seat}"].rect[1]
+        for seat in ("front", "middle", "back")
+    )
+    reflection = controls["room:toggle_screen_reflection"]
+    seat_height = controls["room:seat_height"]
+    exposure = controls["room:exposure"]
+
+    assert model_bottom < seat_top
+    assert reflection.rect[2] - reflection.rect[0] < 0.5
+    assert reflection.rect[3] + 0.07 < seat_height.rect[1]
+    assert seat_height.rect[3] + 0.10 < exposure.rect[1]
+
+
 def test_picture_layout_places_one_reset_action_beside_section_heading():
     menu = OpenXrSettingsMenu()
     controls = {control.key: control for control in menu.controls()}
     assert controls["tab:picture"].rect[3] < controls["color_brightness"].rect[1]
     assert controls["section:reset_defaults"].rect[1] < controls["color_brightness"].rect[1]
+    assert controls["section:reset_defaults"].rect[1] > 0.125
+    assert controls["section:reset_defaults"].rect[3] < 0.18
     assert controls["section:reset_defaults"].label == "Reset to default values"
     assert not any("reset_defaults" in key for key in controls if key != "section:reset_defaults")
     assert set(PICTURE_DEFAULTS) == {
