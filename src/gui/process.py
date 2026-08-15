@@ -567,6 +567,15 @@ class GUIProcessMixin:
 
     async def _on_page_close(self, e=None):
         self._closed = True
+        for task_name in (
+            "_resize_repaint_task",
+            "_media_change_task",
+            "_content_measure_task",
+            "_startup_layout_task",
+        ):
+            task = getattr(self, task_name, None)
+            if task is not None and not task.done():
+                task.cancel()
         if hasattr(self, '_esc_task') and self._esc_task and not self._esc_task.done():
             self._esc_task.cancel()
         if hasattr(self, '_log_poll_task') and self._log_poll_task and not self._log_poll_task.done():
@@ -904,7 +913,6 @@ class GUIProcessMixin:
             except queue.Empty:
                 pass
             if changed:
-                self._fit_window_to_content(update=False)
                 self._safe_update(
                     getattr(self, "log_viewport", None),
                     getattr(self, "log_scroll_row", None),

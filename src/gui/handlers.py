@@ -20,7 +20,6 @@ from .config import (
     environment_display_label, environment_key_from_label,
     get_environment_model_options, load_environment_display_names,
 )
-from .controls import FONT_SIZE
 from .localization import UI_MESSAGES, is_supported_locale
 from .devices import DEVICES
 
@@ -475,7 +474,7 @@ class GUIHandlerMixin:
 
     def on_advanced_device_change(self, e):
         self._sync_visibility()
-        self._fit_window_to_content()
+        self._fit_window_to_content(resize_window=True)
         self._safe_update(self.page)
 
     def on_render_policy_change(self, e):
@@ -1095,7 +1094,7 @@ class GUIHandlerMixin:
 
     def on_advanced_stereo_change(self, e):
         self._sync_advanced_stereo_visibility()
-        self._fit_window_to_content()
+        self._fit_window_to_content(resize_window=True)
         self._safe_update(self.page)
 
     def _sync_advanced_stereo_visibility(self):

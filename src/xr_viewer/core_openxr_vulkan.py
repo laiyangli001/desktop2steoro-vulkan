@@ -669,6 +669,7 @@ class OpenXrVulkanPresenter(
     """OpenXR Vulkan projection-layer presenter with Filament controllers."""
 
     _VULKAN_EXTENSION = "XR_KHR_vulkan_enable2"
+    _DEFAULT_SCREEN_CURVE_HALF_ANGLE = 0.72
 
     def __init__(
         self,
@@ -2831,6 +2832,15 @@ class OpenXrVulkanPresenter(
         u, v = (float(hit[0]), float(hit[1]))
         return self._screen_uv_to_world(u, v)
 
+    def _effective_screen_curve_half_angle(self) -> float:
+        """Return a safe active curve angle for curved-screen geometry."""
+        if not self._screen_curved:
+            return 0.0
+        half_angle = float(self._screen_curve_half_angle)
+        if not math.isfinite(half_angle) or half_angle <= 1e-6:
+            half_angle = self._DEFAULT_SCREEN_CURVE_HALF_ANGLE
+        return min(half_angle, math.pi / 2.0)
+
     def _screen_ray_hit(self, matrix, ray_origin=None, ray_direction=None):
         if matrix is None or self._filament_screen is None:
             return None
@@ -2854,7 +2864,7 @@ class OpenXrVulkanPresenter(
             # screen mesh. Analytic roots avoid a frame-dependent scan.
             half_width = float(width) / 2.0
             half_height = float(height) / 2.0
-            half_angle = min(self._screen_curve_half_angle, math.pi / 2.0)
+            half_angle = self._effective_screen_curve_half_angle()
             radius = half_width / max(half_angle, 1e-8)
             local_origin = pose[:3, :3].T @ (origin - pose[:3, 3])
             local_direction = pose[:3, :3].T @ direction
@@ -2914,7 +2924,7 @@ class OpenXrVulkanPresenter(
         ).astype(np.float64)
         pose[:3, 3] = np.asarray(position, dtype=np.float64)
         if self._screen_curved:
-            half_angle = min(self._screen_curve_half_angle, math.pi / 2.0)
+            half_angle = self._effective_screen_curve_half_angle()
             radius = float(width) / 2.0 / max(half_angle, 1e-8)
             angle = -half_angle + 2.0 * half_angle * float(u)
             local = np.asarray(
@@ -3133,7 +3143,7 @@ class OpenXrVulkanPresenter(
         half_height = float(height) * 0.5
         if self._screen_curved:
             segments = 48
-            half_angle = self._screen_curve_half_angle
+            half_angle = self._effective_screen_curve_half_angle()
             radius = half_width / half_angle
             points = []
             for segment in range(segments + 1):
@@ -6064,7 +6074,7 @@ class OpenXrVulkanPresenter(
             np.asarray((
                 float(width) * 0.5,
                 float(height) * 0.5,
-                self._screen_curve_half_angle if self._screen_curved else 0.0,
+                self._effective_screen_curve_half_angle(),
                 sampling_values[3],
             ), dtype=np.float32),
         )).astype("<f4", copy=False)
@@ -9488,7 +9498,7 @@ class OpenXrVulkanPresenter(
                 )
                 matrix = screen_pose.copy()
                 if self._screen_curved:
-                    half_angle = min(self._screen_curve_half_angle, math.pi / 2.0)
+                    half_angle = self._effective_screen_curve_half_angle()
                     angle = -half_angle + 2.0 * half_angle * u
                     tangent = np.asarray(
                         (math.cos(angle), 0.0, math.sin(angle)),
