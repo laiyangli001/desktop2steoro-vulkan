@@ -922,7 +922,7 @@ class OpenXrVulkanPresenter(
         self._environment_screen_light_intensity_candela = (
             self.config.filament_environment_screen_light_intensity_candela
         )
-        self._environment_screen_light_surface_gain = 1.0
+        self._environment_screen_area_light_intensity = 3.5
         self._environment_screen_light_saturation = (
             self.config.filament_environment_screen_light_saturation
         )
@@ -1436,7 +1436,7 @@ class OpenXrVulkanPresenter(
     def _update_environment_screen_lights(
         self, frame: VulkanStereoOutputFrame | None, bridge: Any
     ) -> None:
-        setter = getattr(bridge, "set_environment_screen_lights", None)
+        setter = getattr(bridge, "set_environment_screen_area_light", None)
         metadata = dict(getattr(frame, "metadata", None) or {})
         samples = metadata.get("screen_edge_light_linear_rgb")
         active = bool(
@@ -1451,62 +1451,50 @@ class OpenXrVulkanPresenter(
             return
         if not active:
             if self._environment_screen_light_applied:
-                setter((), (), (), falloff=1.0, cast_shadows=False, enabled=False)
+                setter(
+                    (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), (0.0, 0.0, 0.0),
+                    half_width=1.0, half_height=1.0, intensity=0.0,
+                    enabled=False,
+                )
             self._environment_screen_light_applied = False
             return
 
         screen_pose = self._filament_screen_pose_mat4().astype(np.float64)
         center = screen_pose[:3, 3]
-        right = screen_pose[:3, 0]
-        up = screen_pose[:3, 1]
         normal = screen_pose[:3, 2]
         width = float(self._filament_screen[1])
         height = float(self._filament_screen[2])
-        offset = max(0.0, float(self._environment_screen_light_offset))
-        perimeter_uv = (
-            tuple(((index + 0.5) / 8.0, 1.0) for index in range(8))
-            + tuple((1.0, (index + 0.5) / 6.0) for index in range(4, 0, -1))
-            + tuple(((index + 0.5) / 8.0, 0.0) for index in range(7, -1, -1))
-            + tuple((0.0, (index + 0.5) / 6.0) for index in range(1, 5))
-        )
-        positions = tuple(
-            tuple(float(value) for value in (
-                center + right * ((u - 0.5) * width)
-                + up * ((v - 0.5) * height) + normal * offset
-            ))
-            for u, v in perimeter_uv
-        )
         saturation = max(0.0, min(
             1.0, float(self._environment_screen_light_saturation)
         ))
         max_luminance = max(
             0.0, float(self._environment_screen_light_max_luminance)
         )
-        intensity_scale = max(
-            0.0, float(self._environment_screen_light_intensity_candela)
-        )
-        colors = []
-        intensities = []
-        for sample in samples:
-            rgb = np.maximum(0.0, np.asarray(sample[:3], dtype=np.float64))
-            luminance = min(
-                float(np.dot(rgb, (0.2126, 0.7152, 0.0722))), max_luminance
-            )
-            maximum = float(np.max(rgb))
-            chroma = rgb / maximum if maximum > 1e-6 else np.zeros(3)
-            colors.append(tuple(float(value) for value in (
-                (1.0 - saturation) + saturation * chroma
-                if luminance > 0.0 else np.zeros(3)
-            )))
-            intensities.append(
-                intensity_scale
-                * max(0.0, float(self._environment_screen_light_surface_gain))
-                * luminance
-            )
+        rgb = np.mean(np.maximum(
+            0.0,
+            np.asarray([sample[:3] for sample in samples], dtype=np.float64),
+        ), axis=0)
+        luminance = float(np.dot(rgb, (0.2126, 0.7152, 0.0722)))
+        if max_luminance > 0.0 and luminance > max_luminance:
+            rgb *= max_luminance / max(luminance, 1e-6)
+            luminance = max_luminance
+        gray = np.full(3, luminance, dtype=np.float64)
+        color = np.maximum(0.0, gray + (rgb - gray) * saturation)
+        # Room EV is applied later to the complete Filament resolve image.
+        # Counter-scale only these virtual screen emitters so changing room
+        # brightness dims the authored room but not the screen reflection.
+        exposure_compensation = 2.0 ** (-max(
+            -8.0, min(8.0, float(self._filament_scene_exposure))
+        ))
+        intensity = max(
+            0.0, float(self._environment_screen_area_light_intensity)
+        ) * exposure_compensation
         applied = setter(
-            positions, tuple(colors), tuple(intensities),
-            falloff=max(0.01, float(self._environment_screen_light_falloff)),
-            cast_shadows=bool(self._environment_screen_light_cast_shadows),
+            tuple(float(value) for value in center),
+            tuple(float(value) for value in normal),
+            tuple(float(value) for value in color),
+            half_width=width * 0.5, half_height=height * 0.5,
+            intensity=intensity,
             enabled=True,
         )
         if not applied:
@@ -1517,10 +1505,8 @@ class OpenXrVulkanPresenter(
             self._environment_screen_light_status = status
             print(
                 "[OpenXRViewer] Filament room screen reflection active: "
-                f"sample={status} segments=24 "
-                f"gain={self._environment_screen_light_surface_gain:.2f} "
-                f"max_cd={max(intensities, default=0.0):.2f} "
-                f"falloff={self._environment_screen_light_falloff:.2f} "
+                f"sample={status} mode=screen_area "
+                f"intensity={intensity:.2f} luminance={luminance:.3f} "
                 "environment_only=True",
                 flush=True,
             )
@@ -3763,7 +3749,7 @@ class OpenXrVulkanPresenter(
         self._environment_screen_light_intensity_candela = (
             self.config.filament_environment_screen_light_intensity_candela
         )
-        self._environment_screen_light_surface_gain = 1.0
+        self._environment_screen_area_light_intensity = 3.5
         self._environment_screen_light_saturation = (
             self.config.filament_environment_screen_light_saturation
         )
@@ -7344,7 +7330,7 @@ class OpenXrVulkanPresenter(
             ("controller_screen_light_smoothing_seconds", "_controller_screen_light_smoothing_seconds"),
             ("controller_screen_light_sample_hz", "_controller_screen_light_sample_hz"),
             ("environment_screen_light_intensity_candela", "_environment_screen_light_intensity_candela"),
-            ("environment_screen_light_surface_gain", "_environment_screen_light_surface_gain"),
+            ("screen_light_intensity", "_environment_screen_area_light_intensity"),
             ("environment_screen_light_saturation", "_environment_screen_light_saturation"),
             ("environment_screen_light_max_luminance", "_environment_screen_light_max_luminance"),
             ("environment_screen_light_smoothing_seconds", "_environment_screen_light_smoothing_seconds"),

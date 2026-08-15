@@ -99,7 +99,7 @@ def test_environment_glb_converts_room_surfaces_but_preserves_emissive_unlit() -
     assert result["extensionsUsed"] == ["KHR_materials_unlit"]
 
 
-def test_environment_reflection_material_uses_custom_lit_surface_shading() -> None:
+def test_environment_reflection_material_uses_continuous_screen_area_light() -> None:
     root = Path(__file__).resolve().parents[1]
     source = (
         root / "native/filament/bridge/bridge_material_provider.cpp"
@@ -109,12 +109,26 @@ def test_environment_reflection_material_uses_custom_lit_surface_shading() -> No
     ).read_text(encoding="utf-8")
 
     assert 'constexpr char kReflectivePrefix[] = "D2S_REFLECTIVE__"' in source
-    assert ".customSurfaceShading(true)" in source
-    assert "vec3 surfaceShading(" in source
-    assert "material.baseColor.rgb * materialParams.emissiveFactor" in source
-    assert "lightData.NdotL * lightData.attenuation" in source
+    assert ".customSurfaceShading(true)" not in source
+    assert "getMaterialGlobal0()" in source
+    assert "getUserWorldPosition()" in source
+    assert "screenAreaLight" in source
+    assert "vec3 bakedBaseline = material.baseColor.rgb" in source
+    assert "* materialParams.emissiveFactor" in source
+    assert "distanceToScreen * distanceToScreen" in source
     assert "reflective room material active" in source
     assert "bridge_create_material_provider(bridge->engine)" in context
+
+
+def test_small_theater_uses_shared_continuous_screen_area_light() -> None:
+    root = Path(__file__).resolve().parents[1]
+    profile = json.loads((
+        root / "src/xr_viewer/environments/3d_theater/profile.json"
+    ).read_text(encoding="utf-8"))
+
+    assert profile["screen_light_intensity"] == pytest.approx(3.5)
+    assert "environment_screen_light_surface_gain" not in profile
+    assert "environment_screen_light_position_inset" not in profile
 
 
 def test_remote_filament_build_enables_multiview_without_stale_sdk_cache() -> None:

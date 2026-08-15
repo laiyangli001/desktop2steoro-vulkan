@@ -514,6 +514,40 @@ int bridge_material_set_environment_screen_lights(
     return 1;
 }
 
+int bridge_material_set_environment_screen_area_light(
+        FilamentBridge* bridge, const float* position,
+        const float* normal, const float* color,
+        float half_width, float half_height, float intensity, int enabled) {
+    if (!bridge || !bridge->engine ||
+            (enabled != 0 && (!valid_vec3(position) || !valid_vec3(normal) ||
+                    !valid_color(color) || !std::isfinite(half_width) ||
+                    !std::isfinite(half_height) || !std::isfinite(intensity) ||
+                    half_width <= 0.0f || half_height <= 0.0f || intensity < 0.0f))) {
+        return 0;
+    }
+    const bool active = enabled != 0 && intensity > 0.0f;
+    const filament::math::float4 globals[] = {
+        active ? filament::math::float4{position[0], position[1], position[2], 1.0f}
+               : filament::math::float4{0.0f, 0.0f, 0.0f, 0.0f},
+        active ? filament::math::float4{normal[0], normal[1], normal[2], intensity}
+               : filament::math::float4{0.0f},
+        active ? filament::math::float4{color[0], color[1], color[2], half_width}
+               : filament::math::float4{0.0f},
+        active ? filament::math::float4{half_height, 0.0f, 0.0f, 0.0f}
+               : filament::math::float4{0.0f},
+    };
+    for (auto& eye : bridge->eyes) {
+        if (!eye.view) continue;
+        for (uint32_t index = 0; index < 4; ++index) {
+            eye.view->setMaterialGlobal(index, globals[index]);
+        }
+    }
+    // The area-light material path replaces the old punctual-light
+    // approximation. Remove any legacy point lights when this ABI is used.
+    return bridge_material_set_environment_screen_lights(
+            bridge, nullptr, nullptr, nullptr, 0, 1.0f, 0, 0);
+}
+
 int bridge_material_set_fill_light(
         FilamentBridge* bridge,
         float red, float green, float blue,

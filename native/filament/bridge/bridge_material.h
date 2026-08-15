@@ -34,6 +34,10 @@ int bridge_material_set_environment_screen_lights(
         FilamentBridge* bridge, const float* positions_xyz,
         const float* linear_rgb, const float* intensity_candela,
         uint32_t count, float falloff, int cast_shadows, int enabled);
+int bridge_material_set_environment_screen_area_light(
+        FilamentBridge* bridge, const float* position,
+        const float* normal, const float* color,
+        float half_width, float half_height, float intensity, int enabled);
 int bridge_material_set_fill_light(
         FilamentBridge* bridge,
         float red, float green, float blue, float intensity,

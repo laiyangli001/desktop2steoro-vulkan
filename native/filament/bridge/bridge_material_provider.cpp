@@ -129,25 +129,47 @@ private:
         shader += R"SHADER(
                 material.metallic = materialParams.metallicFactor;
                 material.roughness = materialParams.roughnessFactor;
-                material.emissive = vec4(
-                        material.baseColor.rgb * materialParams.emissiveFactor,
-                        0.0);
-        )SHADER";
-        // material.baseColor already contains the authored baked texture. Its
-        // RGB value becomes the emissive baseline exactly once above; the
-        // surfaceShading callback below returns direct light only.
-        shader += R"SHADER(
-            }
-
-            vec3 surfaceShading(
-                    const MaterialInputs materialInputs,
-                    const ShadingData shadingData,
-                    const LightData lightData) {
-                float response = lightData.NdotL * lightData.attenuation
-                        * lightData.visibility;
-                vec3 light = lightData.colorIntensity.rgb
-                        * lightData.colorIntensity.w;
-                return shadingData.diffuseColor * light * response;
+                vec3 bakedBaseline = material.baseColor.rgb
+                        * materialParams.emissiveFactor;
+                vec3 screenAreaLight = vec3(0.0);
+                vec4 screenState = getMaterialGlobal0();
+                if (screenState.w > 0.5) {
+                    vec4 screenNormalIntensity = getMaterialGlobal1();
+                    vec4 screenColorHalfWidth = getMaterialGlobal2();
+                    vec4 screenSize = getMaterialGlobal3();
+                    vec3 screenToFragment = getUserWorldPosition()
+                            - screenState.xyz;
+                    float distanceToScreen = length(screenToFragment);
+                    vec3 lightDirection = screenToFragment
+                            / max(distanceToScreen, 0.001);
+                    float front = smoothstep(0.0, 0.3, dot(
+                            screenNormalIntensity.xyz, lightDirection));
+                    vec3 worldNormal = getWorldNormalVector();
+                    float normalResponse = max(dot(
+                            worldNormal, -lightDirection), 0.0);
+                    float halfWidth = max(screenColorHalfWidth.w, 0.001);
+                    float halfHeight = max(screenSize.x, 0.001);
+                    float halfDiagonal = length(vec2(halfWidth, halfHeight));
+                    float broadRadius = max(halfDiagonal * 2.0, 0.50);
+                    float attenuation = (broadRadius * broadRadius)
+                            / (distanceToScreen * distanceToScreen
+                            + broadRadius * broadRadius);
+                    float area = 4.0 * halfWidth * halfHeight;
+                    float nearRadius = max(halfDiagonal * 0.5, 0.10);
+                    float areaResponse = area / (3.14159265 * max(
+                            distanceToScreen * distanceToScreen,
+                            nearRadius * nearRadius));
+                    float haloFree = smoothstep(
+                            max(halfDiagonal * 0.35, 0.75),
+                            max(halfDiagonal * 0.95, 1.75),
+                            distanceToScreen);
+                    screenAreaLight = material.baseColor.rgb
+                            * screenColorHalfWidth.rgb
+                            * screenNormalIntensity.w
+                            * front * normalResponse * attenuation
+                            * areaResponse * haloFree;
+                }
+                material.emissive = vec4(bakedBaseline + screenAreaLight, 0.0);
             }
         )SHADER";
         filament::gltfio::processShaderString(&shader, *uvmap, *config);
@@ -156,7 +178,6 @@ private:
         builder.name(label)
                 .flipUV(false)
                 .shading(MaterialBuilder::Shading::LIT)
-                .customSurfaceShading(true)
                 .doubleSided(config->doubleSided)
                 .transparencyMode(config->doubleSided
                         ? MaterialBuilder::TransparencyMode::TWO_PASSES_TWO_SIDES

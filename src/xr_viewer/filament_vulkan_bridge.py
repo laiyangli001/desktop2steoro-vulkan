@@ -212,6 +212,7 @@ class FilamentVulkanBridge:
         self._lighting_config_abi_available = False
         self._controller_screen_light_abi_available = False
         self._environment_screen_lights_abi_available = False
+        self._environment_screen_area_light_abi_available = False
         self._finished_drawing_semaphore_abi_available = False
         self._image_ready_semaphore_abi_available = False
         self._controller_overlay_abi_available = False
@@ -256,6 +257,10 @@ class FilamentVulkanBridge:
     @property
     def environment_screen_lights_abi_available(self) -> bool:
         return self._environment_screen_lights_abi_available
+
+    @property
+    def environment_screen_area_light_abi_available(self) -> bool:
+        return self._environment_screen_area_light_abi_available
 
     @property
     def vulkan_external_image_abi_available(self) -> bool:
@@ -1066,6 +1071,27 @@ class FilamentVulkanBridge:
         )
         return True
 
+    def set_environment_screen_area_light(
+        self, position, normal, color, *, half_width: float,
+        half_height: float, intensity: float, enabled: bool,
+    ) -> bool:
+        self._ensure_loaded()
+        if not self._environment_screen_area_light_abi_available:
+            return False
+        vector = ctypes.c_float * 3
+        self._check_result(
+            self._library.filament_bridge_set_environment_screen_area_light(
+                self._handle,
+                vector(*(float(value) for value in position)),
+                vector(*(float(value) for value in normal)),
+                vector(*(float(value) for value in color)),
+                float(half_width), float(half_height), float(intensity),
+                int(bool(enabled)),
+            ),
+            "set_environment_screen_area_light",
+        )
+        return True
+
     @property
     def finished_drawing_semaphore_abi_available(self) -> bool:
         return self._finished_drawing_semaphore_abi_available
@@ -1444,6 +1470,19 @@ class FilamentVulkanBridge:
             ]
             set_environment_screen_lights.restype = ctypes.c_int
             self._environment_screen_lights_abi_available = True
+        set_environment_screen_area_light = getattr(
+            library, "filament_bridge_set_environment_screen_area_light", None
+        )
+        if set_environment_screen_area_light is not None:
+            set_environment_screen_area_light.argtypes = [
+                ctypes.c_void_p,
+                ctypes.POINTER(ctypes.c_float),
+                ctypes.POINTER(ctypes.c_float),
+                ctypes.POINTER(ctypes.c_float),
+                ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_int,
+            ]
+            set_environment_screen_area_light.restype = ctypes.c_int
+            self._environment_screen_area_light_abi_available = True
         library.filament_bridge_set_fill_light.argtypes = [
             ctypes.c_void_p,
             ctypes.c_float, ctypes.c_float, ctypes.c_float,

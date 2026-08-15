@@ -67,8 +67,6 @@
     0.48
   ],
   "screen_light_intensity": 3.5,
-  "environment_screen_light_surface_gain": 8.0,
-  "environment_screen_light_falloff": 5.5,
   "controller_hdr_lighting": false,
   "env_fill_lights": [],
   "lighting_presets": [

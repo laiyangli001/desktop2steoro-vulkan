@@ -255,6 +255,15 @@ int filament_bridge_set_environment_screen_lights(
             count, falloff, cast_shadows, enabled);
 }
 
+int filament_bridge_set_environment_screen_area_light(
+        FilamentBridge* bridge, const float* position,
+        const float* normal, const float* color,
+        float half_width, float half_height, float intensity, int enabled) {
+    return bridge_material_set_environment_screen_area_light(
+            bridge, position, normal, color,
+            half_width, half_height, intensity, enabled);
+}
+
 int filament_bridge_set_fill_light(
         FilamentBridge* bridge,
         float red, float green, float blue,

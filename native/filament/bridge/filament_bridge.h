@@ -177,6 +177,12 @@ FILAMENT_BRIDGE_API int filament_bridge_set_environment_screen_lights(
         FilamentBridge* bridge, const float* positions_xyz,
         const float* linear_rgb, const float* intensity_candela,
         uint32_t count, float falloff, int cast_shadows, int enabled);
+// Apply the virtual screen as one continuous rectangular area light through
+// material globals. This is independent from Filament punctual lights.
+FILAMENT_BRIDGE_API int filament_bridge_set_environment_screen_area_light(
+        FilamentBridge* bridge, const float* position,
+        const float* normal, const float* color,
+        float half_width, float half_height, float intensity, int enabled);
 FILAMENT_BRIDGE_API int filament_bridge_set_fill_light(
         FilamentBridge* bridge,
         float red, float green, float blue,
