@@ -65,6 +65,17 @@ int filament_bridge_create_stereo_swapchain_with_depth(
     return bridge_eye_create_stereo_swapchain_with_depth(
             bridge, image_handles, image_count, format, width, height,
             depth_image_handle, depth_format); }
+int filament_bridge_create_controller_overlay_stereo_swapchain(
+        FilamentBridge* bridge, const void* const* image_handles,
+        uint32_t image_count, int32_t format, uint32_t width, uint32_t height) {
+    return bridge_eye_create_controller_overlay_stereo_swapchain(
+            bridge, image_handles, image_count, format, width, height); }
+int filament_bridge_set_controller_overlay_acquired_image(
+        FilamentBridge* bridge, uint32_t image_index) {
+    return bridge_eye_set_controller_overlay_acquired_image(
+            bridge, image_index); }
+int filament_bridge_render_controller_composition_layer(FilamentBridge* bridge) {
+    return bridge_eye_render_controller_composition_layer(bridge); }
 int filament_bridge_set_active_eye(
         FilamentBridge* bridge, uint32_t eye_index) {
     return bridge_eye_set_active(bridge, eye_index);

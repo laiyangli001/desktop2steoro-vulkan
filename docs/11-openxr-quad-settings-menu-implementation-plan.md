@@ -21,7 +21,9 @@
 
 ## 2. Quad 渲染与层顺序
 
-菜单位于 Projection、房间和 Glow 之后，激光光标之前提交，确保不会被虚拟屏幕、Glow 或房间遮挡。
+最终合成固定为三段画家顺序：主 Projection（房间、Glow、虚拟屏幕）→ 设置/提示 Quad → 透明双眼 Controller Projection（手柄、激光、操作指南）。Controller Projection 使用 `array_size=2` 的 multiview swapchain 并带源 Alpha 混合标志，永远最后提交，因此手柄、激光和指南始终显示在全部画面及菜单最前方。该设计明确不提供手柄与菜单之间的真实深度遮挡；即使手柄空间位置在菜单之后，仍按产品要求显示在菜单上方。
+
+Controller Projection 复用同一个 Filament Engine 和现有 multiview 相机，只增加同步 `flushAndWait()` 的透明输出目标；不得重新启用已经触发过 `VK_ERROR_DEVICE_LOST` 的双 SwapChain deferred 提交路径。
 
 扩展现有 GPU MSDF Quad 渲染协议，在文字之外支持：
 
@@ -129,7 +131,7 @@ Presenter 新增统一菜单设置回调：
 ### 7.2 渲染与性能测试
 
 - 菜单使用单 Quad、`eyeVisibility=BOTH`，左右眼位置和物理尺寸一致。
-- 验证菜单层顺序、Swapchain 复用和关闭时停止提交。
+- 验证 `主 Projection → Quad → Controller Projection` 的稳定层顺序、Swapchain 复用和关闭时停止提交。
 - 验证 GPU MSDF 图元容量、shader manifest 和 SPIR-V 构建。
 - 菜单未变化时不重复上传；滑块连续更新不超过 `20 Hz`。
 - 确认菜单开启后不会显著降低 OpenXR Presentation FPS。
@@ -148,4 +150,3 @@ Presenter 新增统一菜单设置回调：
 - 所有菜单修改均持久化。
 - 当前运行中的 GUI 不实时同步；下次加载 `settings.yaml` 时显示新值。
 - 首版不提供任意颜色选择器、环境模型切换、媒体播放控制或手柄模型配置。
-

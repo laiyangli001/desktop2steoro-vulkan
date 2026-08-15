@@ -537,6 +537,26 @@ def test_native_background_frame_defers_controller_layers_to_overlay() -> None:
     assert "filament_bridge_begin_background_frame" in public_header
 
 
+def test_native_multiview_uses_final_controller_composition_layer() -> None:
+    root = Path(__file__).resolve().parents[1]
+    eye_source = (root / "native/filament/bridge/bridge_eye.cpp").read_text(
+        encoding="utf-8"
+    )
+    facade = (root / "native/filament/bridge/filament_bridge.cpp").read_text(
+        encoding="utf-8"
+    )
+    public_header = (root / "native/filament/bridge/filament_bridge.h").read_text(
+        encoding="utf-8"
+    )
+
+    assert "bridge_eye_create_controller_overlay_stereo_swapchain" in eye_source
+    assert "bridge->renderer->render(bridge->eyes[0].controller_view)" in eye_source
+    assert "bridge->engine->flushAndWait()" in eye_source
+    assert "0x02u | (1u << kScreenLayerBase)" in eye_source
+    assert "filament_bridge_render_controller_composition_layer" in facade
+    assert "filament_bridge_render_controller_composition_layer" in public_header
+
+
 def test_native_screen_has_opt_in_multiview_eye_diagnostic() -> None:
     root = Path(__file__).resolve().parents[1]
     assert not (root / "native/filament/bridge/bridge_screen.cpp").exists()

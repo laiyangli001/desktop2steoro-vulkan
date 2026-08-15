@@ -216,6 +216,7 @@ class FilamentVulkanBridge:
         self._finished_drawing_semaphore_abi_available = False
         self._image_ready_semaphore_abi_available = False
         self._controller_overlay_abi_available = False
+        self._controller_composition_layer_abi_available = False
         self._background_frame_abi_available = False
         self._async_submit_abi_available = False
         self._stereo_batch_submit_abi_available = False
@@ -289,6 +290,10 @@ class FilamentVulkanBridge:
     @property
     def controller_overlay_abi_available(self) -> bool:
         return self._controller_overlay_abi_available
+
+    @property
+    def controller_composition_layer_abi_available(self) -> bool:
+        return self._controller_composition_layer_abi_available
 
     @property
     def background_frame_abi_available(self) -> bool:
@@ -503,6 +508,46 @@ class FilamentVulkanBridge:
                 int(depth_format),
             ),
             "create_stereo_swapchain_with_depth",
+        )
+
+    def create_controller_overlay_stereo_swapchain(
+        self, image_handles: Iterable[Any], *, format: int,
+        width: int, height: int,
+    ) -> None:
+        self._ensure_loaded()
+        if not self._controller_composition_layer_abi_available:
+            raise FilamentBridgeError(
+                "Filament controller composition layer ABI is unavailable"
+            )
+        values = [ctypes.c_void_p(_as_pointer_value(image)) for image in image_handles]
+        if not values:
+            raise ValueError("controller overlay swapchain requires VkImages")
+        array_type = ctypes.c_void_p * len(values)
+        self._check_result(
+            self._library.filament_bridge_create_controller_overlay_stereo_swapchain(
+                self._handle, array_type(*values), len(values), int(format),
+                int(width), int(height),
+            ),
+            "create_controller_overlay_stereo_swapchain",
+        )
+
+    def render_controller_composition_layer(self, image_index: int) -> None:
+        self._ensure_loaded()
+        if not self._controller_composition_layer_abi_available:
+            raise FilamentBridgeError(
+                "Filament controller composition layer ABI is unavailable"
+            )
+        self._check_result(
+            self._library.filament_bridge_set_controller_overlay_acquired_image(
+                self._handle, int(image_index)
+            ),
+            "set_controller_overlay_acquired_image",
+        )
+        self._check_result(
+            self._library.filament_bridge_render_controller_composition_layer(
+                self._handle
+            ),
+            "render_controller_composition_layer",
         )
 
     def set_active_eye(self, eye_index: int) -> None:
@@ -1186,6 +1231,21 @@ class FilamentVulkanBridge:
         create_stereo_swapchain_with_depth = getattr(
             library, "filament_bridge_create_stereo_swapchain_with_depth", None
         )
+        create_controller_overlay_swapchain = getattr(
+            library,
+            "filament_bridge_create_controller_overlay_stereo_swapchain",
+            None,
+        )
+        set_controller_overlay_image = getattr(
+            library,
+            "filament_bridge_set_controller_overlay_acquired_image",
+            None,
+        )
+        render_controller_composition_layer = getattr(
+            library,
+            "filament_bridge_render_controller_composition_layer",
+            None,
+        )
         set_stereo_camera = getattr(
             library, "filament_bridge_set_stereo_camera", None
         )
@@ -1224,6 +1284,31 @@ class FilamentVulkanBridge:
                 ]
                 create_stereo_swapchain_with_depth.restype = ctypes.c_int
                 self._multiview_depth_swapchain_abi_available = True
+            if all(
+                function is not None
+                for function in (
+                    create_controller_overlay_swapchain,
+                    set_controller_overlay_image,
+                    render_controller_composition_layer,
+                )
+            ):
+                create_controller_overlay_swapchain.argtypes = [
+                    ctypes.c_void_p,
+                    ctypes.POINTER(ctypes.c_void_p),
+                    ctypes.c_uint32,
+                    ctypes.c_int32,
+                    ctypes.c_uint32,
+                    ctypes.c_uint32,
+                ]
+                create_controller_overlay_swapchain.restype = ctypes.c_int
+                set_controller_overlay_image.argtypes = [
+                    ctypes.c_void_p,
+                    ctypes.c_uint32,
+                ]
+                set_controller_overlay_image.restype = ctypes.c_int
+                render_controller_composition_layer.argtypes = [ctypes.c_void_p]
+                render_controller_composition_layer.restype = ctypes.c_int
+                self._controller_composition_layer_abi_available = True
             set_stereo_camera.argtypes = [
                 ctypes.c_void_p,
                 ctypes.POINTER(ctypes.c_float),

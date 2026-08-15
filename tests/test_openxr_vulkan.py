@@ -3891,6 +3891,13 @@ def test_filament_multiview_uses_private_hdr_targets_and_keeps_eye_swapchains(
             vkDestroySemaphore=lambda *_args: None,
         ),
     )
+    controller_swapchain = _EyeSwapchain(
+        "controller", [SimpleNamespace(image="controller-image")], 10, 20,
+        array_size=2,
+    )
+    presenter._create_projection_swapchain = lambda *_args, **_kwargs: (
+        controller_swapchain
+    )
 
     class FakeBridge:
         multiview_abi_available = True
@@ -3898,6 +3905,7 @@ def test_filament_multiview_uses_private_hdr_targets_and_keeps_eye_swapchains(
         multiview_depth_swapchain_abi_available = True
         image_ready_semaphore_abi_available = True
         finished_drawing_semaphore_abi_available = True
+        controller_composition_layer_abi_available = True
 
         def create_stereo_swapchain_with_depth(self, images, **kwargs):
             assert list(images) == ["hdr-0", "hdr-1", "hdr-2"]
@@ -3909,10 +3917,15 @@ def test_filament_multiview_uses_private_hdr_targets_and_keeps_eye_swapchains(
                 "depth_format": 126,
             }
 
+        def create_controller_overlay_stereo_swapchain(self, images, **kwargs):
+            assert list(images) == ["controller-image"]
+            assert kwargs == {"format": 43, "width": 10, "height": 20}
+
     assert presenter._try_enable_filament_multiview(FakeBridge())
     assert presenter.swapchains == [left, right]
     assert len(presenter._filament_multiview_hdr_images) == 3
     assert len(presenter._filament_depth_attachments) == 1
+    assert presenter._controller_composition_swapchain is controller_swapchain
     assert not closed
 
 
@@ -3967,6 +3980,7 @@ def test_filament_multiview_failure_preserves_two_swapchain_fallback(monkeypatch
         multiview_depth_swapchain_abi_available = True
         image_ready_semaphore_abi_available = True
         finished_drawing_semaphore_abi_available = True
+        controller_composition_layer_abi_available = True
 
         @staticmethod
         def create_stereo_swapchain_with_depth(_images, **_kwargs):
@@ -5540,7 +5554,7 @@ def test_projection_layer_builder_maps_multiview_to_array_layers() -> None:
     swapchain = _EyeSwapchain("stereo-chain", [], 10, 20, array_size=2)
 
     layer = OpenXrCompositionBuilder(FakeXr, "local-space").projection_layer(
-        views, [swapchain]
+        views, [swapchain], layer_flags=7
     )
 
     assert [
@@ -5550,6 +5564,7 @@ def test_projection_layer_builder_maps_multiview_to_array_layers() -> None:
         "stereo-chain",
         "stereo-chain",
     ]
+    assert layer["layer_flags"] == 7
 
 
 def test_projection_array_eye_diagnostic_clears_two_layers(monkeypatch) -> None:

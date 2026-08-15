@@ -204,6 +204,11 @@ void bridge_context_destroy(FilamentBridge* bridge) {
         bridge->engine->destroy(bridge->renderer);
         bridge->renderer = nullptr;
     }
+    if (bridge->controller_overlay_swapchain && bridge->engine) {
+        bridge->engine->destroy(bridge->controller_overlay_swapchain);
+        bridge->controller_overlay_swapchain = nullptr;
+        bridge->controller_overlay_external_swapchain = nullptr;
+    }
     for (auto& eye : bridge->eyes) {
         eye.renderer = nullptr;
         if (eye.swapchain && bridge->engine) {

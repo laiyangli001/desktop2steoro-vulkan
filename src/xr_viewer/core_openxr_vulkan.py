@@ -596,7 +596,8 @@ class OpenXrCompositionBuilder:
         self.reference_space = reference_space
 
     def projection_layer(
-        self, views: list[Any], swapchains: list[_EyeSwapchain]
+        self, views: list[Any], swapchains: list[_EyeSwapchain], *,
+        layer_flags: Any = 0,
     ) -> Any:
         layered = len(swapchains) == 1 and swapchains[0].array_size >= 2
         eye_swapchains = (
@@ -623,6 +624,7 @@ class OpenXrCompositionBuilder:
                 )
             )
         return self.xr.CompositionLayerProjection(
+            layer_flags=layer_flags,
             space=self.reference_space,
             views=projection_views,
         )
@@ -713,6 +715,8 @@ class OpenXrVulkanPresenter(
         self.vulkan: VulkanContext | None = None
         self.swapchain_format: int | None = None
         self.swapchains: list[_EyeSwapchain] = []
+        self._controller_composition_swapchain: _EyeSwapchain | None = None
+        self._controller_composition_layer_logged = False
         self._panorama_swapchain: _EyeSwapchain | None = None
         self._panorama_staging: VulkanHostImage | None = None
         self._panorama_size: tuple[int, int] | None = None
@@ -1904,6 +1908,12 @@ class OpenXrVulkanPresenter(
                         layer_pointers.extend(
                             ctypes.pointer(item) for item in self._last_quad_layers
                         )
+                        controller_layer = self._render_controller_composition_layer(
+                            views
+                        )
+                        if controller_layer is not None:
+                            layer_structures.append(controller_layer)
+                            layer_pointers.append(ctypes.pointer(controller_layer))
                         if self._on_breakdown_add_time is not None:
                             self._on_breakdown_add_time(
                                 "openxr_layer_pointers",
@@ -4649,6 +4659,14 @@ class OpenXrVulkanPresenter(
             except Exception:
                 pass
             self.filament_bridge = None
+        if self._controller_composition_swapchain is not None:
+            try:
+                self._destroy_projection_swapchain(
+                    self._controller_composition_swapchain
+                )
+            except Exception:
+                pass
+            self._controller_composition_swapchain = None
         for attachment in self._filament_depth_attachments:
             try:
                 attachment.close()
@@ -5088,6 +5106,11 @@ class OpenXrVulkanPresenter(
         if self.filament_bridge is not None:
             self.filament_bridge.close()
             self.filament_bridge = None
+        if self._controller_composition_swapchain is not None:
+            self._destroy_projection_swapchain(
+                self._controller_composition_swapchain
+            )
+            self._controller_composition_swapchain = None
         for attachment in self._filament_depth_attachments:
             attachment.close()
         self._filament_depth_attachments.clear()
@@ -6758,6 +6781,9 @@ class OpenXrVulkanPresenter(
             and getattr(bridge, "multiview_depth_swapchain_abi_available", False)
             and getattr(bridge, "image_ready_semaphore_abi_available", False)
             and getattr(bridge, "finished_drawing_semaphore_abi_available", False)
+            and getattr(
+                bridge, "controller_composition_layer_abi_available", False
+            )
             and self.vulkan is not None
             and len(self.swapchains) == 2
             and self._vulkan_projection_composer_requested
@@ -6775,6 +6801,7 @@ class OpenXrVulkanPresenter(
         hdr_images: list[VulkanTransientImage] = []
         depth_attachment: VulkanDepthAttachment | None = None
         ready_semaphores: list[Any] = []
+        controller_swapchain: _EyeSwapchain | None = None
         try:
             depth_attachment = VulkanDepthAttachment(
                 self.vulkan,
@@ -6811,7 +6838,18 @@ class OpenXrVulkanPresenter(
                 depth_image=depth_attachment.image,
                 depth_format=depth_attachment.format,
             )
+            controller_swapchain = self._create_projection_swapchain(
+                left.width, left.height, array_size=2
+            )
+            bridge.create_controller_overlay_stereo_swapchain(
+                (image.image for image in controller_swapchain.images),
+                format=int(self.swapchain_format),
+                width=left.width,
+                height=left.height,
+            )
         except Exception as exc:
+            if controller_swapchain is not None:
+                self._destroy_projection_swapchain(controller_swapchain)
             if depth_attachment is not None:
                 depth_attachment.close()
             for image in hdr_images:
@@ -6827,6 +6865,7 @@ class OpenXrVulkanPresenter(
                 flush=True,
             )
             return False
+        self._controller_composition_swapchain = controller_swapchain
         self._filament_depth_attachments = [depth_attachment]
         self._filament_depth_attachments_bound = True
         self._filament_multiview_hdr_images = hdr_images
@@ -7884,6 +7923,47 @@ class OpenXrVulkanPresenter(
                 "order=environment->screen/glow->controller/laser/guide",
                 flush=True,
             )
+
+    def _render_controller_composition_layer(
+        self, views: list[Any]
+    ) -> Any | None:
+        bridge = self.filament_bridge
+        swapchain = self._controller_composition_swapchain
+        if (
+            bridge is None
+            or swapchain is None
+            or not self._multiview_active
+            or not bool(
+                getattr(
+                    bridge, "controller_composition_layer_abi_available", False
+                )
+            )
+        ):
+            return None
+        started = time.perf_counter()
+        with _acquired_swapchain_image(self.xr, swapchain) as image_index:
+            bridge.render_controller_composition_layer(image_index)
+        if self._on_breakdown_add_time is not None:
+            self._on_breakdown_add_time(
+                "openxr_controller_composition_layer",
+                time.perf_counter() - started,
+            )
+        if not self._controller_composition_layer_logged:
+            self._controller_composition_layer_logged = True
+            print(
+                "[OpenXRViewer] Controller composition layer active: "
+                "order=projection->quad->controller/laser/guide",
+                flush=True,
+            )
+        return OpenXrCompositionBuilder(
+            self.xr, self.reference_space
+        ).projection_layer(
+            views,
+            [swapchain],
+            layer_flags=(
+                self.xr.CompositionLayerFlags.BLEND_TEXTURE_SOURCE_ALPHA_BIT
+            ),
+        )
 
     def _render_projection_layer(
         self,

@@ -2,6 +2,7 @@
 
 ## 2026-08-15
 
+- OpenXR 手柄合成改为永远最前：Filament Multiview 新增透明 `array_size=2` Controller Projection swapchain，主 Projection 移除手柄、激光和指南后，按“房间/Glow/屏幕 → 设置与提示 Quad → 手柄/激光/指南”顺序提交；即使手柄空间位置位于菜单之后也始终显示在菜单上方。新覆盖层复用同一 Filament Engine，并保持同步 `flushAndWait()`，未重新启用已知会触发 `VK_ERROR_DEVICE_LOST` 的双 SwapChain deferred 路径。
 - OpenXR 房间屏幕反射光改为旧工程同类的连续矩形面光算法：专用 Filament 房间材质直接按屏幕中心、法线、实际宽高、表面法线与距离计算连续照明，GPU 外圈采样只用于生成随屏幕内容变化的线性平均颜色；新 ABI 同时移除旧 24 点光近似，消除地面离散光斑并让墙面和地面获得同一片连续反射光。面光强度按房间最终 EV 反向补偿，因此降低“场景亮度”只压暗房间基线，不再连带熄灭屏幕反射光。
 
 ## 2026-08-14

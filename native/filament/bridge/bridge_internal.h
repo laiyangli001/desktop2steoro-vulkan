@@ -301,6 +301,8 @@ struct FilamentBridge {
     filament::gltfio::FilamentAsset* asset = nullptr;
     filament::SwapChain* swapchain = nullptr;
     OpenXrVulkanPlatform::ExternalSwapChain* external_swapchain = nullptr;
+    filament::SwapChain* controller_overlay_swapchain = nullptr;
+    OpenXrVulkanPlatform::ExternalSwapChain* controller_overlay_external_swapchain = nullptr;
     OpenXrVulkanPlatform* platform = nullptr;
     utils::Entity fill_light;
     utils::Entity controller_top_light;

@@ -239,6 +239,85 @@ int bridge_eye_create_stereo_swapchain_with_depth(
     return 1;
 }
 
+int bridge_eye_create_controller_overlay_stereo_swapchain(
+        FilamentBridge* bridge, const void* const* image_handles,
+        uint32_t image_count, int32_t format, uint32_t width, uint32_t height) {
+    if (!bridge || !bridge->engine || !bridge->platform ||
+            !bridge->multiview_active || !image_handles || image_count == 0) {
+        return 0;
+    }
+    if (bridge->controller_overlay_swapchain) {
+        bridge->engine->destroy(bridge->controller_overlay_swapchain);
+        bridge->controller_overlay_swapchain = nullptr;
+        bridge->controller_overlay_external_swapchain = nullptr;
+    }
+    auto* external = bridge->platform->create_external_swapchain(
+            image_handles, image_count, static_cast<VkFormat>(format),
+            width, height, 2);
+    if (!external) {
+        bridge_set_error(
+                bridge, "Invalid controller overlay OpenXR swapchain image list");
+        return 0;
+    }
+    uint64_t swapchain_flags = 0;
+    if (static_cast<VkFormat>(format) == VK_FORMAT_R8G8B8A8_SRGB ||
+            static_cast<VkFormat>(format) == VK_FORMAT_B8G8R8A8_SRGB) {
+        swapchain_flags = filament::SwapChain::CONFIG_SRGB_COLORSPACE;
+    }
+    bridge->controller_overlay_swapchain =
+            bridge->engine->createSwapChain(external, swapchain_flags);
+    if (!bridge->controller_overlay_swapchain) {
+        bridge->platform->destroy(external);
+        bridge_set_error(
+                bridge, "Filament controller overlay SwapChain creation failed");
+        return 0;
+    }
+    bridge->controller_overlay_external_swapchain =
+            static_cast<OpenXrVulkanPlatform::ExternalSwapChain*>(external);
+    auto& eye = bridge->eyes[0];
+    eye.controller_view->setViewport(filament::Viewport{0, 0, width, height});
+    // The main HDR producer retains only room/effect content. Controllers,
+    // lasers and guides are emitted by the final transparent Projection layer.
+    eye.foreground_view->setVisibleLayers(
+            0xff, static_cast<uint8_t>(
+                    0x02u | (1u << kScreenLayerBase)));
+    std::fprintf(stderr,
+            "[FilamentBridge] controller composition swapchain created "
+            "images=%u format=%d extent=%ux%u layers=2\n",
+            image_count, format, width, height);
+    std::fflush(stderr);
+    return 1;
+}
+
+int bridge_eye_set_controller_overlay_acquired_image(
+        FilamentBridge* bridge, uint32_t image_index) {
+    if (!bridge || !bridge->platform ||
+            !bridge->controller_overlay_external_swapchain) return 0;
+    return bridge->platform->set_pending_image(
+            bridge->controller_overlay_external_swapchain, image_index) ? 1 : 0;
+}
+
+int bridge_eye_render_controller_composition_layer(FilamentBridge* bridge) {
+    if (!bridge || !bridge->renderer || !bridge->engine ||
+            !bridge->multiview_active || !bridge->controller_overlay_swapchain ||
+            bridge->frame_active) return 0;
+    set_renderer_clear_alpha(bridge, 0.0);
+    const bool active = bridge->renderer->beginFrame(
+            bridge->controller_overlay_swapchain);
+    if (!active) {
+        bridge_set_error(
+                bridge, "Filament controller composition beginFrame failed");
+        return 0;
+    }
+    bridge->renderer->render(bridge->eyes[0].controller_view);
+    bridge->renderer->endFrame();
+    // The OpenXR swapchain image is released immediately after this call.
+    // Keep the proven synchronous contract and never route this through the
+    // disabled dual-SwapChain deferred submission experiment.
+    bridge->engine->flushAndWait();
+    return 1;
+}
+
 int bridge_eye_set_active(FilamentBridge* bridge, uint32_t eye_index) {
     if (!bridge || eye_index >= bridge->eyes.size()) return 0;
     if (bridge->frame_active || bridge->eyes[eye_index].frame_active) return 0;
