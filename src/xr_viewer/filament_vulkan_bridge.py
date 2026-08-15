@@ -512,7 +512,7 @@ class FilamentVulkanBridge:
 
     def create_controller_overlay_stereo_swapchain(
         self, image_handles: Iterable[Any], *, format: int,
-        width: int, height: int,
+        width: int, height: int, depth_image: Any, depth_format: int,
     ) -> None:
         self._ensure_loaded()
         if not self._controller_composition_layer_abi_available:
@@ -522,11 +522,15 @@ class FilamentVulkanBridge:
         values = [ctypes.c_void_p(_as_pointer_value(image)) for image in image_handles]
         if not values:
             raise ValueError("controller overlay swapchain requires VkImages")
+        if depth_image is None:
+            raise ValueError("controller overlay depth image must not be empty")
         array_type = ctypes.c_void_p * len(values)
         self._check_result(
-            self._library.filament_bridge_create_controller_overlay_stereo_swapchain(
+            self._library.filament_bridge_create_controller_overlay_stereo_swapchain_with_depth(
                 self._handle, array_type(*values), len(values), int(format),
                 int(width), int(height),
+                ctypes.c_void_p(_as_pointer_value(depth_image)),
+                int(depth_format),
             ),
             "create_controller_overlay_stereo_swapchain",
         )
@@ -1233,7 +1237,7 @@ class FilamentVulkanBridge:
         )
         create_controller_overlay_swapchain = getattr(
             library,
-            "filament_bridge_create_controller_overlay_stereo_swapchain",
+            "filament_bridge_create_controller_overlay_stereo_swapchain_with_depth",
             None,
         )
         set_controller_overlay_image = getattr(
@@ -1299,6 +1303,8 @@ class FilamentVulkanBridge:
                     ctypes.c_int32,
                     ctypes.c_uint32,
                     ctypes.c_uint32,
+                    ctypes.c_void_p,
+                    ctypes.c_int32,
                 ]
                 create_controller_overlay_swapchain.restype = ctypes.c_int
                 set_controller_overlay_image.argtypes = [

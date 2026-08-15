@@ -3919,7 +3919,13 @@ def test_filament_multiview_uses_private_hdr_targets_and_keeps_eye_swapchains(
 
         def create_controller_overlay_stereo_swapchain(self, images, **kwargs):
             assert list(images) == ["controller-image"]
-            assert kwargs == {"format": 43, "width": 10, "height": 20}
+            assert kwargs == {
+                "format": 43,
+                "width": 10,
+                "height": 20,
+                "depth_image": "depth",
+                "depth_format": 126,
+            }
 
     assert presenter._try_enable_filament_multiview(FakeBridge())
     assert presenter.swapchains == [left, right]

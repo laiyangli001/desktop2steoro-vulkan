@@ -35,7 +35,7 @@
     0.38,
     0.4
   ],
-  "screen_light_intensity": 5.0,
+  "screen_light_intensity": 6.0,
   "controller_hdr_lighting": false,
   "env_fill_lights": [],
   "lighting_presets": [

@@ -2,6 +2,8 @@
 
 ## 2026-08-15
 
+- 修复最前层 Controller Projection 启用后手柄外壳再次呈透明的问题：复用此前实机验证的“不透明外壳”根因对策，为新的 `array_size=2` 手柄覆盖 swapchain 绑定同一张双层深度 attachment；手柄外壳、按键和内部网格重新在后置 Controller View 内进行正确的逐眼深度写入与遮挡，同时保持手柄/激光/指南位于所有 Projection 与 Quad 图层最前方，GLB 材质、roughness 和光照参数不变。
+- 提高 OpenXR 房间屏幕反射光强度：连续矩形面光的统一默认/Profile 增益由多数房间的 `3.5`（卧室 `5.0`）提升为 `6.0`，增强墙面和地面对屏幕内容的颜色与亮度响应；不改变房间基础亮度、手柄屏幕补光或 Glow。
 - 隔离手柄与激光亮度：Controller View 使用固定 `0 EV` 的独立中性色彩管线，房间“场景亮度”只更新房间/前景管线，不再改变手柄、激光和指南；PBR 手柄仅接收自己的基础环境光、头顶/正面灯和屏幕补光，激光继续使用 Unlit 自发光材质，完全不接收任何灯光。
 - OpenXR 手柄合成改为永远最前：Filament Multiview 新增透明 `array_size=2` Controller Projection swapchain，主 Projection 移除手柄、激光和指南后，按“房间/Glow/屏幕 → 设置与提示 Quad → 手柄/激光/指南”顺序提交；即使手柄空间位置位于菜单之后也始终显示在菜单上方。新覆盖层复用同一 Filament Engine，并保持同步 `flushAndWait()`，未重新启用已知会触发 `VK_ERROR_DEVICE_LOST` 的双 SwapChain deferred 路径。
 - OpenXR 房间屏幕反射光改为旧工程同类的连续矩形面光算法：专用 Filament 房间材质直接按屏幕中心、法线、实际宽高、表面法线与距离计算连续照明，GPU 外圈采样只用于生成随屏幕内容变化的线性平均颜色；新 ABI 同时移除旧 24 点光近似，消除地面离散光斑并让墙面和地面获得同一片连续反射光。面光强度按房间最终 EV 反向补偿，因此降低“场景亮度”只压暗房间基线，不再连带熄灭屏幕反射光。

@@ -926,7 +926,7 @@ class OpenXrVulkanPresenter(
         self._environment_screen_light_intensity_candela = (
             self.config.filament_environment_screen_light_intensity_candela
         )
-        self._environment_screen_area_light_intensity = 3.5
+        self._environment_screen_area_light_intensity = 6.0
         self._environment_screen_light_saturation = (
             self.config.filament_environment_screen_light_saturation
         )
@@ -3759,7 +3759,7 @@ class OpenXrVulkanPresenter(
         self._environment_screen_light_intensity_candela = (
             self.config.filament_environment_screen_light_intensity_candela
         )
-        self._environment_screen_area_light_intensity = 3.5
+        self._environment_screen_area_light_intensity = 6.0
         self._environment_screen_light_saturation = (
             self.config.filament_environment_screen_light_saturation
         )
@@ -6846,6 +6846,8 @@ class OpenXrVulkanPresenter(
                 format=int(self.swapchain_format),
                 width=left.width,
                 height=left.height,
+                depth_image=depth_attachment.image,
+                depth_format=depth_attachment.format,
             )
         except Exception as exc:
             if controller_swapchain is not None:

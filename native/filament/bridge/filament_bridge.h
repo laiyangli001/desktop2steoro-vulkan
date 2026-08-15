@@ -85,6 +85,10 @@ FILAMENT_BRIDGE_API int filament_bridge_create_stereo_swapchain_with_depth(
 FILAMENT_BRIDGE_API int filament_bridge_create_controller_overlay_stereo_swapchain(
         FilamentBridge* bridge, const void* const* image_handles,
         uint32_t image_count, int32_t format, uint32_t width, uint32_t height);
+FILAMENT_BRIDGE_API int filament_bridge_create_controller_overlay_stereo_swapchain_with_depth(
+        FilamentBridge* bridge, const void* const* image_handles,
+        uint32_t image_count, int32_t format, uint32_t width, uint32_t height,
+        const void* depth_image_handle, int32_t depth_format);
 FILAMENT_BRIDGE_API int filament_bridge_set_controller_overlay_acquired_image(
         FilamentBridge* bridge, uint32_t image_index);
 FILAMENT_BRIDGE_API int filament_bridge_render_controller_composition_layer(

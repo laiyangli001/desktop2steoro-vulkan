@@ -126,7 +126,7 @@ def test_small_theater_uses_shared_continuous_screen_area_light() -> None:
         root / "src/xr_viewer/environments/3d_theater/profile.json"
     ).read_text(encoding="utf-8"))
 
-    assert profile["screen_light_intensity"] == pytest.approx(3.5)
+    assert profile["screen_light_intensity"] == pytest.approx(6.0)
     assert "environment_screen_light_surface_gain" not in profile
     assert "environment_screen_light_position_inset" not in profile
 
@@ -549,12 +549,18 @@ def test_native_multiview_uses_final_controller_composition_layer() -> None:
         encoding="utf-8"
     )
 
-    assert "bridge_eye_create_controller_overlay_stereo_swapchain" in eye_source
+    assert "bridge_eye_create_controller_overlay_stereo_swapchain_with_depth" in eye_source
+    assert "external_swapchain->depth =" in eye_source
+    assert "external_swapchain->depth_format =" in eye_source
     assert "bridge->renderer->render(bridge->eyes[0].controller_view)" in eye_source
     assert "bridge->engine->flushAndWait()" in eye_source
     assert "0x02u | (1u << kScreenLayerBase)" in eye_source
     assert "filament_bridge_render_controller_composition_layer" in facade
     assert "filament_bridge_render_controller_composition_layer" in public_header
+    assert (
+        "filament_bridge_create_controller_overlay_stereo_swapchain_with_depth"
+        in public_header
+    )
 
 
 def test_controller_and_unlit_laser_ignore_room_exposure() -> None:

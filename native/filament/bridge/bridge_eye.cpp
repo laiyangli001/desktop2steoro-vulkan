@@ -242,6 +242,15 @@ int bridge_eye_create_stereo_swapchain_with_depth(
 int bridge_eye_create_controller_overlay_stereo_swapchain(
         FilamentBridge* bridge, const void* const* image_handles,
         uint32_t image_count, int32_t format, uint32_t width, uint32_t height) {
+    return bridge_eye_create_controller_overlay_stereo_swapchain_with_depth(
+            bridge, image_handles, image_count, format, width, height,
+            nullptr, 0);
+}
+
+int bridge_eye_create_controller_overlay_stereo_swapchain_with_depth(
+        FilamentBridge* bridge, const void* const* image_handles,
+        uint32_t image_count, int32_t format, uint32_t width, uint32_t height,
+        const void* depth_image_handle, int32_t depth_format) {
     if (!bridge || !bridge->engine || !bridge->platform ||
             !bridge->multiview_active || !image_handles || image_count == 0) {
         return 0;
@@ -259,6 +268,14 @@ int bridge_eye_create_controller_overlay_stereo_swapchain(
                 bridge, "Invalid controller overlay OpenXR swapchain image list");
         return 0;
     }
+    auto* external_swapchain =
+            static_cast<OpenXrVulkanPlatform::ExternalSwapChain*>(external);
+    external_swapchain->depth = depth_image_handle
+            ? reinterpret_cast<VkImage>(const_cast<void*>(depth_image_handle))
+            : VK_NULL_HANDLE;
+    external_swapchain->depth_format = depth_image_handle
+            ? static_cast<VkFormat>(depth_format)
+            : VK_FORMAT_UNDEFINED;
     uint64_t swapchain_flags = 0;
     if (static_cast<VkFormat>(format) == VK_FORMAT_R8G8B8A8_SRGB ||
             static_cast<VkFormat>(format) == VK_FORMAT_B8G8R8A8_SRGB) {
@@ -273,7 +290,7 @@ int bridge_eye_create_controller_overlay_stereo_swapchain(
         return 0;
     }
     bridge->controller_overlay_external_swapchain =
-            static_cast<OpenXrVulkanPlatform::ExternalSwapChain*>(external);
+            external_swapchain;
     auto& eye = bridge->eyes[0];
     eye.controller_view->setViewport(filament::Viewport{0, 0, width, height});
     // The main HDR producer retains only room/effect content. Controllers,
@@ -283,8 +300,12 @@ int bridge_eye_create_controller_overlay_stereo_swapchain(
                     0x02u | (1u << kScreenLayerBase)));
     std::fprintf(stderr,
             "[FilamentBridge] controller composition swapchain created "
-            "images=%u format=%d extent=%ux%u layers=2\n",
-            image_count, format, width, height);
+            "images=%u format=%d extent=%ux%u layers=2 depth=%p "
+            "depth_format=%d\n",
+            image_count, format, width, height,
+            reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(
+                    external_swapchain->depth)),
+            static_cast<int>(external_swapchain->depth_format));
     std::fflush(stderr);
     return 1;
 }
