@@ -62,6 +62,9 @@ int bridge_laser_create(FilamentBridge* bridge) {
             .parameter("laser_time", filamat::MaterialBuilder::UniformType::FLOAT)
             .require(filament::VertexAttribute::UV0)
             .shading(filament::Shading::UNLIT)
+            // Laser color is self-emitted by the Unlit material. It receives
+            // neither room nor controller lights and uses the neutral tool
+            // color pipeline owned by controller_view.
             .materialDomain(filament::MaterialDomain::SURFACE)
             .blending(filament::BlendingMode::OPAQUE)
             .culling(filament::backend::CullingMode::NONE)

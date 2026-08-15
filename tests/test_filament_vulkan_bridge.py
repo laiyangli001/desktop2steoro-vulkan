@@ -557,6 +557,28 @@ def test_native_multiview_uses_final_controller_composition_layer() -> None:
     assert "filament_bridge_render_controller_composition_layer" in public_header
 
 
+def test_controller_and_unlit_laser_ignore_room_exposure() -> None:
+    root = Path(__file__).resolve().parents[1]
+    context_source = (root / "native/filament/bridge/bridge_context.cpp").read_text(
+        encoding="utf-8"
+    )
+    material_source = (root / "native/filament/bridge/bridge_material.cpp").read_text(
+        encoding="utf-8"
+    )
+    laser_source = (root / "native/filament/bridge/bridge_laser.cpp").read_text(
+        encoding="utf-8"
+    )
+
+    assert ".exposure(0.0f)" in context_source
+    assert "setColorGrading(eye.controller_color_grading)" in context_source
+    exposure_body = material_source.split(
+        "int bridge_material_set_scene_exposure", 1
+    )[1].split("int bridge_material_set_skybox_brightness", 1)[0]
+    assert "controller_view->setColorGrading" not in exposure_body
+    assert "controller_guide_view->setColorGrading" not in exposure_body
+    assert ".shading(filament::Shading::UNLIT)" in laser_source
+
+
 def test_native_screen_has_opt_in_multiview_eye_diagnostic() -> None:
     root = Path(__file__).resolve().parents[1]
     assert not (root / "native/filament/bridge/bridge_screen.cpp").exists()

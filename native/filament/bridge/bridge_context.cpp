@@ -176,8 +176,22 @@ FilamentBridge* bridge_context_create(
         }
         eye.color_grading = bridge->color_grading;
         eye.foreground_view->setColorGrading(eye.color_grading);
-        eye.controller_view->setColorGrading(eye.color_grading);
-        eye.controller_guide_view->setColorGrading(eye.color_grading);
+        eye.controller_color_grading = filament::ColorGrading::Builder()
+                .toneMapping(filament::ColorGrading::ToneMapping::LINEAR)
+                .exposure(0.0f)
+                .outputColorSpace(
+                        filament::color::Rec709 - filament::color::Linear -
+                        filament::color::D65)
+                .build(*bridge->engine);
+        if (!eye.controller_color_grading) {
+            bridge_set_error(
+                    bridge.get(),
+                    "Filament neutral controller color pipeline creation failed");
+            return bridge.release();
+        }
+        eye.controller_view->setColorGrading(eye.controller_color_grading);
+        eye.controller_guide_view->setColorGrading(
+                eye.controller_color_grading);
     }
     bridge_eye_activate(bridge.get(), 0);
     filament::gltfio::AssetConfiguration config{bridge->engine, bridge->materials};
@@ -217,11 +231,14 @@ void bridge_context_destroy(FilamentBridge* bridge) {
         if (eye.color_grading && bridge->engine) {
             if (eye.view) eye.view->setColorGrading(nullptr);
             if (eye.foreground_view) eye.foreground_view->setColorGrading(nullptr);
+            bridge->engine->destroy(eye.color_grading);
+        }
+        if (eye.controller_color_grading && bridge->engine) {
             if (eye.controller_view) eye.controller_view->setColorGrading(nullptr);
             if (eye.controller_guide_view) {
                 eye.controller_guide_view->setColorGrading(nullptr);
             }
-            bridge->engine->destroy(eye.color_grading);
+            bridge->engine->destroy(eye.controller_color_grading);
         }
         if (eye.view && bridge->engine) {
             bridge->engine->destroy(eye.view);

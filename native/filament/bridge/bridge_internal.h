@@ -249,6 +249,9 @@ struct FilamentEyeTarget {
     filament::View* controller_guide_view = nullptr;
     filament::Camera* camera = nullptr;
     filament::ColorGrading* color_grading = nullptr;
+    // Neutral output transform for tools. Room scene exposure must never
+    // change controller, laser, or guide brightness.
+    filament::ColorGrading* controller_color_grading = nullptr;
     filament::SwapChain* swapchain = nullptr;
     OpenXrVulkanPlatform::ExternalSwapChain* external_swapchain = nullptr;
     bool frame_active = false;
