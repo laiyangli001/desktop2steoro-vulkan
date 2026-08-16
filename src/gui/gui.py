@@ -64,27 +64,6 @@ class Desktop2StereoGUI(
         self.gui_log_handler = None
         self._log_poll_task = None
         self._resize_repaint_task = None
-        self._media_change_task = None
-        self._monitor_settle_task = None
-        self._content_measure_task = None
-        self._startup_layout_task = None
-        self._pending_page_width = None
-        self._pending_page_height = None
-        self._ui_layout_lock = False
-        self._ui_programmatic_resize = False
-        self._ui_programmatic_resize_until = 0.0
-        self._ui_monitor_transition_until = 0.0
-        self._ui_last_window_width = 0.0
-        self._ui_last_window_height = 0.0
-        self._ui_base_page_padding = S(24)
-        self._ui_base_viewport_width = 0.0
-        self._ui_base_root_width = 0.0
-        self._ui_base_root_height = 0.0
-        self._ui_settings_content_height = 0.0
-        self.display_scale = 1.0
-        self.viewport_scale = 1.0
-        self.effective_ui_scale = 1.0
-        self.device_pixel_ratio = 1.0
         self._progress_log_spans = {}
 
     async def setup(self):
@@ -93,17 +72,9 @@ class Desktop2StereoGUI(
         self._proc_lock = asyncio.Lock()
         self._hot_save_task = None
 
-        media = getattr(self.page, "media", None)
-        self.device_pixel_ratio = float(
-            getattr(media, "device_pixel_ratio", 1.0) or 1.0
-        )
-        self._refresh_display_scale()
-        self.viewport_scale = 1.0
-        self.effective_ui_scale = self.display_scale
-
         self.page.title = f"Desktop2Stereo v{VERSION}"
         self.page.window.icon = os.path.join(BASE_DIR, "icon.ico")
-        self.page.padding = self._ui_base_page_padding * self.effective_ui_scale
+        self.page.padding = S(24)
         self.page.horizontal_alignment = ft.CrossAxisAlignment.STRETCH
         if OS_NAME == "Windows":
             font = "Microsoft YaHei"
@@ -114,8 +85,8 @@ class Desktop2StereoGUI(
         self.page.theme = ft.Theme(color_scheme_seed="blue", font_family=font)
         self.page.spacing = 0
         self.page.theme_mode = ft.ThemeMode.SYSTEM
-        self.page.window.min_width = S(520) * 0.5
-        self.page.window.min_height = S(300) * 0.5
+        self.page.window.min_width = S(520)
+        self.page.window.min_height = S(300)
 
         # Build UI
         self.build_ui()
@@ -123,8 +94,6 @@ class Desktop2StereoGUI(
         self._auto_align_labels()
         self.page.on_close = self._on_page_close
         self.page.on_resize = self._on_page_resize
-        self.page.on_media_change = self._on_page_media_change
-        self.page.window.on_event = self._on_window_event
 
         # Populate monitors & devices
         self.monitor_label_to_index = self.populate_monitors()
@@ -161,9 +130,6 @@ class Desktop2StereoGUI(
         await asyncio.sleep(0)
         self._fit_window_to_content(update=True, resize_window=True)
         self._signal_gui_ready()
-        self._startup_layout_task = asyncio.create_task(
-            self._stabilize_startup_layout()
-        )
         asyncio.create_task(self._prepare_startup_after_window_visible())
 
     def _signal_gui_ready(self):
@@ -173,27 +139,6 @@ class Desktop2StereoGUI(
                 ready_file.write("ready\n")
         except Exception:
             logger.exception("Failed to write GUI ready flag")
-
-    async def _stabilize_startup_layout(self, delays=(0.35,)):
-        """Refit after Windows/Flet has applied its initial DPI client-area change."""
-        try:
-            for delay in delays:
-                await asyncio.sleep(delay)
-                if self._closed:
-                    return
-                media = getattr(self.page, "media", None)
-                self.device_pixel_ratio = float(
-                    getattr(media, "device_pixel_ratio", self.device_pixel_ratio)
-                    or self.device_pixel_ratio
-                )
-                # Match a normal control-triggered refit.  The resize/media
-                # handlers have already established the final viewport scale;
-                # resetting it here causes a visible second layout jump.
-                self._fit_window_to_content(update=True, resize_window=True)
-        except asyncio.CancelledError:
-            return
-        except RuntimeError:
-            return
 
     async def _prepare_startup_after_window_visible(self):
         self.set_status(

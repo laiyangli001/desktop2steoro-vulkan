@@ -57,6 +57,25 @@ def test_capture_fps_reports_accepted_capture_rate_and_expires(monkeypatch) -> N
     assert callbacks.capture_fps() == 0.0
 
 
+def test_show_fps_hot_reload_updates_viewer_provider() -> None:
+    callbacks = _callbacks()
+    callbacks.context.settings_update_q = SimpleNamespace(
+        put_nowait=lambda _snapshot: None,
+        get_nowait=lambda: (_ for _ in ()).throw(Exception()),
+    )
+    assert callbacks.show_fps() is False
+
+    callbacks.send_settings_snapshot(
+        RuntimeSettingsSnapshot(
+            version=1,
+            timestamp=1.0,
+            presentation_flags={"show_fps": True},
+        )
+    )
+
+    assert callbacks.show_fps() is True
+
+
 def test_controller_shortcut_toggles_stereo_and_restores_depth() -> None:
     callbacks = _callbacks(0.75)
 

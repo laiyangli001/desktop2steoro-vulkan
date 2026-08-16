@@ -1,7 +1,6 @@
 """GUI Builder Mixin — UI construction, layout calculation, window sizing."""
 import os
 import asyncio
-import time
 import flet as ft
 from utils import OS_NAME, ALL_MODELS, DEFAULT_PORT
 from utils.xr_headset_presets import xr_headset_options, xr_headset_to_display
@@ -19,12 +18,6 @@ from .capture_sources import (
     get_primary_monitor_index, list_monitors, list_windows,
 )
 from .devices import DEVICES
-from .ui_scaling import (
-    MAX_UI_SCALE,
-    MIN_UI_SCALE,
-    compute_dpi_compensated_display_scale,
-    compute_effective_ui_scale,
-)
 
 
 class GUIBuilderMixin:
@@ -71,19 +64,6 @@ class GUIBuilderMixin:
         return sum(13 if ord(ch) > 127 else 7 for ch in str(txt)) + 28
 
     def _fit_window_to_content(self, update=True, resize_window=False):
-        if getattr(self, "_ui_layout_lock", False):
-            return
-        # Even without changing the native Window size, rebuilding the scaled
-        # root/host can emit PageResizeEvent.  Such an event belongs to this
-        # automatic layout pass and must never be treated as a user drag.
-        self._ui_programmatic_resize_until = time.monotonic() + 2.0
-        self._ui_layout_lock = True
-        try:
-            self._fit_window_to_content_unlocked(update, resize_window)
-        finally:
-            self._ui_layout_lock = False
-
-    def _fit_window_to_content_unlocked(self, update, resize_window):
         main_width = self._estimate_main_panel_width()
         if getattr(self, "_main_panel", None) is not None:
             self._main_panel.width = main_width
@@ -97,284 +77,22 @@ class GUIBuilderMixin:
                 log_panel.width = 0
                 log_panel.expand = False
         width = self._estimate_window_width(main_width)
-        base_padding = getattr(self, "_ui_base_page_padding", S(24))
-        root_width = main_width
-        if log_panel is not None and log_panel.visible:
-            root_width += S(500) + S(10)
-        base_window_height = self._estimate_window_height()
-        scale = getattr(self, "effective_ui_scale", 1.0)
-        dpr = max(getattr(self, "device_pixel_ratio", 1.0), 0.1)
-        _display_width, display_height = self._display_resolution_for_window()
-        max_window_height = max(S(300), float(display_height) / dpr * 0.92)
-        target_native_height = min(
-            base_window_height * scale,
-            max_window_height,
-        )
-        layout_window_height = target_native_height / scale
-        root_height = max(
-            S(300),
-            layout_window_height - (base_padding * 2) - S(42),
-        )
-        self._ui_base_viewport_width = root_width + (base_padding * 2)
-        self._ui_base_root_width = root_width
-        self._ui_base_root_height = root_height
-        self._apply_ui_scale_layout()
-
-        self.page.window.min_width = (
-            (main_width + base_padding * 2) * MIN_UI_SCALE
-        )
-        self.page.window.min_height = S(300) * MIN_UI_SCALE
+        self.page.window.min_width = main_width
         self.page.window.max_width = None
         if resize_window:
-            self._ui_last_window_width = width * scale
-            self._ui_last_window_height = target_native_height
-            self.page.window.width = self._ui_last_window_width
-            self.page.window.height = self._ui_last_window_height
-            self._ui_programmatic_resize = True
-            self._ui_programmatic_resize_until = time.monotonic() + 2.0
+            self.page.window.width = width
+        self.page.window.height = self._estimate_window_height()
         if resize_window:
             try:
                 self.page.window.update()
             except RuntimeError:
                 pass
-            self._ui_programmatic_resize = False
+            self.page.window.width = None
         if update:
-            try:
-                self.page.update()
-            except RuntimeError:
-                pass
-
-    def _apply_ui_scale_layout(self):
-        scale = getattr(self, "effective_ui_scale", 1.0)
-        root_width = getattr(self, "_ui_base_root_width", None)
-        root_height = getattr(self, "_ui_base_root_height", None)
-        surface = getattr(self, "_ui_scale_surface", None)
-        host = getattr(self, "_ui_scale_host", None)
-        root = getattr(self, "_root_row", None)
-        if not all((surface, host, root, root_width, root_height)):
-            return
-
-        root.width = root_width
-        root.height = root_height
-        root.expand = False
-        surface.width = root_width
-        surface.height = root_height
-        surface.scale = ft.Scale(
-            scale=scale,
-            alignment=ft.Alignment.TOP_LEFT,
-            transform_hit_tests=True,
-        )
-        host.width = root_width * scale
-        host.height = root_height * scale
-        self.page.padding = getattr(self, "_ui_base_page_padding", S(24)) * scale
-        for dropdown in getattr(self, "_dropdowns", []):
-            dropdown.set_overlay_scale(scale)
-
-    def _fit_root_height_to_page(self, page_height):
-        """Constrain the scaled root to the current page so its left column scrolls."""
-        try:
-            height = float(page_height or 0)
-        except (TypeError, ValueError):
-            return
-        scale = getattr(self, "effective_ui_scale", 1.0)
-        if height <= 0 or scale <= 0:
-            return
-        padding = getattr(self, "_ui_base_page_padding", S(24)) * scale
-        available_visual_height = max(S(120) * scale, height - padding * 2)
-        self._ui_base_root_height = available_visual_height / scale
-        self._apply_ui_scale_layout()
-
-    def _on_settings_content_size_change(self, e=None):
-        """Debounce a native-window fit using the left column's rendered size."""
-        try:
-            height = float(getattr(e, "height", 0) or 0)
-        except (TypeError, ValueError):
-            return
-        if height <= 0:
-            return
-        self._ui_settings_content_height = height
-        task = getattr(self, "_content_measure_task", None)
-        if task is not None and not task.done():
-            task.cancel()
-        loop = getattr(self, "_loop", None)
-        if loop is None or loop.is_closed() or getattr(self, "_closed", False):
-            return
-        self._content_measure_task = loop.create_task(
-            self._fit_window_to_measured_content()
-        )
-
-    async def _fit_window_to_measured_content(self):
-        try:
-            await asyncio.sleep(0.075)
-            if getattr(self, "_closed", False):
-                return
-            content_height = float(
-                getattr(self, "_ui_settings_content_height", 0) or 0
-            )
-            if content_height <= 0:
-                return
-            base_padding = getattr(self, "_ui_base_page_padding", S(24))
-            base_window_height = max(
-                S(420),
-                content_height + base_padding * 2 + S(42),
-            )
-            scale = getattr(self, "effective_ui_scale", 1.0)
-            dpr = max(getattr(self, "device_pixel_ratio", 1.0), 0.1)
-            _display_width, display_height = self._display_resolution_for_window()
-            target_native_height = min(
-                base_window_height * scale,
-                float(display_height) / dpr * 0.92,
-            )
-            layout_window_height = target_native_height / scale
-            self._ui_base_root_height = max(
-                S(300),
-                layout_window_height - base_padding * 2 - S(42),
-            )
-            self._apply_ui_scale_layout()
-            if abs(
-                target_native_height
-                - float(getattr(self, "_ui_last_window_height", 0) or 0)
-            ) < 2.0:
-                self.page.update()
-                return
-            self._ui_last_window_height = target_native_height
-            self._ui_programmatic_resize = True
-            self._ui_programmatic_resize_until = time.monotonic() + 2.0
-            self.page.window.height = target_native_height
-            try:
-                self.page.window.update()
-                self.page.update()
-            finally:
-                self._ui_programmatic_resize = False
-        except asyncio.CancelledError:
-            return
-        except RuntimeError:
-            return
-
-    def _display_resolution_for_window(self):
-        monitors = list_monitors()
-        if not monitors:
-            return 3840, 2160
-        monitor_index = get_primary_monitor_index()
-        try:
-            left = self.page.window.left
-            top = self.page.window.top
-            width = (
-                getattr(self.page, "width", None)
-                or self.page.window.width
-                or getattr(self, "_ui_last_window_width", 0)
-            )
-            height = (
-                getattr(self.page, "height", None)
-                or self.page.window.height
-                or getattr(self, "_ui_last_window_height", 0)
-            )
-            if left is not None and top is not None:
-                center_x = float(left) + float(width) / 2.0
-                center_y = float(top) + float(height) / 2.0
-                native_resolution = self._windows_physical_resolution_at_point(
-                    center_x,
-                    center_y,
-                )
-                if native_resolution is not None:
-                    return native_resolution
-                for monitor in monitors:
-                    mon_left = monitor["left"]
-                    mon_top = monitor["top"]
-                    if (
-                        mon_left <= center_x < mon_left + monitor["width"]
-                        and mon_top <= center_y < mon_top + monitor["height"]
-                    ):
-                        monitor_index = monitor["capture_index"]
-                        break
-        except (AttributeError, TypeError, ValueError):
-            pass
-        monitor = next(
-            (m for m in monitors if m["capture_index"] == monitor_index),
-            monitors[0],
-        )
-        return monitor["width"], monitor["height"]
-
-    @staticmethod
-    def _windows_physical_resolution_at_point(x, y):
-        """Resolve a logical Flet window point to the monitor's physical mode.
-
-        Flet exposes Windows virtual-desktop coordinates in logical pixels,
-        while mss exposes monitor rectangles in physical pixels.  Comparing
-        those rectangles directly misidentifies mixed-DPI monitors.  Let
-        Windows resolve the logical point and query that display device's
-        current physical mode instead.
-        """
-        if OS_NAME != "Windows":
-            return None
-        try:
-            import win32api
-            import win32con
-
-            handle = win32api.MonitorFromPoint(
-                (int(round(x)), int(round(y))),
-                win32con.MONITOR_DEFAULTTONEAREST,
-            )
-            device_name = win32api.GetMonitorInfo(handle).get("Device", "")
-            if not device_name:
-                return None
-            mode = win32api.EnumDisplaySettings(
-                device_name,
-                win32con.ENUM_CURRENT_SETTINGS,
-            )
-            width = int(mode.PelsWidth)
-            height = int(mode.PelsHeight)
-            if width > 0 and height > 0:
-                return width, height
-        except Exception:
-            return None
-        return None
-
-    def _refresh_display_scale(self):
-        width, height = self._display_resolution_for_window()
-        self.display_scale = compute_dpi_compensated_display_scale(
-            width,
-            height,
-            getattr(self, "device_pixel_ratio", 1.0),
-        )
-        return self.display_scale
-
-    def _set_effective_ui_scale(self, scale, viewport_scale=None):
-        scale = max(MIN_UI_SCALE, min(MAX_UI_SCALE, float(scale)))
-        if viewport_scale is not None:
-            self.viewport_scale = float(viewport_scale)
-        if abs(scale - getattr(self, "effective_ui_scale", 1.0)) < 0.001:
-            return False
-        self.effective_ui_scale = scale
-        self._apply_ui_scale_layout()
-        return True
+            self.page.update()
 
     def _on_page_resize(self, e=None):
-        """Debounce width-driven scaling after a logical page resize."""
-        event_width = getattr(e, "width", None)
-        event_height = getattr(e, "height", None)
-        self._pending_page_width = event_width or getattr(self.page, "width", None)
-        self._pending_page_height = event_height or getattr(self.page, "height", None)
-        if (
-            getattr(self, "_ui_programmatic_resize", False)
-            or time.monotonic()
-            < float(getattr(self, "_ui_programmatic_resize_until", 0.0) or 0.0)
-            or time.monotonic()
-            < float(getattr(self, "_ui_monitor_transition_until", 0.0) or 0.0)
-        ):
-            # A native-window refit must not be interpreted as a user width
-            # resize.  Preserve the established DPI/viewport scale and only
-            # constrain the root height so overflow remains scrollable.
-            if self._pending_page_width:
-                self._ui_last_window_width = float(self._pending_page_width)
-            if self._pending_page_height:
-                self._ui_last_window_height = float(self._pending_page_height)
-                self._fit_root_height_to_page(self._pending_page_height)
-            try:
-                self.page.update()
-            except RuntimeError:
-                pass
-            return
+        """Debounce a repaint after Windows minimize/restore transitions."""
         task = getattr(self, "_resize_repaint_task", None)
         if task is not None and not task.done():
             task.cancel()
@@ -385,98 +103,13 @@ class GUIBuilderMixin:
 
     async def _repaint_after_resize(self):
         try:
-            await asyncio.sleep(0.075)
+            await asyncio.sleep(0.12)
             if getattr(self, "_closed", False):
                 return
-            page_width = getattr(self, "_pending_page_width", None)
-            base_width = getattr(self, "_ui_base_viewport_width", None)
-            display_scale = getattr(self, "display_scale", 1.0)
-            viewport_scale, effective_scale = compute_effective_ui_scale(
-                page_width,
-                base_width,
-                display_scale,
-            )
-            self._set_effective_ui_scale(effective_scale, viewport_scale)
-            if page_width:
-                self._ui_last_window_width = float(page_width)
-            page_height = getattr(self, "_pending_page_height", None)
-            if page_height:
-                self._ui_last_window_height = float(page_height)
-                self._fit_root_height_to_page(page_height)
             self.page.update()
-        except asyncio.CancelledError:
-            return
-        except RuntimeError:
-            return
-
-    def _on_page_media_change(self, e=None):
-        media = e if e is not None else getattr(self.page, "media", None)
-        self.device_pixel_ratio = float(
-            getattr(media, "device_pixel_ratio", 1.0) or 1.0
-        )
-        task = getattr(self, "_media_change_task", None)
-        if task is not None and not task.done():
-            task.cancel()
-        loop = getattr(self, "_loop", None)
-        if loop is None or loop.is_closed() or getattr(self, "_closed", False):
-            return
-        self._media_change_task = loop.create_task(self._apply_media_change())
-
-    def _on_window_event(self, e):
-        """Debounce the position/DPR event pair emitted while crossing displays."""
-        event_type = getattr(e, "type", None)
-        if event_type not in (
-            ft.WindowEventType.MOVE,
-            ft.WindowEventType.MOVED,
-            "move",
-            "moved",
-        ):
-            return
-        self._ui_monitor_transition_until = time.monotonic() + 0.5
-        if event_type not in (ft.WindowEventType.MOVED, "moved"):
-            return
-        task = getattr(self, "_monitor_settle_task", None)
-        if task is not None and not task.done():
-            task.cancel()
-        loop = getattr(self, "_loop", None)
-        if loop is None or loop.is_closed() or getattr(self, "_closed", False):
-            return
-        self._monitor_settle_task = loop.create_task(
-            self._refresh_after_monitor_settles()
-        )
-
-    async def _refresh_after_monitor_settles(self):
-        try:
-            await asyncio.sleep(0.3)
-            if getattr(self, "_closed", False):
-                return
-            self._ui_monitor_transition_until = 0.0
-            self._on_page_media_change()
-        except asyncio.CancelledError:
-            return
-
-    async def _apply_media_change(self):
-        try:
-            await asyncio.sleep(0.075)
-            transition_remaining = float(
-                getattr(self, "_ui_monitor_transition_until", 0.0) or 0.0
-            ) - time.monotonic()
-            if transition_remaining > 0.0:
-                await asyncio.sleep(transition_remaining)
-            media = getattr(self.page, "media", None)
-            self.device_pixel_ratio = float(
-                getattr(media, "device_pixel_ratio", self.device_pixel_ratio)
-                or self.device_pixel_ratio
-            )
-            # Windows/Flet owns per-monitor DPI transitions.  Recomputing the
-            # application scale or native window size here causes the app to
-            # counter-scale the system (4K -> 1K grows, 1K -> 4K shrinks).
-            # Keep the startup/user-selected visual scale and only constrain
-            # the scroll viewport to the final logical client height.
-            page_height = getattr(self.page, "height", None)
-            if page_height:
-                self._fit_root_height_to_page(page_height)
-            self.page.update()
+            await asyncio.sleep(0.05)
+            if not getattr(self, "_closed", False):
+                self.page.update()
         except asyncio.CancelledError:
             return
         except RuntimeError:
@@ -538,7 +171,7 @@ class GUIBuilderMixin:
         content_width = self._estimate_main_panel_width() if main_width is None else main_width
         if getattr(self, "log_panel", None) and self.log_panel.visible:
             content_width += S(500)
-        page_padding = getattr(self, "_ui_base_page_padding", S(24)) * 2
+        page_padding = (getattr(self.page, "padding", 0) or 0) * 2
         spacing = S(10) if getattr(self, "log_panel", None) and self.log_panel.visible else 0
         safety_margin = S(12)
         return content_width + page_padding + spacing + safety_margin
@@ -585,8 +218,11 @@ class GUIBuilderMixin:
         if getattr(self, "stream_container", None) and self.stream_container.visible:
             scroll_height += scroll_spacing
             scroll_height += self._estimate_group_height(self.stream_container, include_margin=False)
-        page_padding = getattr(self, "_ui_base_page_padding", S(24)) * 2
-        footer_height = S(58)
+        page_padding = (getattr(self.page, "padding", 0) or 0) * 2
+        # The footer contains a default-height Flet button row, the status row,
+        # their spacing, and the footer's top padding.  S(58) only covered the
+        # buttons and clipped the status row after the native window was fitted.
+        footer_height = S(84)
         window_chrome = S(42)
         safety_margin = S(0)
         min_height = S(560)
@@ -918,7 +554,12 @@ class GUIBuilderMixin:
         device_names = [v["name"] for v in DEVICES.values()]
         self.device_dd = CompactDropdown(options=[n for n in device_names],
             on_select=self.on_device_change, min_width=S(180))
-        self.showfps_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="Show FPS")
+        self.showfps_cb = ft.Checkbox(
+            scale=SCALE,
+            visual_density=ft.VisualDensity.COMPACT,
+            label="Show FPS",
+            on_change=self.on_stereo_hot_param_change,
+        )
         self.local_vsync_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT,
             label="VSync", value=DEFAULTS.get("VSync", False))
         self.target_fps_label = ft.Text("Capture FPS:", size=FONT_SIZE, width=S(130))
@@ -1105,17 +746,9 @@ class GUIBuilderMixin:
         self.device_group = device_group
         self._build_streamer_rows()
 
-        self._settings_content = ft.Column([
+        scroll_area = ft.Column([
             self.lang_group, self.depth_group, self.device_group, self.stream_container,
-        ], expand=False, tight=True, spacing=S(8),
-            on_size_change=self._on_settings_content_size_change)
-        scroll_area = ft.Column(
-            [self._settings_content],
-            scroll=ft.Scrollbar(orientation=ft.ScrollbarOrientation.RIGHT),
-            expand=True,
-            tight=False,
-            spacing=0,
-        )
+        ], scroll=ft.ScrollMode.AUTO, expand=True, tight=True, spacing=S(8))
         self.log_level_dd = CompactDropdown(
             options=["ALL", "STATUS", "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
             value="ALL",
@@ -1203,10 +836,7 @@ class GUIBuilderMixin:
         footer = ft.Container(
             ft.Column([self._btn_bar, self._status_bar], spacing=S(6)),
             padding=ft.Padding(0, S(6), 0, 0))
-        # Keep the action buttons in the natural settings-content flow.  The
-        # outer scroll area may fill the available viewport, but it must not
-        # consume the gap between the last settings group and the footer.
-        self._settings_content.controls.append(footer)
+        scroll_area.controls.append(footer)
         self._scroll_area = scroll_area
         self._footer = footer
         self._main_panel = ft.Container(
@@ -1215,21 +845,12 @@ class GUIBuilderMixin:
         )
         self._root_row = ft.Row(
             [self._main_panel, self.log_panel],
-            expand=False,
+            expand=True,
             tight=True,
             spacing=S(10),
+            vertical_alignment=ft.CrossAxisAlignment.STRETCH,
         )
-        self._ui_scale_surface = ft.Container(
-            content=self._root_row,
-            alignment=ft.Alignment.TOP_LEFT,
-            clip_behavior=ft.ClipBehavior.NONE,
-        )
-        self._ui_scale_host = ft.Container(
-            content=self._ui_scale_surface,
-            alignment=ft.Alignment.TOP_LEFT,
-            clip_behavior=ft.ClipBehavior.NONE,
-        )
-        page.add(self._ui_scale_host)
+        page.add(self._root_row)
 
     # ── streamer rows ──
 
@@ -1351,9 +972,10 @@ class GUIBuilderMixin:
         return self.device_label_to_index
 
     def _apply_stereo_output(self, cfg):
+        preview_label = UI_MESSAGES[self.locale].get("Window Preview", "Window Preview")
         mon_count = self._get_monitor_count()
         if mon_count <= 1:
-            self.stereo_monitor_dd.value = "Viewer Window"
+            self.stereo_monitor_dd.value = preview_label
             return
         saved = cfg.get("Stereo Output")
         input_label = self.monitor_dd.value if self.capture_mode_key == "Monitor" else None
@@ -1367,7 +989,7 @@ class GUIBuilderMixin:
             if lbl != input_label:
                 fallback = lbl
                 break
-        self.stereo_monitor_dd.value = fallback if fallback else "Viewer Window"
+        self.stereo_monitor_dd.value = fallback if fallback else preview_label
 
     @staticmethod
     def _get_monitor_count():
@@ -1381,16 +1003,25 @@ class GUIBuilderMixin:
     def update_stereo_monitor_menu(self):
         if not hasattr(self, 'stereo_monitor_dd'):
             return
+        preview_labels = {
+            "Viewer Window",
+            "Window Preview",
+            "窗口预览",
+        }
+        preview_label = UI_MESSAGES[self.locale].get("Window Preview", "Window Preview")
         input_label = self.monitor_dd.value if self.capture_mode_key == "Monitor" else None
-        opts = ["Viewer Window"]
+        opts = [preview_label]
         for label in self.monitor_label_to_index:
             if label != input_label:
                 opts.append(label)
         current = self.stereo_monitor_dd.value
+        if current in preview_labels:
+            current = preview_label
         valid = current in opts
         self.stereo_monitor_dd.options = opts
+        self.stereo_monitor_dd.value = current
         if not valid:
-            self.stereo_monitor_dd.value = opts[0] if opts else "Viewer Window"
+            self.stereo_monitor_dd.value = opts[0] if opts else preview_label
         self.stereo_monitor_dd.update()
 
     def update_depth_resolution_options(self, model_name):

@@ -710,9 +710,10 @@ class DistillAnyDepthBaseNativeTensorRt:
             execution_slot_count=self.execution_slot_count,
         )
         self._preprocessor.fixed_input_size = self._engine.input_image_size
+        compact_engine_path = Path(self.engine_path.parent.name) / self.engine_path.name
         print(
             "[TensorRT] native provider loaded:"
-            f" engine={self.engine_path}",
+            f" engine={compact_engine_path}",
             flush=True,
         )
         self.info = replace(

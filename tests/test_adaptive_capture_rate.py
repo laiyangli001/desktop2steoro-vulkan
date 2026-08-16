@@ -1,6 +1,9 @@
 from pathlib import Path
 
-from capture.adaptive_rate import AdaptiveCaptureRate
+from capture.adaptive_rate import (
+    AdaptiveCaptureRate,
+    adaptive_capture_enabled_for_mode,
+)
 from gui.localization import get_messages
 
 
@@ -49,6 +52,13 @@ def test_manual_capture_rate_is_not_adapted() -> None:
 
     for now in range(10):
         assert rate.observe_sbs_fps(10.0, now=float(now)) == 60
+
+
+def test_auto_capture_is_enabled_for_local_viewer_but_not_3d_monitor() -> None:
+    assert adaptive_capture_enabled_for_mode("Local Viewer", 0)
+    assert adaptive_capture_enabled_for_mode("OpenXR Link", 0)
+    assert not adaptive_capture_enabled_for_mode("3D Monitor", 0)
+    assert not adaptive_capture_enabled_for_mode("Local Viewer", 60)
 
 
 def test_capture_fps_gui_exposes_24_and_30_with_adaptive_tooltip() -> None:

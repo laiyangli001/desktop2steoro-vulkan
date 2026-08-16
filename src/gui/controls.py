@@ -116,7 +116,6 @@ class CompactDropdown(ft.Container):
         self._min = min_width or 0
         self._max = max_width or 0
         self._tooltip = tooltip
-        self._overlay_scale = 1.0
         self.height = S(32)
         self.padding = 0
         self.bgcolor = None
@@ -134,14 +133,6 @@ class CompactDropdown(ft.Container):
 
     def reapply_width(self):
         self._apply_width()
-
-    def set_overlay_scale(self, scale):
-        """Scale popup-route content that does not inherit the root transform."""
-        value = max(0.5, min(2.0, float(scale)))
-        if abs(value - self._overlay_scale) < 0.001:
-            return
-        self._overlay_scale = value
-        self._build_menu()
 
     def _calc_auto_width(self):
         txt = self._label.value or ""
@@ -179,26 +170,8 @@ class CompactDropdown(ft.Container):
                 ev = SimpleNamespace(control=SimpleNamespace(value=val))
                 self._on_select_cb(ev)
 
-        popup_scale = self._overlay_scale
-        trigger_width = self.width or self._fixed or self._min or self._calc_auto_width()
-        popup_width = max(S(100), trigger_width) * popup_scale
         items = [
-            ft.PopupMenuItem(
-                content=ft.Container(
-                    ft.Text(o, size=FONT_SIZE * popup_scale),
-                    width=popup_width,
-                    padding=ft.Padding(
-                        S(8) * popup_scale,
-                        0,
-                        S(8) * popup_scale,
-                        0,
-                    ),
-                ),
-                data=o,
-                height=S(32) * popup_scale,
-                padding=0,
-                on_click=on_item_click,
-            )
+            ft.PopupMenuItem(content=ft.Container(ft.Text(o, size=FONT_SIZE), padding=ft.Padding(8, 0, 8, 0)), data=o, height=S(32), padding=0, on_click=on_item_click)
             for o in self._options
         ]
 

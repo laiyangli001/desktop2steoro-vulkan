@@ -447,8 +447,9 @@ def test_native_tensorrt_load_prints_compact_engine_path(monkeypatch, tmp_path, 
         def __init__(self, engine_path, *, device, dtype, execution_slot_count):
             self.engine_path = engine_path
 
-    engine_path = tmp_path / "model.trt"
+    engine_path = tmp_path / "models--lc700x--Distill-Any-Depth-Base-hf" / "model.trt"
     onnx_path = tmp_path / "model.onnx"
+    engine_path.parent.mkdir()
     engine_path.write_bytes(b"trt")
     provider = native_module.NativeTensorRtDepthProvider(
         device="cuda",
@@ -462,7 +463,9 @@ def test_native_tensorrt_load_prints_compact_engine_path(monkeypatch, tmp_path, 
     provider.load()
 
     output = capsys.readouterr().out.strip()
-    assert output == f"[TensorRT] native provider loaded: engine={engine_path}"
+    compact_path = Path(engine_path.parent.name) / engine_path.name
+    assert output == f"[TensorRT] native provider loaded: engine={compact_path}"
+    assert str(tmp_path) not in output
     assert " onnx=" not in output
     assert " dll_dirs=" not in output
 

@@ -20,6 +20,7 @@ from .config import (
     environment_display_label, environment_key_from_label,
     get_environment_model_options, load_environment_display_names,
 )
+from .controls import FONT_SIZE
 from .localization import UI_MESSAGES, is_supported_locale
 from .devices import DEVICES
 
@@ -474,7 +475,7 @@ class GUIHandlerMixin:
 
     def on_advanced_device_change(self, e):
         self._sync_visibility()
-        self._fit_window_to_content(resize_window=True)
+        self._fit_window_to_content()
         self._safe_update(self.page)
 
     def on_render_policy_change(self, e):
@@ -562,7 +563,8 @@ class GUIHandlerMixin:
         if mon_count <= 1:
             return
         cur = self.stereo_monitor_dd.value
-        valid = cur and cur in self.stereo_monitor_dd.options and cur != "Viewer Window"
+        preview_values = {"Viewer Window", "Window Preview", "窗口预览"}
+        valid = cur and cur in self.stereo_monitor_dd.options and cur not in preview_values
         if not valid:
             input_label = self.monitor_dd.value if self.capture_mode_key == "Monitor" else None
             for lbl in self.monitor_label_to_index:
@@ -721,6 +723,7 @@ class GUIHandlerMixin:
         self.upscaler_dd.value = self._upscaler_to_display("Off")
         self.upscaler_sharpness_dd.value = "0.00"
         self.stereo_output_label.value = t["Stereo Output:"]
+        self.update_stereo_monitor_menu()
         self.theme_label.value = t["Theme:"]
         theme_display = ["System", "Blue", "Green", "Red", "Purple", "Orange", "Teal", "Pink", "Grey"]
         self.theme_dd.options = [t.get(k.lower(), k) for k in theme_display]
@@ -1094,7 +1097,7 @@ class GUIHandlerMixin:
 
     def on_advanced_stereo_change(self, e):
         self._sync_advanced_stereo_visibility()
-        self._fit_window_to_content(resize_window=True)
+        self._fit_window_to_content()
         self._safe_update(self.page)
 
     def _sync_advanced_stereo_visibility(self):

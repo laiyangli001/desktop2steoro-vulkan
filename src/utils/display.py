@@ -38,8 +38,10 @@ def compute_output_resolution(setting_value, display_mode, input_monitor_index, 
     """Compute the source processing size used before depth inference.
 
     Integer values keep the legacy meaning of source eye height. WxH values and
-    Auto are treated as the final packed display canvas, so Full-SBS uses half
-    of the target width per eye and Full-TAB uses half of the target height.
+    Auto describe the captured source / single-eye processing size regardless
+    of the packed display mode. Full-SBS and Full-TAB expand only when the two
+    completed eye images are packed for display; Half modes compress only at
+    that same final packing stage.
 
     When ``setting_value`` is Auto, Local Viewer/OpenXR/streamers follow the
     captured input monitor.  The 3D Monitor path considers both input and stereo
@@ -49,7 +51,7 @@ def compute_output_resolution(setting_value, display_mode, input_monitor_index, 
     explicit_size = _parse_resolution_size(setting_value)
     if explicit_size is not None:
         out_w, out_h = explicit_size
-        return _packed_source_size(out_w, out_h, display_mode)
+        return _source_processing_size(out_w, out_h)
 
     try:
         if isinstance(setting_value, str):
@@ -71,7 +73,7 @@ def compute_output_resolution(setting_value, display_mode, input_monitor_index, 
         source_w, source_h = _fit_source_to_output(in_w, in_h, out_w, out_h)
     else:
         source_w, source_h = in_w, in_h
-    return _packed_source_size(source_w, source_h, display_mode)
+    return _source_processing_size(source_w, source_h)
 
 
 def _fit_source_to_output(input_width, input_height, output_width, output_height):
@@ -108,15 +110,8 @@ def _parse_resolution_size(setting_value):
     return width, height
 
 
-def _packed_source_size(output_width, output_height, display_mode):
-    mode = str(display_mode or "").strip().lower().replace("-", "_").replace(" ", "_")
-    width = int(output_width)
-    height = int(output_height)
-    if mode == "full_sbs":
-        width = max(1, width // 2)
-    elif mode == "full_tab":
-        height = max(1, height // 2)
-    return _even_width(width), _even_height(height)
+def _source_processing_size(source_width, source_height):
+    return _even_width(source_width), _even_height(source_height)
 
 
 def _even_width(value):

@@ -1,22 +1,33 @@
 # Desktop2Stereo Vulkan 项目日志
 
+## 2026-08-17
+
+- 恢复本地 Viewer 的独立调试预览语义：GUI 旧 `Viewer Window` 原位更名为 i18n `Window Preview / 窗口预览`，仍保存稳定的 `Stereo Output=None`，兼容现有配置。选择窗口预览时创建普通可缩放、可聚焦、有任务栏入口的 Vulkan 窗口，不应用副屏 Topmost/NoActivate 样式；选择具体显示器时才使用覆盖目标显示器的持久无边框 Vulkan 输出。
+- 根据 GLFW #447 与 mpv #10549 的 Windows 多屏结论强化副屏持久显示：Viewer 采用 GLFW 推荐的 `DECORATED=false + FLOATING=true + monitor=NULL` 无边框模式；窗口先隐藏创建，设置为浏览器 PiP 同类的不可激活 `WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST`、移除最小化/最大化能力和任务栏入口后，才以 `SWP_NOACTIVATE` 显示。这样启动、Win+D 和点击副屏都不会抢走主屏焦点，也不再按普通应用窗口最小化 Viewer；周期性 `SW_SHOWNOACTIVATE` 仅保留为异常隐藏兜底。
+- 根据本地 Viewer 必须长期让鼠标与键盘停留在主显示器的实际用法，移除 `VK_EXT_full_screen_exclusive` 硬独占申请、释放、焦点恢复及专用 Swapchain 分支；副屏现在始终使用 Vulkan 无边框 Topmost Swapchain，不因 Viewer 永久失焦而反复重建或消失。CUDA/Vulkan 零拷贝、指定显示器输出、VSync、动态捕捉和 Win+D 无焦点自动恢复均保持不变。
+- 本地 Vulkan Viewer 在 Windows 上改为指定副屏永久置顶且不抢焦点：承载 `VK_EXT_full_screen_exclusive` 的 HWND 不再使用会在恢复时强制激活的 GLFW monitor-attached 模式，而是使用覆盖目标显示器的无边框 windowed surface，硬独占仅由 Vulkan acquire 控制。原生 `SetWindowPos(HWND_TOPMOST, SWP_NOACTIVATE)` 保持副屏最前，Presenter 每 `100 ms` 检查 Win+D 造成的隐藏、最小化或 Topmost 丢失，并使用 `ShowWindowAsync(SW_SHOWNOACTIVATE)` 自动恢复；鼠标和键盘可长期留在主显示器，重新聚焦 Viewer 时才恢复 Windows 不允许后台持有的硬独占。
+- 修复 `VK_EXT_full_screen_exclusive` 副屏在点击主显示器后仍可能消失的问题：Presenter 现跟踪 GLFW 焦点，副屏 Viewer 失焦后立即释放硬独占并在同一显示器、同一无边框全屏窗口上重建普通 Win32 Swapchain，使 SBS 在用户操作主屏时持续可见；Viewer 重新获得焦点后再重建 `APPLICATION_CONTROLLED` Swapchain 并自动申请硬独占。窗口事件在有帧和无帧等待阶段均走同一切换逻辑。
+- 本地 Viewer 增加真正无窗口 Vulkan direct-display 能力诊断：启动时检查 `VK_KHR_display` 以及 `VK_EXT_direct_mode_display`/`VK_NV_acquire_winrt_display`。当前 RTX 3090 Windows 驱动经项目绑定与 Vulkan SDK `vulkaninfo` 双重确认均未暴露这些实例扩展，因此无法创建无 `HWND` 的 Display Surface；程序明确记录缺失扩展并继续使用已经可用的 Win32 `VK_EXT_full_screen_exclusive`，不加入无法运行的伪 direct-display 后端。
+- 修复 Vulkan 独占 Viewer 在用户点击另一台显示器后消失、必须重新点击才能恢复的问题：GLFW 全屏窗口禁用失焦自动最小化，普通主显示器获得焦点时 SBS 输出窗口继续留在目标显示器；Viewer 再次获得焦点后若系统曾撤销 `VK_EXT_full_screen_exclusive`，会在 Presenter 线程自动重建 Swapchain 并重新申请独占。
+- 修复本地 Viewer 未配置捕捉窗口标题时显示为 `None Vulkan Viewer`：空标题现回退为 `Desktop2Stereo Vulkan Viewer`；这只修正 Windows 窗口/任务栏名称，不改变已经由 `VK_EXT_full_screen_exclusive` 获得的 Vulkan 独占状态。
+- 本地 Vulkan Viewer 现接入 Windows `VK_EXT_full_screen_exclusive`：通过 GLFW `HWND` 获取真实 `HMONITOR` 并查询 surface 独占能力后，全屏 Swapchain 才使用 `APPLICATION_CONTROLLED` 模式并显式 acquire；切回窗口、Swapchain 重建和退出前显式 release，独占丢失会重建并重试。驱动拒绝独占 Swapchain 时立即重试普通 GLFW 显示器全屏，不再令 Viewer 线程退出。同步修复 GUI/MSS 的 1-based 显示器编号直接用于 GLFW 0-based 数组导致选错输出显示器的问题。
+- 本地 `Local Viewer` 在捕捉频率为 `Auto` 时现与 OpenXR 共用动态捕捉控制器：Viewer 无论是否显示 FPS 日志都会每 5 秒反馈成功 Present 的实际 SBS 帧率，控制器每 60 秒按平均 SBS FPS `+5 FPS` 更新 `WindowsCaptureCUDA` 软件限频；手动捕捉频率保持固定，“3D 显示器”模式不受本次改动影响。开启日志时同时显示当前 `capture_target` 便于实机确认闭环。
+- 本地 Vulkan Viewer 的“显示帧率”改为无画面侵入的日志遥测：开启后按成功提交到普通 2D 显示器的 Present 帧统计实际输出帧率，每 5 秒仅输出一次 `[VulkanLocalViewer] Present FPS`；GUI 复选框现通过既有 `settings.yaml` 热更新链路即时开启或关闭，关闭后不再输出，窗口模式仍同步更新标题栏，独占全屏 SBS 像素完全不变。
+
 ## 2026-08-16
 
-- 简化 GUI 跨显示器行为并移除多余的反向缩放：自动分辨率比例只在启动时建立，运行中 `4K <-> 1080p` 移动完全交给 Windows/Flet 的 per-monitor DPI 映射；程序不再根据目标显示器重新放大/缩小控件，也不再重设原生窗口宽高，media 变化仅更新 DPR 诊断值和左栏滚动可用高度。由此消除“到 1K 主动放大、回 4K 主动缩小”及其二次恢复过程，控件点击同样不会重新套用显示器比例。
-- 修复 DPI 后首次点击控件必然恢复初始窗口与控件比例的直接根因：自动适配在 `window.update()` 设置目标宽度后曾立即执行 `page.window.width = None`，该脏值会在下一次控件触发的 `page.update()` 中发送给 Flet，从而清除目标宽度并恢复默认窗口布局。现持续保留最后一次目标窗口宽高，普通控件更新不再隐式撤销 DPI 后的窗口尺寸。
-- 修复 GUI 已按 DPI 显示后点击任意设置控件又恢复初始控件大小的问题：`_fit_window_to_content(resize_window=False)` 虽不改变原生窗口，仍会重建缩放宿主并产生 `PageResizeEvent`；现在所有自动布局计算均标记为保持现有比例，其派生事件只更新高度与滚动范围，不再进入用户宽度缩放。日志文本刷新也不再无意义地重算窗口布局，避免运行期间持续干扰缩放判定。
-- 根据 3840×2160 整屏实机截图最终确认 Flet 尺寸单位：当前 Windows 客户端的 `page.window.width/height` 与 `PageResizeEvent` 均使用逻辑像素，原生窗口不乘 DPR；DPR 仅用于把物理显示器高度上限换算成逻辑高度。自动窗口适配的 resize 保护期延长至覆盖 Windows/Flet 的延迟事件，迟到事件只更新滚动高度，不再触发宽度驱动缩放，避免窗口整屏或控件跳过 DPI。
-- 修复任何自动窗口适配都会把 DPI 后控件比例恢复为初始大小的问题：原生窗口调整产生的 `PageResizeEvent` 现与用户拖动窗口严格分流，自动事件只按 Windows 最终客户区更新根高度和滚动范围，不再根据宽度重算 `effective_ui_scale`；仅 DPR 变化而物理显示器未变化的 media 事件同样保留现有 `viewport_scale`，避免自动高度计算覆盖 DPI 后布局。
-- 修复 GUI 首次显示经过 Windows DPI 重排后底部按钮暂时被遮挡、必须点击任意控件才恢复的问题：窗口可见并等待 DPI 客户区稳定后，只补做一次与控件交互相同的窗口高度适配；该步骤保留 resize/media 事件已经算出的 `viewport_scale`，不再把界面比例重置为启动值，避免出现“DPI 后正确、随后又退回原始布局”的第二次跳变。
-- 修复高 DPI 应用后 GUI 底部按钮消失及原生窗口尺寸异常的问题：界面视觉比例继续严格按显示器物理分辨率计算，保持 4K 为 100% 基准，不再因 DPR 重复缩小控件；Flet 的逻辑窗口宽高则不额外乘入 DPR。程序主动调整窗口时产生的最终 `PageResizeEvent` 不再被丢弃，根布局和左侧滚动视口会按 Windows 实际客户区高度重新约束，底部内容超出时可滚动而不会被直接裁切。
-- 修复 GUI 左侧“重置 / 停止 / 运行”按钮被可扩展滚动视口推到窗口底部、与最后一个设置边框之间产生大片空白的问题：按钮与状态栏现作为左侧设置内容流的最后一区块，始终紧跟最后一个可见设置组；窗口高度不足时随左栏统一滚动，不再由右侧日志栏或剩余高度改变位置。
+- 本地 Vulkan Viewer 的自动全屏改为 GLFW 原生显示器独占模式：窗口直接绑定 GUI 选择的普通 2D 输出显示器及其当前原生分辨率、刷新率，运行期间由 SBS 占用该显示输出，不启用任何“3D 显示器”专用路径；`Alt + Enter` 可在独占全屏与窗口模式间切换，恢复窗口时保留原位置和尺寸，Surface 变化继续由现有 Swapchain 自动重建处理。
+- 本地 Viewer 模式的 Vulkan 窗口现在启动后自动在所选输出显示器上进入原生全屏，不再受“3D 显示器”模式开关限制；OpenXR 路径及显示器选择逻辑不变。
+- 修复本地 Vulkan Viewer 颜色发白：运行时 SBS 帧本身已是 display-referred sRGB 字节，本地 CUDA 外部图像与 CPU staging 图像现统一使用 `R8G8B8A8_SRGB`，并优先创建 sRGB GLFW Swapchain；Vulkan blit 因而只进行正确的 sRGB 解码、线性过滤和重新编码，不再将 `UNORM` 中的已编码字节再次当作线性颜色编码。若表面完全不支持 sRGB，才保留 UNORM 字节复制降级并输出一次明确日志。
+- 恢复并完成本地模式的原生 Vulkan Viewer：`Viewer` / 3D 显示器模式现在启动独立 GLFW Vulkan Swapchain 消费 `runtime_q` 的最新已打包 SBS 帧。CUDA 输入会复用 OpenXR 已验证的 Vulkan 导出图像和 CUDA 外部二进制信号量，直接写入本地 Presenter 的 GPU 图像并由 Vulkan 等待后 transfer blit/present，不经过 CPU 内存；缺少外部内存/信号量扩展或导入失败时才自动退回 Vulkan staging upload。无需虚拟显示器，OpenXR Presenter 路径不变。
+- 修复本地 Vulkan Viewer 在窗口尺寸、DPI 或显示器状态变化后因 `VK_ERROR_OUT_OF_DATE_KHR (-1000001004)` 退出：窗口 Swapchain 现会在 Presenter 线程安全重建并继续消费后续帧，CUDA 外部图像保持复用；同时将 acquire 移到 CUDA signal 之前，防止失效帧遗留未消费的外部二进制信号量，并移除正常关闭时误报的 zero-copy unavailable 日志。
+- 精简 TensorRT 原生 Provider 加载成功日志：引擎路径只显示模型缓存目录名与 TRT 文件名（例如 `models--lc700x--Distill-Any-Depth-Base-hf\\model_fp16_294x518.trt`），不再输出项目所在磁盘的完整绝对路径；实际加载位置与错误诊断不变。
+- 修正固定尺寸 GUI 自动计算窗口高度略少的问题：窗口高度估算现在完整计入底部按钮行、行间距、状态栏及其内边距，避免“重置 / 停止 / 运行”下方的状态文字被窗口底边截断；不改变 DPI、控件比例或左栏自动滚动行为。
+- 修正 Full-SBS / Full-TAB 的分辨率语义：GUI 的“处理分辨率”现在始终表示捕获源及单眼处理尺寸，不再在深度推理前提前减半；Full-SBS 仅在最终本地输出打包时将宽度扩为两倍（例如 3840x2160 单眼生成 7680x2160），Full-TAB 同理只在最终打包时扩高，OpenXR Vulkan 则继续直接提交两张完整分辨率的左右眼图像。
+- 在恢复原始固定尺寸 GUI 的基础上，为完整左栏补充真正受窗口高度约束的纵向滚动视口；窗口高度不足或展开高级选项时，设置组、“重置 / 停止 / 运行”按钮及状态栏可作为连续内容滚动到底，滚动条无溢出时自动隐藏，不重新引入 DPI 或整体界面缩放逻辑。
 
 ## 2026-08-15
 
-- 修复高 DPI 启动后 GUI 被旧行数估算撑到接近全屏、左右两栏底部同时留下大片空白的问题：左侧参数现增加独立的真实布局测量层，首帧及高级选项显隐后按实际渲染内容高度收紧原生窗口；外层滚动视口和右侧日志共享同一最终根高度，日志内容不再参与窗口高度计算，内容超过屏幕上限时才保留滚动空间。
-- 修复 Flet 自适应界面在高级参数展开和高 DPI 下的窗口/滚动行为：“高级立体参数”和“高级设置”现在重新计算并调整原生窗口高度，原生窗口尺寸单独乘入 Flet DPR 以匹配已由系统放大的控件，但 GUI 比例仍不重复计算 DPI；窗口高度限制为当前显示器的 92%，左侧参数栏改为占用剩余高度的常驻纵向滚动区，全部参数展开超过屏幕时仍可滚动到底部按钮。
-- 修复 OpenXR 曲面屏在曲面标志已开启、但 Profile 弧度尚未初始化时的射线命中除零：射线 UV、UV 转世界坐标、屏幕边界、Projection 参数和菜单光圈统一通过安全曲面半角解析，非法或零弧度回退到标准重曲 `0.72 rad`，避免 Presenter 初始化窗口内点击/吸附路径崩溃。
-- 为 Flet 设置界面加入跨分辨率自动缩放：以当前 4K 外观为 100% 基准，1080p/8K 分别自动缩放到 50%/200%，窗口拖动时按逻辑宽度连续等比缩放并由原纵向滚动区处理高度不足；根布局同步维护缩放后的占位和点击坐标，下拉浮层单独同步字号、行高与最小宽度。运行时同时监听 Flet `PageResizeEvent` 与 `PageMediaData.device_pixel_ratio`，跨显示器时重新读取目标显示器分辨率，但不重复乘入已经由 Flet/Flutter 映射的系统 DPI。
 - 修复最前层 Controller Projection 启用后手柄外壳再次呈透明的问题：复用此前实机验证的“不透明外壳”根因对策，为新的 `array_size=2` 手柄覆盖 swapchain 绑定同一张双层深度 attachment；手柄外壳、按键和内部网格重新在后置 Controller View 内进行正确的逐眼深度写入与遮挡，同时保持手柄/激光/指南位于所有 Projection 与 Quad 图层最前方，GLB 材质、roughness 和光照参数不变。
 - 提高 OpenXR 房间屏幕反射光强度：连续矩形面光的统一默认/Profile 增益由多数房间的 `3.5`（卧室 `5.0`）提升为 `6.0`，增强墙面和地面对屏幕内容的颜色与亮度响应；不改变房间基础亮度、手柄屏幕补光或 Glow。
 - 隔离手柄与激光亮度：Controller View 使用固定 `0 EV` 的独立中性色彩管线，房间“场景亮度”只更新房间/前景管线，不再改变手柄、激光和指南；PBR 手柄仅接收自己的基础环境光、头顶/正面灯和屏幕补光，激光继续使用 Unlit 自发光材质，完全不接收任何灯光。

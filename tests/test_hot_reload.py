@@ -88,11 +88,13 @@ def test_hot_reload_value_snapshot_parses_expected_fields():
         "Vulkan Projection MIP LOD Bias": "-0.25",
         "Vulkan Projection RCAS Sharpness": "0.65",
         "Debug Stereo Output": "yes",
+        "Show FPS": "yes",
     }
 
     values = hot_reload_value_snapshot(settings, config)
 
     assert values["depth_strength"] == 1.25
+    assert values["presentation_flags"] == {"show_fps": True}
     assert values["convergence"] == 0.75
     assert "ipd" not in values
     assert "ipd_mm" not in values

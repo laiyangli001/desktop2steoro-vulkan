@@ -225,7 +225,12 @@ class GUIConfigMixin:
         else:
             monitor_idx = self.monitor_label_to_index.get(self.monitor_dd.value, DEFAULTS["Monitor Index"])
         stereo_val = self.stereo_monitor_dd.value
-        if stereo_val == "Viewer Window" or not stereo_val:
+        preview_values = {
+            "Viewer Window",
+            "Window Preview",
+            "窗口预览",
+        }
+        if stereo_val in preview_values or not stereo_val:
             stereo_idx = None
         else:
             stereo_idx = self.monitor_label_to_index.get(stereo_val, None)
@@ -382,6 +387,7 @@ class GUIConfigMixin:
         parallax_budget = self._display_to_parallax_budget(self.parallax_budget_dd.value)
 
         cfg.update({
+            "Show FPS": bool(self.showfps_cb.value),
             "Stereo Preset": stereo_preset,
             "Stereo Quality": stereo_quality,
             "Synthetic View": stereo_quality,

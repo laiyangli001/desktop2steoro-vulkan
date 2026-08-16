@@ -1,0 +1,950 @@
+"""Native Vulkan local viewer for packed SBS frames.
+
+The OpenXR presenter has its own projection swapchain.  Local Viewer uses this
+separate GLFW/Vulkan swapchain and never creates an OpenGL context.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import queue
+import sys
+import time
+from typing import Any, Callable
+
+from viewer.cuda_vulkan_interop import CudaVulkanImageImporter
+from viewer.vulkan_resources import VulkanExportableImage, VulkanExportableSemaphore
+
+
+LOCAL_VIEWER_SOURCE_FORMAT = "VK_FORMAT_R8G8B8A8_SRGB"
+LOCAL_VIEWER_SRGB_SURFACE_FORMATS = (
+    "VK_FORMAT_B8G8R8A8_SRGB",
+    "VK_FORMAT_R8G8B8A8_SRGB",
+)
+DIRECT_DISPLAY_SURFACE_EXTENSION = "VK_KHR_display"
+DIRECT_DISPLAY_ACQUIRE_EXTENSIONS = (
+    "VK_EXT_direct_mode_display",
+    "VK_NV_acquire_winrt_display",
+)
+
+
+def direct_display_capability(extensions: Any) -> tuple[bool, tuple[str, ...]]:
+    available = set(extensions)
+    missing = []
+    if DIRECT_DISPLAY_SURFACE_EXTENSION not in available:
+        missing.append(DIRECT_DISPLAY_SURFACE_EXTENSION)
+    if not any(name in available for name in DIRECT_DISPLAY_ACQUIRE_EXTENSIONS):
+        missing.append("/".join(DIRECT_DISPLAY_ACQUIRE_EXTENSIONS))
+    return not missing, tuple(missing)
+
+
+def choose_srgb_surface_format(formats: Any, vk: Any) -> tuple[Any, bool]:
+    """Prefer an sRGB surface format for display-referred runtime frames."""
+    for name in LOCAL_VIEWER_SRGB_SURFACE_FORMATS:
+        value = getattr(vk, name)
+        selected = next((item for item in formats if item.format == value), None)
+        if selected is not None:
+            return selected, True
+    return formats[0], False
+
+
+def is_exclusive_fullscreen_toggle(key: int, action: int, mods: int, glfw: Any) -> bool:
+    return (
+        key == glfw.KEY_ENTER
+        and action == glfw.PRESS
+        and bool(mods & glfw.MOD_ALT)
+    )
+
+
+def glfw_monitor_array_index(monitor_index: int, monitor_count: int) -> int:
+    """Convert the GUI/MSS 1-based monitor number to GLFW's 0-based index."""
+    return min(max(0, int(monitor_index) - 1), max(0, int(monitor_count) - 1))
+
+
+def should_restore_persistent_fullscreen(
+    fullscreen: bool, visible: bool, iconic: bool, topmost: bool
+) -> bool:
+    return bool(fullscreen and (not visible or iconic or not topmost))
+
+
+def present_fps_if_due(frames: int, elapsed: float, interval: float = 5.0) -> float | None:
+    if frames <= 0 or elapsed < interval:
+        return None
+    return frames / max(elapsed, 1e-6)
+
+
+def fit_rect(source: tuple[int, int], target: tuple[int, int]) -> tuple[int, int, int, int]:
+    """Return an aspect-correct, centered destination rectangle."""
+    sw, sh = source
+    tw, th = target
+    if min(sw, sh, tw, th) <= 0:
+        return 0, 0, 0, 0
+    scale = min(tw / sw, th / sh)
+    width, height = max(1, round(sw * scale)), max(1, round(sh * scale))
+    return (tw - width) // 2, (th - height) // 2, width, height
+
+
+def frame_to_rgba_bytes(frame: Any) -> tuple[bytes, int, int]:
+    """Convert a CHW/HWC torch or numpy frame to tightly packed RGBA8."""
+    import numpy as np
+
+    image = frame.detach() if hasattr(frame, "detach") else frame
+    if bool(getattr(image, "is_cuda", False)):
+        image = image.cpu()
+    if hasattr(image, "numpy"):
+        image = image.numpy()
+    image = np.asarray(image)
+    if image.ndim == 4:
+        image = image[0]
+    if image.ndim != 3:
+        raise ValueError(f"unsupported local viewer frame shape: {image.shape!r}")
+    # Prefer HWC when its trailing channel dimension is explicit.  Runtime
+    # tensors are normally CHW with a wide final image dimension.
+    if image.shape[-1] not in (1, 3, 4) and image.shape[0] in (1, 3, 4):
+        image = np.moveaxis(image, 0, -1)
+    height, width, channels = image.shape
+    if channels not in (1, 3, 4):
+        raise ValueError(f"unsupported local viewer channels: {channels}")
+    if image.dtype != np.uint8:
+        image = np.rint(np.clip(image, 0.0, 1.0) * 255.0).astype(np.uint8)
+    if channels == 1:
+        image = np.repeat(image, 3, axis=2)
+    if channels == 3:
+        image = np.concatenate((image, np.full((height, width, 1), 255, dtype=np.uint8)), axis=2)
+    return np.ascontiguousarray(image).tobytes(), int(width), int(height)
+
+
+def frame_to_cuda_rgba(frame: Any) -> Any | None:
+    """Return an HxWx4 CUDA uint8 tensor, without a host round trip."""
+    image = frame.detach() if hasattr(frame, "detach") else frame
+    if not bool(getattr(image, "is_cuda", False)):
+        return None
+    try:
+        import torch
+
+        if image.ndim == 4:
+            image = image[0]
+        if image.ndim != 3:
+            return None
+        if image.shape[-1] not in (1, 3, 4) and image.shape[0] in (1, 3, 4):
+            image = image.permute(1, 2, 0)
+        if int(image.shape[-1]) not in (1, 3, 4):
+            return None
+        if image.dtype != torch.uint8:
+            image = image.clamp(0.0, 1.0).mul(255.0).to(torch.uint8)
+        if int(image.shape[-1]) == 1:
+            image = image.expand(-1, -1, 3)
+        if int(image.shape[-1]) == 3:
+            alpha = torch.full(
+                (*image.shape[:2], 1), 255, dtype=torch.uint8, device=image.device
+            )
+            image = torch.cat((image, alpha), dim=2)
+        return image.contiguous()
+    except Exception:
+        return None
+
+
+@dataclass(frozen=True, slots=True)
+class VulkanLocalViewerConfig:
+    title: str = "Desktop2Stereo Vulkan Viewer"
+    monitor_index: int = 0
+    fullscreen: bool = False
+    vsync: bool = True
+    show_fps: bool = False
+    show_fps_provider: Callable[[], bool] | None = None
+    on_sbs_fps: Callable[[float], int] | None = None
+    window_width: int = 1280
+    window_height: int = 720
+
+
+class _LocalInteropContext:
+    """Small VulkanContext-compatible surface for CUDA external images.
+
+    Local presentation needs a GLFW present queue, unlike OpenXR's presentation
+    context.  This adapter deliberately exposes only the shared exporter API.
+    """
+
+    def __init__(self, owner: "VulkanLocalViewer") -> None:
+        self.owner = owner
+        self.vk = owner.vk
+        self.device = owner.device
+        self.physical_device = owner.physical_device
+        self.queue_family_index = owner.queue_family
+        self.compute_queue_family_index = owner.queue_family
+        self._resources: set[int] = set()
+
+    def register_external_image(self, resource: Any) -> None:
+        self._resources.add(id(resource))
+
+    def unregister_external_image(self, resource: Any) -> None:
+        self._resources.discard(id(resource))
+
+    def prepare_external_image_for_cuda(self, resource: Any) -> int:
+        """Transition once into GENERAL, the layout CUDA owns between frames."""
+        vk, owner = self.vk, self.owner
+        vk.vkWaitForFences(owner.device, 1, [owner.fence], True, 1_000_000_000)
+        vk.vkResetFences(owner.device, 1, [owner.fence])
+        cmd = owner.command_buffer
+        vk.vkResetCommandBuffer(cmd, 0)
+        vk.vkBeginCommandBuffer(
+            cmd,
+            vk.VkCommandBufferBeginInfo(
+                sType=vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO
+            ),
+        )
+        _TransferSource.transition_image(
+            vk,
+            cmd,
+            resource.image,
+            vk.VK_IMAGE_LAYOUT_UNDEFINED,
+            vk.VK_IMAGE_LAYOUT_GENERAL,
+        )
+        vk.vkEndCommandBuffer(cmd)
+        vk.vkQueueSubmit(
+            owner.queue,
+            1,
+            [
+                vk.VkSubmitInfo(
+                    sType=vk.VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                    commandBufferCount=1,
+                    pCommandBuffers=[cmd],
+                )
+            ],
+            owner.fence,
+        )
+        vk.vkWaitForFences(owner.device, 1, [owner.fence], True, 1_000_000_000)
+        return 0
+
+
+class VulkanLocalViewer:
+    """Transfer-only Vulkan renderer for a GLFW surface."""
+
+    def __init__(self, config: VulkanLocalViewerConfig) -> None:
+        self.config = config
+        self.glfw = self.vk = None
+        self.window = self.instance = self.surface = None
+        self.physical_device = self.device = self.queue = None
+        self.queue_family = None
+        self.command_pool = self.command_buffer = None
+        self.swapchain = None
+        self.swap_images: list[Any] = []
+        self._swap_image_initialized: list[bool] = []
+        self.extent = (0, 0)
+        self.source_format: int | None = None
+        self.image_available = self.render_finished = self.fence = None
+        self._source: _TransferSource | None = None
+        self._interop_extensions: tuple[str, ...] = ()
+        self._target_monitor = None
+        self._exclusive_fullscreen = False
+        self._win32_hwnd = 0
+        self._win32_user32 = None
+        self._last_visibility_enforce = 0.0
+        self._windowed_rect = (40, 40, config.window_width, config.window_height)
+        self._fps_frames = 0
+        self._fps_started = time.perf_counter()
+
+    def initialize(self) -> None:
+        import glfw
+        import vulkan as vk
+
+        self.glfw, self.vk = glfw, vk
+        if not glfw.init():
+            raise RuntimeError("GLFW initialization failed for Vulkan local viewer")
+        glfw.window_hint(glfw.CLIENT_API, glfw.NO_API)
+        glfw.window_hint(glfw.RESIZABLE, glfw.TRUE)
+        glfw.window_hint(glfw.AUTO_ICONIFY, glfw.FALSE)
+        if self.config.fullscreen:
+            glfw.window_hint(glfw.FLOATING, glfw.TRUE)
+            glfw.window_hint(glfw.FOCUS_ON_SHOW, glfw.FALSE)
+        monitors = glfw.get_monitors() or []
+        monitor = (
+            monitors[glfw_monitor_array_index(self.config.monitor_index, len(monitors))]
+            if monitors
+            else None
+        )
+        self._target_monitor = monitor
+        width, height = self.config.window_width, self.config.window_height
+        x, y = 40, 40
+        if monitor is not None:
+            mx, my = glfw.get_monitor_pos(monitor)
+            x, y = int(mx) + 40, int(my) + 40
+            self._windowed_rect = (mx + 40, my + 40, width, height)
+        if self.config.fullscreen and monitor is not None:
+            mode = glfw.get_video_mode(monitor)
+            width, height = int(mode.size.width), int(mode.size.height)
+            x, y = int(mx), int(my)
+            self._exclusive_fullscreen = True
+            glfw.window_hint(glfw.DECORATED, glfw.FALSE)
+            glfw.window_hint(glfw.VISIBLE, glfw.FALSE)
+        self.window = glfw.create_window(
+            width,
+            height,
+            self.config.title,
+            None,
+            None,
+        )
+        if not self.window:
+            raise RuntimeError("could not create Vulkan local viewer window")
+        if self._exclusive_fullscreen:
+            self._configure_persistent_fullscreen()
+        glfw.set_window_pos(self.window, x, y)
+        glfw.set_key_callback(self.window, self._on_key)
+        self._create_device()
+        self._create_swapchain()
+        self._create_sync()
+        if self._exclusive_fullscreen:
+            mode = glfw.get_video_mode(self._target_monitor)
+            print(
+                "[VulkanLocalViewer] Display fullscreen active on 2D display: "
+                f"{int(mode.size.width)}x{int(mode.size.height)}@{int(mode.refresh_rate)}Hz "
+                "(Alt+Enter)",
+                flush=True,
+            )
+
+    def _on_key(self, _window: Any, key: int, _scancode: int, action: int, mods: int) -> None:
+        if is_exclusive_fullscreen_toggle(key, action, mods, self.glfw):
+            self._set_exclusive_fullscreen(not self._exclusive_fullscreen)
+
+    def poll_events(self) -> None:
+        self.glfw.poll_events()
+        if self.glfw.window_should_close(self.window):
+            raise StopIteration
+        self._keep_fullscreen_visible()
+
+    def _configure_persistent_fullscreen(self) -> None:
+        if sys.platform != "win32" or self.window is None:
+            return
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            self._win32_hwnd = int(self.glfw.get_win32_window(self.window))
+            self._win32_user32 = ctypes.windll.user32
+            self._win32_user32.SetWindowPos.argtypes = [
+                wintypes.HWND,
+                wintypes.HWND,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                wintypes.UINT,
+            ]
+            self._win32_user32.SetWindowPos.restype = wintypes.BOOL
+            self._win32_user32.ShowWindowAsync.argtypes = [wintypes.HWND, ctypes.c_int]
+            self._win32_user32.ShowWindowAsync.restype = wintypes.BOOL
+            self._win32_user32.IsIconic.argtypes = [wintypes.HWND]
+            self._win32_user32.IsIconic.restype = wintypes.BOOL
+            self._win32_user32.IsWindowVisible.argtypes = [wintypes.HWND]
+            self._win32_user32.IsWindowVisible.restype = wintypes.BOOL
+            self._win32_user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+            self._win32_user32.GetWindowLongW.restype = ctypes.c_long
+            self._win32_user32.SetWindowLongW.argtypes = [
+                wintypes.HWND,
+                ctypes.c_int,
+                ctypes.c_long,
+            ]
+            self._win32_user32.SetWindowLongW.restype = ctypes.c_long
+            style = self._win32_user32.GetWindowLongW(self._win32_hwnd, -16)
+            style &= ~(0x00020000 | 0x00010000)
+            self._win32_user32.SetWindowLongW(self._win32_hwnd, -16, style)
+            extended_style = self._win32_user32.GetWindowLongW(
+                self._win32_hwnd, -20
+            )
+            extended_style |= 0x00000008 | 0x00000080 | 0x08000000
+            extended_style &= ~0x00040000
+            self._win32_user32.SetWindowLongW(
+                self._win32_hwnd, -20, extended_style
+            )
+            self._set_win32_topmost(self._exclusive_fullscreen)
+        except Exception as exc:
+            self._win32_hwnd = 0
+            self._win32_user32 = None
+            print(
+                "[VulkanLocalViewer] Persistent fullscreen unavailable: "
+                f"{type(exc).__name__}",
+                flush=True,
+            )
+
+    def _set_win32_topmost(self, enabled: bool) -> None:
+        if not self._win32_hwnd or self._win32_user32 is None:
+            return
+        import ctypes
+
+        insert_after = -1 if enabled else -2
+        self._win32_user32.SetWindowPos(
+            ctypes.c_void_p(self._win32_hwnd),
+            ctypes.c_void_p(insert_after),
+            0,
+            0,
+            0,
+            0,
+            0x0001 | 0x0002 | 0x0010 | 0x0020 | 0x0040 | 0x0200,
+        )
+
+    def _keep_fullscreen_visible(self) -> None:
+        if not self._exclusive_fullscreen or not self._win32_hwnd:
+            return
+        now = time.perf_counter()
+        if now - self._last_visibility_enforce < 0.1:
+            return
+        self._last_visibility_enforce = now
+        user32 = self._win32_user32
+        hwnd = self._win32_hwnd
+        visible = bool(user32.IsWindowVisible(hwnd))
+        iconic = bool(user32.IsIconic(hwnd))
+        topmost = bool(user32.GetWindowLongW(hwnd, -20) & 0x00000008)
+        if should_restore_persistent_fullscreen(
+            self._exclusive_fullscreen, visible, iconic, topmost
+        ):
+            if iconic or not visible:
+                user32.ShowWindowAsync(hwnd, 4)
+            self._set_win32_topmost(True)
+
+    def _set_exclusive_fullscreen(self, enabled: bool) -> None:
+        glfw = self.glfw
+        if self.window is None or self._target_monitor is None:
+            return
+        if enabled:
+            if self._exclusive_fullscreen:
+                return
+            x, y = glfw.get_window_pos(self.window)
+            width, height = glfw.get_window_size(self.window)
+            self._windowed_rect = (int(x), int(y), int(width), int(height))
+            mode = glfw.get_video_mode(self._target_monitor)
+            monitor_x, monitor_y = glfw.get_monitor_pos(self._target_monitor)
+            glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.FALSE)
+            glfw.set_window_pos(self.window, int(monitor_x), int(monitor_y))
+            glfw.set_window_size(
+                self.window, int(mode.size.width), int(mode.size.height)
+            )
+            self._exclusive_fullscreen = True
+            self._set_win32_topmost(True)
+        else:
+            if not self._exclusive_fullscreen:
+                return
+            self._exclusive_fullscreen = False
+            self._set_win32_topmost(False)
+            x, y, width, height = self._windowed_rect
+            glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.TRUE)
+            glfw.set_window_pos(self.window, x, y)
+            glfw.set_window_size(self.window, width, height)
+        if self.device is not None:
+            self.recreate_swapchain()
+        print(
+            f"[VulkanLocalViewer] Display fullscreen: {'on' if enabled else 'off'} "
+            "(Alt+Enter)",
+            flush=True,
+        )
+
+    def _report_present_fps(self, fps: float) -> int | None:
+        capture_target = (
+            self.config.on_sbs_fps(fps)
+            if self.config.on_sbs_fps is not None
+            else None
+        )
+        show_fps = (
+            bool(self.config.show_fps_provider())
+            if self.config.show_fps_provider is not None
+            else self.config.show_fps
+        )
+        if not show_fps:
+            return capture_target
+        target_text = (
+            f" capture_target={capture_target}" if capture_target is not None else ""
+        )
+        print(
+            f"[VulkanLocalViewer] Present FPS: {fps:.1f}{target_text}",
+            flush=True,
+        )
+        if not self._exclusive_fullscreen:
+            self.glfw.set_window_title(
+                self.window, f"{self.config.title} | {fps:.1f} FPS"
+            )
+        return capture_target
+
+    def _create_device(self) -> None:
+        vk, glfw = self.vk, self.glfw
+        extensions = list(glfw.get_required_instance_extensions() or [])
+        available_instance_extensions = {
+            prop.extensionName for prop in vk.vkEnumerateInstanceExtensionProperties(None)
+        }
+        direct_display_supported, direct_display_missing = direct_display_capability(
+            available_instance_extensions
+        )
+        if not direct_display_supported:
+            fallback_mode = (
+                "persistent borderless Vulkan fullscreen"
+                if self.config.fullscreen
+                else "Vulkan window preview"
+            )
+            print(
+                "[VulkanLocalViewer] Vulkan direct-display unavailable: missing "
+                f"{', '.join(direct_display_missing)}; using {fallback_mode}",
+                flush=True,
+            )
+        app_info = vk.VkApplicationInfo(
+            sType=vk.VK_STRUCTURE_TYPE_APPLICATION_INFO,
+            pApplicationName=self.config.title,
+            applicationVersion=1,
+            pEngineName="Desktop2Stereo",
+            engineVersion=1,
+            apiVersion=vk.VK_API_VERSION_1_0,
+        )
+        self.instance = vk.vkCreateInstance(vk.VkInstanceCreateInfo(
+            sType=vk.VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+            pApplicationInfo=app_info,
+            enabledExtensionCount=len(extensions),
+            ppEnabledExtensionNames=extensions,
+        ), None)
+        surface_ptr = vk.ffi.new("VkSurfaceKHR *")
+        result = glfw.create_window_surface(self.instance, self.window, None, surface_ptr)
+        if result != vk.VK_SUCCESS:
+            raise RuntimeError(f"glfwCreateWindowSurface failed ({result})")
+        self.surface = surface_ptr[0]
+        for candidate in vk.vkEnumeratePhysicalDevices(self.instance):
+            available = {prop.extensionName for prop in vk.vkEnumerateDeviceExtensionProperties(candidate, None)}
+            if "VK_KHR_swapchain" not in available:
+                continue
+            for index, props in enumerate(vk.vkGetPhysicalDeviceQueueFamilyProperties(candidate)):
+                if props.queueFlags & vk.VK_QUEUE_GRAPHICS_BIT and self._surface_support(candidate, index):
+                    self.physical_device, self.queue_family = candidate, index
+                    break
+            if self.physical_device is not None:
+                break
+        if self.physical_device is None:
+            raise RuntimeError("no Vulkan graphics/present queue available for local viewer")
+        available = {
+            prop.extensionName
+            for prop in vk.vkEnumerateDeviceExtensionProperties(self.physical_device, None)
+        }
+        interop = (
+            *VulkanExportableImage.required_device_extensions(),
+            *VulkanExportableSemaphore.required_device_extensions(),
+        )
+        self._interop_extensions = tuple(name for name in interop if name in available)
+        enabled_extensions = ["VK_KHR_swapchain", *self._interop_extensions]
+        queue_info = vk.VkDeviceQueueCreateInfo(
+            sType=vk.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+            queueFamilyIndex=self.queue_family,
+            queueCount=1,
+            pQueuePriorities=[1.0],
+        )
+        self.device = vk.vkCreateDevice(self.physical_device, vk.VkDeviceCreateInfo(
+            sType=vk.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+            queueCreateInfoCount=1,
+            pQueueCreateInfos=[queue_info],
+            enabledExtensionCount=len(enabled_extensions),
+            ppEnabledExtensionNames=enabled_extensions,
+        ), None)
+        self.queue = vk.vkGetDeviceQueue(self.device, self.queue_family, 0)
+        self.command_pool = vk.vkCreateCommandPool(self.device, vk.VkCommandPoolCreateInfo(
+            sType=vk.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+            queueFamilyIndex=self.queue_family,
+            flags=vk.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+        ), None)
+        self.command_buffer = vk.vkAllocateCommandBuffers(self.device, vk.VkCommandBufferAllocateInfo(
+            sType=vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            commandPool=self.command_pool,
+            level=vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            commandBufferCount=1,
+        ))[0]
+
+    def _instance_function(self, name: bytes, signature: str) -> Any:
+        proc = self.vk.lib.vkGetInstanceProcAddr(self.instance, name)
+        if proc == self.vk.ffi.NULL:
+            raise RuntimeError(f"Vulkan instance function unavailable: {name.decode()}")
+        return self.vk.ffi.cast(signature, proc)
+
+    def _device_function(self, name: bytes, signature: str) -> Any:
+        proc = self.vk.lib.vkGetDeviceProcAddr(self.device, name)
+        if proc == self.vk.ffi.NULL:
+            raise RuntimeError(f"Vulkan device function unavailable: {name.decode()}")
+        return self.vk.ffi.cast(signature, proc)
+
+    def _surface_support(self, physical_device: Any, queue_family: int) -> bool:
+        output = self.vk.ffi.new("VkBool32 *")
+        function = self._instance_function(
+            b"vkGetPhysicalDeviceSurfaceSupportKHR",
+            "VkResult(*)(VkPhysicalDevice, uint32_t, VkSurfaceKHR, VkBool32 *)",
+        )
+        if int(function(physical_device, queue_family, self.surface, output)) != int(self.vk.VK_SUCCESS):
+            return False
+        return bool(output[0])
+
+    def _create_swapchain(self) -> None:
+        vk = self.vk
+        caps = vk.ffi.new("VkSurfaceCapabilitiesKHR *")
+        get_caps = self._instance_function(b"vkGetPhysicalDeviceSurfaceCapabilitiesKHR", "VkResult(*)(VkPhysicalDevice, VkSurfaceKHR, VkSurfaceCapabilitiesKHR *)")
+        if int(get_caps(self.physical_device, self.surface, caps)) != int(vk.VK_SUCCESS):
+            raise RuntimeError("could not query Vulkan surface capabilities")
+        get_formats = self._instance_function(b"vkGetPhysicalDeviceSurfaceFormatsKHR", "VkResult(*)(VkPhysicalDevice, VkSurfaceKHR, uint32_t *, VkSurfaceFormatKHR *)")
+        format_count = vk.ffi.new("uint32_t *")
+        get_formats(self.physical_device, self.surface, format_count, vk.ffi.NULL)
+        formats = vk.ffi.new("VkSurfaceFormatKHR[]", int(format_count[0]))
+        get_formats(self.physical_device, self.surface, format_count, formats)
+        get_modes = self._instance_function(b"vkGetPhysicalDeviceSurfacePresentModesKHR", "VkResult(*)(VkPhysicalDevice, VkSurfaceKHR, uint32_t *, VkPresentModeKHR *)")
+        mode_count = vk.ffi.new("uint32_t *")
+        get_modes(self.physical_device, self.surface, mode_count, vk.ffi.NULL)
+        modes = vk.ffi.new("VkPresentModeKHR[]", int(mode_count[0]))
+        get_modes(self.physical_device, self.surface, mode_count, modes)
+        fmt, is_srgb = choose_srgb_surface_format(formats, vk)
+        self.source_format = getattr(
+            vk,
+            LOCAL_VIEWER_SOURCE_FORMAT if is_srgb else "VK_FORMAT_R8G8B8A8_UNORM",
+        )
+        if not is_srgb:
+            print(
+                "[VulkanLocalViewer] Surface has no sRGB format; using UNORM "
+                "source fallback to preserve display-referred bytes",
+                flush=True,
+            )
+        desired_mode = vk.VK_PRESENT_MODE_FIFO_KHR if self.config.vsync else vk.VK_PRESENT_MODE_MAILBOX_KHR
+        present_mode = desired_mode if desired_mode in modes else vk.VK_PRESENT_MODE_FIFO_KHR
+        if caps.currentExtent.width != 0xFFFFFFFF:
+            extent = caps.currentExtent
+        else:
+            width, height = self.glfw.get_framebuffer_size(self.window)
+            extent = vk.VkExtent2D(
+                width=max(caps.minImageExtent.width, min(caps.maxImageExtent.width, width)),
+                height=max(caps.minImageExtent.height, min(caps.maxImageExtent.height, height)),
+            )
+        count = max(2, caps.minImageCount + 1)
+        if caps.maxImageCount:
+            count = min(count, caps.maxImageCount)
+        info = vk.VkSwapchainCreateInfoKHR(
+            sType=vk.VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+            surface=self.surface,
+            minImageCount=count,
+            imageFormat=fmt.format,
+            imageColorSpace=fmt.colorSpace,
+            imageExtent=extent,
+            imageArrayLayers=1,
+            imageUsage=vk.VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+            imageSharingMode=vk.VK_SHARING_MODE_EXCLUSIVE,
+            preTransform=caps.currentTransform,
+            compositeAlpha=vk.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+            presentMode=present_mode,
+            clipped=True,
+            oldSwapchain=vk.ffi.NULL,
+        )
+        output = vk.ffi.new("VkSwapchainKHR *")
+        create = self._device_function(b"vkCreateSwapchainKHR", "VkResult(*)(VkDevice, const VkSwapchainCreateInfoKHR *, const VkAllocationCallbacks *, VkSwapchainKHR *)")
+        result = int(create(self.device, vk.ffi.addressof(info), vk.ffi.NULL, output))
+        if result != int(vk.VK_SUCCESS):
+            raise RuntimeError(
+                f"could not create Vulkan local-viewer swapchain ({result})"
+            )
+        self.swapchain = output[0]
+        get_images = self._device_function(b"vkGetSwapchainImagesKHR", "VkResult(*)(VkDevice, VkSwapchainKHR, uint32_t *, VkImage *)")
+        image_count = vk.ffi.new("uint32_t *")
+        get_images(self.device, self.swapchain, image_count, vk.ffi.NULL)
+        images = vk.ffi.new("VkImage[]", int(image_count[0]))
+        get_images(self.device, self.swapchain, image_count, images)
+        self.swap_images = list(images)
+        self._swap_image_initialized = [False] * len(self.swap_images)
+        self.extent = int(extent.width), int(extent.height)
+
+    def _destroy_swapchain(self) -> None:
+        if self.swapchain is not None:
+            self._device_function(
+                b"vkDestroySwapchainKHR",
+                "void(*)(VkDevice, VkSwapchainKHR, const VkAllocationCallbacks *)",
+            )(self.device, self.swapchain, self.vk.ffi.NULL)
+        self.swapchain = None
+        self.swap_images = []
+        self._swap_image_initialized = []
+
+    def recreate_swapchain(self) -> bool:
+        """Rebuild an out-of-date window swapchain without touching CUDA images."""
+        width, height = self.glfw.get_framebuffer_size(self.window)
+        if int(width) <= 0 or int(height) <= 0:
+            return False
+        self.vk.vkDeviceWaitIdle(self.device)
+        self._destroy_swapchain()
+        self._create_swapchain()
+        print(
+            f"[VulkanLocalViewer] Swapchain recreated: {self.extent[0]}x{self.extent[1]}",
+            flush=True,
+        )
+        return True
+
+    def is_swapchain_recreate_result(self, result: int) -> bool:
+        return int(result) in {
+            int(getattr(self.vk, "VK_ERROR_OUT_OF_DATE_KHR", -1000001004)),
+            int(getattr(self.vk, "VK_SUBOPTIMAL_KHR", 1000001003)),
+        }
+
+    def is_swapchain_out_of_date(self, result: int) -> bool:
+        return int(result) == int(
+            getattr(self.vk, "VK_ERROR_OUT_OF_DATE_KHR", -1000001004)
+        )
+
+    def _create_sync(self) -> None:
+        vk = self.vk
+        sem_info = vk.VkSemaphoreCreateInfo(sType=vk.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO)
+        self.image_available = vk.vkCreateSemaphore(self.device, sem_info, None)
+        self.render_finished = vk.vkCreateSemaphore(self.device, sem_info, None)
+        self.fence = vk.vkCreateFence(self.device, vk.VkFenceCreateInfo(
+            sType=vk.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+            flags=vk.VK_FENCE_CREATE_SIGNALED_BIT,
+        ), None)
+
+    def present(self, frame: Any) -> None:
+        if self.window is None:
+            raise RuntimeError("Vulkan local viewer has not been initialized")
+        self.poll_events()
+        cuda_rgba = frame_to_cuda_rgba(frame)
+        if cuda_rgba is not None:
+            height, width = (int(cuda_rgba.shape[0]), int(cuda_rgba.shape[1]))
+        else:
+            pixels, width, height = frame_to_rgba_bytes(frame)
+        if (
+            self._source is None
+            or self._source.size != (width, height)
+            or self._source.format != self.source_format
+        ):
+            if self._source is not None:
+                self._source.close()
+            self._source = _TransferSource(self, width, height)
+        if not self._source.present(cuda_rgba if cuda_rgba is not None else pixels):
+            return
+        now = time.perf_counter()
+        self._fps_frames += 1
+        fps = present_fps_if_due(self._fps_frames, now - self._fps_started)
+        if fps is not None:
+            self._report_present_fps(fps)
+            self._fps_frames = 0
+            self._fps_started = now
+
+    def close(self) -> None:
+        try:
+            if self.device is not None:
+                self.vk.vkDeviceWaitIdle(self.device)
+                if self._source is not None:
+                    self._source.close()
+                for semaphore in (self.image_available, self.render_finished):
+                    if semaphore is not None:
+                        self.vk.vkDestroySemaphore(self.device, semaphore, None)
+                if self.fence is not None:
+                    self.vk.vkDestroyFence(self.device, self.fence, None)
+                if self.command_pool is not None:
+                    self.vk.vkDestroyCommandPool(self.device, self.command_pool, None)
+                self._destroy_swapchain()
+                self.vk.vkDestroyDevice(self.device, None)
+        finally:
+            if self.surface is not None and self.instance is not None:
+                self._instance_function(b"vkDestroySurfaceKHR", "void(*)(VkInstance, VkSurfaceKHR, const VkAllocationCallbacks *)")(self.instance, self.surface, self.vk.ffi.NULL)
+            if self.instance is not None:
+                self.vk.vkDestroyInstance(self.instance, None)
+            if self.window is not None:
+                self.glfw.destroy_window(self.window)
+            if self.glfw is not None:
+                self.glfw.terminate()
+            self.window = None
+
+
+class _TransferSource:
+    def __init__(self, owner: VulkanLocalViewer, width: int, height: int) -> None:
+        self.owner, self.size = owner, (width, height)
+        self.format = int(owner.source_format)
+        self.capacity = width * height * 4
+        self.buffer = self.memory = self.image = self.image_memory = None
+        self._image_initialized = False
+        self._interop_context: _LocalInteropContext | None = None
+        self._external_image: VulkanExportableImage | None = None
+        self._cuda_ready: VulkanExportableSemaphore | None = None
+        self._cuda_importer: CudaVulkanImageImporter | None = None
+        self._cuda_active = False
+        self._create()
+
+    def _memory_type(self, bits: int, required: int) -> int:
+        props = self.owner.vk.vkGetPhysicalDeviceMemoryProperties(self.owner.physical_device)
+        for index, item in enumerate(props.memoryTypes):
+            if bits & (1 << index) and (item.propertyFlags & required) == required:
+                return index
+        raise RuntimeError("no compatible Vulkan memory type for local viewer")
+
+    def _create(self) -> None:
+        vk, device = self.owner.vk, self.owner.device
+        self.buffer = vk.vkCreateBuffer(device, vk.VkBufferCreateInfo(sType=vk.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, size=self.capacity, usage=vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT, sharingMode=vk.VK_SHARING_MODE_EXCLUSIVE), None)
+        req = vk.vkGetBufferMemoryRequirements(device, self.buffer)
+        self.memory = vk.vkAllocateMemory(device, vk.VkMemoryAllocateInfo(sType=vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, allocationSize=req.size, memoryTypeIndex=self._memory_type(req.memoryTypeBits, vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)), None)
+        vk.vkBindBufferMemory(device, self.buffer, self.memory, 0)
+        width, height = self.size
+        source_format = self.format
+        self.image = vk.vkCreateImage(device, vk.VkImageCreateInfo(sType=vk.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, imageType=vk.VK_IMAGE_TYPE_2D, format=source_format, extent=vk.VkExtent3D(width=width, height=height, depth=1), mipLevels=1, arrayLayers=1, samples=vk.VK_SAMPLE_COUNT_1_BIT, tiling=vk.VK_IMAGE_TILING_OPTIMAL, usage=vk.VK_IMAGE_USAGE_TRANSFER_SRC_BIT | vk.VK_IMAGE_USAGE_TRANSFER_DST_BIT, sharingMode=vk.VK_SHARING_MODE_EXCLUSIVE, initialLayout=vk.VK_IMAGE_LAYOUT_UNDEFINED), None)
+        req = vk.vkGetImageMemoryRequirements(device, self.image)
+        self.image_memory = vk.vkAllocateMemory(device, vk.VkMemoryAllocateInfo(sType=vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, allocationSize=req.size, memoryTypeIndex=self._memory_type(req.memoryTypeBits, vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)), None)
+        vk.vkBindImageMemory(device, self.image, self.image_memory, 0)
+
+        required = {
+            *VulkanExportableImage.required_device_extensions(),
+            *VulkanExportableSemaphore.required_device_extensions(),
+        }
+        if required.issubset(set(self.owner._interop_extensions)):
+            try:
+                self._interop_context = _LocalInteropContext(self.owner)
+                self._external_image = VulkanExportableImage(
+                    self._interop_context,
+                    width,
+                    height,
+                    label="local-viewer-cuda-source",
+                    format=source_format,
+                )
+                self._cuda_ready = VulkanExportableSemaphore(
+                    self._interop_context,
+                    label="local-viewer-cuda-ready",
+                )
+                self._cuda_importer = CudaVulkanImageImporter()
+                # Imports and establishes GENERAL once, before any frame is sent.
+                self._cuda_importer.register_slot(self._external_image)
+                self._cuda_importer.register_semaphore(self._cuda_ready)
+                self._cuda_active = True
+                print("[VulkanLocalViewer] CUDA external-image zero-copy active", flush=True)
+            except Exception as exc:
+                self._disable_cuda_interop(exc)
+        else:
+            print(
+                "[VulkanLocalViewer] CUDA external-image zero-copy unavailable: "
+                "required Vulkan external-memory/semaphore extensions missing",
+                flush=True,
+            )
+
+    def _disable_cuda_interop(
+        self, reason: Exception | str, *, announce: bool = True
+    ) -> None:
+        if announce and (self._cuda_active or self._external_image is not None):
+            print(
+                "[VulkanLocalViewer] CUDA external-image zero-copy unavailable: "
+                f"{type(reason).__name__ if isinstance(reason, Exception) else reason}",
+                flush=True,
+            )
+        self._cuda_active = False
+        if self._cuda_importer is not None:
+            self._cuda_importer.close()
+        if self._cuda_ready is not None:
+            self._cuda_ready.close()
+        if self._external_image is not None:
+            self._external_image.close()
+        self._cuda_ready = self._external_image = self._cuda_importer = None
+
+    @staticmethod
+    def transition_image(vk: Any, cmd: Any, image: Any, old: int, new: int) -> None:
+        barrier = vk.VkImageMemoryBarrier(sType=vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER, oldLayout=old, newLayout=new, srcAccessMask=0, dstAccessMask=0, image=image, subresourceRange=vk.VkImageSubresourceRange(aspectMask=vk.VK_IMAGE_ASPECT_COLOR_BIT, baseMipLevel=0, levelCount=1, baseArrayLayer=0, layerCount=1))
+        vk.vkCmdPipelineBarrier(cmd, vk.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, vk.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, None, 0, None, 1, [barrier])
+
+    def _transition(self, cmd: Any, image: Any, old: int, new: int) -> None:
+        self.transition_image(self.owner.vk, cmd, image, old, new)
+
+    def present(self, pixels: Any) -> bool:
+        vk, o = self.owner.vk, self.owner
+        vk.vkWaitForFences(o.device, 1, [o.fence], True, 1_000_000_000)
+        index_output = vk.ffi.new("uint32_t *")
+        acquire = o._device_function(b"vkAcquireNextImageKHR", "VkResult(*)(VkDevice, VkSwapchainKHR, uint64_t, VkSemaphore, VkFence, uint32_t *)")
+        result = int(acquire(o.device, o.swapchain, 1_000_000_000, o.image_available, vk.ffi.NULL, index_output))
+        if o.is_swapchain_out_of_date(result):
+            o.recreate_swapchain()
+            return False
+        recreate_after_present = o.is_swapchain_recreate_result(result)
+        if result != int(vk.VK_SUCCESS) and not recreate_after_present:
+            raise RuntimeError(f"Vulkan local-viewer acquire failed ({result})")
+        index = int(index_output[0])
+        vk.vkResetFences(o.device, 1, [o.fence])
+
+        cuda_source = self._cuda_active and bool(getattr(pixels, "is_cuda", False))
+        if cuda_source:
+            try:
+                self._cuda_importer.copy_tensor(pixels, self._external_image)
+                self._cuda_importer.signal_semaphore(self._cuda_ready)
+            except Exception as exc:
+                self._disable_cuda_interop(exc)
+                cuda_source = False
+                pixels, _width, _height = frame_to_rgba_bytes(pixels)
+        if not cuda_source:
+            mapped = vk.vkMapMemory(o.device, self.memory, 0, self.capacity, 0)
+            vk.ffi.buffer(mapped, self.capacity)[:] = pixels
+            vk.vkUnmapMemory(o.device, self.memory)
+        cmd = o.command_buffer
+        vk.vkResetCommandBuffer(cmd, 0)
+        vk.vkBeginCommandBuffer(cmd, vk.VkCommandBufferBeginInfo(sType=vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO))
+        source_image = self.image
+        if cuda_source:
+            source_image = self._external_image.image
+            self._transition(cmd, source_image, vk.VK_IMAGE_LAYOUT_GENERAL, vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
+        else:
+            self._transition(cmd, self.image, vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL if self._image_initialized else vk.VK_IMAGE_LAYOUT_UNDEFINED, vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+            vk.vkCmdCopyBufferToImage(cmd, self.buffer, self.image, vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, [vk.VkBufferImageCopy(bufferOffset=0, bufferRowLength=0, bufferImageHeight=0, imageSubresource=vk.VkImageSubresourceLayers(aspectMask=vk.VK_IMAGE_ASPECT_COLOR_BIT, mipLevel=0, baseArrayLayer=0, layerCount=1), imageOffset=vk.VkOffset3D(x=0, y=0, z=0), imageExtent=vk.VkExtent3D(width=self.size[0], height=self.size[1], depth=1))])
+            self._transition(cmd, self.image, vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
+        target = o.swap_images[index]
+        target_old_layout = (
+            vk.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
+            if o._swap_image_initialized[index]
+            else vk.VK_IMAGE_LAYOUT_UNDEFINED
+        )
+        self._transition(cmd, target, target_old_layout, vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+        clear = vk.VkClearColorValue(float32=[0.0, 0.0, 0.0, 1.0])
+        vk.vkCmdClearColorImage(cmd, target, vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, clear, 1, [vk.VkImageSubresourceRange(aspectMask=vk.VK_IMAGE_ASPECT_COLOR_BIT, baseMipLevel=0, levelCount=1, baseArrayLayer=0, layerCount=1)])
+        x, y, width, height = fit_rect(self.size, o.extent)
+        vk.vkCmdBlitImage(cmd, source_image, vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, target, vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, [vk.VkImageBlit(srcSubresource=vk.VkImageSubresourceLayers(aspectMask=vk.VK_IMAGE_ASPECT_COLOR_BIT, mipLevel=0, baseArrayLayer=0, layerCount=1), srcOffsets=[vk.VkOffset3D(x=0, y=0, z=0), vk.VkOffset3D(x=self.size[0], y=self.size[1], z=1)], dstSubresource=vk.VkImageSubresourceLayers(aspectMask=vk.VK_IMAGE_ASPECT_COLOR_BIT, mipLevel=0, baseArrayLayer=0, layerCount=1), dstOffsets=[vk.VkOffset3D(x=x, y=y, z=0), vk.VkOffset3D(x=x + width, y=y + height, z=1)])], vk.VK_FILTER_LINEAR)
+        self._transition(cmd, target, vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, vk.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR)
+        if cuda_source:
+            self._transition(cmd, source_image, vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vk.VK_IMAGE_LAYOUT_GENERAL)
+        vk.vkEndCommandBuffer(cmd)
+        waits = [o.image_available]
+        stages = [vk.VK_PIPELINE_STAGE_TRANSFER_BIT]
+        if cuda_source:
+            waits.append(self._cuda_ready.semaphore)
+            stages.append(vk.VK_PIPELINE_STAGE_TRANSFER_BIT)
+        submit = vk.VkSubmitInfo(sType=vk.VK_STRUCTURE_TYPE_SUBMIT_INFO, waitSemaphoreCount=len(waits), pWaitSemaphores=waits, pWaitDstStageMask=stages, commandBufferCount=1, pCommandBuffers=[cmd], signalSemaphoreCount=1, pSignalSemaphores=[o.render_finished])
+        vk.vkQueueSubmit(o.queue, 1, [submit], o.fence)
+        present_info = vk.VkPresentInfoKHR(sType=vk.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR, waitSemaphoreCount=1, pWaitSemaphores=[o.render_finished], swapchainCount=1, pSwapchains=[o.swapchain], pImageIndices=[index])
+        present = o._device_function(b"vkQueuePresentKHR", "VkResult(*)(VkQueue, const VkPresentInfoKHR *)")
+        result = int(present(o.queue, vk.ffi.addressof(present_info)))
+        o._swap_image_initialized[index] = True
+        if o.is_swapchain_recreate_result(result) or recreate_after_present:
+            o.recreate_swapchain()
+            self._image_initialized = True
+            return False
+        if result != int(vk.VK_SUCCESS):
+            raise RuntimeError(f"Vulkan local-viewer present failed ({result})")
+        self._image_initialized = True
+        return True
+
+    def close(self) -> None:
+        vk, device = self.owner.vk, self.owner.device
+        self._disable_cuda_interop("close", announce=False)
+        if self.image is not None: vk.vkDestroyImage(device, self.image, None)
+        if self.image_memory is not None: vk.vkFreeMemory(device, self.image_memory, None)
+        if self.buffer is not None: vk.vkDestroyBuffer(device, self.buffer, None)
+        if self.memory is not None: vk.vkFreeMemory(device, self.memory, None)
+
+
+def run_vulkan_local_viewer(*, runtime_q: Any, shutdown_event: Any, config: VulkanLocalViewerConfig) -> None:
+    """Run the Vulkan window and consume only the newest completed SBS frame."""
+    viewer: VulkanLocalViewer | None = None
+    try:
+        while not shutdown_event.is_set():
+            try:
+                result, _started = runtime_q.get(timeout=0.05)
+            except queue.Empty:
+                if viewer is not None:
+                    viewer.poll_events()
+                continue
+            while True:
+                try:
+                    result, _started = runtime_q.get_nowait()
+                except queue.Empty:
+                    break
+            frame = getattr(result, "sbs", None)
+            if frame is None:
+                continue
+            if viewer is None:
+                viewer = VulkanLocalViewer(config)
+                viewer.initialize()
+                print("[VulkanLocalViewer] Vulkan local window initialized", flush=True)
+            viewer.present(frame)
+    except StopIteration:
+        shutdown_event.set()
+    finally:
+        if viewer is not None:
+            viewer.close()

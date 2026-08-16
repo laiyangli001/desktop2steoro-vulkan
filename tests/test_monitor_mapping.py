@@ -20,6 +20,10 @@ def _load_monitor_methods(monitors, primary_index):
         "list_monitors": lambda: monitors,
         "get_primary_monitor_index": lambda: primary_index,
         "PRIMARY_MONITOR_SUFFIX": " (Primary)",
+        "UI_MESSAGES": {
+            "EN": {"Window Preview": "Window Preview"},
+            "CN": {"Window Preview": "窗口预览"},
+        },
     }
     exec(compile(module, str(BUILDERS_SOURCE), "exec"), namespace)
     return namespace["MonitorMixin"]
@@ -36,11 +40,12 @@ class FakeDropdown:
 
 
 class FakeMonitorGui:
-    def __init__(self, monitor_value="", stereo_value="Viewer Window"):
+    def __init__(self, monitor_value="", stereo_value="Window Preview"):
         self.monitor_dd = FakeDropdown(monitor_value)
         self.stereo_monitor_dd = FakeDropdown(stereo_value)
         self.monitor_label_to_index = {}
         self.capture_mode_key = "Monitor"
+        self.locale = "EN"
         self.fit_count = 0
 
     def _fit_window_to_content(self):
@@ -117,7 +122,7 @@ def test_populate_monitors_preserves_current_selection_and_updates_stereo_menu()
 
     assert gui.monitor_dd.value == current
     assert gui.monitor_label_to_index[current] == 2
-    assert gui.stereo_monitor_dd.options == ["Viewer Window", "1: 1920x1080 @ (0,0) (Primary)"]
+    assert gui.stereo_monitor_dd.options == ["Window Preview", "1: 1920x1080 @ (0,0) (Primary)"]
     assert gui.fit_count == 1
 
 
@@ -134,4 +139,15 @@ def test_populate_monitors_falls_back_to_primary_when_current_missing():
 
     primary = "2: 2560x1440 @ (1920,0) (Primary)"
     assert gui.monitor_dd.value == primary
-    assert gui.stereo_monitor_dd.options == ["Viewer Window", "1: 1920x1080 @ (0,0)"]
+    assert gui.stereo_monitor_dd.options == ["Window Preview", "1: 1920x1080 @ (0,0)"]
+
+
+def test_stereo_output_preview_label_follows_gui_language():
+    gui = FakeMonitorGui()
+    gui.locale = "CN"
+    monitor_mixin = _load_monitor_methods([], primary_index=1)
+
+    monitor_mixin.update_stereo_monitor_menu(gui)
+
+    assert gui.stereo_monitor_dd.options == ["窗口预览"]
+    assert gui.stereo_monitor_dd.value == "窗口预览"

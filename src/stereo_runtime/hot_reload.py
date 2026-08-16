@@ -232,6 +232,9 @@ def hot_reload_value_snapshot(settings_dict: dict, config) -> dict:
         "vulkan_projection_mip_lod_bias": max(-1.5, min(0.0, float(settings_dict.get("Vulkan Projection MIP LOD Bias", -0.35)))),
         "vulkan_projection_rcas_sharpness": max(0.0, min(1.0, float(settings_dict.get("Vulkan Projection RCAS Sharpness", 0.5)))),
         "cross_eyed": to_bool_hot_reload(settings_dict.get("Cross Eyed", config.cross_eyed)),
+        "presentation_flags": {
+            "show_fps": to_bool_hot_reload(settings_dict.get("Show FPS", False))
+        },
         "debug_output": debug_output_enabled,
         "debug_flags": {"debug_output": debug_output_enabled},
     }

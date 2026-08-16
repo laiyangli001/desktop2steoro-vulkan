@@ -5,6 +5,16 @@ import threading
 import time
 
 
+def adaptive_capture_enabled_for_mode(run_mode: str, target_fps: int) -> bool:
+    mode = str(run_mode or "").strip().lower()
+    return int(target_fps) <= 0 and mode in {
+        "local viewer",
+        "viewer",
+        "openxr",
+        "openxr link",
+    }
+
+
 class AdaptiveCaptureRate:
     """Select a bounded capture rate from low-rate SBS throughput samples."""
 

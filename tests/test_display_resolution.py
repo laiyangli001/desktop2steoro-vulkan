@@ -20,17 +20,17 @@ compute_output_resolution = display_module.compute_output_resolution
 capture_frame_to_rgb = preprocess_module.capture_frame_to_rgb
 
 
-def test_full_sbs_wxh_resolution_uses_half_target_width_per_eye():
-    assert compute_output_resolution("7680x4320", "Full-SBS", 1, 2) == (3840, 4320)
-    assert compute_output_resolution("3840x2160", "Full-SBS", 1, 2) == (1920, 2160)
+def test_full_sbs_wxh_resolution_keeps_source_size_per_eye():
+    assert compute_output_resolution("7680x4320", "Full-SBS", 1, 2) == (7680, 4320)
+    assert compute_output_resolution("3840x2160", "Full-SBS", 1, 2) == (3840, 2160)
 
 
 def test_half_sbs_wxh_resolution_keeps_target_canvas_size():
     assert compute_output_resolution("3840x2160", "Half-SBS", 1, 2) == (3840, 2160)
 
 
-def test_full_tab_wxh_resolution_uses_half_target_height_per_eye():
-    assert compute_output_resolution("3840x2160", "Full-TAB", 1, 2) == (3840, 1080)
+def test_full_tab_wxh_resolution_keeps_source_size_per_eye():
+    assert compute_output_resolution("3840x2160", "Full-TAB", 1, 2) == (3840, 2160)
 
 
 def test_numeric_height_resolution_keeps_legacy_meaning():
@@ -38,8 +38,25 @@ def test_numeric_height_resolution_keeps_legacy_meaning():
 
 
 def test_wxh_resolution_accepts_common_separators():
-    assert compute_output_resolution("7680 * 4320", "full_sbs", 1, 2) == (3840, 4320)
-    assert compute_output_resolution("7680x4320", "full_sbs", 1, 2) == (3840, 4320)
+    assert compute_output_resolution("7680 * 4320", "full_sbs", 1, 2) == (7680, 4320)
+    assert compute_output_resolution("7680x4320", "full_sbs", 1, 2) == (7680, 4320)
+
+
+def test_wxh_processing_resolution_is_independent_of_packed_display_mode():
+    for display_mode in ("Half-SBS", "Full-SBS", "Half-TAB", "Full-TAB"):
+        assert compute_output_resolution("3840x2160", display_mode, 1, 2) == (3840, 2160)
+
+
+def test_auto_openxr_full_sbs_keeps_4k_source_size(monkeypatch):
+    monkeypatch.setattr(display_module, "get_monitor_size", lambda idx=None: (3840, 2160))
+
+    assert compute_output_resolution(
+        "Auto",
+        "Full-SBS",
+        1,
+        2,
+        use_stereo_monitor=False,
+    ) == (3840, 2160)
 
 
 def test_auto_3d_monitor_fits_4k_input_to_1080p_output(monkeypatch):

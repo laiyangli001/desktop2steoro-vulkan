@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 
 from capture import capture_frame_to_rgb, prepare_rgb_for_stereo_runtime
-from capture.adaptive_rate import AdaptiveCaptureRate
+from capture.adaptive_rate import AdaptiveCaptureRate, adaptive_capture_enabled_for_mode
 from capture.session import CaptureSessionLoop
 from stereo_runtime.pipeline import RuntimePipelineLoop
 from utils import (
@@ -21,6 +21,7 @@ from utils import (
     DEVICE,
     DEVICE_INFO,
     FPS,
+    LOCAL_VSYNC,
     MONITOR_INDEX,
     OPENXR_SCREEN_DISTANCE,
     OPENXR_SCREEN_WIDTH,
@@ -28,6 +29,9 @@ from utils import (
     OUTPUT_RESOLUTION,
     RENDER_SIZE_CONFIG,
     RUN_MODE,
+    SHOW_FPS,
+    STEREO_DISPLAY_INDEX,
+    STEREO_DISPLAY_SELECTION,
     WINDOW_TITLE,
     _get_settings,
     shutdown_event,
@@ -353,9 +357,8 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
         configured_target_fps = 0
     adaptive_capture_rate = AdaptiveCaptureRate(
         FPS,
-        enabled=(
-            str(RUN_MODE).strip().lower() == "openxr"
-            and configured_target_fps <= 0
+        enabled=adaptive_capture_enabled_for_mode(
+            settings.get("Run Mode", RUN_MODE), configured_target_fps
         ),
     )
     context = create_runtime_context(
@@ -377,7 +380,7 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
         convergence=CONVERGENCE,
         capture_fps_provider=adaptive_capture_rate.current_fps,
     )
-    callbacks = RuntimeCallbacks(context)
+    callbacks = RuntimeCallbacks(context, show_fps=bool(SHOW_FPS))
     callbacks.breakdown_set_latest(
         "adaptive_capture_target_fps", adaptive_capture_rate.current_fps()
     )
@@ -450,6 +453,7 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
     presenter_thread = None
     output_consumer = None
     output_thread = None
+    local_viewer_thread = None
     capture_thread.start()
     pipeline_thread.start()
     try:
@@ -497,6 +501,43 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
                 daemon=True,
             )
             output_thread.start()
+        elif str(RUN_MODE).strip().lower() == "viewer":
+            # Local Viewer no longer falls through as an unconsumed runtime_q.
+            # It owns a GLFW Vulkan surface and presents the already packed SBS.
+            from viewer.vulkan_local_viewer import (
+                VulkanLocalViewerConfig,
+                run_vulkan_local_viewer,
+            )
+
+            selected_monitor = (
+                int(STEREO_DISPLAY_INDEX)
+                if bool(STEREO_DISPLAY_SELECTION)
+                else int(MONITOR_INDEX)
+            )
+            local_viewer_config = VulkanLocalViewerConfig(
+                title=f"{WINDOW_TITLE or 'Desktop2Stereo'} Vulkan Viewer",
+                monitor_index=max(0, selected_monitor),
+                fullscreen=bool(STEREO_DISPLAY_SELECTION),
+                vsync=bool(LOCAL_VSYNC),
+                show_fps=bool(SHOW_FPS),
+                show_fps_provider=callbacks.show_fps,
+                on_sbs_fps=(
+                    adaptive_capture_rate.observe_sbs_fps
+                    if adaptive_capture_rate.enabled
+                    else None
+                ),
+            )
+            local_viewer_thread = threading.Thread(
+                target=run_vulkan_local_viewer,
+                kwargs={
+                    "runtime_q": context.runtime_q,
+                    "shutdown_event": shutdown_event,
+                    "config": local_viewer_config,
+                },
+                name="VulkanLocalViewer",
+                daemon=True,
+            )
+            local_viewer_thread.start()
         print(
             f"Desktop2Stereo Vulkan runtime started: mode={RUN_MODE} device={DEVICE_INFO}",
             flush=True,
@@ -527,6 +568,8 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
             # run_until owns Filament/Vulkan teardown on the Presenter thread.
             # Do not let the main thread race that teardown after a timeout.
             presenter_thread.join()
+        if local_viewer_thread is not None:
+            local_viewer_thread.join(timeout=2.0)
         if presenter is not None:
             presenter.close()
         close = getattr(context.stereo_runtime, "close", None)

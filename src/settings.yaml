@@ -502,10 +502,10 @@ Color Gamma: 1.0
 Color Temperature: 0.0
 Color Tint: 0.0
 Vulkan Projection Min LOD: 0.0
-Vulkan Projection Max LOD: 0.0
-Vulkan Projection MIP LOD Bias: 0.0
+Vulkan Projection Max LOD: 0.35
+Vulkan Projection MIP LOD Bias: -0.7
 Vulkan Projection RCAS Sharpness: 0.5
-Display Mode: Half-SBS
+Display Mode: Full-SBS
 FP16: true
 torch.compile: true
 TensorRT: true
@@ -519,7 +519,7 @@ Recompile MIGraphX: false
 Recompile OpenVINO: false
 Computing Device: 0
 Language: CN
-Run Mode: OpenXR Link
+Run Mode: Local Viewer
 XR Headset Model: Pico 4 / 4 Ultra
 XR Preview Window: false
 VSync: false
@@ -542,12 +542,12 @@ Stereo Mix: null
 CRF: 20
 Audio Delay: -0.15
 Controller Model: PICO
-Environment Model: 3d_artemis
+Environment Model: 3d_cinema
 Lossless Scaling Support: false
 Capture Tool: WindowsCaptureCUDA
 Fill 16:9: true
 Fix Viewer Aspect: false
-Stereo Output: 1
+Stereo Output: 3
 Show Log Panel: true
 OpenVINO: null
 OpenXR Color Mode: sRGB
