@@ -29,7 +29,10 @@ def _can_connect(url: str, timeout: float = 5.0) -> bool:
 
 
 def is_cn_ip(checker=None) -> bool:
-    """Return True when Google and Hugging Face are not both reachable."""
+    """Check if the current IP is likely in China by testing connectivity to Google and Hugging Face."""
+    # inject trusted root certificates for requests
+    import truststore
+    truststore.inject_into_ssl()
     check = checker or _can_connect
     google_ok = bool(check("https://www.google.com", timeout=5))
     hf_ok = bool(check(_HF_ENDPOINT_OFFICIAL, timeout=5))

@@ -25,7 +25,7 @@ echo Detected GPU: %FULL_GPU_NAME%
 echo - Setting up the virtual environment
 REM Set paths
 set "VIRTUAL_ENV=python3"
-set "REQUIREMENTS_FILE=requirements-rocm7-nightly.txt"
+set "REQUIREMENTS_FILE=requirements-rocm7.txt"
 
 echo.
 echo Installing requirements from: %REQUIREMENTS_FILE%
