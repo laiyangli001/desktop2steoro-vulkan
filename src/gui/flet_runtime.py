@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import hashlib
 import logging
 import shutil
 import tarfile
@@ -15,6 +16,7 @@ from .paths import GUI_DIR
 CLIENTS_DIR = Path(GUI_DIR) / "flet_clients"
 PACKAGES_DIR = Path(GUI_DIR) / "flet_packages"
 logger = logging.getLogger(__name__)
+_ARCHIVE_DIGEST_FILE = ".archive.sha256"
 
 _LINUX_FALLBACK_ARTIFACTS = (
     "flet-linux-ubuntu22.04-light-amd64.tar.gz",
@@ -31,9 +33,10 @@ def ensure_vendored_flet_view() -> str | None:
     archive_path = PACKAGES_DIR / artifact
     extract_dir = CLIENTS_DIR / _archive_stem(artifact)
     view_path = _view_path_for_platform(extract_dir)
-    if not _view_path_ready(view_path):
+    archive_digest = _archive_digest(archive_path)
+    if not _view_path_ready(view_path) or not _cache_matches_archive(extract_dir, archive_digest):
         _print_prepare_message(artifact)
-        _extract_archive(archive_path, extract_dir)
+        _extract_archive(archive_path, extract_dir, archive_digest)
         view_path = _view_path_for_platform(extract_dir)
         if not _view_path_ready(view_path):
             raise FileNotFoundError(
@@ -95,7 +98,7 @@ def _archive_stem(file_name: str) -> str:
     return Path(file_name).stem
 
 
-def _extract_archive(archive_path: Path, extract_dir: Path) -> None:
+def _extract_archive(archive_path: Path, extract_dir: Path, archive_digest: str) -> None:
     tmp_dir = extract_dir.with_name(f"{extract_dir.name}.tmp")
     shutil.rmtree(tmp_dir, ignore_errors=True)
     tmp_dir.mkdir(parents=True, exist_ok=True)
@@ -107,11 +110,27 @@ def _extract_archive(archive_path: Path, extract_dir: Path) -> None:
             with tarfile.open(archive_path, "r:gz") as archive:
                 _safe_tar_extractall(archive, tmp_dir)
 
+        (tmp_dir / _ARCHIVE_DIGEST_FILE).write_text(archive_digest, encoding="ascii")
         shutil.rmtree(extract_dir, ignore_errors=True)
         tmp_dir.rename(extract_dir)
     except Exception:
         shutil.rmtree(tmp_dir, ignore_errors=True)
         raise
+
+
+def _archive_digest(archive_path: Path) -> str:
+    digest = hashlib.sha256()
+    with archive_path.open("rb") as archive_file:
+        for block in iter(lambda: archive_file.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _cache_matches_archive(extract_dir: Path, archive_digest: str) -> bool:
+    try:
+        return (extract_dir / _ARCHIVE_DIGEST_FILE).read_text(encoding="ascii").strip() == archive_digest
+    except OSError:
+        return False
 
 
 def _safe_zip_extractall(archive: zipfile.ZipFile, target_dir: Path) -> None:

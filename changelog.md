@@ -1,5 +1,11 @@
 # Desktop2Stereo Vulkan 项目日志
 
+## 2026-08-18
+
+- 修复升级 Flet 后 GUI 永久停在 `Working`：Python `flet/flet-desktop` 和内置压缩包已是 `0.86.5`，但旧 `flet_clients` 缓存仍为 `0.85.3`；客户端缓存现在记录并校验源压缩包 SHA-256，Windows、Linux、macOS 的包内容变化后都会自动重新解压，避免 Python 服务与桌面客户端协议版本不匹配。
+- 修复 `install-cuda_standalone.bat` 在电脑已注册同版本 Python 3.12 时提示安装成功、但项目 `src/python3/python.exe` 不存在的问题：python.org EXE 会进入已有安装的维护模式并忽略新的 `TargetDir`，现改用官方 Python 3.12.10 x64 NuGet 独立发行包。项目本地运行时保留完整 `Lib`、`DLLs`、`include`、`libs`、标准库和 `ensurepip`，不再使用仅 35 个基础文件的 embeddable ZIP；检测到旧嵌入版时会自动替换为完整布局，且不受系统注册表中其它 Python 安装位置影响。
+- 清理 CUDA 安装器替换旧 embeddable Python 时的误导性 `ModuleNotFoundError: ensurepip`：完整性检测改为无导入异常的模块探测并静默处理预期失败，随后明确提示正在替换不完整运行时。
+
 ## 2026-08-17
 
 - 恢复本地 Viewer 的独立调试预览语义：GUI 旧 `Viewer Window` 原位更名为 i18n `Window Preview / 窗口预览`，仍保存稳定的 `Stereo Output=None`，兼容现有配置。选择窗口预览时创建普通可缩放、可聚焦、有任务栏入口的 Vulkan 窗口，不应用副屏 Topmost/NoActivate 样式；选择具体显示器时才使用覆盖目标显示器的持久无边框 Vulkan 输出。

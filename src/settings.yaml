@@ -1,5 +1,5 @@
 Capture Mode: Monitor
-Monitor Index: 2
+Monitor Index: 1
 Window Title: ''
 Show FPS: false
 Model List:
@@ -519,7 +519,7 @@ Recompile MIGraphX: false
 Recompile OpenVINO: false
 Computing Device: 0
 Language: CN
-Run Mode: Local Viewer
+Run Mode: OpenXR Link
 XR Headset Model: Pico 4 / 4 Ultra
 XR Preview Window: false
 VSync: false
