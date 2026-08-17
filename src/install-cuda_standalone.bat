@@ -58,8 +58,8 @@ if %errorlevel% neq 0 (
 @REM Install requirements
 echo.
 echo - Installing the requirements
+"%PYTHON_EXE%" -m pip install -r "%SCRIPT_DIR%requirements-cuda.txt" --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/ --no-warn-script-location
 "%PYTHON_EXE%" -m pip install -r "%SCRIPT_DIR%requirements.txt" --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/ --no-warn-script-location
-"%PYTHON_EXE%" -m pip install -r "%SCRIPT_DIR%requirements-cuda0.txt" --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/ --no-warn-script-location
 if %errorlevel% neq 0 (
     echo Failed to install requirements
     pause
