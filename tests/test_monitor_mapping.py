@@ -108,7 +108,7 @@ def test_list_monitors_uses_windows_display_numbers(monkeypatch):
     assert [mon["capture_index"] for mon in monitors] == [3, 2, 1]
 
 
-def test_populate_monitors_preserves_current_selection_and_updates_stereo_menu():
+def test_two_monitors_force_output_away_from_captured_input():
     monitors = [
         {"capture_index": 1, "display_number": 1, "left": 0, "top": 0, "width": 1920, "height": 1080},
         {"capture_index": 2, "display_number": 2, "left": 1920, "top": 0, "width": 2560, "height": 1440},
@@ -122,7 +122,8 @@ def test_populate_monitors_preserves_current_selection_and_updates_stereo_menu()
 
     assert gui.monitor_dd.value == current
     assert gui.monitor_label_to_index[current] == 2
-    assert gui.stereo_monitor_dd.options == ["Window Preview", "1: 1920x1080 @ (0,0) (Primary)"]
+    assert gui.stereo_monitor_dd.options == ["1: 1920x1080 @ (0,0) (Primary)"]
+    assert gui.stereo_monitor_dd.value == "1: 1920x1080 @ (0,0) (Primary)"
     assert gui.fit_count == 1
 
 
@@ -139,7 +140,8 @@ def test_populate_monitors_falls_back_to_primary_when_current_missing():
 
     primary = "2: 2560x1440 @ (1920,0) (Primary)"
     assert gui.monitor_dd.value == primary
-    assert gui.stereo_monitor_dd.options == ["Window Preview", "1: 1920x1080 @ (0,0)"]
+    assert gui.stereo_monitor_dd.options == ["1: 1920x1080 @ (0,0)"]
+    assert gui.stereo_monitor_dd.value == "1: 1920x1080 @ (0,0)"
 
 
 def test_populate_monitors_includes_detected_model_name():
@@ -164,12 +166,52 @@ def test_populate_monitors_includes_detected_model_name():
     assert gui.monitor_dd.value == "1: VITURE 3840x2160 (Primary)"
 
 
-def test_stereo_output_preview_label_follows_gui_language():
+def test_stereo_output_has_no_window_preview_option():
     gui = FakeMonitorGui()
     gui.locale = "CN"
     monitor_mixin = _load_monitor_methods([], primary_index=1)
 
     monitor_mixin.update_stereo_monitor_menu(gui)
 
-    assert gui.stereo_monitor_dd.options == ["窗口预览"]
-    assert gui.stereo_monitor_dd.value == "窗口预览"
+    assert gui.stereo_monitor_dd.options == []
+    assert gui.stereo_monitor_dd.value == ""
+
+
+def test_three_monitors_default_output_to_last_available_monitor():
+    monitors = [
+        {"capture_index": 1, "display_number": 1, "left": 0, "top": 0, "width": 1920, "height": 1080},
+        {"capture_index": 2, "display_number": 2, "left": 1920, "top": 0, "width": 2560, "height": 1440},
+        {"capture_index": 3, "display_number": 3, "left": 4480, "top": 0, "width": 3840, "height": 2160},
+    ]
+    gui = FakeMonitorGui(monitor_value="1: 1920x1080 @ (0,0) (Primary)")
+    monitor_mixin = _load_monitor_methods(monitors, primary_index=1)
+    gui.update_stereo_monitor_menu = monitor_mixin.update_stereo_monitor_menu.__get__(gui, FakeMonitorGui)
+
+    monitor_mixin.populate_monitors(gui)
+
+    assert gui.stereo_monitor_dd.options == [
+        "2: 2560x1440 @ (1920,0)",
+        "3: 3840x2160 @ (4480,0)",
+    ]
+    assert gui.stereo_monitor_dd.value == "3: 3840x2160 @ (4480,0)"
+
+
+def test_switching_input_from_last_monitor_keeps_physical_output():
+    gui = FakeMonitorGui(
+        monitor_value="3: 3840x2160 @ (4480,0)",
+        stereo_value="3: 3840x2160 @ (4480,0)",
+    )
+    gui.monitor_label_to_index = {
+        "1: 1920x1080 @ (0,0)": 1,
+        "2: 2560x1440 @ (1920,0)": 2,
+        "3: 3840x2160 @ (4480,0)": 3,
+    }
+    monitor_mixin = _load_monitor_methods([], primary_index=1)
+
+    monitor_mixin.update_stereo_monitor_menu(gui)
+
+    assert gui.stereo_monitor_dd.options == [
+        "1: 1920x1080 @ (0,0)",
+        "2: 2560x1440 @ (1920,0)",
+    ]
+    assert gui.stereo_monitor_dd.value == "2: 2560x1440 @ (1920,0)"

@@ -497,6 +497,7 @@ class GUIHandlerMixin:
         self.target_fps_dd.visible = show_timing
         self.xr_preview_cb.visible = advanced and mode == "OpenXR Link"
         self.local_vsync_cb.visible = advanced and mode in ["Local Viewer", "3D Monitor"]
+        self.window_preview_cb.visible = advanced and mode in ["Local Viewer", "3D Monitor"]
         self.upscaler_label.visible = show_enhance
         self.upscaler_dd.visible = show_enhance
         self.upscaler_sharpness_label.visible = show_enhance
@@ -539,8 +540,6 @@ class GUIHandlerMixin:
         if hasattr(self, '_stereo_spacer'):
             self._stereo_spacer.visible = stereo_full
         self.row9.visible = (not is_openxr) and (stereo_full or self.fill_16_9_cb.visible or self.fix_aspect_cb.visible or self.lossless_cb.visible)
-        if mode == "3D Monitor":
-            self.stereo_monitor_dd.value = self.monitor_dd.value
         row_map = self._get_streamer_row_map()
         self._show_streamer_rows(*row_map.get(mode, []))
         self.lossless_cb.visible = (OS_NAME == "Windows" and mode == "RTMP Streamer")
@@ -563,11 +562,10 @@ class GUIHandlerMixin:
         if mon_count <= 1:
             return
         cur = self.stereo_monitor_dd.value
-        preview_values = {"Viewer Window", "Window Preview", "窗口预览"}
-        valid = cur and cur in self.stereo_monitor_dd.options and cur not in preview_values
+        valid = cur and cur in self.stereo_monitor_dd.options
         if not valid:
             input_label = self.monitor_dd.value if self.capture_mode_key == "Monitor" else None
-            for lbl in self.monitor_label_to_index:
+            for lbl in reversed(self.monitor_label_to_index):
                 if lbl != input_label:
                     self.stereo_monitor_dd.value = lbl
                     break
@@ -702,6 +700,7 @@ class GUIHandlerMixin:
         self.xr_headset_dd.value = xr_headset_to_display(headset_key, self.locale)
         self.xr_preview_cb.label = t.get("XR Preview Window", "XR画面预览窗口" if self.locale == "CN" else "XR Preview Window")
         self.local_vsync_cb.label = t.get("VSync", "VSync")
+        self.window_preview_cb.label = t.get("Window Preview", "Window Preview")
         self.target_fps_label.value = t.get("Capture FPS:", "Capture FPS:")
         target_fps_value = self._target_fps_from_display(self.target_fps_dd.value)
         self.target_fps_dd.options = [t["Auto"]] + [str(fps) for fps in range(5, 95, 5)]
@@ -818,6 +817,7 @@ class GUIHandlerMixin:
             (self.display_mode_dd, "tooltip_display_mode"),
             (self.xr_headset_dd, "tooltip_xr_headset"),
             (self.local_vsync_cb, "tooltip_vsync"),
+            (self.window_preview_cb, "tooltip_window_preview"),
             (self.target_fps_dd, "tooltip_target_fps"),
             (self.xr_preview_cb, "tooltip_xr_preview"),
             (self.render_policy_dd, "tooltip_render_policy"),

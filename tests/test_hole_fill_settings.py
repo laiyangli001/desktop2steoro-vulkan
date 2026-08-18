@@ -28,7 +28,7 @@ def test_hole_fill_options_only_expose_off_balanced_and_quality() -> None:
     ]
 
     tooltip = get_messages("ZH")["tooltip_hole_fill_mode"]
-    assert "电影模式 = 均衡 / 标准" in tooltip
+    assert "电影模式 = 关闭 / 不补洞" in tooltip
     assert "游戏模式 = 关闭 / 不补洞" in tooltip
     assert "图片模式 = 增强 / 高质量" in tooltip
 
@@ -39,9 +39,9 @@ def test_gui_stereo_presets_select_expected_hole_fill_modes() -> None:
     image = GUIConfigMixin._stereo_preset_gui_values("still_image_hq")
 
     assert (cinema["hole_fill_mode"], cinema["hole_fill_radius"], cinema["hole_fill_strength"]) == (
-        "balanced",
-        1,
-        0.6,
+        "none",
+        0,
+        0.0,
     )
     assert (game["hole_fill_mode"], game["hole_fill_radius"], game["hole_fill_strength"]) == (
         "none",
@@ -83,7 +83,7 @@ def test_hole_fill_mode_controls_gui_temporal_strength() -> None:
     host.hole_fill_mode_dd.value = "均衡 / 标准"
     host.on_hole_fill_mode_change()
 
-    assert host.temporal_strength_dd.value == "0.25"
+    assert host.temporal_strength_dd.value == "0.00"
     assert host.hot_save_count == 2
 
 

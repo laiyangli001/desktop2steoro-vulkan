@@ -403,7 +403,7 @@ class GUIBuilderMixin:
         self.antialiasing_label = ft.Text("Anti-aliasing:", size=FONT_SIZE, width=S(130))
         aa_options = [str(i) for i in range(11)]
         self.antialiasing_dd = CompactDropdown(width=S(130),
-            options=[v for v in aa_options], value="2",
+            options=[v for v in aa_options], value="0",
             on_select=self.on_stereo_hot_param_change)
         row2b = ft.Row([
             self.anaglyph_label, self.anaglyph_dd,
@@ -428,7 +428,7 @@ class GUIBuilderMixin:
         self.hole_fill_mode_label = ft.Text("Hole Fill Mode:", size=FONT_SIZE, width=S(130))
         self.hole_fill_mode_dd = CompactDropdown(
             options=self._hole_fill_mode_options(),
-            value=self._hole_fill_mode_to_display("balanced"), width=S(130), on_select=self.on_hole_fill_mode_change)
+            value=self._hole_fill_mode_to_display("none"), width=S(130), on_select=self.on_hole_fill_mode_change)
         self.depth_separation_label = ft.Text("Depth Separation:", size=FONT_SIZE, width=S(130))
         self.depth_separation_dd = CompactDropdown(
             options=self._depth_separation_options(),
@@ -589,6 +589,13 @@ class GUIBuilderMixin:
         )
         self.local_vsync_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT,
             label="VSync", value=DEFAULTS.get("VSync", False))
+        self.window_preview_cb = ft.Checkbox(
+            scale=SCALE,
+            visual_density=ft.VisualDensity.COMPACT,
+            label="Window Preview",
+            value=DEFAULTS.get("Window Preview", False),
+            on_change=lambda e: self._fit_window_to_content(),
+        )
         self.target_fps_label = ft.Text("Capture FPS:", size=FONT_SIZE, width=S(130))
         self.target_fps_dd = CompactDropdown(
             options=["Auto"] + [str(fps) for fps in range(5, 95, 5)],
@@ -608,7 +615,8 @@ class GUIBuilderMixin:
         row6 = ft.Row([self.capture_tool_label, self.capture_tool_dd,
             ft.Container(width=S(15)), self.showfps_cb], spacing=1)
         self.row6b = ft.Row([self.target_fps_label, self.target_fps_dd,
-            ft.Container(width=S(20)), self.xr_preview_cb, ft.Container(width=S(20)), self.local_vsync_cb], spacing=1)
+            ft.Container(width=S(20)), self.xr_preview_cb, ft.Container(width=S(20)), self.local_vsync_cb,
+            ft.Container(width=S(20)), self.window_preview_cb], spacing=1)
         self.render_policy_label = ft.Text("Render Policy:", size=FONT_SIZE, width=S(130), visible=False)
         self.render_policy_dd = CompactDropdown(
             options=["Scaled"], value="Scaled", width=S(130),
@@ -1003,10 +1011,9 @@ class GUIBuilderMixin:
         return self.device_label_to_index
 
     def _apply_stereo_output(self, cfg):
-        preview_label = UI_MESSAGES[self.locale].get("Window Preview", "Window Preview")
         mon_count = self._get_monitor_count()
         if mon_count <= 1:
-            self.stereo_monitor_dd.value = preview_label
+            self.stereo_monitor_dd.value = ""
             return
         saved = cfg.get("Stereo Output")
         input_label = self.monitor_dd.value if self.capture_mode_key == "Monitor" else None
@@ -1015,12 +1022,11 @@ class GUIBuilderMixin:
             if label and label != input_label:
                 self.stereo_monitor_dd.value = label
                 return
-        fallback = None
-        for lbl in self.monitor_label_to_index:
-            if lbl != input_label:
-                fallback = lbl
-                break
-        self.stereo_monitor_dd.value = fallback if fallback else preview_label
+        fallback = next(
+            (label for label in reversed(self.monitor_label_to_index) if label != input_label),
+            None,
+        )
+        self.stereo_monitor_dd.value = fallback or ""
 
     @staticmethod
     def _get_monitor_count():
@@ -1034,25 +1040,15 @@ class GUIBuilderMixin:
     def update_stereo_monitor_menu(self):
         if not hasattr(self, 'stereo_monitor_dd'):
             return
-        preview_labels = {
-            "Viewer Window",
-            "Window Preview",
-            "窗口预览",
-        }
-        preview_label = UI_MESSAGES[self.locale].get("Window Preview", "Window Preview")
         input_label = self.monitor_dd.value if self.capture_mode_key == "Monitor" else None
-        opts = [preview_label]
-        for label in self.monitor_label_to_index:
-            if label != input_label:
-                opts.append(label)
+        # The persistent Vulkan fullscreen output cannot be excluded from a
+        # monitor capture. Keep it off the input display to prevent recursive
+        # SBS capture in both Local Viewer and 3D Monitor modes.
+        opts = [label for label in self.monitor_label_to_index if label != input_label]
         current = self.stereo_monitor_dd.value
-        if current in preview_labels:
-            current = preview_label
         valid = current in opts
         self.stereo_monitor_dd.options = opts
-        self.stereo_monitor_dd.value = current
-        if not valid:
-            self.stereo_monitor_dd.value = opts[0] if opts else preview_label
+        self.stereo_monitor_dd.value = current if valid else (opts[-1] if opts else "")
         self.stereo_monitor_dd.update()
 
     def update_depth_resolution_options(self, model_name):

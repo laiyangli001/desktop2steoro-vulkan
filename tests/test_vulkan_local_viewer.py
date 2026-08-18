@@ -10,10 +10,15 @@ import viewer.vulkan_local_viewer as local_viewer_module
 from viewer.vulkan_local_viewer import (
     LOCAL_VIEWER_SOURCE_FORMAT,
     choose_srgb_surface_format,
+    configure_glfw_window_hints,
     direct_display_capability,
     fit_rect,
     frame_to_cuda_rgba,
     frame_to_rgba_bytes,
+    depth_preview_frame,
+    depth_to_effective_disparity,
+    depth_to_red_blue_rgb,
+    effective_disparity_to_red_blue_rgb,
     is_exclusive_fullscreen_toggle,
     present_fps_if_due,
     should_restore_persistent_fullscreen,
@@ -26,6 +31,30 @@ from viewer.vulkan_local_viewer import (
 class _Format:
     def __init__(self, value: int) -> None:
         self.format = value
+
+
+class _WindowHintGlfw:
+    CLIENT_API = 1
+    NO_API = 2
+    RESIZABLE = 3
+    AUTO_ICONIFY = 4
+    VISIBLE = 5
+    DECORATED = 6
+    FLOATING = 7
+    FOCUS_ON_SHOW = 8
+    TRUE = 1
+    FALSE = 0
+
+    def __init__(self):
+        self.hints = {}
+        self.reset_count = 0
+
+    def default_window_hints(self):
+        self.hints = {}
+        self.reset_count += 1
+
+    def window_hint(self, key, value):
+        self.hints[key] = value
 
 
 class _VulkanFormats:
@@ -86,6 +115,23 @@ def test_local_viewer_uses_srgb_source_and_preferred_surface_format() -> None:
     assert LOCAL_VIEWER_SOURCE_FORMAT == "VK_FORMAT_R8G8B8A8_SRGB"
     assert selected.format == _VulkanFormats.VK_FORMAT_R8G8B8A8_SRGB
     assert is_srgb
+
+
+def test_fullscreen_and_debug_preview_reset_independent_window_hints() -> None:
+    glfw = _WindowHintGlfw()
+
+    configure_glfw_window_hints(glfw, fullscreen=True)
+    assert glfw.hints[glfw.VISIBLE] == glfw.TRUE
+    assert glfw.hints[glfw.DECORATED] == glfw.TRUE
+    assert glfw.hints[glfw.FLOATING] == glfw.TRUE
+
+    configure_glfw_window_hints(glfw, fullscreen=False)
+
+    assert glfw.reset_count == 2
+    assert glfw.hints[glfw.VISIBLE] == glfw.TRUE
+    assert glfw.hints[glfw.DECORATED] == glfw.TRUE
+    assert glfw.hints[glfw.FLOATING] == glfw.FALSE
+    assert glfw.hints[glfw.FOCUS_ON_SHOW] == glfw.TRUE
 
 
 def test_local_viewer_reports_unorm_surface_fallback() -> None:
@@ -180,3 +226,123 @@ def test_local_viewer_reports_queue_and_present_breakdown(monkeypatch) -> None:
     assert ("local_presented_frame", 1) in counts
     assert timings[0][0] == "local_present"
     assert timings[0][1] >= 0.0
+
+
+def test_window_preview_duplicates_output_without_replacing_fullscreen(monkeypatch) -> None:
+    shutdown = threading.Event()
+    runtime_q = queue.Queue()
+    frame = object()
+    depth_frame = object()
+    runtime_q.put((SimpleNamespace(sbs=frame), 0.0))
+    created = []
+
+    class FakeViewer:
+        def __init__(self, config):
+            self.config = config
+            self.frames = []
+            created.append(self)
+
+        def initialize(self):
+            pass
+
+        def present(self, value):
+            self.frames.append(value)
+            if len(created) == 2 and all(item.frames for item in created):
+                shutdown.set()
+
+        def poll_events(self):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(local_viewer_module, "VulkanLocalViewer", FakeViewer)
+    monkeypatch.setattr(local_viewer_module, "depth_preview_frame", lambda _result: depth_frame)
+    run_vulkan_local_viewer(
+        runtime_q=runtime_q,
+        shutdown_event=shutdown,
+        config=VulkanLocalViewerConfig(
+            monitor_index=3,
+            fullscreen=True,
+            window_preview=True,
+            preview_monitor_index=1,
+        ),
+    )
+
+    assert len(created) == 2
+    output, preview = created
+    assert output.config.fullscreen is True
+    assert output.config.monitor_index == 3
+    assert preview.config.fullscreen is False
+    assert preview.config.monitor_index == 1
+    assert preview.config.exclude_from_capture is False
+    assert output.frames == [frame]
+    assert preview.frames == [depth_frame]
+
+
+def test_depth_preview_uses_one_matched_depth_map_size_not_sbs() -> None:
+    torch = __import__("torch")
+    depth = torch.tensor([[[[0.0, 1.0], [0.25, 0.75]]]])
+    result = SimpleNamespace(
+        depth=depth,
+        sbs=torch.ones(1, 3, 4, 8),
+        output_eye_size=(4, 4),
+        debug_info={"depth_strength": 0.25},
+    )
+
+    preview = depth_preview_frame(result)
+
+    assert tuple(preview.shape) == (1, 3, 4, 4)
+    assert preview[0, :, 0, 0].tolist() == [0.0, 0.0, 1.0]
+    assert preview[0, :, 0, -1].tolist() == [1.0, 0.0, 0.0]
+    assert float(preview.min()) == 0.0
+    assert float(preview.max()) == 1.0
+
+
+def test_depth_preview_maps_hot_reloaded_depth_strength_blue_to_red() -> None:
+    torch = __import__("torch")
+    depth = torch.tensor([[[[0.0, 0.5, 1.0]]]])
+
+    low = depth_preview_frame(SimpleNamespace(
+        depth=depth,
+        output_eye_size=(3, 1),
+        debug_info={"depth_strength": 0.0},
+    ))
+    middle = depth_preview_frame(SimpleNamespace(
+        depth=depth,
+        output_eye_size=(3, 1),
+        debug_info={"depth_strength": 0.25},
+    ))
+    high = depth_preview_frame(SimpleNamespace(
+        depth=depth,
+        output_eye_size=(3, 1),
+        debug_info={"depth_strength": 0.5},
+    ))
+
+    assert low[0].permute(1, 2, 0).tolist() == [[[0.0, 0.0, 1.0]] * 3]
+    assert middle[0].permute(1, 2, 0).tolist() == [[
+        [0.0, 0.0, 1.0],
+        [0.5, 0.0, 0.5],
+        [1.0, 0.0, 0.0],
+    ]]
+    assert high[0].permute(1, 2, 0).tolist() == [[[1.0, 0.0, 0.0]] * 3]
+    assert torch.equal(
+        depth_to_effective_disparity(depth, 0.25),
+        depth,
+    )
+    assert effective_disparity_to_red_blue_rgb(torch.full_like(depth, 0.5))[0, :, 0, 0].tolist() == [0.5, 0.0, 0.5]
+
+
+def test_depth_color_map_transitions_from_far_blue_to_near_red() -> None:
+    torch = __import__("torch")
+    depth = torch.tensor([[[[0.0, 0.25, 0.5, 0.75, 1.0]]]])
+
+    rgb = depth_to_red_blue_rgb(depth)
+
+    assert rgb[0, :, 0].T.tolist() == [
+        [0.0, 0.0, 1.0],
+        [0.0, 1.0, 1.0],
+        [0.0, 1.0, 0.0],
+        [1.0, 1.0, 0.0],
+        [1.0, 0.0, 0.0],
+    ]

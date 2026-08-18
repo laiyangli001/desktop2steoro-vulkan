@@ -1,7 +1,7 @@
 Capture Mode: Monitor
 Monitor Index: 1
 Window Title: ''
-Show FPS: false
+Show FPS: true
 Model List:
   Distill-Any-Depth-Small:
     resolutions:
@@ -466,11 +466,11 @@ Model List:
     resolutions:
     - 1536
 Depth Model: Distill-Any-Depth-Base
-Depth Strength: 0.3
+Depth Strength: 0.25
 Depth Quick: Standard
 Depth Resolution: 518
-Anti-aliasing: 1
-Depth Antialias Strength: 1.0
+Anti-aliasing: 0
+Depth Antialias Strength: 0.0
 Depth Pop: 0.0
 Foreground Pop: 1.15
 Midground Pop: 1.05
@@ -483,15 +483,15 @@ Stereo Preset: cinema
 Stereo Quality: quality_4k
 Stereo Compute Backend: auto
 Parallax Budget Preset: standard
-Temporal: true
-Temporal Strength: 0.25
+Temporal: false
+Temporal Strength: 0.0
 Auto Scene Reset: true
 Scene Reset Threshold: 0.22
 Edge Dilation: 1
 Mask Feather Radius: 1
-Hole Fill Mode: balanced
-Hole Fill Radius: 1
-Hole Fill Strength: 0.6
+Hole Fill Mode: none
+Hole Fill Radius: 0
+Hole Fill Strength: 0.0
 Edge Threshold: 0.04
 Cross Eyed: false
 Anaglyph Method: red_cyan
@@ -519,10 +519,11 @@ Recompile MIGraphX: false
 Recompile OpenVINO: false
 Computing Device: 0
 Language: CN
-Run Mode: OpenXR Link
+Run Mode: Local Viewer
 XR Headset Model: Pico 4 / 4 Ultra
 XR Preview Window: false
 VSync: false
+Window Preview: false
 Target FPS: 0
 Processing Resolution: Auto
 Render Size Policy: scaled
@@ -541,8 +542,8 @@ Stream Key: live
 Stereo Mix: null
 CRF: 20
 Audio Delay: -0.15
-Controller Model: PICO
-Environment Model: 3d_cinema
+Controller Model: NONE
+Environment Model: Default
 Lossless Scaling Support: false
 Capture Tool: WindowsCaptureCUDA
 Fill 16:9: true
@@ -552,4 +553,4 @@ Show Log Panel: true
 OpenVINO: null
 OpenXR Color Mode: sRGB
 Synthetic View: quality_4k
-OpenXR Render Scale: 1.05
+OpenXR Render Scale: 1.0

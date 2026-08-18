@@ -66,6 +66,7 @@ class GUIConfigMixin:
             cfg.get("XR Headset Model", DEFAULTS["XR Headset Model"]), self.locale)
         self.xr_preview_cb.value = cfg.get("XR Preview Window", DEFAULTS["XR Preview Window"])
         self.local_vsync_cb.value = cfg.get("VSync", DEFAULTS["VSync"])
+        self.window_preview_cb.value = cfg.get("Window Preview", DEFAULTS["Window Preview"])
         self.advanced_device_cb.value = False
         self.upscaler_dd.options = self._upscaler_display_options()
         self.upscaler_dd.value = self._upscaler_to_display("Off")
@@ -226,12 +227,8 @@ class GUIConfigMixin:
         else:
             monitor_idx = self.monitor_label_to_index.get(self.monitor_dd.value, DEFAULTS["Monitor Index"])
         stereo_val = self.stereo_monitor_dd.value
-        preview_values = {
-            "Viewer Window",
-            "Window Preview",
-            "窗口预览",
-        }
-        if stereo_val in preview_values or not stereo_val:
+        window_preview = bool(self.window_preview_cb.value)
+        if not stereo_val:
             stereo_idx = None
         else:
             stereo_idx = self.monitor_label_to_index.get(stereo_val, None)
@@ -308,6 +305,7 @@ class GUIConfigMixin:
             "XR Headset Model": display_to_xr_headset(self.xr_headset_dd.value),
             "XR Preview Window": self.xr_preview_cb.value,
             "VSync": self.local_vsync_cb.value,
+            "Window Preview": window_preview,
             "Target FPS": self._target_fps_from_display(self.target_fps_dd.value),
             "Processing Resolution": self._config.get("Processing Resolution", DEFAULTS["Processing Resolution"]),
             "Render Size Policy": "scaled",
@@ -485,10 +483,10 @@ class GUIConfigMixin:
             "cinema": {
                 "quality": "quality_4k", "parallax_budget": "standard", "depth_strength": 0.25, "depth_quick": "Standard",
                 "convergence": 0.0, "dynamic_convergence": False, "dynamic_convergence_strength": 0.0,
-                "temporal_strength": 0.25, "scene_reset_threshold": 0.22,
+                "temporal_strength": 0.0, "scene_reset_threshold": 0.22,
                 "depth_pop": 0.0, "depth_separation": "standard", "foreground_pop": 1.15, "midground_pop": 1.05, "background_pop": 1.05, "antialiasing": 1, "depth_antialias_strength": 1.0,
-                "edge_dilation": 1, "mask_feather_radius": 1, "hole_fill_mode": "balanced",
-                "hole_fill_radius": 1, "hole_fill_strength": 0.60, "edge_threshold": 0.04,
+                "edge_dilation": 1, "mask_feather_radius": 1, "hole_fill_mode": "none",
+                "hole_fill_radius": 0, "hole_fill_strength": 0.0, "edge_threshold": 0.04,
                 "cross_eyed": False,
             },
             "game_low_latency": {

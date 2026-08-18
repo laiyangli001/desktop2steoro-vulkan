@@ -51,9 +51,13 @@ def test_stereo_presets_map_to_expected_modes():
 
     assert isinstance(cinema, StereoConfig)
     assert cinema.backend == "quality_4k"
-    assert cinema.temporal is True
-    assert cinema.auto_reset_temporal is True
-    assert cinema.hole_fill_mode == "balanced"
+    assert cinema.temporal is False
+    assert cinema.temporal_strength == 0.0
+    assert cinema.auto_reset_temporal is False
+    assert cinema.hole_fill == "none"
+    assert cinema.hole_fill_mode == "none"
+    assert cinema.hole_fill_radius == 0
+    assert cinema.hole_fill_strength == 0.0
     assert cinema.parallax_preset == "standard"
     assert not hasattr(cinema, "ipd_mm")
     assert not hasattr(cinema, "stereo_scale")
@@ -66,7 +70,7 @@ def test_stereo_presets_map_to_expected_modes():
     assert game.hole_fill_mode == "none"
     assert game.hole_fill_radius == 0
     assert game.hole_fill_strength == 0.0
-    assert game.temporal_strength < cinema.temporal_strength
+    assert cinema.temporal_strength == 0.0
     assert game.depth_strength < cinema.depth_strength
 
     assert still.backend == "hq_4k"
@@ -195,7 +199,8 @@ def test_manual_presets_bypass_auto_runtime_contract():
     assert manual.backend == "fast_plus"
     assert manual.hole_fill == "none"
     assert auto_default.backend == "quality_4k"
-    assert auto_default.hole_fill == "edge_aware"
+    assert auto_default.hole_fill == "none"
+    assert auto_default.hole_fill_mode == "none"
     assert auto_detection_required("auto") is True
     assert auto_detection_required("traditional_fastest") is False
     assert auto_detection_required("cinema") is False

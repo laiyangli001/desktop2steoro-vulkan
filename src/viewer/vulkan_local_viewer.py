@@ -6,7 +6,7 @@ separate GLFW/Vulkan swapchain and never creates an OpenGL context.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import queue
 import sys
 import time
@@ -15,6 +15,7 @@ from typing import Any, Callable
 from utils.display_info import resolve_glfw_monitor_index
 from viewer.cuda_vulkan_interop import CudaVulkanImageImporter
 from viewer.vulkan_resources import VulkanExportableImage, VulkanExportableSemaphore
+from viewer.window_control import hide_window_from_capture
 
 
 LOCAL_VIEWER_SOURCE_FORMAT = "VK_FORMAT_R8G8B8A8_SRGB"
@@ -61,6 +62,21 @@ def should_restore_persistent_fullscreen(
     fullscreen: bool, visible: bool, iconic: bool, topmost: bool
 ) -> bool:
     return bool(fullscreen and (not visible or iconic or not topmost))
+
+
+def configure_glfw_window_hints(glfw: Any, *, fullscreen: bool) -> None:
+    """Reset process-global GLFW hints before creating each viewer window."""
+    glfw.default_window_hints()
+    glfw.window_hint(glfw.CLIENT_API, glfw.NO_API)
+    glfw.window_hint(glfw.RESIZABLE, glfw.TRUE)
+    glfw.window_hint(glfw.AUTO_ICONIFY, glfw.FALSE)
+    glfw.window_hint(glfw.VISIBLE, glfw.TRUE)
+    glfw.window_hint(glfw.DECORATED, glfw.TRUE)
+    glfw.window_hint(glfw.FLOATING, glfw.FALSE)
+    glfw.window_hint(glfw.FOCUS_ON_SHOW, glfw.TRUE)
+    if fullscreen:
+        glfw.window_hint(glfw.FLOATING, glfw.TRUE)
+        glfw.window_hint(glfw.FOCUS_ON_SHOW, glfw.FALSE)
 
 
 def present_fps_if_due(frames: int, elapsed: float, interval: float = 5.0) -> float | None:
@@ -151,11 +167,70 @@ def frame_to_cuda_rgba(frame: Any) -> Any | None:
         return None
 
 
+def depth_to_red_blue_rgb(depth: Any) -> Any:
+    """Map normalized inverse depth to blue/cyan/green/yellow/red RGB."""
+    import torch
+
+    value = depth.float().clamp(0.0, 1.0)
+    red = (4.0 * value - 2.0).clamp(0.0, 1.0)
+    green = torch.minimum(4.0 * value, 4.0 - 4.0 * value).clamp(0.0, 1.0)
+    blue = (2.0 - 4.0 * value).clamp(0.0, 1.0)
+    return torch.cat((red, green, blue), dim=1)
+
+
+def depth_to_effective_disparity(depth: Any, depth_strength: float) -> Any:
+    """Center depth colors on strength while retaining maximum detail at 0.25."""
+    center = max(0.0, min(0.5, float(depth_strength))) / 0.5
+    depth_contrast = 4.0 * center * (1.0 - center)
+    normalized_depth = depth.float().clamp(0.0, 1.0)
+    return (center + (normalized_depth - 0.5) * depth_contrast).clamp(0.0, 1.0)
+
+
+def effective_disparity_to_red_blue_rgb(disparity: Any) -> Any:
+    """Linearly mix blue and red so the midpoint is purple."""
+    import torch
+
+    value = disparity.float().clamp(0.0, 1.0)
+    return torch.cat((value, torch.zeros_like(value), 1.0 - value), dim=1)
+
+
+def depth_preview_frame(result: Any) -> Any | None:
+    """Return hot-reloaded depth strength on the effective-disparity color scale."""
+    debug_info = getattr(result, "debug_info", None) or {}
+    depth = debug_info.get("output_depth")
+    if depth is None:
+        depth = getattr(result, "depth", None)
+    if depth is None:
+        return None
+
+    size = getattr(result, "output_eye_size", None)
+    if isinstance(size, (tuple, list)) and len(size) == 2:
+        width, height = int(size[0]), int(size[1])
+    else:
+        shape = tuple(int(value) for value in getattr(depth, "shape", ()))
+        if len(shape) < 2:
+            return None
+        height, width = shape[-2], shape[-1]
+
+    from stereo_runtime.output import match_depth
+
+    matched = match_depth(depth, height, width)
+    if int(matched.shape[1]) != 1:
+        matched = matched[:, :1]
+    depth_strength = float(debug_info.get("depth_strength", 1.0))
+    effective_disparity = depth_to_effective_disparity(matched, depth_strength)
+    return effective_disparity_to_red_blue_rgb(effective_disparity)
+
+
 @dataclass(frozen=True, slots=True)
 class VulkanLocalViewerConfig:
     title: str = "Desktop2Stereo Vulkan Viewer"
     monitor_index: int = 0
     fullscreen: bool = False
+    window_preview: bool = False
+    preview_monitor_index: int | None = None
+    manage_glfw_lifecycle: bool = True
+    exclude_from_capture: bool = False
     vsync: bool = True
     show_fps: bool = False
     show_fps_provider: Callable[[], bool] | None = None
@@ -259,12 +334,7 @@ class VulkanLocalViewer:
         self.glfw, self.vk = glfw, vk
         if not glfw.init():
             raise RuntimeError("GLFW initialization failed for Vulkan local viewer")
-        glfw.window_hint(glfw.CLIENT_API, glfw.NO_API)
-        glfw.window_hint(glfw.RESIZABLE, glfw.TRUE)
-        glfw.window_hint(glfw.AUTO_ICONIFY, glfw.FALSE)
-        if self.config.fullscreen:
-            glfw.window_hint(glfw.FLOATING, glfw.TRUE)
-            glfw.window_hint(glfw.FOCUS_ON_SHOW, glfw.FALSE)
+        configure_glfw_window_hints(glfw, fullscreen=self.config.fullscreen)
         monitors = glfw.get_monitors() or []
         monitor = (
             monitors[resolve_glfw_monitor_index(self.config.monitor_index, glfw)]
@@ -284,7 +354,6 @@ class VulkanLocalViewer:
             x, y = int(mx), int(my)
             self._exclusive_fullscreen = True
             glfw.window_hint(glfw.DECORATED, glfw.FALSE)
-            glfw.window_hint(glfw.VISIBLE, glfw.FALSE)
         self.window = glfw.create_window(
             width,
             height,
@@ -297,6 +366,8 @@ class VulkanLocalViewer:
         if self._exclusive_fullscreen:
             self._configure_persistent_fullscreen()
         glfw.set_window_pos(self.window, x, y)
+        if self.config.exclude_from_capture:
+            hide_window_from_capture(self.window)
         glfw.set_key_callback(self.window, self._on_key)
         self._create_device()
         self._create_swapchain()
@@ -747,7 +818,7 @@ class VulkanLocalViewer:
                 self.vk.vkDestroyInstance(self.instance, None)
             if self.window is not None:
                 self.glfw.destroy_window(self.window)
-            if self.glfw is not None:
+            if self.glfw is not None and self.config.manage_glfw_lifecycle:
                 self.glfw.terminate()
             self.window = None
 
@@ -931,6 +1002,8 @@ class _TransferSource:
 def run_vulkan_local_viewer(*, runtime_q: Any, shutdown_event: Any, config: VulkanLocalViewerConfig) -> None:
     """Run the Vulkan window and consume only the newest completed SBS frame."""
     viewer: VulkanLocalViewer | None = None
+    preview_viewer: VulkanLocalViewer | None = None
+    preview_disabled = not bool(config.window_preview)
     try:
         while not shutdown_event.is_set():
             try:
@@ -938,6 +1011,13 @@ def run_vulkan_local_viewer(*, runtime_q: Any, shutdown_event: Any, config: Vulk
             except queue.Empty:
                 if viewer is not None:
                     viewer.poll_events()
+                if preview_viewer is not None:
+                    try:
+                        preview_viewer.poll_events()
+                    except StopIteration:
+                        preview_viewer.close()
+                        preview_viewer = None
+                        preview_disabled = True
                 continue
             if config.on_breakdown_inc is not None:
                 config.on_breakdown_inc("viewer_get", 1)
@@ -956,6 +1036,41 @@ def run_vulkan_local_viewer(*, runtime_q: Any, shutdown_event: Any, config: Vulk
                 viewer = VulkanLocalViewer(config)
                 viewer.initialize()
                 print("[VulkanLocalViewer] Vulkan local window initialized", flush=True)
+            if preview_viewer is None and not preview_disabled:
+                preview_config = replace(
+                    config,
+                    title=f"{config.title} - Debug Preview",
+                    monitor_index=(
+                        int(config.preview_monitor_index)
+                        if config.preview_monitor_index is not None
+                        else int(config.monitor_index)
+                    ),
+                    fullscreen=False,
+                    window_preview=False,
+                    show_fps=False,
+                    on_sbs_fps=None,
+                    on_breakdown_inc=None,
+                    on_breakdown_add_time=None,
+                    manage_glfw_lifecycle=False,
+                    exclude_from_capture=False,
+                )
+                try:
+                    preview_viewer = VulkanLocalViewer(preview_config)
+                    preview_viewer.initialize()
+                    print(
+                        "[VulkanLocalViewer] Additional debug preview initialized",
+                        flush=True,
+                    )
+                except Exception as exc:
+                    if preview_viewer is not None:
+                        preview_viewer.close()
+                    preview_viewer = None
+                    preview_disabled = True
+                    print(
+                        "[VulkanLocalViewer] Additional debug preview unavailable: "
+                        f"{type(exc).__name__}: {exc}",
+                        flush=True,
+                    )
             present_started = time.perf_counter()
             viewer.present(frame)
             if config.on_breakdown_add_time is not None:
@@ -964,8 +1079,33 @@ def run_vulkan_local_viewer(*, runtime_q: Any, shutdown_event: Any, config: Vulk
                 )
             if config.on_breakdown_inc is not None:
                 config.on_breakdown_inc("local_presented_frame", 1)
+            if preview_viewer is not None:
+                preview_frame = depth_preview_frame(result)
+                if preview_frame is None:
+                    continue
+                preview_started = time.perf_counter()
+                try:
+                    preview_viewer.present(preview_frame)
+                    if config.on_breakdown_add_time is not None:
+                        config.on_breakdown_add_time(
+                            "local_preview_present",
+                            time.perf_counter() - preview_started,
+                        )
+                    if config.on_breakdown_inc is not None:
+                        config.on_breakdown_inc("local_preview_presented_frame", 1)
+                except Exception as exc:
+                    preview_viewer.close()
+                    preview_viewer = None
+                    preview_disabled = True
+                    print(
+                        "[VulkanLocalViewer] Additional debug preview stopped: "
+                        f"{type(exc).__name__}: {exc}",
+                        flush=True,
+                    )
     except StopIteration:
         shutdown_event.set()
     finally:
+        if preview_viewer is not None:
+            preview_viewer.close()
         if viewer is not None:
             viewer.close()
