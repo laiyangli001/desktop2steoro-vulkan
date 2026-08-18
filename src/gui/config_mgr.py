@@ -104,6 +104,7 @@ class GUIConfigMixin:
         self.edge_dilation_dd.value = str(cfg.get("Edge Dilation", DEFAULTS["Edge Dilation"]))
         self.mask_feather_dd.value = str(cfg.get("Mask Feather Radius", DEFAULTS["Mask Feather Radius"]))
         self.hole_fill_mode_dd.value = self._hole_fill_mode_to_display(cfg.get("Hole Fill Mode", DEFAULTS["Hole Fill Mode"]))
+        self._sync_temporal_with_hole_fill(restore=False)
         self.edge_threshold_dd.value = f'{self._parse_float(cfg.get("Edge Threshold", DEFAULTS["Edge Threshold"]), DEFAULTS["Edge Threshold"]):.2f}'
         self.cross_eyed_cb.value = cfg.get("Cross Eyed", DEFAULTS["Cross Eyed"])
         self.anaglyph_dd.value = cfg.get("Anaglyph Method", DEFAULTS["Anaglyph Method"])
@@ -235,7 +236,11 @@ class GUIConfigMixin:
         else:
             stereo_idx = self.monitor_label_to_index.get(stereo_val, None)
 
-        temporal_strength = self._parse_float(self.temporal_strength_dd.value, DEFAULTS["Temporal Strength"])
+        hole_fill_mode = self._display_to_hole_fill_mode(self.hole_fill_mode_dd.value)
+        temporal_strength = self._temporal_strength_for_hole_fill(
+            self._parse_float(self.temporal_strength_dd.value, DEFAULTS["Temporal Strength"]),
+            hole_fill_mode,
+        )
         scene_reset_threshold = self._parse_float(self.scene_reset_dd.value, DEFAULTS["Scene Reset Threshold"])
         depth_pop = self._clamp_depth_pop(self._parse_float(self.depth_pop_dd.value, DEFAULTS["Depth Pop"]))
         dynamic_convergence_strength = self._parse_float(self.dynamic_convergence_strength_dd.value, DEFAULTS["Dynamic Convergence Strength"])
@@ -274,7 +279,7 @@ class GUIConfigMixin:
             "Scene Reset Threshold": scene_reset_threshold,
             "Edge Dilation": self._parse_int(self.edge_dilation_dd.value, DEFAULTS["Edge Dilation"]),
             "Mask Feather Radius": self._parse_int(self.mask_feather_dd.value, DEFAULTS["Mask Feather Radius"]),
-            "Hole Fill Mode": self._display_to_hole_fill_mode(self.hole_fill_mode_dd.value),
+            "Hole Fill Mode": hole_fill_mode,
             "Hole Fill Radius": int(preset_values.get("hole_fill_radius", DEFAULTS["Hole Fill Radius"])),
             "Hole Fill Strength": float(preset_values.get("hole_fill_strength", DEFAULTS["Hole Fill Strength"])),
             "Edge Threshold": self._parse_float(self.edge_threshold_dd.value, DEFAULTS["Edge Threshold"]),
@@ -345,6 +350,31 @@ class GUIConfigMixin:
 
     # ── stereo hot-param save ──
 
+    @staticmethod
+    def _temporal_strength_for_hole_fill(temporal_strength, hole_fill_mode):
+        strength = max(0.0, float(temporal_strength))
+        return 0.0 if str(hole_fill_mode).strip().lower() == "none" else strength
+
+    def _sync_temporal_with_hole_fill(self, *, restore):
+        hole_fill_mode = self._display_to_hole_fill_mode(self.hole_fill_mode_dd.value)
+        current_strength = self._parse_float(
+            self.temporal_strength_dd.value,
+            DEFAULTS["Temporal Strength"],
+        )
+        if hole_fill_mode == "none":
+            effective_strength = 0.0
+        elif restore and current_strength <= 0.0:
+            stereo_preset = self._display_to_preset(self.stereo_preset_dd.value)
+            preset_values = self._stereo_preset_gui_values(stereo_preset) or {}
+            effective_strength = max(0.0, float(preset_values.get("temporal_strength", 0.0)))
+        else:
+            effective_strength = current_strength
+        self.temporal_strength_dd.value = f"{effective_strength:.2f}"
+
+    def on_hole_fill_mode_change(self, e=None):
+        self._sync_temporal_with_hole_fill(restore=True)
+        self.on_stereo_hot_param_change(e)
+
     def on_stereo_hot_param_change(self, e=None):
         self._schedule_stereo_hot_save()
 
@@ -375,7 +405,11 @@ class GUIConfigMixin:
             except Exception:
                 pass
         cfg.pop("Debug Mode", None)
-        temporal_strength = self._parse_float(self.temporal_strength_dd.value, DEFAULTS["Temporal Strength"])
+        hole_fill_mode = self._display_to_hole_fill_mode(self.hole_fill_mode_dd.value)
+        temporal_strength = self._temporal_strength_for_hole_fill(
+            self._parse_float(self.temporal_strength_dd.value, DEFAULTS["Temporal Strength"]),
+            hole_fill_mode,
+        )
         scene_reset_threshold = self._parse_float(self.scene_reset_dd.value, DEFAULTS["Scene Reset Threshold"])
         antialias_strength = self._parse_float(self.antialiasing_dd.value, DEFAULTS["Depth Antialias Strength"])
         depth_pop = self._clamp_depth_pop(self._parse_float(self.depth_pop_dd.value, DEFAULTS["Depth Pop"]))
@@ -410,7 +444,7 @@ class GUIConfigMixin:
             "Depth Antialias Strength": antialias_strength,
             "Edge Dilation": self._parse_int(self.edge_dilation_dd.value, DEFAULTS["Edge Dilation"]),
             "Mask Feather Radius": self._parse_int(self.mask_feather_dd.value, DEFAULTS["Mask Feather Radius"]),
-            "Hole Fill Mode": self._display_to_hole_fill_mode(self.hole_fill_mode_dd.value),
+            "Hole Fill Mode": hole_fill_mode,
             "Hole Fill Radius": int(preset_values.get("hole_fill_radius", DEFAULTS["Hole Fill Radius"])),
             "Hole Fill Strength": float(preset_values.get("hole_fill_strength", DEFAULTS["Hole Fill Strength"])),
             "Edge Threshold": self._parse_float(self.edge_threshold_dd.value, DEFAULTS["Edge Threshold"]),

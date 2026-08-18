@@ -623,7 +623,7 @@ def _runtime_supports_parallel_cuda_pending(ctx: RuntimePipelineContext) -> bool
         getattr(runtime_config, "parallel_inference", False)
     ):
         return False
-    if ctx.run_mode != "OpenXR":
+    if ctx.run_mode not in {"OpenXR", "Viewer"}:
         return False
     runtime = ctx.stereo_runtime
     provider = getattr(runtime, "depth_provider", None)
@@ -638,14 +638,15 @@ def _runtime_supports_parallel_cuda_pending(ctx: RuntimePipelineContext) -> bool
         # Vulkan deferred stereo has a separate presenter-side consumer lease;
         # keep its depth queue single-pending until that path is made safe.
         return False
-    realtime_config = _openxr_realtime_synthesis_config(
-        getattr(runtime, "stereo_config", None)
-    )
-    if bool(getattr(realtime_config, "temporal", False)):
-        return False
-    convergence = getattr(realtime_config, "convergence", None)
-    if str(getattr(type(convergence), "__module__", "")).startswith("torch"):
-        return False
+    if ctx.run_mode == "OpenXR":
+        realtime_config = _openxr_realtime_synthesis_config(
+            getattr(runtime, "stereo_config", None)
+        )
+        if bool(getattr(realtime_config, "temporal", False)):
+            return False
+        convergence = getattr(realtime_config, "convergence", None)
+        if str(getattr(type(convergence), "__module__", "")).startswith("torch"):
+            return False
     return True
 
 
@@ -826,6 +827,8 @@ def _add_cuda_event_timings(ctx: RuntimePipelineContext, runtime_result) -> None
         ("rt_gpu_depth_postprocess", "depth_post_start", "depth_post_end"),
         ("rt_gpu_synth", "depth", "synthesis"),
         ("rt_gpu_synth_scene", "synth_start", "synth_scene"),
+        ("rt_gpu_synth_depth_postprocess", "synth_scene", "synth_depth_postprocess"),
+        ("rt_gpu_synth_shift_response", "synth_depth_postprocess", "synth_shift_response"),
         ("rt_gpu_synth_depth_shift", "synth_scene", "synth_depth_shift"),
         ("rt_gpu_synth_warp", "synth_depth_shift", "synth_warp"),
         ("rt_gpu_synth_occ", "synth_warp", "synth_occlusion"),
@@ -989,7 +992,7 @@ class RuntimePipelineLoop:
             int(getattr(runtime_config, "parallel_inference_workers", 2) or 2),
         ))
         if (
-            ctx.run_mode != "OpenXR"
+            ctx.run_mode not in {"OpenXR", "Viewer"}
             or not bool(getattr(runtime_config, "parallel_inference", False))
             or min(int(getattr(provider, "pipeline_slot_count", 1)), requested_workers) < 2
             or bool(getattr(getattr(ctx.stereo_runtime, "config", None), "profile_sync", False))
@@ -1305,7 +1308,7 @@ class RuntimePipelineLoop:
                 # caller then consumes the oldest completed job in order and
                 # performs synthesis/OpenXR submission serially below.
                 depth_profile = None
-                if ctx.run_mode == "OpenXR" and self._parallel_depth_scheduler is not None:
+                if self._parallel_depth_scheduler is not None:
                     scheduler = self._parallel_depth_scheduler
                     self._parallel_recover_if_ready()
                     admission_limit = self._pending_depth_limit()
@@ -1387,6 +1390,7 @@ class RuntimePipelineLoop:
                     runtime_result = ctx.stereo_runtime.process_rgb_frame(
                         runtime_rgb,
                         skip_sbs_output=False,
+                        depth_profile=depth_profile,
                     )
                 ctx.breakdown_add_time("rt_call", time.perf_counter() - runtime_call_start_time)
                 _attach_pipeline_debug(

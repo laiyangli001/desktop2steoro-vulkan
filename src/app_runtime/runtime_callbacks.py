@@ -73,7 +73,11 @@ class RuntimeCallbacks:
         self.context.fps_breakdown.add_runtime_timing(runtime_result)
 
     def _render_active_for_breakdown(self):
-        render_active = getattr(getattr(self.context, "openxr_state", None), "render_active", None)
+        openxr_state = getattr(self.context, "openxr_state", None)
+        run_mode = getattr(self.context, "run_mode", getattr(openxr_state, "run_mode", ""))
+        if str(run_mode).strip().lower() != "openxr":
+            return True
+        render_active = getattr(openxr_state, "render_active", None)
         return render_active is None or render_active.is_set()
 
     def log_fps_breakdown(self, now=None):

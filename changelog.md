@@ -2,6 +2,14 @@
 
 ## 2026-08-18
 
+- 优化本地模式持续性能输出：SBS 性能统计窗口改为 15 秒，自动捕捉目标按有效持续 SBS 峰值 `+5 FPS` 计算；静态/动态判断逻辑保留但默认关闭，避免静态图片导致捕捉帧率降到个位数后无法恢复。
+- 修复补洞关闭时的时域处理：补洞模式为“关闭 / 不补洞”时自动保存 `Temporal: false` 与 `Temporal Strength: 0`，运行时也会对旧配置强制旁路 Temporal；重新启用补洞时恢复当前立体预设的默认时域强度。
+- 优化补洞关闭路径：不再创建无消费者的 Occlusion 空遮罩，`fast_plus` 同样跳过无用的 Occlusion 和补洞计算；4K 关闭路径的 Occlusion 区间降至约 `0.002 ms`。
+- 新增本地 SBS 直接融合输出：在 `quality_4k`、2 层对称、Half-SBS/Full-SBS 且补洞和 Temporal 关闭时，Warp 直接生成 SBS，跳过左右眼中间张量及独立拼接；Half-SBS 与 Full-SBS 均与原路径像素误差为 0，Full-SBS 4K 合成约由 `3.81 ms` 降至 `2.95 ms`。
+- 优化本地 Vulkan Viewer 的 CUDA 浮点 CHW 到 RGBA8 转换：复用 Triton 融合内核，4K 转换约由 `3.12 ms` 降至 `0.64 ms`，保持 CPU staging 回退路径和跨平台行为不变。
+- 完善跨平台显示器型号读取与显示器映射：优先按显示器名称匹配，名称相同时再按序号匹配；保留 Windows、Linux、macOS 的统一 Python 读取接口，并移除本地模式不再需要的显示器坐标配置。
+- 兼容新版 `tqdm.thread_map` 的进度条构造方式：线程任务进度正确显示为 `steps`，普通模型/文件下载仍显示为 `bytes`。
+
 - 修复升级 Flet 后 GUI 永久停在 `Working`：Python `flet/flet-desktop` 和内置压缩包已是 `0.86.5`，但旧 `flet_clients` 缓存仍为 `0.85.3`；客户端缓存现在记录并校验源压缩包 SHA-256，Windows、Linux、macOS 的包内容变化后都会自动重新解压，避免 Python 服务与桌面客户端协议版本不匹配。
 - 修复 `install-cuda_standalone.bat` 在电脑已注册同版本 Python 3.12 时提示安装成功、但项目 `src/python3/python.exe` 不存在的问题：python.org EXE 会进入已有安装的维护模式并忽略新的 `TargetDir`，现改用官方 Python 3.12.10 x64 NuGet 独立发行包。项目本地运行时保留完整 `Lib`、`DLLs`、`include`、`libs`、标准库和 `ensurepip`，不再使用仅 35 个基础文件的 embeddable ZIP；检测到旧嵌入版时会自动替换为完整布局，且不受系统注册表中其它 Python 安装位置影响。
 - 清理 CUDA 安装器替换旧 embeddable Python 时的误导性 `ModuleNotFoundError: ensurepip`：完整性检测改为无导入异常的模块探测并静默处理预期失败，随后明确提示正在替换不完整运行时。

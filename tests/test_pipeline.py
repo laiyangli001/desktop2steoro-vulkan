@@ -260,7 +260,9 @@ def test_pending_cuda_retains_latest_raw_frame(monkeypatch):
     assert sleeps == [0.001]
 
 
-def _dual_pending_context(*, backend="cuda_triton", slots=2, temporal=False, workers=2):
+def _dual_pending_context(
+    *, backend="cuda_triton", slots=2, temporal=False, workers=2, run_mode="OpenXR"
+):
     runtime = SimpleNamespace(
         depth_provider=SimpleNamespace(pipeline_slot_count=slots),
         config=SimpleNamespace(profile_sync=False),
@@ -268,7 +270,7 @@ def _dual_pending_context(*, backend="cuda_triton", slots=2, temporal=False, wor
         _resolved_stereo_compute_backend=backend,
     )
     return SimpleNamespace(
-        run_mode="OpenXR",
+        run_mode=run_mode,
         openxr_runtime_direct=False,
         stereo_active_preset="cinema",
         stereo_runtime=runtime,
@@ -280,6 +282,47 @@ def test_openxr_safe_dual_slot_defaults_to_two_pending(monkeypatch):
     monkeypatch.delenv("D2S_RUNTIME_PENDING_CUDA_DEPTH", raising=False)
 
     assert _runtime_pending_depth_limit(_dual_pending_context()) == 2
+
+
+def test_viewer_creates_two_worker_depth_scheduler() -> None:
+    events = []
+    runtime = SimpleNamespace(
+        depth_provider=SimpleNamespace(pipeline_slot_count=2),
+        config=SimpleNamespace(profile_sync=False),
+        predict_openxr_depth=lambda _frame: None,
+    )
+    loop = RuntimePipelineLoop(
+        SimpleNamespace(
+            run_mode="Viewer",
+            runtime_config=SimpleNamespace(
+                parallel_inference=True,
+                parallel_inference_workers=2,
+            ),
+            stereo_runtime=runtime,
+            source_stat_inc=lambda name, **values: events.append((name, values)),
+        )
+    )
+
+    loop._ensure_parallel_depth_scheduler()
+
+    assert loop._parallel_depth_scheduler is not None
+    assert loop._parallel_depth_scheduler.worker_count == 2
+    assert events == [("runtime_parallel_workers", {"active_workers": 2})]
+    loop._parallel_depth_scheduler.close()
+
+
+def test_viewer_dual_pending_supports_ordered_temporal_synthesis(monkeypatch):
+    monkeypatch.delenv("D2S_RUNTIME_PENDING_CUDA_DEPTH", raising=False)
+
+    assert _runtime_pending_depth_limit(
+        _dual_pending_context(run_mode="Viewer", temporal=True)
+    ) == 2
+
+
+def test_openxr_temporal_pipeline_keeps_existing_single_pending_limit(monkeypatch):
+    monkeypatch.delenv("D2S_RUNTIME_PENDING_CUDA_DEPTH", raising=False)
+
+    assert _runtime_pending_depth_limit(_dual_pending_context(temporal=True)) == 1
 
 
 def test_openxr_three_slot_defaults_to_three_pending(monkeypatch):

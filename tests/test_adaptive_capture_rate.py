@@ -12,46 +12,82 @@ BUILDERS_SOURCE = ROOT / "src" / "gui" / "builders.py"
 HANDLERS_SOURCE = ROOT / "src" / "gui" / "handlers.py"
 
 
-def test_auto_capture_steps_down_after_60_second_low_sbs_average() -> None:
+def test_auto_capture_calibrates_from_sustained_sbs_after_15_seconds() -> None:
     rate = AdaptiveCaptureRate(60, enabled=True)
 
-    assert rate.observe_sbs_fps(20.0, now=1.0) == 60
-    assert rate.observe_sbs_fps(20.0, now=30.0) == 60
-    assert rate.observe_sbs_fps(20.0, now=61.0) == 25
+    assert rate.observe_sbs_fps(20.0, frame_count=100, now=1.0) == 60
+    assert rate.observe_sbs_fps(20.0, frame_count=100, now=10.0) == 60
+    assert rate.observe_sbs_fps(20.0, frame_count=100, now=16.0) == 25
 
 
-def test_auto_capture_keeps_five_fps_headroom() -> None:
+def test_auto_capture_uses_peak_sustained_sbs_sample() -> None:
     rate = AdaptiveCaptureRate(60, enabled=True)
 
-    rate.observe_sbs_fps(27.0, now=1.0)
-    rate.observe_sbs_fps(27.0, now=30.0)
-    assert rate.observe_sbs_fps(27.0, now=61.0) == 32
+    rate.observe_sbs_fps(20.0, frame_count=100, now=1.0)
+    rate.observe_sbs_fps(30.0, frame_count=150, now=10.0)
+    assert rate.observe_sbs_fps(20.0, frame_count=100, now=16.0) == 35
 
 
-def test_auto_capture_tracks_sbs_with_five_fps_headroom() -> None:
+def test_auto_capture_tracks_improved_sustained_capacity() -> None:
     rate = AdaptiveCaptureRate(60, enabled=True)
-    for now in (1.0, 30.0, 61.0):
-        rate.observe_sbs_fps(20.0, now=now)
+    rate.observe_sbs_fps(20.0, frame_count=100, now=1.0)
+    rate.observe_sbs_fps(20.0, frame_count=100, now=16.0)
     assert rate.current_fps() == 25
 
-    assert rate.observe_sbs_fps(24.0, now=62.0) == 25
-    assert rate.observe_sbs_fps(24.0, now=121.0) == 29
-    assert rate.observe_sbs_fps(30.0, now=122.0) == 29
-    assert rate.observe_sbs_fps(30.0, now=181.0) == 35
+    assert rate.observe_sbs_fps(40.0, frame_count=200, now=17.0) == 25
+    assert rate.observe_sbs_fps(40.0, frame_count=200, now=32.0) == 45
 
 
-def test_auto_capture_does_not_jump_to_display_refresh_rate() -> None:
-    rate = AdaptiveCaptureRate(120, enabled=True)
+def test_auto_capture_is_capped_by_base_refresh_rate() -> None:
+    rate = AdaptiveCaptureRate(60, enabled=True)
 
-    rate.observe_sbs_fps(60.0, now=1.0)
-    assert rate.observe_sbs_fps(60.0, now=61.0) == 65
+    rate.observe_sbs_fps(90.0, frame_count=450, now=1.0)
+    assert rate.observe_sbs_fps(90.0, frame_count=450, now=16.0) == 60
+
+
+def test_auto_capture_holds_target_when_no_frames_arrive() -> None:
+    rate = AdaptiveCaptureRate(60, enabled=True)
+
+    rate.observe_sbs_fps(20.0, frame_count=100, now=1.0)
+    assert rate.current_fps() == 60
+
+
+def test_sparse_sbs_windows_do_not_reduce_capture_target() -> None:
+    rate = AdaptiveCaptureRate(60, enabled=True)
+
+    rate.observe_sbs_fps(5.0, frame_count=25, now=1.0)
+    assert rate.observe_sbs_fps(8.0, frame_count=40, now=20.0) == 60
+
+
+def test_static_dynamic_activity_guard_is_disabled_by_default() -> None:
+    rate = AdaptiveCaptureRate(60, enabled=True)
+
+    rate.observe_sbs_fps(20.0, frame_count=100, now=1.0)
+    rate.observe_sbs_fps(20.0, frame_count=100, now=16.0)
+    assert rate.current_fps() == 25
+    assert rate.observe_sbs_fps(1.0, capture_fps=0.0, now=21.0) == 25
+
+
+def test_static_dynamic_activity_guard_can_be_reenabled() -> None:
+    rate = AdaptiveCaptureRate(60, enabled=True, activity_guard_enabled=True)
+
+    rate.observe_sbs_fps(20.0, frame_count=100, now=1.0)
+    rate.observe_sbs_fps(20.0, frame_count=100, now=16.0)
+    assert rate.observe_sbs_fps(1.0, capture_fps=0.5, now=21.0) == 60
+
+
+def test_invalid_sbs_sample_is_ignored() -> None:
+    rate = AdaptiveCaptureRate(60, enabled=True)
+
+    assert rate.observe_sbs_fps("invalid", frame_count=100, now=1.0) == 60
+    assert rate.observe_sbs_fps(0.0, frame_count=100, now=16.0) == 60
 
 
 def test_manual_capture_rate_is_not_adapted() -> None:
     rate = AdaptiveCaptureRate(60, enabled=False)
 
     for now in range(10):
-        assert rate.observe_sbs_fps(10.0, now=float(now)) == 60
+        assert rate.observe_sbs_fps(20.0, frame_count=100, now=float(now)) == 60
 
 
 def test_auto_capture_is_enabled_for_local_viewer_but_not_3d_monitor() -> None:
@@ -69,6 +105,5 @@ def test_capture_fps_gui_exposes_24_and_30_with_adaptive_tooltip() -> None:
     tooltip = get_messages("ZH")["tooltip_target_fps"]
     assert "SBS" in tooltip
     assert "+ 5 FPS" in tooltip
-    return
-    assert "每 60 秒" in tooltip
-    assert "最多调整一个档位" in tooltip
+    assert "每 15 秒" in tooltip
+    assert "持续输出窗口" in tooltip

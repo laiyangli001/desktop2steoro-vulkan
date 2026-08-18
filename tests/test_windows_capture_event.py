@@ -175,6 +175,40 @@ def test_windows_capture_cuda_software_limiter_can_be_disabled(monkeypatch):
     assert all(runner._accept_software_paced_frame(now) for now in (10.0, 10.001, 10.002))
 
 
+def test_windows_capture_replays_last_frame_at_runtime_target_fps():
+    target = {"fps": 20}
+    runner = windows_capture_event.WindowsCaptureEventRunner(
+        CaptureConfig(
+            capture_tool="WindowsCaptureCUDA",
+            capture_mode="Monitor",
+            monitor_index=1,
+            fps=60,
+            fps_provider=lambda: target["fps"],
+        )
+    )
+    captured_frame = windows_capture_event.capture_frame_from_raw(
+        "frame",
+        1080,
+        10.0,
+        config=runner.config,
+        metadata={"backend": "windows_capture_event"},
+    )
+
+    runner._remember_emitted_frame(captured_frame, 10.0)
+
+    assert runner._replay_frame_if_due(10.049) is None
+    replayed = runner._replay_frame_if_due(10.05)
+    assert replayed is not None
+    assert replayed.frame == "frame"
+    assert replayed.timestamp == pytest.approx(10.05)
+    assert replayed.metadata["replayed_static_frame"] is True
+    assert captured_frame.metadata == {"backend": "windows_capture_event"}
+
+    target["fps"] = 10
+    assert runner._replay_frame_if_due(10.149) is None
+    assert runner._replay_frame_if_due(10.15) is not None
+
+
 def test_windows_capture_cuda_limiter_runs_before_gpu_buffer_delivery(monkeypatch):
     module = _install_capture_module(monkeypatch, "wc_cuda")
     monkeypatch.setattr(windows_capture_event, "_setup_dpi_awareness", lambda: None)

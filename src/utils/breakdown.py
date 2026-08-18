@@ -82,6 +82,7 @@ class FPSBreakdown:
             "runtime": 0,
             "viewer_get": 0,
             "viewer_drop": 0,
+            "local_presented_frame": 0,
             "loops": 0,
             "update_ms": 0.0,
             "render_ms": 0.0,
@@ -308,6 +309,8 @@ class FPSBreakdown:
             f"rt_pending_limit={int(stats.get('parallel_inference_pending_limit', 1))} "
             f"viewer_get={rate('viewer_get'):.1f} "
             f"viewer_drop={rate('viewer_drop'):.1f} "
+            f"local_present={rate('local_presented_frame'):.1f} "
+            f"local_present_ms={avg_ms('local_present'):.2f}ms "
             f"screen_new={rate('openxr_new_screen_frame'):.1f} "
             f"screen_reuse={rate('openxr_reused_screen_frame'):.1f} "
             f"screen_proj={rate('openxr_projection_screen_present'):.1f} "
@@ -500,6 +503,8 @@ class FPSBreakdown:
             f"rt_gpu_depth_post={avg_ms('rt_gpu_depth_postprocess'):.2f}ms "
             f"rt_gpu_synth={avg_ms('rt_gpu_synth'):.2f}ms "
             f"rt_gpu_syn_scene={avg_ms('rt_gpu_synth_scene'):.2f}ms "
+            f"rt_gpu_syn_depth_post={avg_ms('rt_gpu_synth_depth_postprocess'):.2f}ms "
+            f"rt_gpu_syn_shift_response={avg_ms('rt_gpu_synth_shift_response'):.2f}ms "
             f"rt_gpu_syn_shift={avg_ms('rt_gpu_synth_depth_shift'):.2f}ms "
             f"rt_gpu_syn_warp={avg_ms('rt_gpu_synth_warp'):.2f}ms "
             f"rt_gpu_syn_occ={avg_ms('rt_gpu_synth_occ'):.2f}ms "

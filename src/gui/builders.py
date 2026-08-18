@@ -309,8 +309,8 @@ class GUIBuilderMixin:
             width=S(110))
         self.fp16_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="FP16")
         parallel_inference_tooltip = (
-            "Experimental: do not enable two-worker or three-worker inference; "
-            "multi-worker inference performs worse."
+            "Pipelines depth inference with SBS synthesis. Two workers are recommended; "
+            "three workers use more VRAM and may not improve throughput."
         )
         self.parallel_inference_label = ft.Text(
             "Parallel Inference:", size=FONT_SIZE, width=S(130),
@@ -401,7 +401,7 @@ class GUIBuilderMixin:
         self.hole_fill_mode_label = ft.Text("Hole Fill Mode:", size=FONT_SIZE, width=S(130))
         self.hole_fill_mode_dd = CompactDropdown(
             options=self._hole_fill_mode_options(),
-            value=self._hole_fill_mode_to_display("balanced"), width=S(130), on_select=self.on_stereo_hot_param_change)
+            value=self._hole_fill_mode_to_display("balanced"), width=S(130), on_select=self.on_hole_fill_mode_change)
         self.depth_separation_label = ft.Text("Depth Separation:", size=FONT_SIZE, width=S(130))
         self.depth_separation_dd = CompactDropdown(
             options=self._depth_separation_options(),
@@ -940,7 +940,11 @@ class GUIBuilderMixin:
             display_number = mon["display_number"]
             is_primary = capture_index == primary_index
             suffix = PRIMARY_MONITOR_SUFFIX if is_primary else ""
-            label = f"{display_number}: {mon['width']}x{mon['height']} @ ({mon['left']},{mon['top']}){suffix}"
+            display_name = mon.get("model") or mon.get("name")
+            if display_name:
+                label = f"{display_number}: {display_name} {mon['width']}x{mon['height']}{suffix}"
+            else:
+                label = f"{display_number}: {mon['width']}x{mon['height']} @ ({mon['left']},{mon['top']}){suffix}"
             self.monitor_label_to_index[label] = capture_index
             opts.append(label)
             if label == current_val:

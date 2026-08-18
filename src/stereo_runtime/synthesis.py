@@ -90,7 +90,9 @@ def _layered_synthesis(
     depth: torch.Tensor,
     config: StereoConfig,
     cuda_events: dict[str, object] | None = None,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict]:
+    *,
+    sbs_only: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, dict]:
     stage_times: dict[str, float] = {}
     stage_start = time.perf_counter()
     cuda_events = cuda_events if cuda_events is not None else {}
@@ -109,38 +111,86 @@ def _layered_synthesis(
         depth_pop=config.depth_pop,
         antialias_strength=config.depth_antialias_strength,
     )
+    _record_cuda_event(cuda_events, "synth_depth_postprocess", rgb)
     base_shift = compute_shift_px(depth, rgb.shape[-1], params)
     parallax_debug = shift_debug_info(depth, rgb.shape[-1], params)
+    _record_cuda_event(cuda_events, "synth_shift_response", rgb)
     _record_cuda_event(cuda_events, "synth_depth_shift", rgb)
     stage_times["depth_postprocess_shift_ms"] = (time.perf_counter() - stage_start) * 1000.0
     stage_start = time.perf_counter()
 
     layer_count = max(1, int(config.layers))
-    fused = _try_fused_warp_composite2(
-        rgb,
-        depth,
-        base_shift,
-        layers=layer_count,
-        symmetric=config.symmetric,
-        enabled=config.fused,
+    direct_sbs = None
+    direct_sbs_backend = None
+    direct_sbs_eligible = (
+        sbs_only
+        and config.output_format in {"half_sbs", "full_sbs"}
+        and config.backend == "quality_4k"
+        and layer_count == 2
+        and bool(config.symmetric)
+        and bool(config.fused)
+        and str(config.hole_fill).strip().lower() == "none"
+        and not bool(config.temporal)
+        and not bool(config.refine)
+        and not bool(config.debug_output)
+        and not bool(config.cross_eyed)
+        and int(rgb.shape[-1]) % 2 == 0
     )
-    warp_composite_backend = "triton_warp_composite2" if fused is not None else "torch_grid_sample"
-    if fused is not None:
-        left, right = fused
+    direct_sbs_ms = 0.0
+    if direct_sbs_eligible:
+        try:
+            from .warp_composite_triton import (
+                can_use_triton_warp_composite2,
+                warp_composite2_full_sbs,
+                warp_composite2_half_sbs,
+            )
+            if can_use_triton_warp_composite2(
+                rgb, depth, base_shift, layers=layer_count, symmetric=config.symmetric
+            ):
+                direct_start = time.perf_counter()
+                direct_sbs = (
+                    warp_composite2_half_sbs(rgb, depth, base_shift)
+                    if config.output_format == "half_sbs"
+                    else warp_composite2_full_sbs(rgb, depth, base_shift)
+                )
+                direct_sbs_backend = (
+                    "triton_warp_composite2_half_sbs"
+                    if config.output_format == "half_sbs"
+                    else "triton_warp_composite2_full_sbs"
+                )
+                direct_sbs_ms = (time.perf_counter() - direct_start) * 1000.0
+        except Exception:
+            direct_sbs = None
+            direct_sbs_backend = None
+    if direct_sbs is not None:
+        left, right = rgb, rgb
+        warp_composite_backend = direct_sbs_backend
     else:
-        weights = make_depth_layers(depth, layers=layer_count)
-        left_layers: list[torch.Tensor] = []
-        right_layers: list[torch.Tensor] = []
-        for idx in range(layer_count):
-            layer_shift = base_shift * (0.75 + 0.25 * (idx + 1) / layer_count)
-            left_layers.append(warp_horizontal(rgb, layer_shift, eye_sign=1.0))
-            sign = -1.0 if config.symmetric else -0.9
-            right_layers.append(warp_horizontal(rgb, layer_shift, eye_sign=sign))
+        fused = _try_fused_warp_composite2(
+            rgb,
+            depth,
+            base_shift,
+            layers=layer_count,
+            symmetric=config.symmetric,
+            enabled=config.fused,
+        )
+        warp_composite_backend = "triton_warp_composite2" if fused is not None else "torch_grid_sample"
+        if fused is not None:
+            left, right = fused
+        else:
+            weights = make_depth_layers(depth, layers=layer_count)
+            left_layers: list[torch.Tensor] = []
+            right_layers: list[torch.Tensor] = []
+            for idx in range(layer_count):
+                layer_shift = base_shift * (0.75 + 0.25 * (idx + 1) / layer_count)
+                left_layers.append(warp_horizontal(rgb, layer_shift, eye_sign=1.0))
+                sign = -1.0 if config.symmetric else -0.9
+                right_layers.append(warp_horizontal(rgb, layer_shift, eye_sign=sign))
 
-        left = composite_layers(left_layers, weights)
-        right = composite_layers(right_layers, weights)
+            left = composite_layers(left_layers, weights)
+            right = composite_layers(right_layers, weights)
     _record_cuda_event(cuda_events, "synth_warp", rgb)
-    stage_times["warp_composite_ms"] = (time.perf_counter() - stage_start) * 1000.0
+    stage_times["warp_composite_ms"] = direct_sbs_ms if direct_sbs is not None else (time.perf_counter() - stage_start) * 1000.0
     stage_start = time.perf_counter()
     occlusion_mask_needed = bool(config.occlusion) and (
         config.hole_fill != "none"
@@ -166,7 +216,7 @@ def _layered_synthesis(
         )
     else:
         occlusion_mask_backend = "skipped_no_consumer" if config.occlusion else "none"
-        mask = torch.zeros_like(depth)
+        mask = None
 
     _record_cuda_event(cuda_events, "synth_occlusion", rgb)
     stage_times["occlusion_ms"] = (time.perf_counter() - stage_start) * 1000.0
@@ -237,6 +287,9 @@ def _layered_synthesis(
         "shift_px": base_shift,
         "occlusion_mask": mask,
         "warp_composite_backend": warp_composite_backend,
+        "direct_sbs_backend": direct_sbs_backend or "none",
+        "direct_sbs_ms": float(direct_sbs_ms),
+        "direct_sbs": direct_sbs,
         "occlusion_mask_backend": occlusion_mask_backend,
         "hole_fill_backend": hole_fill_backend,
         "mask_feather_radius": int(config.mask_feather_radius),
@@ -280,6 +333,8 @@ def synthesize_stereo(
     depth: torch.Tensor,
     config: StereoConfig | None = None,
     temporal_state: TemporalState | None = None,
+    *,
+    sbs_only: bool = False,
 ) -> StereoResult:
     synthesis_start = time.perf_counter()
     stage_times: dict[str, float] = {}
@@ -288,6 +343,7 @@ def synthesize_stereo(
     config = config or StereoConfig()
     temporal_reset = False
     scene_gate = None
+    direct_sbs = None
 
     stage_start = time.perf_counter()
     if config.temporal and config.auto_reset_temporal and temporal_state is not None and rgb.is_cuda:
@@ -322,15 +378,32 @@ def synthesize_stereo(
         stage_times["fast_baseline_ms"] = (time.perf_counter() - stage_start) * 1000.0
         if config.backend == "fast_plus":
             stage_start = time.perf_counter()
-            depth_for_mask = match_depth(depth, left.shape[-2], left.shape[-1])
-            mask = make_occlusion_mask(
-                depth_for_mask,
-                shift_px,
-                edge_threshold=0.03,
-                dilation=1,
-                fused=config.fused,
-                screen_edge_suppression=config.screen_edge_mask_suppression,
+            fast_plus_mask_needed = (
+                config.hole_fill != "none"
+                or bool(config.temporal)
+                or bool(config.debug_output)
             )
+            if fast_plus_mask_needed:
+                depth_for_mask = match_depth(depth, left.shape[-2], left.shape[-1])
+                mask = make_occlusion_mask(
+                    depth_for_mask,
+                    shift_px,
+                    edge_threshold=0.03,
+                    dilation=1,
+                    fused=config.fused,
+                    screen_edge_suppression=config.screen_edge_mask_suppression,
+                )
+                occlusion_mask_backend = occlusion_backend(
+                    depth_for_mask,
+                    shift_px,
+                    edge_threshold=0.03,
+                    dilation=1,
+                    fused=config.fused,
+                )
+            else:
+                depth_for_mask = None
+                mask = None
+                occlusion_mask_backend = "skipped_no_consumer"
             _record_cuda_event(cuda_events, "synth_occlusion", rgb)
             stage_times["fast_plus_mask_ms"] = (time.perf_counter() - stage_start) * 1000.0
 
@@ -372,13 +445,7 @@ def synthesize_stereo(
                 "backend": config.backend,
                 "shift_px": shift_px,
                 "occlusion_mask": mask,
-                "occlusion_mask_backend": occlusion_backend(
-                    depth_for_mask,
-                    shift_px,
-                    edge_threshold=0.03,
-                    dilation=1,
-                    fused=config.fused,
-                ),
+                "occlusion_mask_backend": occlusion_mask_backend,
                 "hole_fill_backend": hole_fill_backend,
                 "fast_plus_edge_threshold": 0.03,
                 "fast_plus_edge_dilation": 1,
@@ -397,7 +464,14 @@ def synthesize_stereo(
         if config.backend == "hq_4k" and config.layers < 3:
             config = StereoConfig(**{**config.__dict__, "layers": 3})
         stage_start = time.perf_counter()
-        left, right, mask, debug = _layered_synthesis(rgb, depth, config, cuda_events)
+        left, right, mask, debug = _layered_synthesis(
+            rgb,
+            depth,
+            config,
+            cuda_events,
+            sbs_only=sbs_only,
+        )
+        direct_sbs = debug.pop("direct_sbs", None)
         stage_times["layered_total_ms"] = (time.perf_counter() - stage_start) * 1000.0
         debug["backend"] = config.backend
 
@@ -448,28 +522,34 @@ def synthesize_stereo(
     stage_times["debug_finalize_ms"] = (time.perf_counter() - stage_start) * 1000.0
 
     stage_start = time.perf_counter()
-    debug["sbs_backend"] = sbs_backend(
-        left,
-        right,
-        config.output_format,
-        fused=config.fused,
-        depth=output_depth if config.output_format == "depth_map" else None,
-        anaglyph_method=config.anaglyph_method,
-    )
-    stage_times["sbs_backend_ms"] = (time.perf_counter() - stage_start) * 1000.0
+    if direct_sbs is not None:
+        debug["sbs_backend"] = debug.get("direct_sbs_backend", "triton_direct_sbs")
+        stage_times["sbs_backend_ms"] = 0.0
+        sbs = direct_sbs
+        stage_times["make_sbs_ms"] = 0.0
+    else:
+        debug["sbs_backend"] = sbs_backend(
+            left,
+            right,
+            config.output_format,
+            fused=config.fused,
+            depth=output_depth if config.output_format == "depth_map" else None,
+            anaglyph_method=config.anaglyph_method,
+        )
+        stage_times["sbs_backend_ms"] = (time.perf_counter() - stage_start) * 1000.0
 
-    stage_start = time.perf_counter()
-    sbs = make_sbs(
-        left,
-        right,
-        config.output_format,
-        fused=config.fused,
-        depth=output_depth if config.output_format == "depth_map" else None,
-        anaglyph_method=config.anaglyph_method,
-    )
+        stage_start = time.perf_counter()
+        sbs = make_sbs(
+            left,
+            right,
+            config.output_format,
+            fused=config.fused,
+            depth=output_depth if config.output_format == "depth_map" else None,
+            anaglyph_method=config.anaglyph_method,
+        )
+        stage_times["make_sbs_ms"] = (time.perf_counter() - stage_start) * 1000.0
+
     _record_cuda_event(cuda_events, "synth_sbs", rgb)
-    stage_times["make_sbs_ms"] = (time.perf_counter() - stage_start) * 1000.0
-
     synthesis_total_ms = (time.perf_counter() - synthesis_start) * 1000.0
     stage_accounted_ms = sum(stage_times.values())
     debug.update(stage_times)

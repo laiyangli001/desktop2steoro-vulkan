@@ -385,6 +385,14 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
         capture_fps_provider=adaptive_capture_rate.current_fps,
     )
     callbacks = RuntimeCallbacks(context, show_fps=bool(SHOW_FPS))
+
+    def observe_sbs_fps(sbs_fps, frame_count=None):
+        return adaptive_capture_rate.observe_sbs_fps(
+            sbs_fps,
+            capture_fps=callbacks.capture_fps(),
+            frame_count=frame_count,
+        )
+
     callbacks.breakdown_set_latest(
         "adaptive_capture_target_fps", adaptive_capture_rate.current_fps()
     )
@@ -480,11 +488,7 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
                 on_breakdown_set_latest=callbacks.breakdown_set_latest,
                 on_runtime_fps=callbacks.runtime_fps,
                 on_capture_fps=callbacks.capture_fps,
-                on_sbs_fps=(
-                    adaptive_capture_rate.observe_sbs_fps
-                    if adaptive_capture_rate.enabled
-                    else None
-                ),
+                on_sbs_fps=observe_sbs_fps if adaptive_capture_rate.enabled else None,
             )
             presenter_thread = threading.Thread(
                 target=presenter.run_until,
@@ -525,11 +529,9 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
                 vsync=bool(LOCAL_VSYNC),
                 show_fps=bool(SHOW_FPS),
                 show_fps_provider=callbacks.show_fps,
-                on_sbs_fps=(
-                    adaptive_capture_rate.observe_sbs_fps
-                    if adaptive_capture_rate.enabled
-                    else None
-                ),
+                on_sbs_fps=observe_sbs_fps if adaptive_capture_rate.enabled else None,
+                on_breakdown_inc=callbacks.breakdown_inc,
+                on_breakdown_add_time=callbacks.breakdown_add_time,
             )
             local_viewer_thread = threading.Thread(
                 target=run_vulkan_local_viewer,

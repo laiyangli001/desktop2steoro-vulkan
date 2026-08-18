@@ -142,6 +142,28 @@ def test_populate_monitors_falls_back_to_primary_when_current_missing():
     assert gui.stereo_monitor_dd.options == ["Window Preview", "1: 1920x1080 @ (0,0)"]
 
 
+def test_populate_monitors_includes_detected_model_name():
+    monitors = [
+        {
+            "capture_index": 1,
+            "display_number": 1,
+            "left": 0,
+            "top": 0,
+            "width": 3840,
+            "height": 2160,
+            "model": "VITURE",
+            "name": "Generic PnP Monitor",
+        },
+    ]
+    gui = FakeMonitorGui()
+    monitor_mixin = _load_monitor_methods(monitors, primary_index=1)
+    gui.update_stereo_monitor_menu = monitor_mixin.update_stereo_monitor_menu.__get__(gui, FakeMonitorGui)
+
+    monitor_mixin.populate_monitors(gui)
+
+    assert gui.monitor_dd.value == "1: VITURE 3840x2160 (Primary)"
+
+
 def test_stereo_output_preview_label_follows_gui_language():
     gui = FakeMonitorGui()
     gui.locale = "CN"

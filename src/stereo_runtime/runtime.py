@@ -413,6 +413,7 @@ def _try_openxr_no_fill_fused_rgba_u8(
         depth_pop=float(getattr(config, "depth_pop", 0.0)),
         antialias_strength=float(getattr(config, "depth_antialias_strength", 0.0)),
     )
+    _record_cuda_event(cuda_events, "synth_depth_postprocess", rgb)
     params = ShiftParams(
         depth_strength=float(getattr(config, "depth_strength", 1.0)),
         convergence=getattr(config, "convergence", 0.0),
@@ -423,6 +424,7 @@ def _try_openxr_no_fill_fused_rgba_u8(
         background_shift_scale=float(getattr(config, "background_shift_scale", 1.0)),
     )
     base_shift = compute_shift_px(processed_depth, int(rgb.shape[-1]), params)
+    _record_cuda_event(cuda_events, "synth_shift_response", rgb)
     _record_cuda_event(cuda_events, "synth_depth_shift", rgb)
     depth_shift_ms = (time.perf_counter() - depth_shift_start) * 1000.0
 
@@ -1123,7 +1125,13 @@ class StereoRuntime:
         report["inference_active"] = self._active
         return report
 
-    def process_rgb_frame(self, rgb_frame: torch.Tensor, *, skip_sbs_output: bool = False) -> StereoRuntimeResult:
+    def process_rgb_frame(
+        self,
+        rgb_frame: torch.Tensor,
+        *,
+        skip_sbs_output: bool = False,
+        depth_profile: DepthProfileResult | None = None,
+    ) -> StereoRuntimeResult:
         if not self._active:
             raise RuntimeError("StereoRuntime inference is paused")
         self.load()
@@ -1134,8 +1142,12 @@ class StereoRuntime:
         _record_cuda_event(cuda_events, "start", rgb_frame)
         total_start = time.perf_counter()
         depth_start = time.perf_counter()
-        profile = self._predict_depth_profile(rgb_frame)
-        depth_total_ms = (time.perf_counter() - depth_start) * 1000.0
+        profile = depth_profile or self._predict_depth_profile(rgb_frame)
+        depth_total_ms = (
+            float(profile.total_ms)
+            if depth_profile is not None
+            else (time.perf_counter() - depth_start) * 1000.0
+        )
         depth = profile.depth
         output_rgb = _apply_color_adjustment(rgb_frame, self.config)
         cuda_events.update(getattr(profile, "cuda_timing_events", None) or {})
@@ -1181,6 +1193,7 @@ class StereoRuntime:
                 depth,
                 stereo_config_for_frame,
                 temporal_state=self.temporal_state,
+                sbs_only=not skip_sbs_output,
             )
             cuda_events.update(getattr(stereo, "cuda_timing_events", None) or {})
             stereo.debug_info.setdefault("fast_plus_fused_backend", "not_used")

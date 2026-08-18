@@ -266,8 +266,13 @@ def test_fast_plus_hole_fill_off_skips_fill_algorithms(monkeypatch):
     def unexpected_fill(*args, **kwargs):
         raise AssertionError("hole fill must not run when disabled")
 
+    def unexpected_occlusion(*args, **kwargs):
+        raise AssertionError("occlusion mask must not run without a consumer")
+
     monkeypatch.setattr(synthesis_module, "directional_edge_aware_fill_backend", unexpected_fill)
     monkeypatch.setattr(synthesis_module, "directional_edge_aware_fill", unexpected_fill)
+    monkeypatch.setattr(synthesis_module, "occlusion_backend", unexpected_occlusion)
+    monkeypatch.setattr(synthesis_module, "make_occlusion_mask", unexpected_occlusion)
 
     result = synthesize_stereo(
         rgb,
@@ -283,6 +288,7 @@ def test_fast_plus_hole_fill_off_skips_fill_algorithms(monkeypatch):
     )
 
     assert result.debug_info["hole_fill_backend"] == "none"
+    assert result.debug_info["occlusion_mask_backend"] == "skipped_no_consumer"
     assert result.debug_info["hole_fill_mode"] == "none"
     assert result.debug_info["hole_fill_radius"] == 0
     assert result.debug_info["hole_fill_strength"] == 0.0
@@ -1165,6 +1171,21 @@ def test_warp_horizontal_matches_cached_grid_formula():
     expected = F.grid_sample(rgb, grid, mode="bilinear", padding_mode="reflection", align_corners=True)
     actual = warp_horizontal(rgb, shift_px, eye_sign=eye_sign)
     assert torch.allclose(actual, expected, atol=1e-6, rtol=1e-6)
+
+
+def test_zero_depth_pop_skips_duplicate_depth_pop_pass(monkeypatch: pytest.MonkeyPatch):
+    import stereo_runtime.depth_postprocess as depth_postprocess_module
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("zero depth_pop should skip apply_depth_pop")
+
+    monkeypatch.setattr(depth_postprocess_module, "apply_depth_pop", fail_if_called)
+    depth = torch.tensor([[[[-0.5, 0.25, 1.5]]]], dtype=torch.float32)
+
+    actual = depth_postprocess_module.postprocess_depth(depth, depth_pop=0.0, antialias_strength=0.0)
+
+    assert torch.equal(actual, torch.tensor([[[[0.0, 0.25, 1.0]]]], dtype=torch.float32))
+
 
 def test_negative_depth_pop_uses_realtime_compression_without_pow():
     from stereo_runtime.depth_postprocess import apply_depth_pop

@@ -222,6 +222,14 @@ def runtime_config_from_d2s_settings(
         hole_fill_strength = float(settings.get("Hole Fill Strength", hole_fill_strength))
     export_height, export_width = _depth_export_size_from_settings(settings)
     parallel_workers = _parallel_inference_workers(settings)
+    temporal_strength = max(0.0, float(settings.get("Temporal Strength", 0.75)))
+    temporal_enabled = (
+        hole_fill_mode != "none"
+        and temporal_strength > 0.0
+        and _to_bool(settings.get("Temporal", True))
+    )
+    if not temporal_enabled:
+        temporal_strength = 0.0
 
     return StereoRuntimeConfig(
         model_id=str(model_name),
@@ -255,8 +263,8 @@ def runtime_config_from_d2s_settings(
         dynamic_convergence_strength=float(settings.get("Dynamic Convergence Strength", 0.0)),
         dynamic_convergence_target=float(settings.get("Dynamic Convergence Target", 0.5)),
         dynamic_convergence_alpha=float(settings.get("Dynamic Convergence Alpha", 0.85)),
-        temporal=_to_bool(settings.get("Temporal", True)),
-        temporal_strength=float(settings.get("Temporal Strength", 0.75)),
+        temporal=temporal_enabled,
+        temporal_strength=temporal_strength,
         auto_reset_temporal=_to_bool(settings.get("Auto Scene Reset", settings.get("Auto Reset Temporal", True))),
         scene_reset_threshold=float(settings.get("Scene Reset Threshold", 0.22)),
         depth_pop=float(settings.get("Depth Pop", 0.0)),

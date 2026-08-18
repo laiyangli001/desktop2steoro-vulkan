@@ -12,6 +12,7 @@ import sys
 import time
 from typing import Any, Callable
 
+from utils.display_info import resolve_glfw_monitor_index
 from viewer.cuda_vulkan_interop import CudaVulkanImageImporter
 from viewer.vulkan_resources import VulkanExportableImage, VulkanExportableSemaphore
 
@@ -54,11 +55,6 @@ def is_exclusive_fullscreen_toggle(key: int, action: int, mods: int, glfw: Any) 
         and action == glfw.PRESS
         and bool(mods & glfw.MOD_ALT)
     )
-
-
-def glfw_monitor_array_index(monitor_index: int, monitor_count: int) -> int:
-    """Convert the GUI/MSS 1-based monitor number to GLFW's 0-based index."""
-    return min(max(0, int(monitor_index) - 1), max(0, int(monitor_count) - 1))
 
 
 def should_restore_persistent_fullscreen(
@@ -126,6 +122,17 @@ def frame_to_cuda_rgba(frame: Any) -> Any | None:
             image = image[0]
         if image.ndim != 3:
             return None
+        if (
+            image.dtype == torch.float32
+            and image.shape[0] == 3
+            and image.shape[-1] not in (1, 3, 4)
+        ):
+            try:
+                from stereo_runtime.output_triton import make_chw_rgb_to_hwc_rgba_u8
+
+                return make_chw_rgb_to_hwc_rgba_u8(image.unsqueeze(0))
+            except Exception:
+                pass
         if image.shape[-1] not in (1, 3, 4) and image.shape[0] in (1, 3, 4):
             image = image.permute(1, 2, 0)
         if int(image.shape[-1]) not in (1, 3, 4):
@@ -152,7 +159,9 @@ class VulkanLocalViewerConfig:
     vsync: bool = True
     show_fps: bool = False
     show_fps_provider: Callable[[], bool] | None = None
-    on_sbs_fps: Callable[[float], int] | None = None
+    on_sbs_fps: Callable[[float, int], int] | None = None
+    on_breakdown_inc: Callable[[str, int | float], None] | None = None
+    on_breakdown_add_time: Callable[[str, float], None] | None = None
     window_width: int = 1280
     window_height: int = 720
 
@@ -258,7 +267,7 @@ class VulkanLocalViewer:
             glfw.window_hint(glfw.FOCUS_ON_SHOW, glfw.FALSE)
         monitors = glfw.get_monitors() or []
         monitor = (
-            monitors[glfw_monitor_array_index(self.config.monitor_index, len(monitors))]
+            monitors[resolve_glfw_monitor_index(self.config.monitor_index, glfw)]
             if monitors
             else None
         )
@@ -436,9 +445,9 @@ class VulkanLocalViewer:
             flush=True,
         )
 
-    def _report_present_fps(self, fps: float) -> int | None:
+    def _report_present_fps(self, fps: float, frame_count: int) -> int | None:
         capture_target = (
-            self.config.on_sbs_fps(fps)
+            self.config.on_sbs_fps(fps, frame_count)
             if self.config.on_sbs_fps is not None
             else None
         )
@@ -712,7 +721,7 @@ class VulkanLocalViewer:
         self._fps_frames += 1
         fps = present_fps_if_due(self._fps_frames, now - self._fps_started)
         if fps is not None:
-            self._report_present_fps(fps)
+            self._report_present_fps(fps, self._fps_frames)
             self._fps_frames = 0
             self._fps_started = now
 
@@ -930,11 +939,16 @@ def run_vulkan_local_viewer(*, runtime_q: Any, shutdown_event: Any, config: Vulk
                 if viewer is not None:
                     viewer.poll_events()
                 continue
+            if config.on_breakdown_inc is not None:
+                config.on_breakdown_inc("viewer_get", 1)
             while True:
                 try:
                     result, _started = runtime_q.get_nowait()
                 except queue.Empty:
                     break
+                if config.on_breakdown_inc is not None:
+                    config.on_breakdown_inc("viewer_get", 1)
+                    config.on_breakdown_inc("viewer_drop", 1)
             frame = getattr(result, "sbs", None)
             if frame is None:
                 continue
@@ -942,7 +956,14 @@ def run_vulkan_local_viewer(*, runtime_q: Any, shutdown_event: Any, config: Vulk
                 viewer = VulkanLocalViewer(config)
                 viewer.initialize()
                 print("[VulkanLocalViewer] Vulkan local window initialized", flush=True)
+            present_started = time.perf_counter()
             viewer.present(frame)
+            if config.on_breakdown_add_time is not None:
+                config.on_breakdown_add_time(
+                    "local_present", time.perf_counter() - present_started
+                )
+            if config.on_breakdown_inc is not None:
+                config.on_breakdown_inc("local_presented_frame", 1)
     except StopIteration:
         shutdown_event.set()
     finally:

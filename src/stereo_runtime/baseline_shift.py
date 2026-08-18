@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 import torch
@@ -57,11 +58,42 @@ def _layered_shift_response(depth: torch.Tensor, response: torch.Tensor, params:
     if abs(fg - 1.0) < 1e-6 and abs(mg - 1.0) < 1e-6 and abs(bg - 1.0) < 1e-6:
         return response
     normalized = depth.clamp(0.0, 1.0)
-    background_weight = ((0.5 - normalized) * 2.0).clamp(0.0, 1.0)
-    foreground_weight = ((normalized - 0.5) * 2.0).clamp(0.0, 1.0)
-    midground_weight = (1.0 - background_weight - foreground_weight).clamp(0.0, 1.0)
-    scale = background_weight * bg + midground_weight * mg + foreground_weight * fg
+    background_scale = bg + (2.0 * normalized) * (mg - bg)
+    foreground_scale = mg + (2.0 * normalized - 1.0) * (fg - mg)
+    scale = torch.where(normalized < 0.5, background_scale, foreground_scale)
     return response * scale
+
+
+def _triton_disabled_by_env() -> bool:
+    for name in ("STEREO_RUNTIME_DISABLE_TRITON", "STEREO_LAB_DISABLE_TRITON"):
+        if str(os.environ.get(name, "")).strip().lower() in {"1", "true", "yes", "on"}:
+            return True
+    return False
+
+
+def _try_triton_shift(
+    depth: torch.Tensor,
+    params: ShiftParams,
+    *,
+    output_scale: float,
+) -> torch.Tensor | None:
+    if _triton_disabled_by_env() or isinstance(params.convergence, torch.Tensor):
+        return None
+    try:
+        from .baseline_shift_triton import can_use_triton_layered_shift, compute_layered_shift
+
+        if not can_use_triton_layered_shift(depth, params.convergence):
+            return None
+        return compute_layered_shift(
+            depth,
+            convergence=float(params.convergence),
+            output_scale=output_scale,
+            foreground_scale=max(0.0, float(params.foreground_shift_scale)),
+            midground_scale=max(0.0, float(params.midground_shift_scale)),
+            background_scale=max(0.0, float(params.background_shift_scale)),
+        )
+    except Exception:
+        return None
 
 
 def compute_shift_px(depth: torch.Tensor, width: int, params: ShiftParams) -> torch.Tensor:
@@ -74,8 +106,12 @@ def compute_shift_px(depth: torch.Tensor, width: int, params: ShiftParams) -> to
         max_disparity_px=params.max_disparity_px,
     )
     depth_strength = max(0.0, float(params.depth_strength))
+    output_scale = -depth_strength * budget.max_disparity_px * 0.5
+    fused_shift = _try_triton_shift(depth, params, output_scale=output_scale)
+    if fused_shift is not None:
+        return fused_shift
     response = _layered_shift_response(depth, budget.depth_response(depth), params)
-    return -response * depth_strength * budget.max_disparity_px * 0.5
+    return response * output_scale
 
 
 def shift_debug_info(depth: torch.Tensor, width: int, params: ShiftParams) -> dict[str, float | int | str]:

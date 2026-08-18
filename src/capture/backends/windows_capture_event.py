@@ -5,6 +5,7 @@ import os
 import threading
 import time
 from ctypes import wintypes
+from dataclasses import replace
 
 from capture.types import FrameCopyMode, capture_frame_from_raw
 
@@ -142,6 +143,10 @@ class WindowsCaptureEventRunner:
         self._software_frame_due = 0.0
         self._software_pacing_fps = 0
         self._software_limited_frames = 0
+        self._replay_lock = threading.Lock()
+        self._replay_frame = None
+        self._last_frame_emit_ts = 0.0
+        self._replay_thread = None
 
     @property
     def session(self):
@@ -189,6 +194,59 @@ class WindowsCaptureEventRunner:
         else:
             self._software_frame_due += interval
         return True
+
+    def _target_fps(self) -> int:
+        try:
+            provider = getattr(self.config, "fps_provider", None)
+            return max(1, int(provider() if provider is not None else self.config.fps))
+        except (TypeError, ValueError):
+            return max(1, int(self.config.fps or 60))
+
+    def _remember_emitted_frame(self, captured_frame, now: float) -> None:
+        with self._replay_lock:
+            self._replay_frame = captured_frame
+            self._last_frame_emit_ts = float(now)
+
+    def _replay_frame_if_due(self, now: float):
+        with self._replay_lock:
+            captured_frame = self._replay_frame
+            if captured_frame is None:
+                return None
+            interval = 1.0 / float(self._target_fps())
+            if float(now) - self._last_frame_emit_ts + 1e-9 < interval:
+                return None
+            self._last_frame_emit_ts = float(now)
+            metadata = dict(captured_frame.metadata)
+            metadata["replayed_static_frame"] = True
+            return replace(captured_frame, timestamp=float(now), metadata=metadata)
+
+    def _start_static_replay_worker(
+        self,
+        *,
+        shutdown_event,
+        on_frame,
+        is_paused=None,
+        is_hard_idle=None,
+    ) -> None:
+        def replay_worker():
+            while not shutdown_event.is_set():
+                interval = 1.0 / float(self._target_fps())
+                if shutdown_event.wait(min(0.02, max(0.001, interval * 0.25))):
+                    break
+                if (is_hard_idle is not None and is_hard_idle()) or (
+                    is_paused is not None and is_paused()
+                ):
+                    continue
+                replay_frame = self._replay_frame_if_due(time.perf_counter())
+                if replay_frame is not None:
+                    on_frame(replay_frame)
+
+        self._replay_thread = threading.Thread(
+            target=replay_worker,
+            name="CaptureStaticReplay",
+            daemon=True,
+        )
+        self._replay_thread.start()
 
     def _log_capture_fps(self, now: float) -> None:
         if self.capture_tool != "WindowsCaptureCUDA":
@@ -306,6 +364,12 @@ class WindowsCaptureEventRunner:
         _setup_dpi_awareness()
         WindowsCapture, Frame, InternalCaptureControl = _load_windows_capture(self.capture_tool)
         self._start_keyboard_worker(shutdown_event)
+        self._start_static_replay_worker(
+            shutdown_event=shutdown_event,
+            on_frame=on_frame,
+            is_paused=is_paused,
+            is_hard_idle=is_hard_idle,
+        )
 
         while not shutdown_event.is_set():
             if on_tick is not None:
@@ -352,21 +416,21 @@ class WindowsCaptureEventRunner:
                 copy_start_time = time.perf_counter()
                 raw, copy_mode, frame_raw_device = _copy_frame_buffer(frame.frame_buffer, self.capture_tool)
                 enqueue_start_time = time.perf_counter()
-                on_frame(
-                    capture_frame_from_raw(
-                        raw,
-                        self.config.output_resolution,
-                        capture_start_time,
-                        config=self.config,
-                        copy_mode=copy_mode,
-                        original_format=type(frame.frame_buffer).__name__,
-                        frame_raw_device=frame_raw_device,
-                        metadata={
-                            "backend": "windows_capture_event",
-                            "zero_copy": copy_mode is FrameCopyMode.GPU_TENSOR,
-                        },
-                    )
+                captured_frame = capture_frame_from_raw(
+                    raw,
+                    self.config.output_resolution,
+                    capture_start_time,
+                    config=self.config,
+                    copy_mode=copy_mode,
+                    original_format=type(frame.frame_buffer).__name__,
+                    frame_raw_device=frame_raw_device,
+                    metadata={
+                        "backend": "windows_capture_event",
+                        "zero_copy": copy_mode is FrameCopyMode.GPU_TENSOR,
+                    },
                 )
+                self._remember_emitted_frame(captured_frame, capture_start_time)
+                on_frame(captured_frame)
                 handler_end_time = time.perf_counter()
                 self._record_capture_timing(
                     copy_seconds=enqueue_start_time - copy_start_time,
@@ -396,3 +460,6 @@ class WindowsCaptureEventRunner:
             if shutdown_event.is_set():
                 break
             time.sleep(0.1)
+
+        if self._replay_thread is not None:
+            self._replay_thread.join(timeout=0.2)

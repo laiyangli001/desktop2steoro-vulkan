@@ -1,6 +1,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 import sys
+import threading
 
 import pytest
 
@@ -33,9 +34,25 @@ def _callbacks(depth_strength: float = 0.75) -> RuntimeCallbacks:
             stereo_config=SimpleNamespace(depth_strength=depth_strength)
         ),
         openxr_state=FakeOpenXrState(depth_strength),
-        fps_breakdown=SimpleNamespace(inc=lambda *_args, **_kwargs: None),
+        fps_breakdown=SimpleNamespace(
+            inc=lambda *_args, **_kwargs: None,
+            add_runtime_timing=lambda *_args, **_kwargs: None,
+        ),
     )
     return RuntimeCallbacks(context)
+
+
+def test_local_breakdown_is_not_gated_by_openxr_render_state() -> None:
+    callbacks = _callbacks()
+    callbacks.context.run_mode = "Viewer"
+    callbacks.context.openxr_state.render_active = threading.Event()
+
+    assert callbacks._render_active_for_breakdown() is True
+
+    callbacks.context.run_mode = "OpenXR"
+    assert callbacks._render_active_for_breakdown() is False
+    callbacks.context.openxr_state.render_active.set()
+    assert callbacks._render_active_for_breakdown() is True
 
 
 def test_capture_fps_reports_accepted_capture_rate_and_expires(monkeypatch) -> None:

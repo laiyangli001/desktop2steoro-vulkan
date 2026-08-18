@@ -138,7 +138,15 @@ class DownloadProgress(_NullProgress):
             total = operator.length_hint(iterable, 0) if iterable is not None else (args[0] if args else None)
         super().__init__(str(kwargs.get("desc") or "download"), total=total)
         self.iterable = iterable
-        self._progress_unit = "steps" if iterable is not None else "bytes"
+        requested_unit = str(kwargs.get("unit") or "").strip().lower()
+        if requested_unit in {"step", "steps", "it", "items"}:
+            self._progress_unit = "steps"
+        elif requested_unit in {"byte", "bytes", "b"}:
+            self._progress_unit = "bytes"
+        else:
+            # tqdm.contrib.concurrent.thread_map constructs the progress
+            # object with total+smoothing but without passing the iterable.
+            self._progress_unit = "steps" if iterable is not None or "smoothing" in kwargs else "bytes"
         self.n = int(kwargs.get("initial") or 0)
         self._mininterval = float(kwargs.get("mininterval") or 0.25)
         self.leave = bool(kwargs.get("leave", True))

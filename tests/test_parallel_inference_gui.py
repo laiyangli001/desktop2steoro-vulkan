@@ -25,9 +25,11 @@ def test_parallel_inference_is_left_of_cross_eyed_in_advanced_row() -> None:
     assert "stereo_row4" in source[source.index("self._advanced_stereo_rows"):]
 
 
-def test_parallel_inference_tooltip_warns_against_multiple_workers() -> None:
+def test_parallel_inference_tooltip_recommends_two_stage_pipeline() -> None:
     tooltip = get_messages("ZH")["tooltip_parallel_inference"]
-    assert tooltip == "实验用：不要开启两路或三路推理，多路推理效果更差。"
+    assert "推荐两路" in tooltip
+    assert "深度推理与 SBS 合成流水并行" in tooltip
+    assert "三路" in tooltip
 
 
 def test_controller_model_options_come_only_from_scanned_directories() -> None:

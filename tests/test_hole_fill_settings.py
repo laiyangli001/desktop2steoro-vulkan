@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from gui.localization import (
     display_to_hole_fill_mode,
     get_messages,
@@ -58,6 +60,33 @@ def test_gui_stereo_presets_select_expected_hole_fill_modes() -> None:
     ]
 
 
+def test_hole_fill_mode_controls_gui_temporal_strength() -> None:
+    class Host(GUIConfigMixin):
+        def __init__(self):
+            self.hole_fill_mode_dd = SimpleNamespace(value="关闭 / 不补洞")
+            self.temporal_strength_dd = SimpleNamespace(value="0.25")
+            self.stereo_preset_dd = SimpleNamespace(value="cinema")
+            self.hot_save_count = 0
+
+        def _display_to_preset(self, value):
+            return value
+
+        def on_stereo_hot_param_change(self, e=None):
+            self.hot_save_count += 1
+
+    host = Host()
+    host.on_hole_fill_mode_change()
+
+    assert host.temporal_strength_dd.value == "0.00"
+    assert host.hot_save_count == 1
+
+    host.hole_fill_mode_dd.value = "均衡 / 标准"
+    host.on_hole_fill_mode_change()
+
+    assert host.temporal_strength_dd.value == "0.25"
+    assert host.hot_save_count == 2
+
+
 def test_hole_fill_off_settings_disable_runtime_fill() -> None:
     config = runtime_config_from_d2s_settings(
         {
@@ -65,6 +94,8 @@ def test_hole_fill_off_settings_disable_runtime_fill() -> None:
             "Hole Fill Mode": "关闭 / 不补洞",
             "Hole Fill Radius": 3,
             "Hole Fill Strength": 1.0,
+            "Temporal": True,
+            "Temporal Strength": 0.25,
         },
         cache_dir="models",
         device="cpu",
@@ -75,9 +106,13 @@ def test_hole_fill_off_settings_disable_runtime_fill() -> None:
     assert config.hole_fill_mode == "none"
     assert config.hole_fill_radius == 0
     assert config.hole_fill_strength == 0.0
+    assert config.temporal is False
+    assert config.temporal_strength == 0.0
 
     stereo_config = stereo_config_from_runtime(config)
     assert stereo_config.hole_fill == "none"
     assert stereo_config.hole_fill_mode == "none"
     assert stereo_config.hole_fill_radius == 0
     assert stereo_config.hole_fill_strength == 0.0
+    assert stereo_config.temporal is False
+    assert stereo_config.temporal_strength == 0.0

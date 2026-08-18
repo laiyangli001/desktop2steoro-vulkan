@@ -48,6 +48,7 @@ def postprocess_depth(
     antialias_strength: float = 0.0,
 ) -> torch.Tensor:
     out = ensure_b1hw(depth).float().clamp(0.0, 1.0)
-    out = apply_depth_pop(out, depth_pop)
+    if abs(float(depth_pop)) >= 1e-6:
+        out = apply_depth_pop(out, depth_pop)
     out = anti_alias_depth(out, antialias_strength)
     return out

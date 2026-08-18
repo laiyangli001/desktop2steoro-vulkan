@@ -2,6 +2,7 @@ import logging
 import subprocess
 
 from utils import OS_NAME
+from utils.display_info import enumerate_displays
 
 from . import devices as devices_module
 
@@ -42,63 +43,9 @@ def get_primary_monitor_index():
 
 def list_monitors():
     """Return display monitors with capture index and user-facing display number."""
-    try:
-        import mss
-        with mss.mss() as sct:
-            monitors = [
-                {
-                    "capture_index": idx,
-                    "display_number": idx,
-                    "left": mon["left"],
-                    "top": mon["top"],
-                    "width": mon["width"],
-                    "height": mon["height"],
-                }
-                for idx, mon in enumerate(sct.monitors[1:], start=1)
-            ]
-    except Exception:
-        return []
-
-    if OS_NAME == "Windows":
-        _apply_windows_display_numbers(monitors)
-        monitors = sorted(monitors, key=lambda mon: mon["display_number"])
-        for display_number, mon in enumerate(monitors, start=1):
-            mon["device_display_number"] = mon["display_number"]
-            mon["display_number"] = display_number
-        return monitors
-
-    return sorted(monitors, key=lambda mon: mon["display_number"])
+    return [display.as_dict() for display in enumerate_displays(OS_NAME)]
 
 
-def _apply_windows_display_numbers(monitors):
-    rect_to_number = {}
-    try:
-        import win32api
-        for handle, _hdc, rect in win32api.EnumDisplayMonitors():
-            info = win32api.GetMonitorInfo(handle)
-            display_number = _display_number_from_device(info.get("Device", ""))
-            if display_number is not None:
-                rect_to_number[tuple(rect)] = display_number
-    except Exception:
-        return
-
-    for mon in monitors:
-        rect = (
-            mon["left"],
-            mon["top"],
-            mon["left"] + mon["width"],
-            mon["top"] + mon["height"],
-        )
-        display_number = rect_to_number.get(rect)
-        if display_number is not None:
-            mon["display_number"] = display_number
-
-
-def _display_number_from_device(device_name):
-    suffix = str(device_name).upper().rsplit("DISPLAY", 1)[-1]
-    if not suffix.isdigit():
-        return None
-    return int(suffix)
 def _get_primary_monitor_index_unix():
     try:
         import mss

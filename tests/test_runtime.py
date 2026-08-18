@@ -111,6 +111,29 @@ def test_runtime_process_rgb_frame_uses_persistent_provider_and_returns_report()
     assert provider.close_count == 1
 
 
+def test_runtime_process_rgb_frame_accepts_precomputed_depth_profile():
+    provider = FakeDepthProvider()
+    runtime = StereoRuntime(
+        StereoRuntimeConfig(
+            model_id="lc700x/Distill-Any-Depth-Base-hf",
+            depth_backend="pytorch_cuda",
+            stereo_quality="fast",
+            output_format="half_sbs",
+            temporal=False,
+        ),
+        depth_provider=provider,
+        collect_memory_stats=False,
+    )
+    rgb = torch.rand(1, 3, 8, 12)
+    profile = provider.predict_profile(rgb)
+
+    result = runtime.process_rgb_frame(rgb, depth_profile=profile)
+
+    assert provider.predict_count == 1
+    assert result.depth is profile.depth
+    assert result.timing["depth_total_ms"] == pytest.approx(profile.total_ms)
+
+
 def test_runtime_inference_gate_pauses_processing_and_reports_state():
     provider = FakeDepthProvider()
     config = StereoRuntimeConfig(
