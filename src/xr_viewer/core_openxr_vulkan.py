@@ -95,7 +95,13 @@ from .windows_input import (
     _send_mouse_flags,
     _send_key,
     _set_cursor_pos,
-    _get_desktop_size,
+)
+from .input import (
+    _TOUCH_AVAILABLE,
+    _TOUCH_CONTACT_ID_LEFT,
+    _TOUCH_CONTACT_ID_RIGHT,
+    _TOUCH_PINCH_SPREAD_GAIN,
+    _touch_injector,
 )
 from utils import LANG
 from gui.localization import normalize_locale
@@ -525,6 +531,9 @@ class OpenXrVulkanConfig:
     swapchain_color_mode: str = "srgb"
     controller_model: str = "PICO"
     headset_model: str = _DEFAULT_XR_HEADSET_PRESET.key
+    # MSS 1-based monitor whose desktop is captured and shown in VR. Used to
+    # map the laser screen UV to the correct virtual-desktop cursor position.
+    monitor_index: int = 1
     controller_guide_max_distance: float = 0.4
     filament_bridge_path: str | None = None
     filament_glb_path: str | None = None
@@ -1172,12 +1181,21 @@ class OpenXrVulkanPresenter(
         self._kb_held_key_r = None
         self._kb_held_mods_l = None
         self._kb_held_mods_r = None
+        self._kb_rpt_t_l = 0.0   # last auto-repeat emit time (left)
+        self._kb_rpt_t_r = 0.0
+        self._kb_rpt_n_l = 0     # repeats emitted; 0 = still in initial delay
+        self._kb_rpt_n_r = 0
         self._haptic_last_l = 0.0
         self._haptic_last_r = 0.0
         self._grip_l_now = False
         self._grip_r_now = False
         self._pointer_state = {"left": "idle", "right": "idle"}
         self._pointer_press_time = {"left": 0.0, "right": 0.0}
+        # Windows multi-touch contacts (preferred over mouse clicks).
+        self._touch_state = {"left": "idle", "right": "idle"}
+        self._touch_px = {"left": (0, 0), "right": (0, 0)}
+        self._touch_valid = {"left": False, "right": False}
+        self._touch_trig_prev = {"left": 0.0, "right": 0.0}
         self._left_grab_anchor = None
         self._right_grab_anchor = None
         self._screen_hit_grab_anchor_l = None
@@ -3338,6 +3356,219 @@ class OpenXrVulkanPresenter(
             flush=True,
         )
 
+    def _target_monitor_rect(self) -> tuple[int, int, int, int]:
+        """Return (left, top, width, height) of the captured monitor.
+
+        Port of the legacy ``_get_target_monitor_rect``. Monitor indices
+        follow the MSS 1-based convention; falls back to the primary monitor.
+        Cached per monitor index so the Win32 enumeration runs once.
+        """
+        cached = getattr(self, "_target_mon_rect_cache", None)
+        if cached is not None and cached[0] == self.config.monitor_index:
+            return cached[1]
+        if sys.platform != "win32":
+            rect = (0, 0, 1920, 1080)
+        else:
+            from ctypes import wintypes
+
+            class _RECT(ctypes.Structure):
+                _fields_ = [
+                    ("left", wintypes.LONG),
+                    ("top", wintypes.LONG),
+                    ("right", wintypes.LONG),
+                    ("bottom", wintypes.LONG),
+                ]
+
+            class _MONITORINFO(ctypes.Structure):
+                _fields_ = [
+                    ("cbSize", wintypes.DWORD),
+                    ("rcMonitor", _RECT),
+                    ("rcWork", _RECT),
+                    ("dwFlags", wintypes.DWORD),
+                ]
+
+            monitors: list[tuple[int, int, int, int]] = []
+
+            def _enumerate_monitor(
+                _handle, _hdc, _p_rect, _lparam
+            ) -> bool:
+                info = _MONITORINFO()
+                info.cbSize = ctypes.sizeof(_MONITORINFO)
+                ctypes.windll.user32.GetMonitorInfoW(
+                    _handle, ctypes.byref(info)
+                )
+                r = info.rcMonitor
+                monitors.append(
+                    (r.left, r.top, r.right - r.left, r.bottom - r.top)
+                )
+                return True
+
+            _CALLBACK = ctypes.WINFUNCTYPE(
+                wintypes.BOOL,
+                wintypes.HMONITOR,
+                wintypes.HDC,
+                ctypes.POINTER(_RECT),
+                wintypes.LPARAM,
+            )
+            ctypes.windll.user32.EnumDisplayMonitors(
+                None, None, _CALLBACK(_enumerate_monitor), 0
+            )
+            index = max(0, int(self.config.monitor_index) - 1)
+            rect = (
+                monitors[index] if index < len(monitors) else (0, 0, 1920, 1080)
+            )
+        self._target_mon_rect_cache = (int(self.config.monitor_index), rect)
+        return rect
+
+    def _cursor_pixel_for_screen_uv(self, u: float, v: float) -> tuple[int, int]:
+        """Map the bottom-to-top screen UV to virtual-desktop cursor pixels.
+
+        Matches the legacy ``_screen_uv_to_source_top_uv``: v=0 is the bottom
+        of the screen quad (image bottom), so the Windows cursor y must use
+        ``(1 - v)`` because Windows y grows downward.
+        """
+        left, top, width, height = self._target_monitor_rect()
+        return (
+            int(left + float(u) * width),
+            int(top + (1.0 - float(v)) * height),
+        )
+
+    def _hand_keyboard_hit(self, hand_index: int) -> bool:
+        """True when the hand's laser currently intersects the keyboard."""
+        if not self._keyboard_visible:
+            return False
+        origin, direction = self._controller_interaction_ray(hand_index)
+        if origin is None or direction is None:
+            return False
+        return self._keyboard_plane_hit(origin, direction) != (None, None)
+
+    def _screen_edge_px_for_hand(self, hand_index: int):
+        """Clamp the interaction ray to the screen edge in desktop pixels.
+
+        An active touch drag that briefly grazes off-screen keeps updating at
+        the clamped edge so Windows sees uninterrupted motion data (the legacy
+        fast-drag "cursor stuck at edge" fix).
+        """
+        origin, direction = self._controller_interaction_ray(hand_index)
+        if origin is None or direction is None:
+            return None
+        uv = self._screen_plane_uv(origin, direction)
+        if uv is None:
+            return None
+        u = max(0.0, min(1.0, float(uv[0])))
+        v = max(0.0, min(1.0, float(uv[1])))
+        return self._cursor_pixel_for_screen_uv(u, v)
+
+    def _clamp_touch_px(self, x: float, y: float) -> tuple[int, int]:
+        """Clamp touch coordinates to the captured monitor's pixel bounds."""
+        left, top, width, height = self._target_monitor_rect()
+        if width > 0 and height > 0:
+            x = max(float(left), min(float(left + width - 1), x))
+            y = max(float(top), min(float(top + height - 1), y))
+        return int(round(x)), int(round(y))
+
+    def _update_touch_contacts(self, inputs, hits) -> bool:
+        """Drive Windows multi-touch contacts for both hands (preferred).
+
+        Returns True while touch injection is active, in which case the mouse
+        click/drag fallback is disabled. Mirrors the legacy ``_handle_triggers``
+        lifecycle with the documented bug fixes applied:
+          * the raw laser-mapped pixel position is used directly (the second
+            EMA stage caused drag lag / "fast drag = small move" / cursor hang),
+          * an active contact survives off-screen by clamping to the screen
+            edge, and
+          * an UP fires at the current laser position (no post-release snap).
+        ``SetCursorPos`` suppression during a two-contact gesture is handled
+        by the caller via ``_touch_state``.
+        """
+        if not _TOUCH_AVAILABLE or _touch_injector is None:
+            return False
+        hands = []
+        for name, hand_index, hit in (
+            ("left", 0, hits[0]),
+            ("right", 1, hits[1]),
+        ):
+            trigger = float(inputs[hand_index].get("trigger", 0.0) or 0.0)
+            keyboard_hit = self._hand_keyboard_hit(hand_index)
+            valid = hit is not None and not keyboard_hit
+            if valid:
+                self._touch_px[name] = self._cursor_pixel_for_screen_uv(
+                    hit[0], hit[1]
+                )
+            else:
+                edge = self._screen_edge_px_for_hand(hand_index)
+                if edge is not None:
+                    self._touch_px[name] = edge
+            self._touch_valid[name] = valid
+            suffix = "l" if hand_index == 0 else "r"
+            grip = bool(
+                float(inputs[hand_index].get("grip", 0.0) or 0.0) > 0.5
+                and getattr(self, f"_grip_target_{suffix}") in ("screen", "keyboard")
+            )
+            trig_prev = self._touch_trig_prev[name]
+            if self._touch_state[name] == "down":
+                want_down = trigger > 0.3 and not grip
+            else:
+                want_down = (
+                    trigger >= 0.7 and trig_prev < 0.7 and valid and not grip
+                )
+            hands.append(
+                {
+                    "name": name,
+                    "contact_id": (
+                        _TOUCH_CONTACT_ID_LEFT
+                        if hand_index == 0
+                        else _TOUCH_CONTACT_ID_RIGHT
+                    ),
+                    "want_down": want_down,
+                    "px": self._touch_px[name],
+                    "trig": trigger,
+                }
+            )
+        # Two simultaneous DOWNs spread around their midpoint so pinch/zoom
+        # responds with less physical travel (legacy gain).
+        if len(hands) == 2 and all(hand["want_down"] for hand in hands):
+            gain = float(_TOUCH_PINCH_SPREAD_GAIN)
+            if gain > 1.0:
+                p0 = hands[0]["px"]
+                p1 = hands[1]["px"]
+                cx = (float(p0[0]) + float(p1[0])) * 0.5
+                cy = (float(p0[1]) + float(p1[1])) * 0.5
+                hands[0]["px"] = self._clamp_touch_px(
+                    cx + (float(p0[0]) - cx) * gain,
+                    cy + (float(p0[1]) - cy) * gain,
+                )
+                hands[1]["px"] = self._clamp_touch_px(
+                    cx + (float(p1[0]) - cx) * gain,
+                    cy + (float(p1[1]) - cy) * gain,
+                )
+        for hand in hands:
+            self._touch_trig_prev[hand["name"]] = hand["trig"]
+            # Only publish a real transition (DOWN / held UPDATE / UP from a
+            # held contact), matching the legacy _handle_triggers call pattern.
+            if hand["want_down"] or self._touch_state[hand["name"]] == "down":
+                px = hand["px"]
+                _touch_injector.set(
+                    hand["contact_id"], px[0], px[1], hand["want_down"]
+                )
+            self._touch_state[hand["name"]] = "down" if hand["want_down"] else "idle"
+        _touch_injector.flush()
+        return bool(_touch_injector.available)
+
+    def _cancel_touch_contacts(self) -> None:
+        """Lift every active touch contact (menu open / grip / shutdown)."""
+        if not _TOUCH_AVAILABLE or _touch_injector is None:
+            return
+        for name, contact_id in (
+            ("left", _TOUCH_CONTACT_ID_LEFT),
+            ("right", _TOUCH_CONTACT_ID_RIGHT),
+        ):
+            if self._touch_state[name] == "down":
+                px = self._touch_px[name]
+                _touch_injector.set(contact_id, px[0], px[1], want_down=False)
+                self._touch_state[name] = "idle"
+        _touch_injector.flush()
+
     def _handle_vulkan_pointer_input(self) -> None:
         """Reuse legacy trigger hold/drag semantics for the Vulkan screen."""
         self._right_grip_screen_pointer_applied = False
@@ -3576,6 +3807,7 @@ class OpenXrVulkanPresenter(
                 dt=input_dt,
                 laser_hit=hits[1],
             )
+        touch_active = self._update_touch_contacts(inputs, hits)
         for name, hand, hit, down_flag, up_flag in (
             ("left", inputs[0], hits[0], _MOUSEEVENTF_RIGHTDOWN, _MOUSEEVENTF_RIGHTUP),
             ("right", inputs[1], hits[1], _MOUSEEVENTF_LEFTDOWN, _MOUSEEVENTF_LEFTUP),
@@ -3583,20 +3815,33 @@ class OpenXrVulkanPresenter(
             trigger = float(hand.get("trigger", 0.0) or 0.0)
             state = self._pointer_state[name]
             hand_index = 0 if name == "left" else 1
-            aim_matrix = self._aim_mat_l if hand_index == 0 else self._aim_mat_r
-            keyboard_hit = False
-            ray_origin, ray_direction = self._controller_interaction_ray(hand_index)
-            if self._keyboard_visible and aim_matrix is not None:
-                keyboard_hit = self._keyboard_plane_hit(
-                    ray_origin, ray_direction
-                ) != (None, None)
+            keyboard_hit = self._hand_keyboard_hit(hand_index)
+            if touch_active:
+                # Windows multi-touch is the preferred input. The OS pins the
+                # cursor to an active contact, so only move SetCursorPos for
+                # hover, and never fight a two-contact gesture (pinch/zoom/pan)
+                # with it.
+                if (
+                    hit is not None
+                    and not keyboard_hit
+                    and not (
+                        self._touch_state["left"] == "down"
+                        and self._touch_state["right"] == "down"
+                    )
+                ):
+                    _set_cursor_pos(*self._cursor_pixel_for_screen_uv(hit[0], hit[1]))
+                self._pointer_state[name] = "idle"
+                continue
             if hit is None or keyboard_hit:
                 if state != "idle":
                     _send_mouse_flags(up_flag)
                 self._pointer_state[name] = "idle"
                 continue
+            # Move the OS cursor every frame the laser is on the screen,
+            # matching the legacy _handle_cursor continuous tracking. The
+            # trigger press below then clicks at this already-updated spot.
+            _set_cursor_pos(*self._cursor_pixel_for_screen_uv(hit[0], hit[1]))
             if state == "idle" and trigger >= 0.7:
-                _set_cursor_pos(int(hit[0] * _get_desktop_size()[0]), int(hit[1] * _get_desktop_size()[1]))
                 _send_mouse_flags(down_flag)
                 _send_mouse_flags(up_flag)
                 self._pointer_press_time[name] = now
@@ -3611,10 +3856,9 @@ class OpenXrVulkanPresenter(
                 if trigger <= 0.3:
                     _send_mouse_flags(up_flag)
                     self._pointer_state[name] = "idle"
-                else:
-                    _set_cursor_pos(int(hit[0] * _get_desktop_size()[0]), int(hit[1] * _get_desktop_size()[1]))
 
     def _open_settings_menu(self) -> None:
+        self._cancel_touch_contacts()
         if self._head_position_w is None or self._head_model_matrix is None:
             return
         head_basis = np.asarray(self._head_model_matrix[:3, :3], dtype=np.float64)
@@ -4652,6 +4896,11 @@ class OpenXrVulkanPresenter(
         print("[OpenXRViewer] Headset detected; source inference resumed", flush=True)
 
     def close(self) -> None:
+        if _TOUCH_AVAILABLE and _touch_injector is not None:
+            try:
+                _touch_injector.cancel_all()
+            except Exception:
+                pass
         xr = self.xr
         vulkan_device_lost = bool(
             self.vulkan is not None

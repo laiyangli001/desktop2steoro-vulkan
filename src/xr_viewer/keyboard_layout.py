@@ -1,6 +1,9 @@
 # Desktop2Stereo OpenXR viewer: virtual keyboard layout constants.
 
-__all__ = ['_KB_UNITS_WIDE', '_KB_ROWS', '_KeyEntry', '_KB_TEX_W', '_KB_TEX_H']
+__all__ = [
+    '_KB_UNITS_WIDE', '_KB_ROWS', '_KeyEntry', '_KB_TEX_W', '_KB_TEX_H',
+    '_KB_HYSTERESIS_M', '_KB_REPEAT_DELAY', '_KB_REPEAT_INTERVAL',
+]
 
 # Virtual keyboard layout
 
@@ -46,7 +49,7 @@ _KB_ROWS = [
     ('C',0x43,None,0x43,1),('V',0x56,None,0x56,1),('B',0x42,None,0x42,1),
     ('N',0x4E,None,0x4E,1),('M',0x4D,None,0x4D,1),(',',0xBC,'<',0xBC,1),
     ('.',0xBE,'>',0xBE,1),('/',0xBF,'?',0xBF,1),('Shift',0x10,None,0x10,2.75),
-    ('',-1,None,-1,1),('Up',0x26,None,0x26,1),('',-1,None,-1,1)],
+    ('',-1,None,-1,1),('▲',0x26,None,0x26,1),('',-1,None,-1,1)],
     # Row 4: bottom + arrow cluster -Down sits directly under Up at col 16-17.
     # 1.5+1+1.25+7.5+1.25+1+1.5 = 15.0   then  ->1) | ->1) | ->1)
     [('Ctrl',0x11,None,0x11,1.5),('Win',0x5B,None,0x5B,1),
@@ -54,10 +57,21 @@ _KB_ROWS = [
     ('Space',0x20,None,0x20,7.5),
     ('Alt',0x12,None,0x12,1.25),('Apps',0x5D,None,0x5D,1),
     ('Ctrl',0x11,None,0x11,1.5),
-    ('Left',0x25,None,0x25,1),('Down',0x28,None,0x28,1),('Right',0x27,None,0x27,1)],
+    ('◀',0x25,None,0x25,1),('▼',0x28,None,0x28,1),('▶',0x27,None,0x27,1)],
 ]
 
 import collections as _collections
 _KeyEntry = _collections.namedtuple('_KeyEntry', 'label shifted_label vk shifted_vk rect_uv rect_local')
 
 _KB_TEX_W, _KB_TEX_H = 1280, 384   # keyboard texture: 6 rows x 18 units
+
+# Sticky-key hysteresis margin (metres) grown around the currently hovered or
+# held key so hand tremor at a key border does not flip the selection to a
+# neighbour. Fixed in world space because the tremor source (the hand) is
+# world-space; 6 mm is roughly a quarter of a legacy keyboard key width.
+_KB_HYSTERESIS_M = 0.006
+# Auto-repeat for a held virtual key (Windows defaults: ~500 ms delay, ~30 Hz).
+# Windows does not auto-repeat synthetic keybd_event input, so the runtime
+# re-sends key-down on this schedule itself.
+_KB_REPEAT_DELAY = 0.5
+_KB_REPEAT_INTERVAL = 0.033

@@ -1,8 +1,14 @@
 import ctypes
 import math
+import time
 
 import numpy as np
 
+from .keyboard_layout import (
+    _KB_HYSTERESIS_M,
+    _KB_REPEAT_DELAY,
+    _KB_REPEAT_INTERVAL,
+)
 from .windows_input import (
     _KEYEVENTF_KEYUP,
     _send_hscroll,
@@ -129,9 +135,12 @@ class CoreInputHelpersMixin:
             rt = self._read_float_action(self._act_right_trigger, "/user/hand/right")
 
         HOVER_DEBOUNCE = 0
-        for trig_now, trig_prev_attr, hover_attr, held_key_attr, held_mods_attr, aim_mat, debounce_attr in [
-            (lt, '_kb_trig_prev_l', '_kb_hover_l', '_kb_held_key_l', '_kb_held_mods_l', self._aim_mat_l, '_kb_debounce_l'),
-            (rt, '_kb_trig_prev_r', '_kb_hover_r', '_kb_held_key_r', '_kb_held_mods_r', self._aim_mat_r, '_kb_debounce_r'),
+        for (trig_now, trig_prev_attr, hover_attr, held_key_attr, held_mods_attr,
+             rpt_t_attr, rpt_n_attr, aim_mat, debounce_attr) in [
+            (lt, '_kb_trig_prev_l', '_kb_hover_l', '_kb_held_key_l', '_kb_held_mods_l',
+             '_kb_rpt_t_l', '_kb_rpt_n_l', self._aim_mat_l, '_kb_debounce_l'),
+            (rt, '_kb_trig_prev_r', '_kb_hover_r', '_kb_held_key_r', '_kb_held_mods_r',
+             '_kb_rpt_t_r', '_kb_rpt_n_r', self._aim_mat_r, '_kb_debounce_r'),
         ]:
             trig_prev = getattr(self, trig_prev_attr)
             held_key = getattr(self, held_key_attr)
@@ -162,11 +171,23 @@ class CoreInputHelpersMixin:
                         smooth = prev_smooth + (np.array([lx_ly[0], lx_ly[1]], dtype='f8') - prev_smooth) * alpha
                     setattr(self, smooth_attr, smooth)
                     sx, sy = float(smooth[0]), float(smooth[1])
-                    for key_index, key in enumerate(self._keyboard_keys):
-                        x0, y0, x1, y1 = key.rect_local
-                        if x0 <= sx <= x1 and y0 <= sy <= y1:
-                            raw_idx = key_index
-                            break
+                    # Sticky key first: keep the currently hovered/held key while
+                    # the ray is still within its hysteresis-grown rect, so hand
+                    # tremor at a key border does not flip the selection to a
+                    # neighbour (physical-keyboard feel).
+                    raw_idx = None
+                    sticky = held_key if held_key is not None else getattr(self, hover_attr)
+                    if sticky is not None and 0 <= sticky < len(self._keyboard_keys):
+                        x0, y0, x1, y1 = self._keyboard_keys[sticky].rect_local
+                        if (x0 - _KB_HYSTERESIS_M <= sx <= x1 + _KB_HYSTERESIS_M
+                                and y0 - _KB_HYSTERESIS_M <= sy <= y1 + _KB_HYSTERESIS_M):
+                            raw_idx = sticky
+                    if raw_idx is None:
+                        for key_index, key in enumerate(self._keyboard_keys):
+                            x0, y0, x1, y1 = key.rect_local
+                            if x0 <= sx <= x1 and y0 <= sy <= y1:
+                                raw_idx = key_index
+                                break
                 else:
                     setattr(self, '_kb_smooth_l' if hover_attr.endswith('_l') else '_kb_smooth_r', None)
             else:
@@ -189,12 +210,10 @@ class CoreInputHelpersMixin:
                 self._pulse_haptic(hand_path, amplitude=0.18, duration_s=0.018, min_interval_s=0.045)
 
             if held_key is not None:
-                release = False
+                # ▶Release held regular key only when the trigger drops▶
+                # A physical key stays down until you lift your finger; sliding
+                # the laser off it must NOT release it nor press the neighbour.
                 if trig_now < RELEASE_THRESH:
-                    release = True
-                elif idx != held_key:
-                    release = True
-                if release:
                     shift_dn, ctrl_dn, alt_dn, win_dn, vk_held = held_mods
                     kbd(vk_held, 0, _KEYEVENTF_KEYUP, 0)
                     if win_dn:
@@ -207,7 +226,21 @@ class CoreInputHelpersMixin:
                         kbd(VK_CTRL, 0, _KEYEVENTF_KEYUP, 0)
                     setattr(self, held_key_attr, None)
                     setattr(self, held_mods_attr, None)
+                    setattr(self, rpt_t_attr, 0.0)
+                    setattr(self, rpt_n_attr, 0)
                     held_key = None
+                else:
+                    # ▶Auto-repeat like a physical keyboard▶
+                    # Windows does not auto-repeat synthetic keybd_event input,
+                    # so re-send key-down on our own delay/rate schedule.
+                    now_t = time.monotonic()
+                    t0 = getattr(self, rpt_t_attr, 0.0)
+                    n = getattr(self, rpt_n_attr, 0)
+                    due = _KB_REPEAT_DELAY if n == 0 else _KB_REPEAT_INTERVAL
+                    if now_t - t0 >= due:
+                        kbd(held_mods[4], 0, 0, 0)
+                        setattr(self, rpt_t_attr, now_t)
+                        setattr(self, rpt_n_attr, n + 1)
 
             if trig_now >= CLICK_THRESH and trig_prev < CLICK_THRESH and idx is not None:
                 key = self._keyboard_keys[idx]
@@ -218,11 +251,11 @@ class CoreInputHelpersMixin:
                     self._caps_lock = not self._caps_lock
                 else:
                     self._press_key(key, idx, held_key_attr, held_mods_attr)
+                    setattr(self, rpt_t_attr, time.monotonic())
+                    setattr(self, rpt_n_attr, 0)
 
-            if held_key is None and trig_now >= CLICK_THRESH and idx is not None and trig_prev >= CLICK_THRESH:
-                key = self._keyboard_keys[idx]
-                if key.vk not in (VK_SHIFT, VK_CTRL, VK_ALT, VK_WIN, VK_CAPS):
-                    self._press_key(key, idx, held_key_attr, held_mods_attr)
+            # ponytail: no slide-to-new-key. Trigger held = one key locked,
+            # like a finger on a physical key.
 
             setattr(self, trig_prev_attr, trig_now)
 
