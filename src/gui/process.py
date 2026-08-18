@@ -64,6 +64,7 @@ _ASYNCIO_SHUTDOWN_UNRAISABLE_MESSAGES = (
 _asyncio_shutdown_noise_filter_installed = False
 _console_logging_installed = False
 _gui_log_handler = None
+_file_log_handler = None
 logger = logging.getLogger(__name__)
 status_logger = logging.getLogger("status")
 child_logger = logging.getLogger("child")
@@ -163,6 +164,39 @@ def _disable_flet_logging():
         logging.getLogger(name).disabled = True
 
 
+def _setup_file_log_handler():
+    """Create (or re-create) the file handler that appends to the log file."""
+    global _file_log_handler
+    if _file_log_handler is None:
+        handler = logging.FileHandler(LOG_FILE, mode="a", encoding="utf-8")
+        handler.setLevel(logging.DEBUG)
+        handler.addFilter(_FletInfoAsDebugFilter())
+        handler.addFilter(_CpuOperationAsCriticalFilter())
+        handler.setFormatter(logging.Formatter(
+            "[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s", "%H:%M:%S"
+        ))
+        logging.getLogger().addHandler(handler)
+        _file_log_handler = handler
+    return _file_log_handler
+
+
+def _release_file_log_handler():
+    """Close and detach the file handler so the log file is free for the OS.
+
+    The next run re-creates it in append mode; only a GUI restart truncates
+    the file. Between runs the GUI logs to console and the GUI queue only.
+    """
+    global _file_log_handler
+    handler = _file_log_handler
+    _file_log_handler = None
+    if handler is not None:
+        try:
+            logging.getLogger().removeHandler(handler)
+            handler.close()
+        except Exception:
+            pass
+
+
 def _setup_console_logging():
     """Configure console logging, file logging, and GUI log queue."""
     global _console_logging_installed, _gui_log_handler
@@ -202,13 +236,7 @@ def _setup_console_logging():
         "[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s", "%H:%M:%S"
     ))
 
-    file_handler = logging.FileHandler(LOG_FILE, mode="a", encoding="utf-8")
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.addFilter(_FletInfoAsDebugFilter())
-    file_handler.addFilter(_CpuOperationAsCriticalFilter())
-    file_handler.setFormatter(logging.Formatter(
-        "[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s", "%H:%M:%S"
-    ))
+    _setup_file_log_handler()
 
     gui_handler = GuiLogHandler(maxlen=2000)
     gui_handler.setLevel(logging.DEBUG)
@@ -220,7 +248,6 @@ def _setup_console_logging():
     ))
 
     root.addHandler(console_handler)
-    root.addHandler(file_handler)
     root.addHandler(gui_handler)
     _gui_log_handler = gui_handler
 
@@ -377,6 +404,9 @@ class GUIProcessMixin:
         self._cancel_starting = False
         self._esc_stopped = False
         self._stopping = False
+        # Re-attach the file handler (append mode) for this run's log output;
+        # it was released after the previous run so the file stayed free.
+        _setup_file_log_handler()
         _set_console_quick_edit(False)
         self._set_log_panel_visible(self._config.get("Show Log Panel", DEFAULTS["Show Log Panel"]))
         self._set_running_ui(True)
@@ -653,6 +683,18 @@ class GUIProcessMixin:
         _set_console_quick_edit(True)
         if not self._closed:
             self._set_running_ui(False)
+        # Release the log file so it is not locked by the GUI between runs.
+        # The next run re-adds the file handler in append mode.
+        _release_file_log_handler()
+
+    def _release_file_log_handler_if_idle(self):
+        """Free the log file once startup logging is done, unless a run is active."""
+        running = getattr(self, "_starting", False) or (
+            getattr(self, "process", None) is not None
+            and getattr(self.process, "returncode", None) is None
+        )
+        if not running:
+            _release_file_log_handler()
 
     def _show_log_panel(self):
         panel = getattr(self, "log_panel", None)
@@ -688,7 +730,11 @@ class GUIProcessMixin:
             return
         panel.visible = bool(visible)
         self._sync_log_visibility_link()
-        self._fit_window_to_content(update=update, resize_window=True)
+        # Re-layout within the current window size. Do NOT resize the native
+        # window: clicking Run shows the log panel and would otherwise clobber
+        # the user's manually chosen size. The explicit "Hide log window" link
+        # still fits the window via _resize_window_after_log_visibility_change.
+        self._fit_window_to_content(update=update, resize_window=False)
         if save:
             path = os.path.join(BASE_DIR, "settings.yaml")
             cfg = self._config.copy()
@@ -989,7 +1035,11 @@ class GUIProcessMixin:
             if handler is not None:
                 for item in list(handler.cache)[-200:]:
                     lines.append(self._format_gui_log_line(item))
-            lines.extend(["", "=== Config ===", json.dumps(getattr(self, "_config", {}), indent=2, ensure_ascii=False)])
+            lines.extend(["", "=== Config ===", json.dumps(
+                {k: v for k, v in getattr(self, "_config", {}).items() if k != "Model List"},
+                indent=2,
+                ensure_ascii=False,
+            )])
             text = "\n".join(lines)
             try:
                 import pyperclip

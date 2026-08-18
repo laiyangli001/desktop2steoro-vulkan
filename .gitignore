@@ -28,3 +28,4 @@ native/filament/bridge/*.lib
 .ci-artifacts/
 .tools/
 artifacts/
+AGENTS.md

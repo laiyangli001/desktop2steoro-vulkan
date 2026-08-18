@@ -94,6 +94,8 @@ class Desktop2StereoGUI(
         self._auto_align_labels()
         self.page.on_close = self._on_page_close
         self.page.on_resize = self._on_page_resize
+        self._startup_fit_pending = False
+        self._startup_fit_width = 0
 
         # Populate monitors & devices
         self.monitor_label_to_index = self.populate_monitors()
@@ -124,7 +126,11 @@ class Desktop2StereoGUI(
         self.page.on_keyboard_event = self._on_key
         self._esc_task = asyncio.ensure_future(self._esc_poll_task())
         self._set_log_panel_visible(self._config.get("Show Log Panel", DEFAULTS["Show Log Panel"]), update=False)
-        self._fit_window_to_content(update=False)
+        # Size the window to the fitted content BEFORE showing it. Applying the
+        # size after visible=True lets the Flet client fall back to its own
+        # default / restored width on the first render, which is why the
+        # hide-log window opened wider than its fitted width on first launch.
+        self._fit_window_to_content(update=False, resize_window=True)
         self.page.window.visible = True
         self.page.update()
         await asyncio.sleep(0)
@@ -141,6 +147,11 @@ class Desktop2StereoGUI(
             logger.exception("Failed to write GUI ready flag")
 
     async def _prepare_startup_after_window_visible(self):
+        # Mimic the log visibility link's resize action so the first-render
+        # window matches the width that clicking show/hide log produces for the
+        # saved Show Log Panel setting (the client drops early resizes).
+        if not getattr(self, "_closed", False):
+            asyncio.create_task(self._apply_startup_fit())
         self.set_status(
             UI_MESSAGES[self.locale].get(
                 "Preparing Flet package...",
@@ -157,6 +168,9 @@ class Desktop2StereoGUI(
                 ),
                 key="Startup preparation complete",
             )
+            # Startup logging is done: release the file so it is not locked
+            # while the GUI idles before the first run.
+            self._release_file_log_handler_if_idle()
         except Exception as exc:
             logger.exception("Startup preparation failed")
             message = UI_MESSAGES[self.locale].get(

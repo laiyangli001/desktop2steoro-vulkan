@@ -160,6 +160,7 @@ def _openxr_projection_config(settings: dict) -> dict[str, object]:
         "headset_model": str(
             settings.get("XR Headset Model", DEFAULT_XR_HEADSET_MODEL)
         ),
+        "monitor_index": max(1, int(settings.get("Monitor Index", 1) or 1)),
     }
 
 

@@ -81,18 +81,23 @@ class GUIBuilderMixin:
         self.page.window.max_width = None
         if resize_window:
             self.page.window.width = width
-        self.page.window.height = self._estimate_window_height()
-        if resize_window:
+            self.page.window.height = self._estimate_window_height()
             try:
                 self.page.window.update()
             except RuntimeError:
                 pass
-            self.page.window.width = None
+            # Keep the explicit width set: clearing it to None right after the
+            # first render lets the Flet client fall back to its own default /
+            # restored geometry, which drifts from the fitted hide/show widths.
         if update:
             self.page.update()
 
     def _on_page_resize(self, e=None):
         """Debounce a repaint after Windows minimize/restore transitions."""
+        if e is not None and getattr(self, "_startup_fit_pending", False):
+            event_width = getattr(e, "width", 0) or 0
+            if event_width < getattr(self, "_startup_fit_width", 0) + 100:
+                self._startup_fit_pending = False
         task = getattr(self, "_resize_repaint_task", None)
         if task is not None and not task.done():
             task.cancel()
@@ -100,6 +105,28 @@ class GUIBuilderMixin:
         if loop is None or loop.is_closed() or getattr(self, "_closed", False):
             return
         self._resize_repaint_task = loop.create_task(self._repaint_after_resize())
+
+    async def _apply_startup_fit(self):
+        try:
+            self._startup_fit_pending = False
+            for _ in range(8):
+                if getattr(self, "_closed", False):
+                    return
+                await asyncio.sleep(0.4)
+                if getattr(self, "_closed", False):
+                    return
+                self._startup_fit_width = self._estimate_window_width()
+                self._startup_fit_pending = True
+                # Mimic the log visibility link's resize action, which is known
+                # to work once the client is ready; retry until the client
+                # confirms via a resize event (early resizes get dropped).
+                await self._resize_window_after_log_visibility_change()
+                await asyncio.sleep(0.4)
+                if not getattr(self, "_startup_fit_pending", False):
+                    return
+            self._startup_fit_pending = False
+        except (asyncio.CancelledError, RuntimeError):
+            return
 
     async def _repaint_after_resize(self):
         try:
