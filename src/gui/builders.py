@@ -1021,7 +1021,11 @@ class GUIBuilderMixin:
         self.stereo_monitor_dd.options = opts
         self.stereo_monitor_dd.value = current
         if not valid:
-            self.stereo_monitor_dd.value = opts[0] if opts else preview_label
+            # Prefer a real external monitor over window mode when the previous
+            # selection no longer exists (e.g. it matched the new input monitor).
+            self.stereo_monitor_dd.value = (
+                opts[1] if len(opts) > 1 else (opts[0] if opts else preview_label)
+            )
         self.stereo_monitor_dd.update()
 
     def update_depth_resolution_options(self, model_name):

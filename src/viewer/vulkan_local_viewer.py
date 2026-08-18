@@ -61,6 +61,47 @@ def glfw_monitor_array_index(monitor_index: int, monitor_count: int) -> int:
     return min(max(0, int(monitor_index) - 1), max(0, int(monitor_count) - 1))
 
 
+def glfw_monitor_for_mss_index(glfw: Any, monitor_index: int, monitors: list[Any]) -> Any | None:
+    """Return the GLFW monitor matching the GUI/MSS 1-based monitor number.
+
+    MSS numbers physical displays from 1 (``monitors[0]`` is the virtual
+    bounding box), while GLFW's handle order is not guaranteed to match MSS
+    order.  Match by position and size like the legacy viewer, falling back to
+    index arithmetic when geometry matching is unavailable or fails.
+    """
+    if not monitors:
+        return None
+    mss_index = int(monitor_index)
+    if mss_index < 1 or mss_index >= len(monitors) + 1:
+        mss_index = 1
+    mss_target = None
+    try:
+        import mss
+
+        with mss.mss() as sct:
+            mss_monitors = sct.monitors
+        if mss_index < len(mss_monitors):
+            mss_target = mss_monitors[mss_index]
+    except Exception:
+        mss_target = None
+    if mss_target is None:
+        return monitors[0]
+    mss_x, mss_y = mss_target["left"], mss_target["top"]
+    mss_w, mss_h = mss_target["width"], mss_target["height"]
+    for gmon in monitors:
+        gx, gy = glfw.get_monitor_pos(gmon)
+        mode = glfw.get_video_mode(gmon)
+        gw, gh = mode.size.width, mode.size.height
+        if (
+            abs(gx - mss_x) <= 5
+            and abs(gy - mss_y) <= 5
+            and abs(gw - mss_w) <= 5
+            and abs(gh - mss_h) <= 5
+        ):
+            return gmon
+    return monitors[0]
+
+
 def should_restore_persistent_fullscreen(
     fullscreen: bool, visible: bool, iconic: bool, topmost: bool
 ) -> bool:
@@ -242,6 +283,7 @@ class VulkanLocalViewer:
         self._windowed_rect = (40, 40, config.window_width, config.window_height)
         self._fps_frames = 0
         self._fps_started = time.perf_counter()
+        self._show_fps_override: bool | None = None
 
     def initialize(self) -> None:
         import glfw
@@ -258,7 +300,7 @@ class VulkanLocalViewer:
             glfw.window_hint(glfw.FOCUS_ON_SHOW, glfw.FALSE)
         monitors = glfw.get_monitors() or []
         monitor = (
-            monitors[glfw_monitor_array_index(self.config.monitor_index, len(monitors))]
+            glfw_monitor_for_mss_index(glfw, self.config.monitor_index, monitors)
             if monitors
             else None
         )
@@ -302,8 +344,70 @@ class VulkanLocalViewer:
             )
 
     def _on_key(self, _window: Any, key: int, _scancode: int, action: int, mods: int) -> None:
-        if is_exclusive_fullscreen_toggle(key, action, mods, self.glfw):
+        if action != self.glfw.PRESS:
+            return
+        glfw = self.glfw
+        if is_exclusive_fullscreen_toggle(key, action, mods, glfw):
             self._set_exclusive_fullscreen(not self._exclusive_fullscreen)
+        elif key in (glfw.KEY_ENTER, glfw.KEY_SPACE):
+            self._set_exclusive_fullscreen(not self._exclusive_fullscreen)
+        elif key == glfw.KEY_ESCAPE:
+            glfw.set_window_should_close(self.window, True)
+        elif key == glfw.KEY_LEFT:
+            self._move_to_adjacent_monitor(-1)
+        elif key == glfw.KEY_RIGHT:
+            self._move_to_adjacent_monitor(+1)
+        elif key == glfw.KEY_F:
+            self._show_fps_override = not self._current_show_fps()
+            print(
+                f"[VulkanLocalViewer] FPS display: "
+                f"{'on' if self._show_fps_override else 'off'}",
+                flush=True,
+            )
+
+    def _current_show_fps(self) -> bool:
+        if self._show_fps_override is not None:
+            return self._show_fps_override
+        if self.config.show_fps_provider is not None:
+            return bool(self.config.show_fps_provider())
+        return self.config.show_fps
+
+    def _move_to_adjacent_monitor(self, direction: int) -> None:
+        glfw = self.glfw
+        monitors = glfw.get_monitors() or []
+        if not monitors:
+            return
+        try:
+            current = monitors.index(self._target_monitor)
+        except ValueError:
+            current = 0
+        new_monitor = monitors[(current + direction) % len(monitors)]
+        self._target_monitor = new_monitor
+        if self._exclusive_fullscreen:
+            mode = glfw.get_video_mode(new_monitor)
+            mx, my = glfw.get_monitor_pos(new_monitor)
+            glfw.set_window_pos(self.window, int(mx), int(my))
+            glfw.set_window_size(
+                self.window, int(mode.size.width), int(mode.size.height)
+            )
+        else:
+            self._position_on_monitor(new_monitor)
+        print(
+            f"[VulkanLocalViewer] Window moved to monitor {((current + direction) % len(monitors)) + 1}",
+            flush=True,
+        )
+
+    def _position_on_monitor(self, monitor: Any) -> None:
+        glfw = self.glfw
+        mx, my = glfw.get_monitor_pos(monitor)
+        mode = glfw.get_video_mode(monitor)
+        mon_w, mon_h = mode.size.width, mode.size.height
+        win_w, win_h = glfw.get_window_size(self.window)
+        width, height = min(win_w, mon_w), min(win_h, mon_h)
+        x = mx + (mon_w - width) // 2
+        y = my + (mon_h - height) // 2
+        glfw.set_window_pos(self.window, x, y)
+        self._windowed_rect = (x, y, width, height)
 
     def poll_events(self) -> None:
         self.glfw.poll_events()
@@ -442,11 +546,7 @@ class VulkanLocalViewer:
             if self.config.on_sbs_fps is not None
             else None
         )
-        show_fps = (
-            bool(self.config.show_fps_provider())
-            if self.config.show_fps_provider is not None
-            else self.config.show_fps
-        )
+        show_fps = self._current_show_fps()
         if not show_fps:
             return capture_target
         target_text = (

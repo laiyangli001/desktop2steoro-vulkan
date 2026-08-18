@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+
 import numpy as np
 
 from viewer.vulkan_local_viewer import (
@@ -10,6 +12,7 @@ from viewer.vulkan_local_viewer import (
     frame_to_cuda_rgba,
     frame_to_rgba_bytes,
     glfw_monitor_array_index,
+    glfw_monitor_for_mss_index,
     is_exclusive_fullscreen_toggle,
     present_fps_if_due,
     should_restore_persistent_fullscreen,
@@ -93,11 +96,204 @@ def test_alt_enter_toggles_exclusive_fullscreen_once_per_press() -> None:
     assert not is_exclusive_fullscreen_toggle(257, 1, 0, _GlfwKeys)
 
 
+def test_key_handler_ignores_release_events() -> None:
+    keys = _GlfwKeys
+    calls = []
+
+    class _Glfw:
+        KEY_ENTER = keys.KEY_ENTER
+        KEY_SPACE = 32
+        KEY_ESCAPE = 256
+        KEY_LEFT = 263
+        KEY_RIGHT = 262
+        KEY_F = 70
+        MOD_ALT = keys.MOD_ALT
+        PRESS = keys.PRESS
+
+        @staticmethod
+        def set_window_should_close(window, value):
+            calls.append(("close", value))
+
+    viewer = VulkanLocalViewer(VulkanLocalViewerConfig())
+    viewer.glfw = _Glfw
+    viewer.window = object()
+    viewer._on_key(None, keys.KEY_ENTER, 0, keys.RELEASE, 0)
+    assert calls == []
+    assert viewer._exclusive_fullscreen is False
+
+
+def test_key_handler_escape_closes_window() -> None:
+    keys = _GlfwKeys
+    calls = []
+
+    class _Glfw:
+        KEY_ENTER = keys.KEY_ENTER
+        KEY_SPACE = 32
+        KEY_ESCAPE = 256
+        KEY_LEFT = 263
+        KEY_RIGHT = 262
+        KEY_F = 70
+        MOD_ALT = keys.MOD_ALT
+        PRESS = keys.PRESS
+
+        @staticmethod
+        def set_window_should_close(window, value):
+            calls.append(("close", value))
+
+    viewer = VulkanLocalViewer(VulkanLocalViewerConfig())
+    viewer.glfw = _Glfw
+    viewer.window = object()
+    viewer._on_key(None, 256, 0, keys.PRESS, 0)
+    assert calls == [("close", True)]
+
+
+def test_key_handler_f_toggles_fps_display() -> None:
+    keys = _GlfwKeys
+
+    class _Glfw:
+        KEY_ENTER = keys.KEY_ENTER
+        KEY_SPACE = 32
+        KEY_ESCAPE = 256
+        KEY_LEFT = 263
+        KEY_RIGHT = 262
+        KEY_F = 70
+        MOD_ALT = keys.MOD_ALT
+        PRESS = keys.PRESS
+
+    viewer = VulkanLocalViewer(VulkanLocalViewerConfig(show_fps=False))
+    viewer.glfw = _Glfw
+    viewer.window = object()
+    assert viewer._current_show_fps() is False
+    viewer._on_key(None, 70, 0, keys.PRESS, 0)
+    assert viewer._current_show_fps() is True
+    viewer._on_key(None, 70, 0, keys.PRESS, 0)
+    assert viewer._current_show_fps() is False
+
+
+def test_key_handler_enter_toggles_exclusive_fullscreen() -> None:
+    keys = _GlfwKeys
+
+    class _Glfw:
+        KEY_ENTER = keys.KEY_ENTER
+        KEY_SPACE = 32
+        KEY_ESCAPE = 256
+        KEY_LEFT = 263
+        KEY_RIGHT = 262
+        KEY_F = 70
+        MOD_ALT = keys.MOD_ALT
+        PRESS = keys.PRESS
+
+    class _Monitor:
+        pass
+
+    viewer = VulkanLocalViewer(VulkanLocalViewerConfig())
+    viewer.glfw = _Glfw
+    viewer.window = object()
+    viewer._target_monitor = _Monitor()
+    viewer._windowed_rect = (10, 20, 800, 600)
+    viewer._set_exclusive_fullscreen = lambda enabled: setattr(
+        viewer, "_exclusive_fullscreen", enabled
+    )
+    viewer._on_key(None, keys.KEY_ENTER, 0, keys.PRESS, 0)
+    assert viewer._exclusive_fullscreen is True
+
+
 def test_gui_monitor_number_maps_to_glfw_array_index() -> None:
     assert glfw_monitor_array_index(1, 3) == 0
     assert glfw_monitor_array_index(2, 3) == 1
     assert glfw_monitor_array_index(99, 3) == 2
     assert glfw_monitor_array_index(0, 3) == 0
+
+
+def test_gui_monitor_number_matches_glfw_monitor_by_geometry(monkeypatch) -> None:
+    import types
+
+    class _ModeSize:
+        width = 1920
+        height = 1080
+
+    class _Mode:
+        size = _ModeSize()
+
+    class _Sct:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        monitors = [
+            {"left": 0, "top": 0, "width": 3840, "height": 1080},
+            {"left": 0, "top": 0, "width": 1920, "height": 1080},
+            {"left": 1920, "top": 0, "width": 1920, "height": 1080},
+        ]
+
+    class _Mss:
+        @staticmethod
+        def mss():
+            return _Sct()
+
+    monkeypatch.setitem(
+        sys.modules, "mss", types.SimpleNamespace(mss=_Mss.mss)
+    )
+
+    class _Glfw:
+        @staticmethod
+        def get_monitor_pos(name):
+            return {"a": (0, 0), "b": (1920, 0)}[name]
+
+        @staticmethod
+        def get_video_mode(name):
+            return _Mode()
+
+    monitors = ["a", "b"]
+    assert glfw_monitor_for_mss_index(_Glfw, 1, monitors) == "a"
+    assert glfw_monitor_for_mss_index(_Glfw, 2, monitors) == "b"
+
+
+def test_gui_monitor_number_falls_back_to_primary_when_geometry_missing(
+    monkeypatch,
+) -> None:
+    import types
+
+    class _Sct:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        monitors = [
+            {"left": 0, "top": 0, "width": 3840, "height": 1080},
+            {"left": 0, "top": 0, "width": 1920, "height": 1080},
+            {"left": 1920, "top": 0, "width": 1920, "height": 1080},
+        ]
+
+    class _Mss:
+        @staticmethod
+        def mss():
+            return _Sct()
+
+    monkeypatch.setitem(sys.modules, "mss", types.SimpleNamespace(mss=_Mss.mss))
+
+    class _Glfw:
+        @staticmethod
+        def get_monitor_pos(name):
+            return {"a": (0, 0), "b": (0, 2000)}[name]
+
+        @staticmethod
+        def get_video_mode(name):
+            class _ModeSize:
+                width = 800
+                height = 600
+
+            class _Mode:
+                size = _ModeSize()
+
+            return _Mode()
+
+    assert glfw_monitor_for_mss_index(_Glfw, 2, ["a"]) == "a"
+    assert glfw_monitor_for_mss_index(_Glfw, 99, ["a"]) == "a"
 
 
 def test_persistent_fullscreen_restores_hidden_minimized_or_non_topmost_window() -> None:
