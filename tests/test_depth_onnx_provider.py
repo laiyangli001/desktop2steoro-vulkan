@@ -253,6 +253,7 @@ def test_create_depth_provider_supports_native_tensorrt(monkeypatch, tmp_path):
             device="cuda",
             cache_dir=tmp_path,
             build_engine=True,
+            depth_resolution=336,
         )
     )
 
@@ -261,6 +262,8 @@ def test_create_depth_provider_supports_native_tensorrt(monkeypatch, tmp_path):
     assert provider.onnx_path.name == "model_fp16_294x518.onnx"
     assert provider.engine_path.name == "model_fp16_294x518.trt"
     assert provider.build_engine is True
+    assert provider.info.depth_resolution == 336
+    assert provider._preprocessor.input_size(2160, 3840) == (196, 336)
 
     provider._ensure_artifacts_for_input(768, 1024)
     assert provider.onnx_path == tmp_path / "model.onnx"

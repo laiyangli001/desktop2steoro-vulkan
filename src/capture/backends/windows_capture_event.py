@@ -236,6 +236,8 @@ class WindowsCaptureEventRunner:
             return
         gap = now - self._last_frame_ts if self._last_frame_ts > 0.0 else 0.0
         self._last_frame_ts = now
+        if not _env_bool("D2S_WGC_CAPTURE_GAP_LOG"):
+            return
         if gap < 0.5:
             return
         if self._capture_gap_logs >= CAPTURE_GAP_LOG_LIMIT:

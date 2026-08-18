@@ -151,6 +151,14 @@ def test_room_tab_exposes_models_three_seats_and_live_sliders():
     ] == ["Front", "Middle", "Back"]
 
 
+def test_default_environment_hides_room_tab():
+    menu = OpenXrSettingsMenu()
+    menu.room_tab_visible = False
+
+    assert "tab:room" not in {control.key for control in menu.controls()}
+    assert menu.set_tab("room") is False
+
+
 def test_room_tab_keeps_three_model_rows_above_seat_and_live_controls():
     menu = OpenXrSettingsMenu()
     menu.room_models = tuple(

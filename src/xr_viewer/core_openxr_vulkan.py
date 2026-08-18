@@ -718,6 +718,8 @@ class OpenXrVulkanPresenter(
         self.swapchains: list[_EyeSwapchain] = []
         self._controller_composition_swapchain: _EyeSwapchain | None = None
         self._controller_composition_layer_logged = False
+        self._vulkan_controller_proxy_swapchains: list[_EyeSwapchain] = []
+        self._vulkan_controller_proxy_layer_logged = False
         self._panorama_swapchain: _EyeSwapchain | None = None
         self._panorama_staging: VulkanHostImage | None = None
         self._panorama_size: tuple[int, int] | None = None
@@ -1915,6 +1917,12 @@ class OpenXrVulkanPresenter(
                         if controller_layer is not None:
                             layer_structures.append(controller_layer)
                             layer_pointers.append(ctypes.pointer(controller_layer))
+                        controller_proxy_layer = self._render_vulkan_controller_proxy_layer(
+                            views
+                        )
+                        if controller_proxy_layer is not None:
+                            layer_structures.append(controller_proxy_layer)
+                            layer_pointers.append(ctypes.pointer(controller_proxy_layer))
                         if self._on_breakdown_add_time is not None:
                             self._on_breakdown_add_time(
                                 "openxr_layer_pointers",
@@ -4053,9 +4061,15 @@ class OpenXrVulkanPresenter(
             (key, environment_display_label(key, locale, display_names))
             for key in room_keys
         )
-        self._settings_menu_values["room:model"] = (
+        selected_room = (
             Path(self.config.filament_profile_path).parent.name
             if self.config.filament_profile_path else "Default"
+        )
+        self._settings_menu.room_tab_visible = selected_room.strip().lower() != "default"
+        if not self._settings_menu.room_tab_visible and self._settings_menu.tab == "room":
+            self._settings_menu.set_tab("picture")
+        self._settings_menu_values["room:model"] = (
+            selected_room
         )
         self._settings_menu_values["room:seat_index"] = int(
             self._filament_view_pose_index
@@ -4677,6 +4691,12 @@ class OpenXrVulkanPresenter(
             except Exception:
                 pass
             self._controller_composition_swapchain = None
+        for eye in reversed(self._vulkan_controller_proxy_swapchains):
+            try:
+                self._destroy_projection_swapchain(eye)
+            except Exception:
+                pass
+        self._vulkan_controller_proxy_swapchains.clear()
         for attachment in self._filament_depth_attachments:
             try:
                 attachment.close()
@@ -5108,6 +5128,17 @@ class OpenXrVulkanPresenter(
                 self.swapchains.append(
                     self._create_projection_swapchain(width, height)
                 )
+        if self._vulkan_controller_proxy_enabled and len(self.swapchains) == 2:
+            try:
+                self._vulkan_controller_proxy_swapchains = [
+                    self._create_projection_swapchain(width, height)
+                    for width, height in eye_extents
+                ]
+            except Exception:
+                for eye in reversed(self._vulkan_controller_proxy_swapchains):
+                    self._destroy_projection_swapchain(eye)
+                self._vulkan_controller_proxy_swapchains.clear()
+                raise
 
     def _release_projection_render_targets(self) -> None:
         if self.vulkan is None:
@@ -5121,6 +5152,9 @@ class OpenXrVulkanPresenter(
                 self._controller_composition_swapchain
             )
             self._controller_composition_swapchain = None
+        for eye in reversed(self._vulkan_controller_proxy_swapchains):
+            self._destroy_projection_swapchain(eye)
+        self._vulkan_controller_proxy_swapchains.clear()
         for attachment in self._filament_depth_attachments:
             attachment.close()
         self._filament_depth_attachments.clear()
@@ -7418,10 +7452,19 @@ class OpenXrVulkanPresenter(
             "controller_screen_light_cast_shadows",
             self._controller_screen_light_cast_shadows,
         ))
-        self._environment_screen_light_enabled = bool(profile.get(
-            "environment_screen_light_enabled",
-            self._environment_screen_light_enabled,
-        ))
+        default_environment = bool(
+            self.config.filament_profile_path
+            and Path(self.config.filament_profile_path).parent.name.strip().lower()
+            == "default"
+        )
+        self._environment_screen_light_enabled = (
+            False
+            if default_environment
+            else bool(profile.get(
+                "environment_screen_light_enabled",
+                self._environment_screen_light_enabled,
+            ))
+        )
         self._environment_screen_light_cast_shadows = bool(profile.get(
             "environment_screen_light_cast_shadows",
             self._environment_screen_light_cast_shadows,
@@ -7975,6 +8018,75 @@ class OpenXrVulkanPresenter(
             layer_flags=(
                 self.xr.CompositionLayerFlags.BLEND_TEXTURE_SOURCE_ALPHA_BIT
             ),
+        )
+
+    def _render_vulkan_controller_proxy_layer(
+        self, views: list[Any]
+    ) -> Any | None:
+        swapchains = self._vulkan_controller_proxy_swapchains
+        screen_pass = self._vulkan_projection_screen_pass
+        params = self._projection_controller_proxy_params()
+        if (
+            not self._vulkan_controller_proxy_enabled
+            or screen_pass is None
+            or params is None
+            or len(swapchains) != 2
+            or len(views) < 2
+        ):
+            return None
+        acquired_images: list[tuple[_EyeSwapchain, int]] = []
+        try:
+            for eye in swapchains:
+                image_index = self.xr.acquire_swapchain_image(eye.handle)
+                acquired_images.append((eye, image_index))
+            for eye, _image_index in acquired_images:
+                self.xr.wait_swapchain_image(
+                    eye.handle,
+                    self.xr.SwapchainImageWaitInfo(timeout=self.xr.INFINITE_DURATION),
+                )
+            draws = []
+            for eye_index, (eye, image_index) in enumerate(acquired_images):
+                draws.append(
+                    {
+                        "target": eye.resources[image_index],
+                        "array_layer": 0,
+                        "eye_index": eye_index,
+                        "frame_slot": int(self.frame_count) % 3,
+                        "controller_proxy_params": params,
+                        "controller_proxy_push_constants": (
+                            self._projection_screen_push_constants(
+                                views[eye_index]
+                            )[:64]
+                        ),
+                        "clear_color": (0.0, 0.0, 0.0, 0.0),
+                    }
+                )
+            screen_pass.submit_stereo_controller_proxy(
+                draws,
+                wait_for_timeline=0,
+                clear_target=True,
+            )
+        except Exception as exc:
+            print(
+                "[OpenXRViewer] Vulkan controller proxy layer skipped: "
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            return None
+        finally:
+            for eye, _image_index in acquired_images:
+                self.xr.release_swapchain_image(eye.handle)
+        if not self._vulkan_controller_proxy_layer_logged:
+            self._vulkan_controller_proxy_layer_logged = True
+            print(
+                "[OpenXRViewer] Vulkan controller proxy layer active: "
+                "order=projection->quad->controller/laser/guide",
+                flush=True,
+            )
+        return OpenXrCompositionBuilder(self.xr, self.reference_space).projection_layer(
+            views,
+            swapchains,
+            layer_flags=self.xr.CompositionLayerFlags.BLEND_TEXTURE_SOURCE_ALPHA_BIT,
         )
 
     def _render_projection_layer(
@@ -10119,6 +10231,13 @@ class OpenXrVulkanPresenter(
                 self._tool_quad_texture_keys["laser_cursor"] = ("legacy_cursor_ring", 64)
             specs.extend(self._cursor_overlay_specs(cursor_rgba, screen_pose, head))
 
+        if self._vulkan_controller_proxy_enabled:
+            controller_callouts = [
+                spec for spec in specs if spec[0] == "controller_proxy_callout"
+            ]
+            specs = [
+                spec for spec in specs if spec[0] != "controller_proxy_callout"
+            ] + controller_callouts
         specs_ready = time.perf_counter()
         layers = [self._upload_tool_quad(*spec) for spec in specs]
         if self._on_breakdown_add_time is not None:

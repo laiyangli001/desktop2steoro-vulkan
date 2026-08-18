@@ -1,3 +1,4 @@
+-r requirements-pip-options.txt
 glcontext==3.0.0
 glfw==2.10.0
 moderngl==5.12.0

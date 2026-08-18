@@ -181,6 +181,8 @@ def _openxr_filament_config(
         src_root,
     )
     common_filament = _load_common_filament_defaults(src_root)
+    environment_name = str(settings.get("Environment Model", "Default")).strip()
+    default_environment = not environment_name or environment_name.lower() in {"default", "none"}
 
     bridge_path = os.environ.get("D2S_FILAMENT_BRIDGE") or (
         str(platform_bridge) if platform_bridge and platform_bridge.is_file() else None
@@ -275,7 +277,9 @@ def _openxr_filament_config(
             common_filament.get("controller_screen_light_cast_shadows", False)
         ),
         "filament_environment_screen_light_enabled": bool(
-            common_filament.get("environment_screen_light_enabled", True)
+            False
+            if default_environment
+            else common_filament.get("environment_screen_light_enabled", True)
         ),
         "filament_environment_screen_light_intensity_candela": float(
             common_filament.get("environment_screen_light_intensity_candela", 120.0)

@@ -35,8 +35,8 @@ if %errorlevel% neq 0 (
   pause
   exit /b 1
 )
-%PYTHON_EXE% -m pip install -r %REQUIREMENTS_FILE% --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
-%PYTHON_EXE% -m pip install -r requirements.txt --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
+%PYTHON_EXE% -m pip install -r %REQUIREMENTS_FILE% --no-cache-dir --no-warn-script-location --retries 5 --timeout 120
+%PYTHON_EXE% -m pip install -r requirements.txt --no-cache-dir --no-warn-script-location --retries 5 --timeout 120
 
 if %errorlevel% neq 0 (
     echo Failed to install requirements

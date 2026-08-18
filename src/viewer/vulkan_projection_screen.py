@@ -1589,6 +1589,7 @@ class VulkanProjectionScreenPass:
         frame_slot: int,
         push_constants: bytes,
         clear_color: tuple[float, float, float, float],
+        clear_target: bool = False,
     ) -> dict[str, Any]:
         if self.laser_pipeline is None or len(push_constants) != 64:
             raise RuntimeError("Vulkan projection laser pass is unavailable")
@@ -1601,7 +1602,7 @@ class VulkanProjectionScreenPass:
         if last_use:
             self.context.wait_for_timeline(last_use)
         _view, framebuffer = self._target_view_and_framebuffer(
-            target, array_layer, overlay=True
+            target, array_layer, overlay=not bool(clear_target)
         )
         return {
             "target": target,
@@ -1612,11 +1613,17 @@ class VulkanProjectionScreenPass:
             "push_constant_size": 64,
             "clear_color": clear_color,
             "descriptor_index": descriptor_index,
-            "render_pass": self.overlay_render_pass,
+            "render_pass": (
+                self.render_pass if clear_target else self.overlay_render_pass
+            ),
             "pipeline": self.laser_pipeline,
             "pipeline_layout": self.laser_pipeline_layout,
             "vertex_count": self._LASER_VERTEX_COUNT,
-            "target_old_layout": self.vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            "target_old_layout": (
+                self.vk.VK_IMAGE_LAYOUT_UNDEFINED
+                if clear_target
+                else self.vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+            ),
         }
 
     def submit_stereo_laser(
@@ -1671,6 +1678,7 @@ class VulkanProjectionScreenPass:
         draws: list[dict[str, Any]],
         *,
         wait_for_timeline: int,
+        clear_target: bool = False,
     ) -> int:
         """Draw two local Vulkan controller cubes and beams without Filament."""
         if len(draws) != 2 or self.controller_proxy_pipeline is None:
@@ -1690,6 +1698,7 @@ class VulkanProjectionScreenPass:
                 frame_slot=int(item["frame_slot"]),
                 push_constants=bytes(item["controller_proxy_push_constants"]),
                 clear_color=item["clear_color"],
+                clear_target=bool(clear_target),
             )
             proxy_draw["pipeline"] = self.controller_proxy_pipeline
             proxy_draw["vertex_count"] = self._CONTROLLER_PROXY_VERTEX_COUNT

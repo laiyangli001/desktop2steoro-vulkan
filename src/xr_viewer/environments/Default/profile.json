@@ -62,5 +62,6 @@
     }
   ],
   "controller_hdr_lighting": false,
+  "environment_screen_light_enabled": false,
   "screen_light_intensity": 6.0
 }

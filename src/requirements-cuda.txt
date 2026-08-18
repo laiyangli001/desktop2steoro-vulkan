@@ -1,4 +1,6 @@
-# --extra-index-url https://download.pytorch.org/whl/cu128
+-r requirements-pip-options.txt
+--extra-index-url https://download.pytorch.org/whl/cu128
+--extra-index-url https://pypi.nvidia.com
 -f https://mirrors.aliyun.com/pytorch-wheels/cu128/
 torch==2.11.0
 torchvision==0.26.0

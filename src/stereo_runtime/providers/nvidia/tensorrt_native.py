@@ -7,10 +7,11 @@ import time
 
 import torch
 
-from ...depth_onnx_provider import ModelOnnxPreprocessor, _dtype_from_onnx_name, _input_size_from_artifact_name, default_onnx_path
+from ...depth_onnx_provider import ModelOnnxPreprocessor, _dtype_from_onnx_name, _input_size_from_artifact_name, _model_input_size, default_onnx_path
 from ...depth_provider import (
     DISTILL_ANY_DEPTH_BASE_MODEL_ID,
     DISTILL_ANY_DEPTH_BASE_NAME,
+    DISTILL_ANY_DEPTH_PATCH_SIZE,
     DISTILL_ANY_DEPTH_BASE_RESOLUTION,
     DepthProfileResult,
     DepthProviderConfig,
@@ -32,6 +33,12 @@ def default_distill_base_native_trt_path(cache_dir: str | Path | None = None) ->
 
 def default_native_tensorrt_engine_path(cache_dir: str | Path | None = None) -> Path:
     return default_distill_base_native_trt_path(cache_dir)
+
+
+def _compact_artifact_path(path: str | Path) -> str:
+    artifact = Path(path)
+    parent_name = artifact.parent.name
+    return f"{parent_name}/{artifact.name}" if parent_name else artifact.name
 
 
 def _infer_model_metadata_from_paths(
@@ -516,8 +523,8 @@ def build_native_tensorrt_engine(
 
     print(
         "[TensorRT] building native engine:"
-        f" onnx={onnx_path}"
-        f" engine={engine_path}"
+        f" onnx={_compact_artifact_path(onnx_path)}"
+        f" engine={_compact_artifact_path(engine_path)}"
         f" dtype={'fp16' if fp16 else 'fp32'}"
         f" workspace_gb={workspace_gb}"
         f" force={force}",
@@ -571,7 +578,11 @@ def build_native_tensorrt_engine(
 
     engine_path.parent.mkdir(parents=True, exist_ok=True)
     write_bytes_with_progress(engine_path, serialized, f"Saving TensorRT engine: {engine_path.name}")
-    print(f"[TensorRT] native engine ready: engine={engine_path}", flush=True)
+    print(
+        "[TensorRT] native engine ready: "
+        f"engine={_compact_artifact_path(engine_path)}",
+        flush=True,
+    )
     status_write(f"TensorRT 引擎编译完成：{engine_path.name}。")
     return engine_path
 
@@ -587,6 +598,7 @@ class DistillAnyDepthBaseNativeTensorRt:
         engine_path: str | Path | None = None,
         model_id: str = DISTILL_ANY_DEPTH_BASE_MODEL_ID,
         model_name: str = DISTILL_ANY_DEPTH_BASE_NAME,
+        depth_resolution: int = DISTILL_ANY_DEPTH_BASE_RESOLUTION,
         local_files_only: bool = False,
         force_download: bool = False,
         build_engine: bool = False,
@@ -612,6 +624,7 @@ class DistillAnyDepthBaseNativeTensorRt:
             model_id=model_id,
             model_name=model_name,
         )
+        self.depth_resolution = max(1, int(depth_resolution))
         self.local_files_only = bool(local_files_only)
         self.force_download = bool(force_download)
         self.build_engine = bool(build_engine)
@@ -627,7 +640,7 @@ class DistillAnyDepthBaseNativeTensorRt:
             provider="tensorrt.Runtime",
             model_name=self.model_name,
             model_id=self.model_id,
-            depth_resolution=DISTILL_ANY_DEPTH_BASE_RESOLUTION,
+            depth_resolution=self.depth_resolution,
             cache_dir=str(self.cache_dir),
             load_mode="local_onnx_native_tensorrt",
             depth_backend="tensorrt_native_graph" if self.use_cuda_graph else "tensorrt_native",
@@ -639,11 +652,19 @@ class DistillAnyDepthBaseNativeTensorRt:
         self._engine: NativeTensorRtEngine | None = None
         self._artifact_input_size: tuple[int, int] | None = None
         self._cuda_graph_disabled_reason: str | None = None
+        configured_input_size = None
+        if self._explicit_onnx_path is None:
+            configured_input_size = _model_input_size(
+                294,
+                518,
+                self.depth_resolution,
+                DISTILL_ANY_DEPTH_PATCH_SIZE,
+            )
         self._preprocessor = ModelOnnxPreprocessor(
             model_id=self.model_id,
             device=self.device,
             dtype=self.dtype,
-            fixed_input_size=_input_size_from_artifact_name(self.onnx_path) if self._explicit_onnx_path else None,
+            fixed_input_size=_input_size_from_artifact_name(self.onnx_path) if self._explicit_onnx_path else configured_input_size,
         )
 
     @property

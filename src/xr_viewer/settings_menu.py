@@ -79,6 +79,7 @@ class OpenXrSettingsMenu:
         self._trigger_down = [False, False]
         self._outside_down = [False, False]
         self.room_models: tuple[tuple[str, str], ...] = ()
+        self.room_tab_visible = True
 
     def open(self) -> None:
         self.visible = True
@@ -98,7 +99,7 @@ class OpenXrSettingsMenu:
         self.revision += 1
 
     def set_tab(self, tab: str) -> bool:
-        if tab not in self.tabs or tab == self.tab:
+        if tab not in self.tabs or (tab == "room" and not self.room_tab_visible) or tab == self.tab:
             return False
         self.tab = tab
         self.hover_key = None
@@ -112,7 +113,9 @@ class OpenXrSettingsMenu:
         visible_tabs = ["picture", "depth"]
         if show_glow:
             visible_tabs.append("glow")
-        visible_tabs.extend(("room", "screen"))
+        if self.room_tab_visible:
+            visible_tabs.append("room")
+        visible_tabs.append("screen")
         left, right, gap = 0.04, 0.96, 0.008
         locale = normalize_locale(lang)
         labels = {

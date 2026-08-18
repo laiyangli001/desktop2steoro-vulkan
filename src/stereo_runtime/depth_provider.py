@@ -956,6 +956,7 @@ def create_depth_provider(config: DepthProviderConfig | dict[str, Any] | None = 
             force_download=cfg.force_download,
             model_id=cfg.model_id,
             model_name=cfg.model_name,
+            depth_resolution=cfg.depth_resolution,
             build_engine=cfg.build_engine,
             force_rebuild=cfg.force_rebuild,
             use_cuda_graph=cfg.use_cuda_graph or backend == "tensorrt_native_graph",

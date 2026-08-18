@@ -37,7 +37,7 @@ fi
 
 # Update pip
 echo "- Updating the pip package"
-$PYTHON_EXE -m pip install --upgrade pip --no-cache-dir -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
+$PYTHON_EXE -m pip install --upgrade pip -r requirements-pip-options.txt --no-cache-dir --retries 5 --timeout 120
 if [ $? -ne 0 ]; then
     echo "Failed to update pip"
     read -p "Press enter to exit..."
@@ -48,8 +48,8 @@ fi
 echo
 echo "- Installing the requirements"
 sudo apt-get install python3-tk wmctrl mesa-utils portaudio19-dev ffmpeg xdotool -y
-$PYTHON_EXE -m pip install -r requirements-cuda.txt --no-cache-dir -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
-$PYTHON_EXE -m pip install -r requirements.txt --no-cache-dir -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/
+$PYTHON_EXE -m pip install -r requirements-cuda.txt --no-cache-dir --retries 5 --timeout 120
+$PYTHON_EXE -m pip install -r requirements.txt --no-cache-dir --retries 5 --timeout 120
 if [ $? -ne 0 ]; then
     echo "Failed to install requirements"
     read -p "Press enter to exit..."

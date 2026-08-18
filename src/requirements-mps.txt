@@ -1,3 +1,4 @@
+-r requirements-pip-options.txt
 -f https://mirrors.nju.edu.cn/pytorch/whl --trusted-host mirrors.nju.edu.cn
 torch==2.9.0
 torchvision==0.24.0

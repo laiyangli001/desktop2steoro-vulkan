@@ -2843,6 +2843,23 @@ def test_vulkan_controller_proxy_uses_front_right_top_corner_for_b_anchor() -> N
     assert "build_controller_callout_rgba(lang=language)" in source
 
 
+def test_vulkan_controller_proxy_uses_final_transparent_projection_layer() -> None:
+    source = inspect.getsource(OpenXrVulkanPresenter._render_vulkan_controller_proxy_layer)
+
+    assert '"clear_color": (0.0, 0.0, 0.0, 0.0)' in source
+    assert "clear_target=True" in source
+    assert "BLEND_TEXTURE_SOURCE_ALPHA_BIT" in source
+    assert "order=projection->quad->controller/laser/guide" in source
+
+
+def test_vulkan_controller_proxy_callout_is_ordered_after_menu() -> None:
+    source = inspect.getsource(OpenXrVulkanPresenter._render_tool_quad_layers)
+
+    assert "controller_callouts = [" in source
+    assert "specs = [" in source
+    assert "controller_proxy_callout" in source
+
+
 def test_vulkan_shortcut_delegates_runtime_owned_actions() -> None:
     actions: list[str] = []
     presenter = OpenXrVulkanPresenter(

@@ -292,8 +292,21 @@ def _reset_capture_gap_defer_state():
     windows_capture_event._CAPTURE_GAP_DEFER_RELEASED = False
 
 
-def test_windows_capture_cuda_logs_callback_gap(capsys):
+def test_windows_capture_cuda_suppresses_callback_gaps_by_default(monkeypatch, capsys):
+    monkeypatch.delenv("D2S_WGC_CAPTURE_GAP_LOG", raising=False)
+    runner = windows_capture_event.WindowsCaptureEventRunner(
+        CaptureConfig(capture_tool="WindowsCaptureCUDA", capture_mode="Monitor", monitor_index=1)
+    )
+
+    runner._log_capture_gap(10.0, {"monitor_index": 1})
+    runner._log_capture_gap(10.8, {"monitor_index": 1})
+
+    assert capsys.readouterr().out == ""
+
+
+def test_windows_capture_cuda_logs_callback_gap(monkeypatch, capsys):
     _reset_capture_gap_defer_state()
+    monkeypatch.setenv("D2S_WGC_CAPTURE_GAP_LOG", "1")
     runner = windows_capture_event.WindowsCaptureEventRunner(
         CaptureConfig(capture_tool="WindowsCaptureCUDA", capture_mode="Monitor", monitor_index=1)
     )
@@ -306,7 +319,8 @@ def test_windows_capture_cuda_logs_callback_gap(capsys):
     assert "[CaptureGap] tool=WindowsCaptureCUDA mode=Monitor monitor=1 gap=0.60s" in capsys.readouterr().out
 
 
-def test_windows_capture_cuda_logs_at_most_three_callback_gaps(capsys):
+def test_windows_capture_cuda_logs_at_most_three_callback_gaps(monkeypatch, capsys):
+    monkeypatch.setenv("D2S_WGC_CAPTURE_GAP_LOG", "1")
     runner = windows_capture_event.WindowsCaptureEventRunner(
         CaptureConfig(capture_tool="WindowsCaptureCUDA", capture_mode="Monitor", monitor_index=1)
     )
@@ -319,6 +333,7 @@ def test_windows_capture_cuda_logs_at_most_three_callback_gaps(capsys):
 
 def test_windows_capture_cuda_defers_gap_until_openxr_projection(monkeypatch, capsys):
     _reset_capture_gap_defer_state()
+    monkeypatch.setenv("D2S_WGC_CAPTURE_GAP_LOG", "1")
     monkeypatch.setenv("D2S_DEFER_CAPTURE_GAP_UNTIL_OPENXR_PROJECTION", "1")
     runner = windows_capture_event.WindowsCaptureEventRunner(
         CaptureConfig(capture_tool="WindowsCaptureCUDA", capture_mode="Monitor", monitor_index=1)

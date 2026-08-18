@@ -14,9 +14,9 @@ Set "PYTHON_ARCHIVE=%TEMP%\python-%PYTHON_VERSION%-nuget.zip"
 Set "PYTHON_URL=https://www.nuget.org/api/v2/package/python/%PYTHON_VERSION%"
 
 if exist "%PYTHON_ROOT%\python.exe" (
-    "%PYTHON_ROOT%\python.exe" -c "import importlib.util, sys; raise SystemExit(0 if sys.version_info[:3] == (3, 12, 10) and sys.maxsize.bit_length() == 63 and importlib.util.find_spec('ensurepip') is not None else 1)" >nul 2>nul
+    "%PYTHON_ROOT%\python.exe" -c "import importlib.util, sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) and sys.maxsize.bit_length() == 63 and importlib.util.find_spec('ensurepip') is not None else 1)" >nul 2>nul
     if not errorlevel 1 (
-        echo - Complete local Python 3.12.10 x64 already installed
+        echo - Complete local Python 3.12.x x64 runtime already installed
         goto python_ready
     )
     echo - Replacing incomplete local Python runtime
@@ -64,7 +64,7 @@ if errorlevel 1 (
 
 @REM Update pip
 echo - Updating the pip package
-"%PYTHON_EXE%" -m pip install --upgrade pip --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/ --no-warn-script-location
+"%PYTHON_EXE%" -m pip install --upgrade pip -r "%SCRIPT_DIR%requirements-pip-options.txt" --no-cache-dir --no-warn-script-location --retries 5 --timeout 120
 if %errorlevel% neq 0 (
     echo Failed to update pip
     pause
@@ -74,8 +74,8 @@ if %errorlevel% neq 0 (
 @REM Install requirements
 echo.
 echo - Installing the requirements
-"%PYTHON_EXE%" -m pip install -r "%SCRIPT_DIR%requirements-cuda.txt" --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/ --no-warn-script-location
-"%PYTHON_EXE%" -m pip install -r "%SCRIPT_DIR%requirements.txt" --no-cache-dir --no-warn-script-location -i https://repo.huaweicloud.com/repository/pypi/simple/ --trusted-host https://repo.huaweicloud.com/ --no-warn-script-location
+"%PYTHON_EXE%" -m pip install -r "%SCRIPT_DIR%requirements-cuda.txt" --no-cache-dir --no-warn-script-location --retries 5 --timeout 120
+"%PYTHON_EXE%" -m pip install -r "%SCRIPT_DIR%requirements.txt" --no-cache-dir --no-warn-script-location --retries 5 --timeout 120
 if %errorlevel% neq 0 (
     echo Failed to install requirements
     pause
