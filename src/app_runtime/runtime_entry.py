@@ -319,6 +319,13 @@ def _openxr_filament_config(
     }
 
 
+def _exclude_local_output_from_capture(settings: dict, *, os_name: str) -> bool:
+    return (
+        str(os_name).strip().lower() == "windows"
+        and settings.get("Run Mode", "Local Viewer") == "3D Monitor"
+    )
+
+
 def _queue_clear(queue) -> None:
     while True:
         try:
@@ -356,6 +363,14 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
 
     shutdown_event.clear()
     settings = _get_settings()
+    configured_run_mode = str(settings.get("Run Mode", "Local Viewer"))
+    direct_stream_mode = configured_run_mode in {
+        "RTMP Streamer",
+        "MJPEG Streamer",
+        "Legacy Streamer",
+    }
+    if direct_stream_mode:
+        os.environ["D2S_RUNTIME_OUTPUT_UINT8"] = "1"
     try:
         configured_target_fps = int(settings.get("Target FPS", 0) or 0)
     except (TypeError, ValueError):
@@ -467,6 +482,7 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
     output_consumer = None
     output_thread = None
     local_viewer_thread = None
+    network_output = None
     capture_thread.start()
     pipeline_thread.start()
     try:
@@ -510,6 +526,53 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
                 daemon=True,
             )
             output_thread.start()
+        elif configured_run_mode in {
+            "RTMP Streamer",
+            "MJPEG Streamer",
+            "Legacy Streamer",
+        }:
+            from streaming.direct_sbs import (
+                DirectSbsOutputConsumer,
+                FfmpegDirectSbsOutput,
+                MjpegDirectSbsOutput,
+            )
+
+            if configured_run_mode == "RTMP Streamer":
+                network_output = FfmpegDirectSbsOutput(
+                    base_dir=context.base_dir,
+                    protocol=settings.get("Stream Protocol", "RTMP"),
+                    port=int(settings.get("Streamer Port", 1122)),
+                    stream_key=settings.get("Stream Key", "live"),
+                    fps=int(FPS),
+                    crf=int(settings.get("CRF", 20)),
+                    stereo_mix_device=settings.get("Stereo Mix"),
+                    audio_delay=float(settings.get("Audio Delay", 0.0)),
+                    os_name=OS_NAME,
+                    prefer_nvenc=(
+                        OS_NAME in {"Windows", "Linux"}
+                        and "NVIDIA" in str(DEVICE_INFO).upper()
+                    ),
+                )
+            else:
+                network_output = MjpegDirectSbsOutput(
+                    port=int(settings.get("Streamer Port", 1122)),
+                    fps=int(FPS),
+                    quality=int(settings.get("Stream Quality", 90)),
+                )
+            network_output.start()
+            output_consumer = DirectSbsOutputConsumer(
+                runtime_q=context.runtime_q,
+                shutdown_event=shutdown_event,
+                output=network_output,
+                source_stat_inc=callbacks.source_stat_inc,
+                show_fps_provider=callbacks.show_fps,
+            )
+            output_thread = threading.Thread(
+                target=output_consumer.run,
+                name="DirectSbsOutputConsumer",
+                daemon=True,
+            )
+            output_thread.start()
         elif str(RUN_MODE).strip().lower() == "viewer":
             # Local Viewer no longer falls through as an unconsumed runtime_q.
             # It owns a GLFW Vulkan surface and presents the already packed SBS.
@@ -529,6 +592,10 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
                 fullscreen=bool(STEREO_DISPLAY_SELECTION),
                 window_preview=bool(settings.get("Window Preview", False)),
                 preview_monitor_index=max(0, int(MONITOR_INDEX)),
+                exclude_from_capture=_exclude_local_output_from_capture(
+                    settings,
+                    os_name=OS_NAME,
+                ),
                 vsync=bool(LOCAL_VSYNC),
                 show_fps=bool(SHOW_FPS),
                 show_fps_provider=callbacks.show_fps,
@@ -572,7 +639,11 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
         if output_thread is not None:
             output_thread.join(timeout=2.0)
         if output_consumer is not None:
-            output_consumer.close()
+            close_output_consumer = getattr(output_consumer, "close", None)
+            if callable(close_output_consumer):
+                close_output_consumer()
+        if network_output is not None:
+            network_output.close()
         if presenter_thread is not None:
             # run_until owns Filament/Vulkan teardown on the Presenter thread.
             # Do not let the main thread race that teardown after a timeout.

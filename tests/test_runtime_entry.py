@@ -21,6 +21,47 @@ def _load_environment_resolver():
     return namespace["_resolve_filament_environment_paths"]
 
 
+def test_only_windows_3d_display_is_excluded_from_capture() -> None:
+    from app_runtime.runtime_entry import _exclude_local_output_from_capture
+
+    assert not _exclude_local_output_from_capture(
+        {"Run Mode": "Local Viewer"},
+        os_name="Windows",
+    )
+    assert _exclude_local_output_from_capture(
+        {"Run Mode": "3D Monitor"},
+        os_name="Windows",
+    )
+
+
+def test_stream_and_non_windows_outputs_remain_capturable() -> None:
+    from app_runtime.runtime_entry import _exclude_local_output_from_capture
+
+    for run_mode in ("RTMP Streamer", "MJPEG Streamer", "Legacy Streamer"):
+        assert not _exclude_local_output_from_capture(
+            {"Run Mode": run_mode},
+            os_name="Windows",
+        )
+    assert not _exclude_local_output_from_capture(
+        {"Run Mode": "Local Viewer"},
+        os_name="Linux",
+    )
+
+
+def test_direct_stream_output_uses_uint8_nvenc_and_fps_provider() -> None:
+    source = RUNTIME_ENTRY.read_text(encoding="utf-8")
+    stream_branch = source[source.index("elif configured_run_mode in {"):]
+
+    uint8_enable = source.index(
+        'os.environ["D2S_RUNTIME_OUTPUT_UINT8"] = "1"'
+    )
+    context_create = source.index("context = create_runtime_context(")
+    assert uint8_enable < context_create
+    assert "prefer_nvenc=" in stream_branch
+    assert '"NVIDIA" in str(DEVICE_INFO).upper()' in stream_branch
+    assert "show_fps_provider=callbacks.show_fps" in stream_branch
+
+
 def test_openxr_starts_after_inference_load_and_first_ready_output() -> None:
     source = RUNTIME_ENTRY.read_text(encoding="utf-8")
 

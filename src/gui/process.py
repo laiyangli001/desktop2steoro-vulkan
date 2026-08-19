@@ -42,6 +42,9 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 _VULKAN_DESCRIPTOR_DETAIL_RE = re.compile(
     r"^Descriptor set \(handle=\d+\) binding=\d+ was set between begin/endRenderPass$"
 )
+_MEDIAMTX_LEVEL_RE = re.compile(
+    r"^\[MediaMTX\].*?\s(?P<level>INF|WAR|ERR|DBG)\s"
+)
 _FILAMENT_FRAME_DETAIL_RE = re.compile(
     r"^\[FilamentBridge\] (?:"
     r"acquired eye=\d+ index=\d+ image=\w+ result=1|"
@@ -61,6 +64,7 @@ _ASYNCIO_SHUTDOWN_UNRAISABLE_MESSAGES = (
     "Event loop is closed",
     "I/O operation on closed pipe",
 )
+_GRACEFUL_PROCESS_STOP_TIMEOUT_S = 8.0
 _asyncio_shutdown_noise_filter_installed = False
 _console_logging_installed = False
 _gui_log_handler = None
@@ -358,6 +362,8 @@ class GUIProcessMixin:
     # ── save & run ──
 
     def _validate_config_before_run(self):
+        if self.run_mode_key == "Local Viewer" and self._get_monitor_count() <= 1:
+            return False, UI_MESSAGES[self.locale]["Local Viewer requires a second display"]
         try:
             port_val = int(self.stream_port_tf.value) if self.stream_port_tf.value else DEFAULT_PORT
             if not (1 <= port_val <= 65535):
@@ -552,10 +558,21 @@ class GUIProcessMixin:
             self._log_child_line(text[fps_marker:])
             return
         lower = text.lower()
+        mediamtx_level = _MEDIAMTX_LEVEL_RE.match(text)
         if text.startswith(_STATUS_PREFIX):
             status_logger.info(text[len(_STATUS_PREFIX):].strip())
         elif text.startswith("[FPSBreakdown]"):
             child_logger.debug(text)
+        elif mediamtx_level is not None:
+            level = mediamtx_level.group("level")
+            if level == "ERR":
+                child_logger.error(text)
+            elif level == "WAR":
+                child_logger.warning(text)
+            elif level == "DBG":
+                child_logger.debug(text)
+            else:
+                child_logger.info(text)
         elif any(token in lower for token in ("traceback", "exception", "error", "failed", "exited with code")):
             child_logger.error(text)
         elif any(token in lower for token in ("warning", "warn")):
@@ -604,24 +621,30 @@ class GUIProcessMixin:
         await self._async_stop()
 
     async def _kill_process_tree(self, proc, pid):
-        try:
-            proc.kill()
-        except Exception:
-            pass
-        try:
-            if OS_NAME == "Windows":
-                p = await asyncio.create_subprocess_exec(
-                    'taskkill', '/f', '/t', '/pid', str(pid),
-                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-                await p.wait()
-            else:
+        if OS_NAME == "Windows":
+            try:
+                # Kill the tree while the parent PID still exists. Killing the
+                # parent first can orphan MediaMTX and FFmpeg before taskkill
+                # has a chance to discover its descendants.
+                tree_kill = await asyncio.create_subprocess_exec(
+                    "taskkill", "/f", "/t", "/pid", str(pid),
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await tree_kill.wait()
+            except Exception:
+                pass
+        else:
+            try:
                 import signal
-                try:
-                    os.killpg(os.getpgid(pid), signal.SIGTERM)
-                except Exception:
-                    pass
-        except Exception:
-            pass
+                os.killpg(os.getpgid(pid), signal.SIGTERM)
+            except Exception:
+                pass
+        if proc.returncode is None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
 
     async def _async_stop(self):
         if self._stopping:
@@ -668,7 +691,9 @@ class GUIProcessMixin:
                     await self._kill_process_tree(proc, saved_pid)
                 else:
                     try:
-                        await asyncio.wait_for(proc.wait(), timeout=1)
+                        await asyncio.wait_for(
+                            proc.wait(), timeout=_GRACEFUL_PROCESS_STOP_TIMEOUT_S
+                        )
                         exited_cleanly = True
                     except asyncio.TimeoutError:
                         exited_cleanly = False

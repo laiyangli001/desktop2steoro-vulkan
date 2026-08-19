@@ -12,7 +12,7 @@ def _load_monitor_methods(monitors, primary_index):
     source = BUILDERS_SOURCE.read_text(encoding="utf-8")
     tree = ast.parse(source)
     class_node = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "GUIBuilderMixin")
-    wanted = {"populate_monitors", "update_stereo_monitor_menu"}
+    wanted = {"populate_monitors", "_apply_stereo_output", "update_stereo_monitor_menu"}
     selected = [node for node in class_node.body if isinstance(node, ast.FunctionDef) and node.name in wanted]
     module = ast.Module(body=[ast.ClassDef(name="MonitorMixin", bases=[], keywords=[], body=selected, decorator_list=[])], type_ignores=[])
     ast.fix_missing_locations(module)
@@ -40,11 +40,17 @@ class FakeDropdown:
 
 
 class FakeMonitorGui:
-    def __init__(self, monitor_value="", stereo_value="Window Preview"):
+    def __init__(
+        self,
+        monitor_value="",
+        stereo_value="Window Preview",
+        run_mode_key="Local Viewer",
+    ):
         self.monitor_dd = FakeDropdown(monitor_value)
         self.stereo_monitor_dd = FakeDropdown(stereo_value)
         self.monitor_label_to_index = {}
         self.capture_mode_key = "Monitor"
+        self.run_mode_key = run_mode_key
         self.locale = "EN"
         self.fit_count = 0
 
@@ -108,7 +114,7 @@ def test_list_monitors_uses_windows_display_numbers(monkeypatch):
     assert [mon["capture_index"] for mon in monitors] == [3, 2, 1]
 
 
-def test_two_monitors_force_output_away_from_captured_input():
+def test_two_monitors_exclude_captured_input_from_local_output():
     monitors = [
         {"capture_index": 1, "display_number": 1, "left": 0, "top": 0, "width": 1920, "height": 1080},
         {"capture_index": 2, "display_number": 2, "left": 1920, "top": 0, "width": 2560, "height": 1440},
@@ -122,7 +128,9 @@ def test_two_monitors_force_output_away_from_captured_input():
 
     assert gui.monitor_dd.value == current
     assert gui.monitor_label_to_index[current] == 2
-    assert gui.stereo_monitor_dd.options == ["1: 1920x1080 @ (0,0) (Primary)"]
+    assert gui.stereo_monitor_dd.options == [
+        "1: 1920x1080 @ (0,0) (Primary)",
+    ]
     assert gui.stereo_monitor_dd.value == "1: 1920x1080 @ (0,0) (Primary)"
     assert gui.fit_count == 1
 
@@ -140,7 +148,9 @@ def test_populate_monitors_falls_back_to_primary_when_current_missing():
 
     primary = "2: 2560x1440 @ (1920,0) (Primary)"
     assert gui.monitor_dd.value == primary
-    assert gui.stereo_monitor_dd.options == ["1: 1920x1080 @ (0,0)"]
+    assert gui.stereo_monitor_dd.options == [
+        "1: 1920x1080 @ (0,0)",
+    ]
     assert gui.stereo_monitor_dd.value == "1: 1920x1080 @ (0,0)"
 
 
@@ -196,7 +206,7 @@ def test_three_monitors_default_output_to_last_available_monitor():
     assert gui.stereo_monitor_dd.value == "3: 3840x2160 @ (4480,0)"
 
 
-def test_switching_input_from_last_monitor_keeps_physical_output():
+def test_switching_local_input_to_output_monitor_selects_last_other_monitor():
     gui = FakeMonitorGui(
         monitor_value="3: 3840x2160 @ (4480,0)",
         stereo_value="3: 3840x2160 @ (4480,0)",
@@ -215,3 +225,53 @@ def test_switching_input_from_last_monitor_keeps_physical_output():
         "2: 2560x1440 @ (1920,0)",
     ]
     assert gui.stereo_monitor_dd.value == "2: 2560x1440 @ (1920,0)"
+
+
+def test_saved_local_output_cannot_match_input_monitor():
+    shared = "2: 2560x1440 @ (1920,0)"
+    gui = FakeMonitorGui(monitor_value=shared)
+    gui.monitor_label_to_index = {
+        "1: 1920x1080 @ (0,0)": 1,
+        shared: 2,
+    }
+    gui._get_monitor_count = lambda: 2
+    monitor_mixin = _load_monitor_methods([], primary_index=1)
+
+    monitor_mixin._apply_stereo_output(gui, {"Stereo Output": 2})
+
+    assert gui.stereo_monitor_dd.value == "1: 1920x1080 @ (0,0)"
+
+
+def test_3d_monitor_output_can_match_input_monitor():
+    shared = "2: 2560x1440 @ (1920,0)"
+    gui = FakeMonitorGui(
+        monitor_value=shared,
+        run_mode_key="3D Monitor",
+    )
+    gui.monitor_label_to_index = {
+        "1: 1920x1080 @ (0,0)": 1,
+        shared: 2,
+    }
+    gui._get_monitor_count = lambda: 2
+    monitor_mixin = _load_monitor_methods([], primary_index=1)
+
+    monitor_mixin._apply_stereo_output(gui, {"Stereo Output": 2})
+
+    assert gui.stereo_monitor_dd.value == shared
+
+
+def test_single_monitor_local_viewer_requires_virtual_display():
+    from gui.process import GUIProcessMixin
+
+    class Gui:
+        run_mode_key = "Local Viewer"
+        locale = "CN"
+
+        @staticmethod
+        def _get_monitor_count():
+            return 1
+
+    ok, message = GUIProcessMixin._validate_config_before_run(Gui())
+
+    assert not ok
+    assert "虚拟显示屏" in message

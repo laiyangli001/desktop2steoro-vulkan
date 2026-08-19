@@ -1015,18 +1015,30 @@ class GUIBuilderMixin:
         if mon_count <= 1:
             self.stereo_monitor_dd.value = ""
             return
+        input_label = (
+            self.monitor_dd.value
+            if self.run_mode_key == "Local Viewer"
+            and self.capture_mode_key == "Monitor"
+            else None
+        )
+        output_labels = [
+            label for label in self.monitor_label_to_index
+            if label != input_label
+        ]
         saved = cfg.get("Stereo Output")
-        input_label = self.monitor_dd.value if self.capture_mode_key == "Monitor" else None
         if saved is not None:
-            label = next((lbl for lbl, i in self.monitor_label_to_index.items() if i == saved), None)
-            if label and label != input_label:
+            label = next(
+                (
+                    label
+                    for label, index in self.monitor_label_to_index.items()
+                    if index == saved and label in output_labels
+                ),
+                None,
+            )
+            if label:
                 self.stereo_monitor_dd.value = label
                 return
-        fallback = next(
-            (label for label in reversed(self.monitor_label_to_index) if label != input_label),
-            None,
-        )
-        self.stereo_monitor_dd.value = fallback or ""
+        self.stereo_monitor_dd.value = output_labels[-1] if output_labels else ""
 
     @staticmethod
     def _get_monitor_count():
@@ -1040,11 +1052,16 @@ class GUIBuilderMixin:
     def update_stereo_monitor_menu(self):
         if not hasattr(self, 'stereo_monitor_dd'):
             return
-        input_label = self.monitor_dd.value if self.capture_mode_key == "Monitor" else None
-        # The persistent Vulkan fullscreen output cannot be excluded from a
-        # monitor capture. Keep it off the input display to prevent recursive
-        # SBS capture in both Local Viewer and 3D Monitor modes.
-        opts = [label for label in self.monitor_label_to_index if label != input_label]
+        input_label = (
+            self.monitor_dd.value
+            if self.run_mode_key == "Local Viewer"
+            and self.capture_mode_key == "Monitor"
+            else None
+        )
+        opts = [
+            label for label in self.monitor_label_to_index
+            if label != input_label
+        ]
         current = self.stereo_monitor_dd.value
         valid = current in opts
         self.stereo_monitor_dd.options = opts

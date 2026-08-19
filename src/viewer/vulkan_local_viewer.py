@@ -75,6 +75,9 @@ def configure_glfw_window_hints(glfw: Any, *, fullscreen: bool) -> None:
     glfw.window_hint(glfw.FLOATING, glfw.FALSE)
     glfw.window_hint(glfw.FOCUS_ON_SHOW, glfw.TRUE)
     if fullscreen:
+        # Create the output hidden so Windows cannot register a taskbar button
+        # before WS_EX_TOOLWINDOW is applied by _configure_persistent_fullscreen.
+        glfw.window_hint(glfw.VISIBLE, glfw.FALSE)
         glfw.window_hint(glfw.FLOATING, glfw.TRUE)
         glfw.window_hint(glfw.FOCUS_ON_SHOW, glfw.FALSE)
 

@@ -2,6 +2,7 @@
 import os
 import asyncio
 import logging
+import re
 import subprocess
 import flet as ft
 from utils import (
@@ -9,6 +10,10 @@ from utils import (
     DISABLE_TRT_KEYWORDS, DISABLE_COREML_KEYWORDS, DISABLE_OPENVINO_KEYWORDS,
     DISABLE_MIGRAPHX_KEYWORDS,
     get_local_ip,
+)
+from streaming.audio import (
+    find_loopback_audio_devices,
+    query_ffmpeg_dshow_audio_devices,
 )
 from utils.xr_headset_presets import display_to_xr_headset, xr_headset_options, xr_headset_to_display
 from . import devices as devices_module
@@ -22,6 +27,7 @@ from .config import (
 )
 from .controls import FONT_SIZE
 from .localization import UI_MESSAGES, is_supported_locale
+from .paths import BASE_DIR
 from .devices import DEVICES
 
 logger = logging.getLogger(__name__)
@@ -560,15 +566,9 @@ class GUIHandlerMixin:
     def _auto_select_stereo_monitor(self):
         mon_count = self._get_monitor_count()
         if mon_count <= 1:
+            self.stereo_monitor_dd.value = ""
             return
-        cur = self.stereo_monitor_dd.value
-        valid = cur and cur in self.stereo_monitor_dd.options
-        if not valid:
-            input_label = self.monitor_dd.value if self.capture_mode_key == "Monitor" else None
-            for lbl in reversed(self.monitor_label_to_index):
-                if lbl != input_label:
-                    self.stereo_monitor_dd.value = lbl
-                    break
+        self.update_stereo_monitor_menu()
 
     # ── theme / language ──
 
@@ -929,31 +929,58 @@ class GUIHandlerMixin:
             if self.audio_devices[0] in ["No Stereo Mix device found", "sounddevice not available"]:
                 self.set_status(self.audio_devices[0])
 
+    @staticmethod
+    def _log_missing_windows_audio_capture():
+        logger.warning(
+            "No Stereo Mix devices found, please enable it in audio settings."
+        )
+        logger.warning(
+            "If no Stereo Mix, install 'Screen Capture Recorder':"
+        )
+        logger.warning(
+            "https://github.com/rdp/"
+            "screen-capture-recorder-to-video-windows-free/releases"
+        )
+
     def _populate_audio_generic(self):
         self.audio_devices = []
+        if OS_NAME == "Windows":
+            ffmpeg_path = os.path.join(
+                BASE_DIR,
+                "streaming",
+                "rtmp",
+                "ffmpeg",
+                "bin",
+                "ffmpeg.exe",
+            )
+            dshow_devices = query_ffmpeg_dshow_audio_devices(ffmpeg_path)
+            if dshow_devices is not None:
+                self.audio_devices = find_loopback_audio_devices(dshow_devices)
+                if not self.audio_devices:
+                    self._log_missing_windows_audio_capture()
+                    self.audio_devices = ["virtual-audio-capturer"]
+                return
         try:
             import sounddevice as sd
+
             all_devices = sd.query_devices()
-            found = set()
-            for dev in all_devices:
-                name = (dev.get("name", "") or "").lower()
-                in_ch = dev.get("max_input_channels", 0)
-                out_ch = dev.get("max_output_channels", 0)
-                if in_ch > 0 or out_ch > 0:
-                    for mix in STEREO_MIX_NAMES:
-                        if mix in name and "audio stereo input" not in name:
-                            found.add(dev.get("name"))
-                            break
-                    if "virtual-audio-capturer" in name:
-                        found.add(dev.get("name"))
+            eligible_names = [
+                dev.get("name")
+                for dev in all_devices
+                if (
+                    dev.get("max_input_channels", 0) > 0
+                    or dev.get("max_output_channels", 0) > 0
+                )
+            ]
+            found = find_loopback_audio_devices(eligible_names)
             if not found and OS_NAME == "Darwin":
                 logger.info("No audio capture devices found on MacOS. Recommended tools: BlackHole, Virtual Desktop Streamer, Loopback")
                 self.audio_devices = ["No audio capture devices found"]
             elif not found and OS_NAME == "Windows":
-                logger.warning("No Stereo Mix devices found; enable it in audio settings or install Screen Capture Recorder")
+                self._log_missing_windows_audio_capture()
                 self.audio_devices = ["virtual-audio-capturer"]
             else:
-                self.audio_devices = list(found) or ["No Stereo Mix device found"]
+                self.audio_devices = found or ["No Stereo Mix device found"]
         except ImportError:
             self.audio_devices = ["sounddevice not available"]
         except Exception as e:

@@ -1,3 +1,11 @@
+from __future__ import annotations
+
+from pathlib import Path
+import re
+import subprocess
+from typing import Iterable
+
+
 STEREO_MIX_NAMES = [
     # English
     "stereo mix",
@@ -45,3 +53,75 @@ STEREO_MIX_NAMES = [
     # Linux specific
     "monitor",
 ]
+
+
+_DSHOW_AUDIO_RE = re.compile(
+    r'^\[dshow\s+@[^\]]+\]\s+"([^"]+)"\s+\(audio\)\s*',
+    re.MULTILINE,
+)
+
+
+def parse_ffmpeg_dshow_audio_devices(output: str) -> list[str]:
+    devices = []
+    seen = set()
+    for match in _DSHOW_AUDIO_RE.finditer(str(output or "")):
+        name = match.group(1).strip()
+        key = name.casefold()
+        if name and key not in seen:
+            devices.append(name)
+            seen.add(key)
+    return devices
+
+
+def query_ffmpeg_dshow_audio_devices(
+    ffmpeg_path: str | Path,
+) -> list[str] | None:
+    executable = Path(ffmpeg_path)
+    if not executable.is_file():
+        return None
+    try:
+        result = subprocess.run(
+            [
+                str(executable),
+                "-nostdin",
+                "-hide_banner",
+                "-list_devices",
+                "true",
+                "-f",
+                "dshow",
+                "-i",
+                "dummy",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5.0,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    output = "\n".join((result.stdout or "", result.stderr or ""))
+    if "[dshow @" not in output:
+        return None
+    return parse_ffmpeg_dshow_audio_devices(output)
+
+
+def find_loopback_audio_devices(
+    device_names: Iterable[object],
+) -> list[str]:
+    devices = []
+    seen = set()
+    for value in device_names:
+        name = str(value or "").strip()
+        normalized = name.casefold()
+        if not name or normalized in seen:
+            continue
+        is_stereo_mix = (
+            "audio stereo input" not in normalized
+            and any(token in normalized for token in STEREO_MIX_NAMES)
+        )
+        if is_stereo_mix or "virtual-audio-capturer" in normalized:
+            devices.append(name)
+            seen.add(normalized)
+    return devices

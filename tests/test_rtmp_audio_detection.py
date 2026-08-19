@@ -1,0 +1,123 @@
+import logging
+import sys
+import types
+
+
+DSHOW_OUTPUT = """
+[dshow @ 000001] "screen-capture-recorder" (video)
+[dshow @ 000001] "Stereo Mix (Realtek(R) Audio)" (audio)
+[dshow @ 000001] "virtual-audio-capturer" (audio)
+[dshow @ 000001]   Alternative name "@device_cm_..."
+"""
+
+
+def _target():
+    from gui.handlers import GUIHandlerMixin
+
+    return object.__new__(GUIHandlerMixin)
+
+
+def test_parse_ffmpeg_dshow_audio_devices() -> None:
+    from streaming.audio import parse_ffmpeg_dshow_audio_devices
+
+    assert parse_ffmpeg_dshow_audio_devices(DSHOW_OUTPUT) == [
+        "Stereo Mix (Realtek(R) Audio)",
+        "virtual-audio-capturer",
+    ]
+
+
+def test_query_ffmpeg_dshow_audio_devices(monkeypatch, tmp_path) -> None:
+    from streaming import audio
+
+    ffmpeg = tmp_path / "ffmpeg.exe"
+    ffmpeg.write_bytes(b"")
+    result = types.SimpleNamespace(stdout="", stderr=DSHOW_OUTPUT)
+    monkeypatch.setattr(audio.subprocess, "run", lambda *args, **kwargs: result)
+
+    assert audio.query_ffmpeg_dshow_audio_devices(ffmpeg) == [
+        "Stereo Mix (Realtek(R) Audio)",
+        "virtual-audio-capturer",
+    ]
+
+
+def test_windows_detection_prefers_dshow_virtual_audio(
+    monkeypatch, caplog
+) -> None:
+    from gui import handlers
+
+    caplog.set_level(logging.WARNING, logger="gui.handlers")
+    monkeypatch.setattr(handlers, "OS_NAME", "Windows")
+    monkeypatch.setattr(
+        handlers,
+        "query_ffmpeg_dshow_audio_devices",
+        lambda path: ["virtual-audio-capturer"],
+    )
+    fake_sounddevice = types.SimpleNamespace(
+        query_devices=lambda: (_ for _ in ()).throw(
+            AssertionError("sounddevice fallback must not run")
+        )
+    )
+    monkeypatch.setitem(sys.modules, "sounddevice", fake_sounddevice)
+
+    target = _target()
+    target._populate_audio_generic()
+
+    assert target.audio_devices == ["virtual-audio-capturer"]
+    assert not caplog.messages
+
+
+def test_windows_detection_warns_when_dshow_has_no_loopback(
+    monkeypatch, caplog
+) -> None:
+    from gui import handlers
+
+    caplog.set_level(logging.WARNING, logger="gui.handlers")
+    monkeypatch.setattr(handlers, "OS_NAME", "Windows")
+    monkeypatch.setattr(
+        handlers,
+        "query_ffmpeg_dshow_audio_devices",
+        lambda path: ["Microphone (USB Audio)"],
+    )
+
+    target = _target()
+    target._populate_audio_generic()
+
+    assert target.audio_devices == ["virtual-audio-capturer"]
+    assert caplog.messages == [
+        "No Stereo Mix devices found, please enable it in audio settings.",
+        "If no Stereo Mix, install 'Screen Capture Recorder':",
+        (
+            "https://github.com/rdp/"
+            "screen-capture-recorder-to-video-windows-free/releases"
+        ),
+    ]
+
+
+def test_windows_detection_falls_back_to_sounddevice(
+    monkeypatch, caplog
+) -> None:
+    from gui import handlers
+
+    caplog.set_level(logging.WARNING, logger="gui.handlers")
+    monkeypatch.setattr(handlers, "OS_NAME", "Windows")
+    monkeypatch.setattr(
+        handlers,
+        "query_ffmpeg_dshow_audio_devices",
+        lambda path: None,
+    )
+    fake_sounddevice = types.SimpleNamespace(
+        query_devices=lambda: [
+            {
+                "name": "Stereo Mix (Realtek(R) Audio)",
+                "max_input_channels": 2,
+                "max_output_channels": 0,
+            }
+        ]
+    )
+    monkeypatch.setitem(sys.modules, "sounddevice", fake_sounddevice)
+
+    target = _target()
+    target._populate_audio_generic()
+
+    assert target.audio_devices == ["Stereo Mix (Realtek(R) Audio)"]
+    assert not caplog.messages

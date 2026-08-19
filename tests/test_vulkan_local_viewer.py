@@ -121,7 +121,7 @@ def test_fullscreen_and_debug_preview_reset_independent_window_hints() -> None:
     glfw = _WindowHintGlfw()
 
     configure_glfw_window_hints(glfw, fullscreen=True)
-    assert glfw.hints[glfw.VISIBLE] == glfw.TRUE
+    assert glfw.hints[glfw.VISIBLE] == glfw.FALSE
     assert glfw.hints[glfw.DECORATED] == glfw.TRUE
     assert glfw.hints[glfw.FLOATING] == glfw.TRUE
 
