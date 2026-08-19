@@ -417,6 +417,13 @@ class GUIProcessMixin:
         self._set_log_panel_visible(self._config.get("Show Log Panel", DEFAULTS["Show Log Panel"]))
         self._set_running_ui(True)
         self._collect_config()
+        if (
+            self.run_mode_key == "RTMP Streamer"
+            and self._config.get("Display Mode") == "Full-SBS"
+        ):
+            status_logger.warning(
+                UI_MESSAGES[self.locale]["full_sbs_stream_advisory"]
+            )
         ok, err = save_yaml(os.path.join(BASE_DIR, "settings.yaml"), self._config)
         if not ok:
             self.set_status(UI_MESSAGES[self.locale]["failed_save_yaml"].format(err))
@@ -1108,9 +1115,9 @@ class GUIProcessMixin:
             if "Distill-Any-Depth-Base" in DEFAULT_MODEL_LIST
             else default_base_depth_model()
         )
-        # Reset selects the Cinema preset; keep its realtime balanced fill
-        # policy instead of the still-image high-quality mode.
-        dynamic_defaults["Hole Fill Mode"] = "balanced"
+        # Reset uses the Cinema preset with hole filling disabled.
+        dynamic_defaults["Hole Fill Mode"] = "none"
+        dynamic_defaults["Run Mode"] = "Local Viewer"
         dynamic_defaults["XR Preview Window"] = False
         if is_nvidia_cuda:
             dynamic_defaults["torch.compile"] = True
@@ -1125,7 +1132,7 @@ class GUIProcessMixin:
         self._sync_visibility()
         self.on_device_change(None)
         self.auto_enable_optimizers_based_on_device()
-        self.page.update()
+        self._fit_window_to_content(update=True, resize_window=True)
 
     # ── URL actions ──
 

@@ -540,18 +540,19 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
             if configured_run_mode == "RTMP Streamer":
                 network_output = FfmpegDirectSbsOutput(
                     base_dir=context.base_dir,
-                    protocol=settings.get("Stream Protocol", "RTMP"),
+                    protocol=settings.get("Stream Protocol", "WebRTC"),
                     port=int(settings.get("Streamer Port", 1122)),
                     stream_key=settings.get("Stream Key", "live"),
                     fps=int(FPS),
-                    crf=int(settings.get("CRF", 20)),
+                    crf=int(settings.get("CRF", 23)),
                     stereo_mix_device=settings.get("Stereo Mix"),
-                    audio_delay=float(settings.get("Audio Delay", 0.0)),
+                    audio_delay=float(settings.get("Audio Delay", -0.1)),
                     os_name=OS_NAME,
                     prefer_nvenc=(
                         OS_NAME in {"Windows", "Linux"}
                         and "NVIDIA" in str(DEVICE_INFO).upper()
                     ),
+                    display_mode=settings.get("Display Mode", "Half-SBS"),
                 )
             else:
                 network_output = MjpegDirectSbsOutput(
@@ -559,6 +560,7 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
                     fps=int(FPS),
                     quality=int(settings.get("Stream Quality", 90)),
                 )
+            callbacks.set_stream_output(network_output)
             network_output.start()
             output_consumer = DirectSbsOutputConsumer(
                 runtime_q=context.runtime_q,
@@ -566,6 +568,9 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
                 output=network_output,
                 source_stat_inc=callbacks.source_stat_inc,
                 show_fps_provider=callbacks.show_fps,
+                on_sbs_fps=(
+                    observe_sbs_fps if adaptive_capture_rate.enabled else None
+                ),
             )
             output_thread = threading.Thread(
                 target=output_consumer.run,

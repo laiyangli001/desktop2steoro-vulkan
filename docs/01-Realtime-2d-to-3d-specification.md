@@ -589,7 +589,7 @@ LDR display View: virtual screen + UI/laser -> no post-processing/tone mapping -
 | 2K | 4K |
 | 4K | 8K |
 
-头显档位来自 GUI 的 `XR Headset Model`，每个型号只维护一个明确的应用采样档位；它是采样策略档位，不宣称替代厂商面板的精确像素规格。输入档位优先使用捕捉链的实际 `capture_size`，没有该元数据时才使用处理后眼图尺寸。非 16:9 输入按最长边近似归入 1920/2560/3840 三个标准档位，但不得因此裁剪、拉伸或改写实际源图像宽高。
+头显档位来自 GUI 的 `XR Headset Model`，默认型号为 `Pico 4 / 4 Ultra`；每个型号只维护一个明确的应用采样档位，它是采样策略档位，不宣称替代厂商面板的精确像素规格。OpenXR、本地输出和网络推流必须读取同一个 GUI 头显选择。本地物理显示器、浏览器窗口和 OpenXR 虚拟屏幕只是不同呈现/传输载体，不得覆盖最终头显档位。输入档位使用立体生成完成、质量处理尚未执行的实际每眼纹理尺寸；非 16:9 输入按最长边近似归入 1920/2560/3840 三个标准档位，但不得因此裁剪、拉伸或改写实际源图像宽高。
 
 矩阵计算为 `recommended_headset = input_tier × 2`，实际有效档位为 `min(GUI_headset_tier, recommended_headset)`。匹配档位保持源纹素 footprint；当高分辨率输入进入较低档头显时才按比例增加面积预滤。OpenXR runtime 推荐交换链尺寸只是最终硬件/运行时上限，不得覆盖 GUI 头显选择或改变输入档位语义。
 
@@ -601,9 +601,9 @@ LDR display View: virtual screen + UI/laser -> no post-processing/tone mapping -
 | 2048×1080、2560×1440、2560×1600 | 2K | 保留实际宽高，按 2K 档参与矩阵 |
 | 3440×1440、3840×2160、4096×2160 | 4K | 保留实际宽高，按 4K 档参与矩阵 |
 
-四个尺寸的职责必须分开：`XR Headset Model` 决定头显采样策略档位；`capture_size` 决定输入屏幕档位；处理后眼图尺寸用于实际纹理绑定；OpenXR recommended extent 只决定交换链是否允许该输出尺寸。输入档位只能决定过滤预算，不能通过插值制造输入中不存在的细节，也不能把非 16:9 源图像强制变成 16:9。
+尺寸职责必须分开：`XR Headset Model` 决定所有模式共同的最终头显采样档位；立体生成后的眼图尺寸决定输入档位与真实源纹理；物理显示器和窗口尺寸只决定最终呈现画布；OpenXR recommended extent 只决定交换链是否允许该输出尺寸。输入档位只能决定过滤预算，不能通过插值制造输入中不存在的细节，也不能把非 16:9 源图像强制变成 16:9。
 
-采样比例同时定义为 `filter_scale = max(1, input_tier / effective_tier)` 和 `upscale_scale = max(1, effective_tier / input_tier)`。低分辨率输入（`upscale_scale>1`）必须执行 GPU EASU → RCAS → MIP 主路径；同档位只执行源图 → MIP；高分辨率输入（`filter_scale>1`）执行一次有界 Lanczos2 → RCAS → MIP 缩小路径。所有路径不改变颜色空间、不执行 tone mapping、不改变 UV 和原始源图像。
+采样比例同时定义为 `filter_scale = max(1, input_tier / effective_tier)` 和 `upscale_scale = max(1, effective_tier / input_tier)`。公共输出质量阶段固定在“左右眼生成完成”和“SBS/TAB/Mono 等格式打包”之间。由于 RTMP/本地输出在此处没有 OpenXR 投影导数，统一 LOD 需求定义为 `max(缩放所需 LOD, Max LOD) + MIP Bias`，再限制到 Min/Max LOD；默认 `0.35 + (-0.35)=0` 保持原画，单独提高 Max LOD 会立即增加三线性 MIP 预滤。低分辨率输入随后执行 GPU EASU，高分辨率输入执行一次有界 Lanczos2，同档位保持原生尺寸，最后按需执行 RCAS。完成后各模式才执行格式打包与输出。OpenXR 收到已处理眼图后只负责投影与呈现，不得再次执行 MIP/LOD、EASU、Lanczos2 或 RCAS。所有路径不执行 tone mapping，不改变 UV 和源图宽高比。
 
 ### 8.3 Composition Layer
 

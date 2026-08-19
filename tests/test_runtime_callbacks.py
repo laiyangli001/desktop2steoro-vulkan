@@ -93,6 +93,30 @@ def test_show_fps_hot_reload_updates_viewer_provider() -> None:
     assert callbacks.show_fps() is True
 
 
+def test_audio_delay_hot_reload_is_forwarded_to_stream_output() -> None:
+    callbacks = _callbacks()
+    callbacks.context.stereo_active_preset = None
+    seen = []
+    snapshot = RuntimeSettingsSnapshot(version=2, timestamp=1.0)
+    callbacks.context.stereo_hot_reloader = SimpleNamespace(
+        poll_settings_snapshot_if_needed=lambda **_kwargs: (
+            snapshot,
+            None,
+            {"audio_delay": 0.35},
+        ),
+        log_settings_snapshot=lambda *_args, **_kwargs: None,
+    )
+    callbacks.set_stream_output(
+        SimpleNamespace(request_audio_delay=seen.append)
+    )
+    callbacks.send_settings_snapshot = lambda _snapshot: None
+    callbacks.update_openxr_runtime_config = lambda **_kwargs: None
+    callbacks.log_stereo_runtime_mode_once = lambda *_args, **_kwargs: None
+
+    assert callbacks.apply_stereo_hot_reload_if_needed() is True
+    assert seen == [0.35]
+
+
 def test_controller_shortcut_toggles_stereo_and_restores_depth() -> None:
     callbacks = _callbacks(0.75)
 

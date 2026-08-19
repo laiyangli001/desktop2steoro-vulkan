@@ -1,6 +1,7 @@
 import pytest
 
 from utils.screen_resolution_policy import (
+    build_output_sampling_plan,
     build_screen_sampling_plan,
     classify_input_resolution,
 )
@@ -47,3 +48,19 @@ def test_input_headset_matrix(
 def test_invalid_resolution_is_rejected():
     with pytest.raises(ValueError):
         build_screen_sampling_plan(0, 1080, 2)
+
+
+def test_shared_headset_target_uses_the_existing_input_headset_matrix():
+    upscale = build_output_sampling_plan(
+        1920, 1080, headset_tier_k=4
+    )
+    native = build_output_sampling_plan(
+        3840, 2160, headset_tier_k=4
+    )
+
+    assert (upscale.mode, upscale.target_width, upscale.target_height) == (
+        "upscale_easu", 3840, 2160
+    )
+    assert (native.mode, native.target_width, native.target_height) == (
+        "native_mip", 3840, 2160
+    )

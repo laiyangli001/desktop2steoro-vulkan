@@ -6742,12 +6742,16 @@ class OpenXrVulkanPresenter(
                 )
         self._apply_vulkan_projection_sampling(
             frame,
-            quality_chain_enabled=self._vulkan_projection_quality_chain_requested,
+            quality_chain_enabled=(
+                self._vulkan_projection_quality_chain_requested
+                and not bool((frame.metadata or {}).get("output_quality_applied", 0))
+            ),
         )
         plan = self._active_screen_sampling_plan
         use_quality_mip = bool(
             self._vulkan_projection_quality_chain_requested
             and plan is not None
+            and not bool((frame.metadata or {}).get("output_quality_applied", 0))
         )
         projection_draws = []
         glow_source = (frame.metadata or {}).get("glow_vulkan_image")
@@ -7253,6 +7257,19 @@ class OpenXrVulkanPresenter(
             )
         except (TypeError, ValueError):
             return None
+        if int(metadata.get("output_quality_applied", 0) or 0):
+            # Eye images already passed through the shared Lanczos2/EASU/RCAS
+            # stage before output routing. Projection only owns MIP generation
+            # and screen composition now; repeating the quality pass would
+            # resize and sharpen the frame twice.
+            plan = replace(
+                plan,
+                recommended_headset_tier_k=plan.input_tier_k,
+                effective_tier_k=plan.input_tier_k,
+                filter_scale=1.0,
+                upscale_scale=1.0,
+                mode="native_mip",
+            )
         status = (
             plan.source_width,
             plan.source_height,

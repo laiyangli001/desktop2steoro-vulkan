@@ -122,6 +122,44 @@ def _warp_composite2_full_sbs_kernel(
 
 
 @triton.jit
+def _sample_composite_at(
+    rgb,
+    depth,
+    base_shift,
+    channel,
+    y,
+    x,
+    scale0,
+    scale1,
+    width: tl.constexpr,
+    pixels: tl.constexpr,
+    softness: tl.constexpr,
+    active,
+):
+    source_pixel = y * width + x
+    depth_value = tl.load(depth + source_pixel, mask=active, other=0.0)
+    w0_raw = tl.exp(-(depth_value * depth_value) / softness)
+    depth_from_one = depth_value - 1.0
+    w1_raw = tl.exp(-(depth_from_one * depth_from_one) / softness)
+    weight_sum = w0_raw + w1_raw
+    shift = tl.load(base_shift + source_pixel, mask=active, other=0.0)
+    return _sample_two_layers(
+        rgb,
+        channel,
+        y,
+        x,
+        shift,
+        scale0,
+        scale1,
+        width,
+        pixels,
+        active,
+        w0_raw / weight_sum,
+        w1_raw / weight_sum,
+    )
+
+
+@triton.jit
 def _warp_composite2_half_sbs_kernel(
     rgb,
     depth,
@@ -144,27 +182,21 @@ def _warp_composite2_half_sbs_kernel(
     use_left = x < half_width
     source_x = tl.where(use_left, x, x - half_width)
     x0 = source_x * 2
+    xm1 = tl.maximum(x0 - 1, 0)
     x1 = x0 + 1
-    depth0 = tl.load(depth + y * width + x0, mask=active, other=0.0)
-    depth1 = tl.load(depth + y * width + x1, mask=active, other=0.0)
-    w0_raw_0 = tl.exp(-((depth0 - 0.0) * (depth0 - 0.0)) / softness)
-    w1_raw_0 = tl.exp(-((depth0 - 1.0) * (depth0 - 1.0)) / softness)
-    wsum0 = w0_raw_0 + w1_raw_0
-    weight0 = w0_raw_0 / wsum0
-    weight1 = w1_raw_0 / wsum0
-    w0_raw_1 = tl.exp(-((depth1 - 0.0) * (depth1 - 0.0)) / softness)
-    w1_raw_1 = tl.exp(-((depth1 - 1.0) * (depth1 - 1.0)) / softness)
-    wsum1 = w0_raw_1 + w1_raw_1
-    weight2 = w0_raw_1 / wsum1
-    weight3 = w1_raw_1 / wsum1
-    shift0 = tl.load(base_shift + y * width + x0, mask=active, other=0.0)
-    shift1 = tl.load(base_shift + y * width + x1, mask=active, other=0.0)
+    x2 = tl.minimum(x0 + 2, width - 1)
 
-    left0 = _sample_two_layers(rgb, channel, y, x0, shift0, 0.875, 1.0, width, pixels, active, weight0, weight1)
-    left1 = _sample_two_layers(rgb, channel, y, x1, shift1, 0.875, 1.0, width, pixels, active, weight2, weight3)
-    right0 = _sample_two_layers(rgb, channel, y, x0, shift0, -0.875, -1.0, width, pixels, active, weight0, weight1)
-    right1 = _sample_two_layers(rgb, channel, y, x1, shift1, -0.875, -1.0, width, pixels, active, weight2, weight3)
-    value = tl.where(use_left, (left0 + left1) * 0.5, (right0 + right1) * 0.5)
+    left_m1 = _sample_composite_at(rgb, depth, base_shift, channel, y, xm1, 0.875, 1.0, width, pixels, softness, active)
+    left0 = _sample_composite_at(rgb, depth, base_shift, channel, y, x0, 0.875, 1.0, width, pixels, softness, active)
+    left1 = _sample_composite_at(rgb, depth, base_shift, channel, y, x1, 0.875, 1.0, width, pixels, softness, active)
+    left2 = _sample_composite_at(rgb, depth, base_shift, channel, y, x2, 0.875, 1.0, width, pixels, softness, active)
+    right_m1 = _sample_composite_at(rgb, depth, base_shift, channel, y, xm1, -0.875, -1.0, width, pixels, softness, active)
+    right0 = _sample_composite_at(rgb, depth, base_shift, channel, y, x0, -0.875, -1.0, width, pixels, softness, active)
+    right1 = _sample_composite_at(rgb, depth, base_shift, channel, y, x1, -0.875, -1.0, width, pixels, softness, active)
+    right2 = _sample_composite_at(rgb, depth, base_shift, channel, y, x2, -0.875, -1.0, width, pixels, softness, active)
+    left_value = (-left_m1 + 9.0 * left0 + 9.0 * left1 - left2) * 0.0625
+    right_value = (-right_m1 + 9.0 * right0 + 9.0 * right1 - right2) * 0.0625
+    value = tl.where(use_left, left_value, right_value)
     tl.store(out + offsets, value, mask=active)
 
 

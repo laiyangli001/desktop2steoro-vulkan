@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 from pathlib import Path
 import platform
@@ -121,6 +122,7 @@ class DirectSbsOutputConsumer:
         output,
         source_stat_inc: Callable[..., None],
         show_fps_provider: Callable[[], bool] | None = None,
+        on_sbs_fps: Callable[..., Any] | None = None,
         fps_report_interval: float = 5.0,
         clock: Callable[[], float] = time.perf_counter,
     ) -> None:
@@ -129,6 +131,7 @@ class DirectSbsOutputConsumer:
         self.output = output
         self.source_stat_inc = source_stat_inc
         self.show_fps_provider = show_fps_provider
+        self.on_sbs_fps = on_sbs_fps
         self.fps_report_interval = max(0.1, float(fps_report_interval))
         self._clock = clock
         self._fps_started = self._clock()
@@ -157,13 +160,15 @@ class DirectSbsOutputConsumer:
         elapsed = now - self._fps_started
         if elapsed < self.fps_report_interval:
             return
+        sbs_fps = self._fps_sbs_frames / elapsed
+        if self.on_sbs_fps is not None:
+            self.on_sbs_fps(sbs_fps, frame_count=self._fps_sbs_frames)
         show_fps = (
             bool(self.show_fps_provider())
             if self.show_fps_provider is not None
             else False
         )
         if show_fps:
-            sbs_fps = self._fps_sbs_frames / elapsed
             submitted_fps = self._fps_submitted_frames / elapsed
             convert_ms = (
                 self._fps_convert_seconds * 1000.0 / self._fps_sbs_frames
@@ -258,9 +263,10 @@ class FfmpegDirectSbsOutput:
         fps: int,
         crf: int,
         stereo_mix_device: str | None = None,
-        audio_delay: float = 0.0,
+        audio_delay: float = -0.1,
         os_name: str | None = None,
         prefer_nvenc: bool = False,
+        display_mode: str = "Half-SBS",
     ) -> None:
         self.base_dir = Path(base_dir)
         self.protocol = str(protocol or "RTMP").strip().upper()
@@ -273,7 +279,10 @@ class FfmpegDirectSbsOutput:
         self.audio_delay = float(audio_delay)
         self.os_name = str(os_name or platform.system())
         self.prefer_nvenc = bool(prefer_nvenc)
-        self.video_encoder = "libx264"
+        self.display_mode = str(display_mode or "Half-SBS").strip()
+        self.use_hevc = self.display_mode.casefold() == "full-sbs"
+        self.video_encoder = "libx265" if self.use_hevc else "libx264"
+        self._active_rate_budget: tuple[int, int, int] | None = None
         self._encoder_selected = False
         self.ffmpeg_path = self._find_executable(
             "D2S_FFMPEG_PATH",
@@ -304,6 +313,8 @@ class FfmpegDirectSbsOutput:
         self._rate_probe_max_seconds = 15.0
         self._stream_rate_calibrated = False
         self._next_submit_at = 0.0
+        self._pending_audio_delay: float | None = None
+        self._audio_delay_lock = threading.Lock()
 
     @staticmethod
     def _find_executable(env_name: str, bundled: Path, command: str) -> Path:
@@ -359,7 +370,7 @@ class FfmpegDirectSbsOutput:
                     "1",
                     "-an",
                     "-c:v",
-                    "h264_nvenc",
+                    "hevc_nvenc" if self.use_hevc else "h264_nvenc",
                     "-preset",
                     "p1",
                     "-tune",
@@ -383,23 +394,64 @@ class FfmpegDirectSbsOutput:
                 timeout=8.0,
                 creationflags=creationflags,
             )
-        except (OSError, subprocess.SubprocessError):
+        except (OSError, subprocess.SubprocessError) as exc:
+            print(
+                f"[DirectSbsStream] NVENC probe failed for {int(width)}x{int(height)}: "
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
             return False
-        return result.returncode == 0
+        if result.returncode == 0:
+            return True
+        stderr = result.stderr
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", errors="replace")
+        detail_lines = [line.strip() for line in str(stderr or "").splitlines() if line.strip()]
+        detail = detail_lines[-1] if detail_lines else f"FFmpeg exited with code {result.returncode}"
+        print(
+            f"[DirectSbsStream] NVENC probe failed for {int(width)}x{int(height)}: {detail}",
+            flush=True,
+        )
+        return False
 
     def _select_video_encoder(self, width: int, height: int) -> str:
+        nvenc_encoder = "hevc_nvenc" if self.use_hevc else "h264_nvenc"
+        software_encoder = "libx265" if self.use_hevc else "libx264"
+        codec_label = "H.265/HEVC" if self.use_hevc else "H.264"
         if self.prefer_nvenc and self._probe_nvenc(width, height):
             print(
-                "[DirectSbsStream] NVIDIA NVENC H.264 encoder active",
+                f"[DirectSbsStream] NVIDIA NVENC {codec_label} encoder active",
                 flush=True,
             )
-            return "h264_nvenc"
+            return nvenc_encoder
         if self.prefer_nvenc:
             print(
-                "[DirectSbsStream] NVENC unavailable; falling back to libx264",
+                f"[DirectSbsStream] {codec_label} NVENC unavailable; "
+                f"falling back to {software_encoder}",
                 flush=True,
             )
-        return "libx264"
+        return software_encoder
+
+    def _dynamic_stream_rate_budget(
+        self, width: int, height: int
+    ) -> tuple[int, int, int] | None:
+        """Return wireless-friendly target, peak and VBV rates in Mbps."""
+        if self.protocol not in {"HLS", "HLS M3U8", "RTMP", "WEBRTC"}:
+            return None
+        pixels_per_second = max(1, int(width)) * max(1, int(height)) * self.fps
+        bits_per_pixel = 0.075 if self.use_hevc else 0.12
+        quality_factor = max(0.5, min(2.0, 2.0 ** ((20 - self.crf) / 12.0)))
+        target_limit = 100 if self.use_hevc else 80
+        peak_limit = 120 if self.use_hevc else 100
+        target_mbps = round(
+            pixels_per_second * bits_per_pixel * quality_factor / 1_000_000
+        )
+        target_mbps = max(4, min(target_limit, target_mbps))
+        peak_mbps = max(
+            target_mbps,
+            min(peak_limit, int(math.ceil(target_mbps * 1.15))),
+        )
+        return target_mbps, peak_mbps, peak_mbps
 
     @staticmethod
     def _select_sustainable_stream_fps(
@@ -492,6 +544,12 @@ class FfmpegDirectSbsOutput:
                 print(f"[MediaMTX] {message}", flush=True)
 
     def start(self) -> None:
+        if self.protocol != "WEBRTC":
+            print(
+                f"[DirectSbsStream] WARNING: {self.protocol} selected; "
+                "WebRTC is recommended for lower-latency browser streaming.",
+                flush=True,
+            )
         creationflags = (
             getattr(subprocess, "CREATE_NO_WINDOW", 0)
             if self.os_name == "Windows"
@@ -561,6 +619,12 @@ class FfmpegDirectSbsOutput:
 
     def _ffmpeg_command(self, width: int, height: int) -> list[str]:
         audio_args = self._audio_input_args()
+        self._active_rate_budget = self._dynamic_stream_rate_budget(width, height)
+        target_rate = (
+            f"{self._active_rate_budget[0]}M"
+            if self._active_rate_budget is not None
+            else "0"
+        )
         command = [
             str(self.ffmpeg_path),
             "-hide_banner",
@@ -594,17 +658,13 @@ class FfmpegDirectSbsOutput:
             command.extend(
                 [
                     "-c:v",
-                    "h264_videotoolbox",
+                    "hevc_videotoolbox" if self.use_hevc else "h264_videotoolbox",
                     "-profile:v",
-                    "high",
+                    "main" if self.use_hevc else "high",
                     "-pix_fmt",
                     "yuv420p",
                     "-b:v",
-                    "10M",
-                    "-maxrate",
-                    "12M",
-                    "-bufsize",
-                    "24M",
+                    target_rate if self._active_rate_budget is not None else "10M",
                     "-g",
                     str(self.fps),
                     "-r",
@@ -613,11 +673,11 @@ class FfmpegDirectSbsOutput:
                     "true",
                 ]
             )
-        elif self.video_encoder == "h264_nvenc":
+        elif self.video_encoder in {"h264_nvenc", "hevc_nvenc"}:
             command.extend(
                 [
                     "-c:v",
-                    "h264_nvenc",
+                    self.video_encoder,
                     "-preset",
                     "p1",
                     "-tune",
@@ -627,7 +687,7 @@ class FfmpegDirectSbsOutput:
                     "-cq",
                     str(self.crf),
                     "-b:v",
-                    "0",
+                    target_rate,
                     "-pix_fmt",
                     "yuv420p",
                     "-bf",
@@ -642,6 +702,36 @@ class FfmpegDirectSbsOutput:
                     "1",
                     "-strict_gop",
                     "1",
+                    "-spatial-aq",
+                    "1",
+                    "-temporal-aq",
+                    "1",
+                    "-aq-strength",
+                    "8",
+                ]
+            )
+        elif self.video_encoder == "libx265":
+            command.extend(
+                [
+                    "-c:v",
+                    "libx265",
+                    "-preset",
+                    "ultrafast",
+                    "-tune",
+                    "zerolatency",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-bf",
+                    "0",
+                    "-g",
+                    str(self.fps),
+                    "-r",
+                    str(self.fps),
+                    "-crf",
+                    str(self.crf),
+                    "-x265-params",
+                    f"keyint={self.fps}:min-keyint={self.fps}:scenecut=0:"
+                    "rc-lookahead=0:open-gop=0:repeat-headers=1",
                 ]
             )
         else:
@@ -663,20 +753,39 @@ class FfmpegDirectSbsOutput:
                     str(self.fps),
                     "-crf",
                     str(self.crf),
+                    "-x264-params",
+                    f"keyint={self.fps}:min-keyint={self.fps}:scenecut=0:"
+                    "rc-lookahead=0:open-gop=0:repeat-headers=1",
                 ]
             )
-            if self.os_name == "Linux":
+        if self._active_rate_budget is not None:
+            _, peak_mbps, buffer_mbps = self._active_rate_budget
+            command.extend(
+                [
+                    "-maxrate",
+                    f"{peak_mbps}M",
+                    "-bufsize",
+                    f"{buffer_mbps}M",
+                ]
+            )
+        if audio_args:
+            if self.protocol == "WEBRTC":
                 command.extend(
                     [
-                        "-x264-params",
-                        f"keyint={self.fps}:min-keyint={self.fps}:scenecut=0:rc-lookahead=0",
+                        "-af",
+                        "aresample=async=1000:first_pts=0",
+                        "-c:a",
+                        "libopus",
+                        "-ar",
+                        "48000",
+                        "-ac",
+                        "2",
+                        "-b:a",
+                        "96k",
                     ]
                 )
-        if audio_args:
-            if self.os_name == "Windows":
-                command.extend(["-c:a", "libopus", "-b:a", "96k"])
             else:
-                command.extend(["-c:a", "aac", "-ar", "44100", "-b:a", "96k"])
+                command.extend(["-c:a", "aac", "-ar", "48000", "-b:a", "128k"])
         if self.os_name == "Windows":
             command.extend(
                 [
@@ -688,6 +797,8 @@ class FfmpegDirectSbsOutput:
                     "0",
                     "-flush_packets",
                     "1",
+                    "-max_interleave_delta",
+                    "0",
                     "-f",
                     "mpegts",
                     f"srt://127.0.0.1:8890?streamid=publish:{self.stream_key}&pkt_size=1316",
@@ -698,6 +809,8 @@ class FfmpegDirectSbsOutput:
                 [
                     "-threads",
                     "2",
+                    "-max_interleave_delta",
+                    "0",
                     "-f",
                     "rtsp",
                     "-rtsp_transport",
@@ -725,6 +838,15 @@ class FfmpegDirectSbsOutput:
             creationflags=creationflags,
         )
         self._frame_size = (width, height)
+        if self._active_rate_budget is not None:
+            target_mbps, peak_mbps, buffer_mbps = self._active_rate_budget
+            print(
+                f"[DirectSbsStream] Dynamic stream quality: protocol={self.protocol} "
+                f"target={target_mbps}M "
+                f"peak={peak_mbps}M buffer={buffer_mbps}M "
+                f"resolution={width}x{height} fps={self.fps} crf={self.crf}",
+                flush=True,
+            )
         print(
             f"[DirectSbsStream] FFmpeg consumes RGB24 SBS directly: "
             f"{width}x{height}@{self.fps} encoder={self.video_encoder}",
@@ -739,9 +861,42 @@ class FfmpegDirectSbsOutput:
             raise RuntimeError(f"FFmpeg exited with code {process.returncode}")
         process.stdin.write(memoryview(frame).cast("B"))
 
+    def request_audio_delay(self, delay: float) -> bool:
+        delay = max(-10.0, min(10.0, float(delay)))
+        with self._audio_delay_lock:
+            current = (
+                self._pending_audio_delay
+                if self._pending_audio_delay is not None
+                else self.audio_delay
+            )
+            if math.isclose(delay, current, abs_tol=1e-6):
+                return False
+            self._pending_audio_delay = delay
+        return True
+
+    def _apply_pending_audio_delay(self) -> None:
+        with self._audio_delay_lock:
+            delay = self._pending_audio_delay
+            self._pending_audio_delay = None
+        if delay is None or math.isclose(delay, self.audio_delay, abs_tol=1e-6):
+            return
+        previous = self.audio_delay
+        self.audio_delay = delay
+        if self.ffmpeg_process is None:
+            return
+        print(
+            f"[DirectSbsStream] Audio delay changed: {previous:.3f}s -> "
+            f"{delay:.3f}s; restarting FFmpeg publisher",
+            flush=True,
+        )
+        self._stop_process(self.ffmpeg_process)
+        self.ffmpeg_process = None
+        self._frame_size = None
+
     def submit_frame(self, frame: np.ndarray) -> None:
         height, width = frame.shape[:2]
         size = (int(width), int(height))
+        self._apply_pending_audio_delay()
         if self.ffmpeg_process is None:
             self._start_ffmpeg(*size)
         elif self._frame_size != size:
@@ -751,16 +906,18 @@ class FfmpegDirectSbsOutput:
         try:
             self._write_frame(frame)
         except (BrokenPipeError, OSError, RuntimeError):
-            if self.video_encoder != "h264_nvenc":
+            if self.video_encoder not in {"h264_nvenc", "hevc_nvenc"}:
                 raise
+            software_encoder = "libx265" if self.use_hevc else "libx264"
             print(
-                "[DirectSbsStream] NVENC startup failed; retrying with libx264",
+                f"[DirectSbsStream] NVENC startup failed; retrying with "
+                f"{software_encoder}",
                 flush=True,
             )
             self._stop_process(self.ffmpeg_process)
             self.ffmpeg_process = None
             self._frame_size = None
-            self.video_encoder = "libx264"
+            self.video_encoder = software_encoder
             self._start_ffmpeg(*size)
             self._write_frame(frame)
 

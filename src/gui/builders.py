@@ -271,7 +271,7 @@ class GUIBuilderMixin:
             self.depth_separation_label, self.parallel_inference_label,
             self.acceleration_label, self.computing_device_label, self.capture_tool_label,
             self.target_fps_label, self.render_policy_label, self.render_fixed_label,
-            self.render_min_dimension_label, self.run_mode_label,
+            self.render_min_dimension_label, self.run_mode_label, self.xr_headset_label,
             self.stereo_output_label, self.controller_label, self.lang_label,
             self.stream_url_label, self.stream_port_label,
             self.stream_proto_label, self.audio_label, self.crf_label,
@@ -283,7 +283,7 @@ class GUIBuilderMixin:
             self.temporal_strength_label,
             self.edge_threshold_label, self.anaglyph_label,
             self.render_scale_label, self.render_max_pixels_label, self.render_align_label,
-            self.display_mode_label, self.xr_headset_label, self.environment_label,
+            self.display_mode_label, self.environment_label,
             self.theme_label, self.stream_quality_label, self.stream_key_label,
             self.audio_delay_label, self.color_contrast_label,
             self.color_gamma_label, self.color_tint_label, self.projection_max_lod_label,
@@ -519,12 +519,12 @@ class GUIBuilderMixin:
             self.color_temperature_label, self.color_temperature_dd,
             ft.Container(width=S(40)), self.color_tint_label, self.color_tint_dd,
         ], spacing=1)
-        projection_min_lod_tooltip = "Limits the lowest mip level sampled by the Vulkan projection. Recommended: 0.00."
+        projection_min_lod_tooltip = "Limits the lowest mip level used by the shared output quality stage. Recommended: 0.00."
         self.projection_min_lod_label = ft.Text("Min LOD:", size=FONT_SIZE, width=S(130), tooltip=projection_min_lod_tooltip)
         self.projection_min_lod_dd = CompactDropdown(
             options=[f"{i / 20:.2f}" for i in range(0, 41)], value="0.00", width=S(130),
             on_select=self.on_stereo_hot_param_change, tooltip=projection_min_lod_tooltip)
-        projection_max_lod_tooltip = "Caps the highest mip level used by the Vulkan projection. Recommended: 0.35."
+        projection_max_lod_tooltip = "Caps the highest mip level used by every output mode. Recommended: 0.35."
         self.projection_max_lod_label = ft.Text("Max LOD:", size=FONT_SIZE, width=S(130), tooltip=projection_max_lod_tooltip)
         self.projection_max_lod_dd = CompactDropdown(
             options=[f"{i / 20:.2f}" for i in range(0, 41)], value="0.35", width=S(130),
@@ -533,12 +533,12 @@ class GUIBuilderMixin:
             self.projection_min_lod_label, self.projection_min_lod_dd,
             ft.Container(width=S(40)), self.projection_max_lod_label, self.projection_max_lod_dd,
         ], spacing=1)
-        projection_mip_lod_bias_tooltip = "Biases projection texture sampling toward sharper mip levels. Recommended: -0.35."
+        projection_mip_lod_bias_tooltip = "Biases shared output sampling toward sharper mip levels. Recommended: -0.35."
         self.projection_mip_lod_bias_label = ft.Text("MIP Bias:", size=FONT_SIZE, width=S(130), tooltip=projection_mip_lod_bias_tooltip)
         self.projection_mip_lod_bias_dd = CompactDropdown(
             options=[f"{-i / 20:.2f}" for i in range(30, -1, -1)], value="-0.35", width=S(130),
             on_select=self.on_stereo_hot_param_change, tooltip=projection_mip_lod_bias_tooltip)
-        projection_rcas_tooltip = "Applies RCAS sharpening before mip generation. Recommended: 0.50."
+        projection_rcas_tooltip = "Applies RCAS sharpening after shared scaling and mip filtering. Recommended: 0.50."
         self.projection_rcas_sharpness_label = ft.Text("RCAS:", size=FONT_SIZE, width=S(130), tooltip=projection_rcas_tooltip)
         self.projection_rcas_sharpness_dd = CompactDropdown(
             options=[f"{i / 20:.2f}" for i in range(0, 21)], value="0.50", width=S(130),
@@ -698,8 +698,9 @@ class GUIBuilderMixin:
             on_select=self.on_env_change,
             width=S(130))
         self.row7a = ft.Row([self.run_mode_label, self.run_mode_dd, ft.Container(width=S(40)),
-            self.xr_headset_label, self.xr_headset_dd,
             self.display_mode_label, self.display_mode_dd], spacing=1)
+        self.xr_headset_row = ft.Row(
+            [self.xr_headset_label, self.xr_headset_dd], spacing=1)
         self.row7b = ft.Row([self.controller_label, self.ctrl_model_dd, ft.Container(width=S(40)),
             self.environment_label, self.env_model_dd], spacing=1)
 
@@ -765,7 +766,7 @@ class GUIBuilderMixin:
             border_radius=6, padding=ft.Padding(S(16), S(10), S(16), S(10)))
         device_group = ft.Container(
             ft.Column([row5, row6, color_row1, color_row2, color_row3, projection_lod_row, projection_sharpen_row, self.row6b, self.row6d, self.row6e, self.row6f,
-                       self.row7a, self.row7b, row8, self.row6c, self.row9], spacing=S(8)),
+                       self.row7a, self.xr_headset_row, self.row7b, row8, self.row6c, self.row9], spacing=S(8)),
             margin=ft.Margin(0, 0, 0, S(8)),
             border=ft.Border(ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE),
                              ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE)),
@@ -913,7 +914,7 @@ class GUIBuilderMixin:
         self.stream_proto_label = ft.Text("Stream Protocol:", size=FONT_SIZE, width=S(150))
         self.stream_proto_dd = CompactDropdown(width=S(130),
             options=["RTMP", "RTSP", "HLS", "HLS M3U8", "WebRTC"],
-            value="HLS", on_select=self._on_stream_protocol_change)
+            value=DEFAULTS["Stream Protocol"], on_select=self._on_stream_protocol_change)
         self.stream_key_label = ft.Text("Stream Key:", size=FONT_SIZE, width=S(130))
         self.stream_key_tf = CompactTextField(value="live", width=S(130),
             on_change=self._on_stream_key_change)
@@ -923,9 +924,10 @@ class GUIBuilderMixin:
         self.audio_dd = CompactDropdown(options=[], min_width=S(130))
         self.audio_row = ft.Row([self.audio_label, self.audio_dd], spacing=1)
         self.crf_label = ft.Text("CRF:", size=FONT_SIZE, width=S(150))
-        self.crf_tf = CompactTextField(value="20", width=S(130), filter=r"[0-9]", max_length=2)
+        self.crf_tf = CompactTextField(value=str(DEFAULTS["CRF"]), width=S(130), filter=r"[0-9]", max_length=2)
         self.audio_delay_label = ft.Text("Audio Delay (s):", size=FONT_SIZE, width=S(130))
-        self.audio_delay_tf = CompactTextField(value="-0.15", width=S(130), filter=r"[0-9\-\.]", max_length=6)
+        self.audio_delay_tf = CompactTextField(value="-0.1", width=S(130),
+            on_change=self.on_audio_delay_change, filter=r"[0-9\-\.]", max_length=6)
         self.crf_row = ft.Row([self.crf_label, self.crf_tf, ft.Container(width=S(40)),
             self.audio_delay_label, self.audio_delay_tf], spacing=1)
         self._streamer_rows = [

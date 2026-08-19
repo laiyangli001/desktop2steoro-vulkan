@@ -56,6 +56,72 @@ def match_depth(depth: torch.Tensor, height: int, width: int) -> torch.Tensor:
     return F.interpolate(depth, size=(height, width), mode="bilinear", align_corners=False)
 
 
+def downsample_horizontal_lanczos2(
+    image: torch.Tensor,
+    target_width: int | None = None,
+) -> torch.Tensor:
+    """Match the OpenXR Lanczos2 route for an approximately 2x horizontal reduction."""
+    image = ensure_bchw(image, name="image")
+    width = int(image.shape[-1])
+    target_width = width // 2 if target_width is None else int(target_width)
+    if target_width <= 0 or target_width > width:
+        raise ValueError("Lanczos2 target width must be between 1 and the source width")
+    if width != target_width * 2:
+        # Odd-sized inputs need different left/right half widths to preserve the
+        # packed frame width. Evaluate the same Lanczos2 kernel at each target
+        # pixel centre instead of assuming the exact 2x phase below.
+        positions = (
+            (torch.arange(target_width, device=image.device, dtype=torch.float32) + 0.5)
+            * (float(width) / float(target_width))
+            - 0.5
+        )
+        bases = torch.floor(positions).to(torch.int64)
+        result = torch.zeros(
+            (*image.shape[:-1], target_width),
+            device=image.device,
+            dtype=image.dtype,
+        )
+        total_weight = torch.zeros(target_width, device=image.device, dtype=torch.float32)
+        for offset in (-1, 0, 1, 2):
+            indices = bases + offset
+            distance = positions - indices.to(torch.float32)
+            pi_distance = torch.pi * distance
+            sinc = torch.where(
+                distance.abs() < 1e-6,
+                torch.ones_like(distance),
+                torch.sin(pi_distance) / pi_distance,
+            )
+            half_pi_distance = pi_distance * 0.5
+            window = torch.where(
+                distance.abs() < 1e-6,
+                torch.ones_like(distance),
+                torch.sin(half_pi_distance) / half_pi_distance,
+            )
+            weight = torch.where(distance.abs() < 2.0, sinc * window, 0.0)
+            result = result + image.index_select(-1, indices.clamp(0, width - 1)) * weight.to(image.dtype)
+            total_weight = total_weight + weight
+        return result / total_weight.to(image.dtype).view(1, 1, 1, -1)
+    padded = F.pad(image, (1, 2, 0, 0), mode="replicate")
+    return (
+        -padded[..., 0:width:2]
+        + 9.0 * padded[..., 1 : width + 1 : 2]
+        + 9.0 * padded[..., 2 : width + 2 : 2]
+        - padded[..., 3 : width + 3 : 2]
+    ) * (1.0 / 16.0)
+
+
+def downsample_vertical_lanczos2(
+    image: torch.Tensor,
+    target_height: int | None = None,
+) -> torch.Tensor:
+    """Apply the same Lanczos2 reduction vertically for Half-TAB output."""
+    image = ensure_bchw(image, name="image")
+    return downsample_horizontal_lanczos2(
+        image.transpose(-2, -1),
+        target_height,
+    ).transpose(-2, -1)
+
+
 def make_sbs(
     left: torch.Tensor,
     right: torch.Tensor,
@@ -121,11 +187,9 @@ def make_sbs(
             from .output_triton import make_half_sbs
 
             return make_half_sbs(left, right)
-        h, w = left.shape[-2:]
-        left_w = max(1, w // 2)
-        right_w = max(1, w - left_w)
-        left_half = F.interpolate(left, size=(h, left_w), mode="area")
-        right_half = F.interpolate(right, size=(h, right_w), mode="area")
+        width = int(left.shape[-1])
+        left_half = downsample_horizontal_lanczos2(left, width // 2)
+        right_half = downsample_horizontal_lanczos2(right, width - width // 2)
         return torch.cat([left_half, right_half], dim=-1)
 
     if output_format == "full_tab":
@@ -140,11 +204,11 @@ def make_sbs(
             from .output_triton import make_half_tab
 
             return make_half_tab(left, right)
-        h, w = left.shape[-2:]
+        h = int(left.shape[-2])
         left_h = max(1, h // 2)
         right_h = max(1, h - left_h)
-        left_half = F.interpolate(left, size=(left_h, w), mode="area")
-        right_half = F.interpolate(right, size=(right_h, w), mode="area")
+        left_half = downsample_vertical_lanczos2(left, left_h)
+        right_half = downsample_vertical_lanczos2(right, right_h)
         return torch.cat([left_half, right_half], dim=-2)
 
     raise ValueError(f"unknown output_format: {output_format}")

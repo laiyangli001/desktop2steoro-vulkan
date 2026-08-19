@@ -913,47 +913,28 @@ native/filament/bridge/
 
 ### 11.4 虚拟屏幕
 
-屏幕采样和 EASU/Lanczos2/RCAS/MIP 均属于 Vulkan Projection Composer；以下历史 Bridge 参数名仅作为迁移记录，不得作为新实现边界。
+MIP/LOD、EASU/Lanczos2/RCAS 属于格式分流前的 StereoRuntime 公共输出质量阶段；Vulkan Projection Composer 只负责处理后 OpenXR 眼图的屏幕投影。以下历史 Bridge 参数名仅作为迁移记录，不得作为新实现边界。
 
 虚拟屏幕材质采样 Left/Right Eye 或 SBS 对应区域。每眼 View 必须选择正确 eye texture/UV，不通过 cross-eyed 旧兼容参数猜测顺序。
 
-Presenter 启动时从 `XR Headset Model` 解析 2K/4K/8K 应用采样档位，并从输出帧元数据中的 `capture_size` 获取 GUI“输入屏幕”的实际输入尺寸。输入尺寸按最长边近似归入 1K/2K/4K；矩阵固定为 `1K→2K`、`2K→4K`、`4K→8K`，有效档位取 GUI 头显档位与矩阵推荐档位的较小值。非 16:9 只影响档位归类，屏幕 UV、源图像宽高和显示纵横比保持原值。输入低于有效档位时，Bridge 通过 `filament_bridge_set_screen_upscale` 进入 EASU 主路径；输入高于有效档位时，`filament_bridge_set_screen_sampling` 选择 Lanczos2/RCAS 缩小路径；同档位直接生成 MIP。OpenXR recommended extent 仅用于 swapchain 创建上限。
+运行时从所有模式共用的 `XR Headset Model` 解析 2K/4K/8K 应用采样档位，默认型号为 Pico 4 / 4 Ultra。输入尺寸取立体生成完成、格式打包前的实际每眼纹理，并按最长边近似归入 1K/2K/4K；矩阵固定为 `1K→2K`、`2K→4K`、`4K→8K`，有效档位取 GUI 头显档位与矩阵推荐档位的较小值。非 16:9 只影响档位归类，源图宽高比保持不变。公共阶段先按基础缩放 LOD、GUI Min/Max LOD 与 MIP Bias 进行三线性 MIP 预滤，再执行 EASU 或 Lanczos2，最后按 GUI sharpness 执行可选 RCAS；本地、OpenXR 和流媒体随后消费同一语义的处理结果。OpenXR metadata 标记公共质量阶段已执行后，Projection Composer 必须使用中性 sampler，禁止二次 MIP/LOD、缩放或锐化。
 
 实现必须保留以下运行时数据边界：
 
 1. `headset_model` 使用 GUI 保存的稳定型号 key，不使用显示字符串反向猜测实际分辨率；型号表中的 `resolution_tier_k` 是应用采样策略字段。
-2. `capture_size` 优先于处理后 eye image 尺寸，用于判断输入是 1K、2K 还是 4K；缺失时才回退到 eye image 尺寸。输入尺寸变化必须使采样策略重新计算，但不得重建源图像纹理，除非源图像 extent 本身发生变化。
+2. 立体生成后的 eye image 尺寸用于判断输入是 1K、2K 还是 4K；`capture_size` 只保留为捕捉诊断，不得覆盖实际参加质量处理的纹理尺寸。输入尺寸变化必须使采样策略重新计算。
 3. 采样计划至少记录 `input_tier_k`、`headset_tier_k`、`recommended_headset_tier_k`、`effective_tier_k`、`filter_scale`、`upscale_scale` 和 `mode`，并在这些值变化时记录一次诊断日志，禁止每帧刷屏。
-4. `upscale_scale>1` 选择 EASU → RCAS → MIP 主路径；`upscale_scale=1` 且 `filter_scale=1` 选择源图 → MIP；`filter_scale>1` 选择 Lanczos2 → RCAS → MIP。所有路径保持 sRGB/linear 契约，不加入 tone mapping，也不修改源图像。
+4. 公共阶段先执行 MIP/LOD 预滤；`upscale_scale>1` 再选择 EASU → RCAS，`upscale_scale=1` 且 `filter_scale=1` 保持原生尺寸，`filter_scale>1` 选择 Lanczos2 → RCAS。SBS/TAB 等格式打包只能发生在该阶段之后；OpenXR 不再重复质量处理。所有路径保持颜色契约，不加入 tone mapping。
 5. Bridge 不支持任一采样 ABI 时必须保留兼容路径并报告不可用状态；新 ABI 必须通过三平台远程构建后才可实机验收为 active。
 
-#### 11.4.1 动态 MIP 与各向异性采样
+#### 11.4.1 公共动态 MIP/LOD
 
-桌面源图像持续变化时，屏幕采样的 MIP 链必须在 GPU 上动态更新。当前正式实现采用
-Filament 的 device-local 中间纹理：每只眼在每帧先把源 `VkImage` 渲染到 MIP
-目标的 LOD 0，再调用 `Texture::generateMipmaps()` 生成完整链，屏幕材质使用
-`LINEAR_MIPMAP_LINEAR` 和 16x 各向异性过滤。源图像不回读 CPU，也不在 Python
-中逐像素缩放。
+桌面源图像持续变化时，每帧在 StereoRuntime 公共质量阶段直接处理 CUDA 眼图。RTMP 与本地路径没有最终投影的隐式纹理导数，因此统一请求值为 `max(log2(源尺寸/目标尺寸), Max LOD) + MIP Bias`，再限制在 `Min LOD` 与 `Max LOD` 之间；这使 Max LOD 在同尺寸输入时仍可直接控制过滤强度。相邻层使用三线性混合并恢复到原眼图尺寸，之后才进入 EASU/Lanczos2 和 RCAS。该结果由本地、OpenXR 与流媒体共同消费，SBS/TAB 打包前不得再次生成模式专属版本。
 
-- sRGB 目标必须声明为 `SRGB8_A8`，由 GPU 在下采样时在线性空间完成过滤；UNORM
-  目标只允许用于已经完成 sRGB 解码的线性输入。
-- MIP 目标和 RenderTarget 只在尺寸或格式变化时重建；正常帧只更新 LOD 0 和 MIP
-  链，避免重复创建纹理、材质和 Framebuffer。
-- 每眼必须记录源绑定次数和 MIP 生成次数。`mip` 回归运行中，每个有效渲染帧的
-  MIP 生成计数应递增；`legacy` 运行不得生成 MIP。
-- 正常运行路径不得为了视觉诊断执行固定相机 RenderTarget、GPU readback 或 PNG 写盘。
-  屏幕采样回归使用离线保存的历史 artifact，并校验源图像 manifest；运行时只保留
-  每眼源绑定和 MIP 生成计数。当前先使用 Filament 内部 blit/generateMipmap；AMD
-  FidelityFX SPD 或 Vulkan compute downsampler 作为后续等价替换，必须在相同离线
-  artifact 和 heatmap 指标下证明收益后才能替换。
-
-- MIP 链生成前按采样计划选择 GPU 主路径：`upscale_scale>1` 时使用 EASU
-  重建，随后使用完整 FSR RCAS 的十字邻域、luma 自适应和 RGB limiter；
-  `filter_scale>1` 时使用 legacy 4x4 Lanczos2，再执行 RCAS；两者均从 RCAS
-  输出生成 MIP。两级 pass 均在 Filament device-local RenderTarget 上完成，CPU
-  不读取或改写像素；同档位则直接把源图写入 MIP LOD 0。RCAS 的有效 sharpness
-  按 `screenSharpness / max(screenFilterScale, 1)` 有界缩放，不使用跨帧混合，
-  避免视频高对比边缘振铃、闪烁和字幕拖影。
+- 正常路径不得把眼图回读 CPU；PyTorch/Triton 操作必须停留在当前 GPU device。
+- 运行时诊断必须记录最终 `output_quality_mip_lod` 和实际 backend，便于确认热更新已生效。
+- OpenXR metadata 中 `output_quality_applied=1` 时，Vulkan Projection sampler 必须切换为 `minLod=0`、`maxLod=0`、`mipLodBias=0`、`RCAS=0`，只完成投影呈现。
+- 正常运行不得为视觉诊断执行 GPU readback 或逐帧 PNG 写盘；画质回归使用离线 artifact。
 
 屏幕变换、距离、曲率和可见性由 `SceneFrameState` 提供。交互状态与渲染资源分离，手柄拖动只更新下一帧 transform snapshot。
 

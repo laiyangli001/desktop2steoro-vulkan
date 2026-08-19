@@ -1,5 +1,6 @@
 import queue
 import threading
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -126,12 +127,14 @@ def test_direct_consumer_logs_fps_when_enabled(capsys):
 
 
 def test_direct_consumer_hides_fps_when_disabled(capsys):
+    samples = []
     consumer = DirectSbsOutputConsumer(
         runtime_q=queue.Queue(),
         shutdown_event=threading.Event(),
         output=SimpleNamespace(),
         source_stat_inc=lambda *args, **kwargs: None,
         show_fps_provider=lambda: False,
+        on_sbs_fps=lambda fps, **kwargs: samples.append((fps, kwargs)),
         fps_report_interval=1.0,
         clock=lambda: 0.0,
     )
@@ -142,6 +145,7 @@ def test_direct_consumer_hides_fps_when_disabled(capsys):
     consumer._report_fps_if_due()
 
     assert "SBS FPS" not in capsys.readouterr().out
+    assert samples == [(30.0, {"frame_count": 30})]
 
 
 def test_cuda_converter_reuses_pinned_host_buffer():
@@ -218,6 +222,36 @@ def test_mediamtx_startup_error_includes_server_output(monkeypatch):
         output.start()
 
 
+def test_non_webrtc_start_recommends_webrtc(monkeypatch, capsys):
+    output = FfmpegDirectSbsOutput(
+        base_dir="src",
+        protocol="RTMP",
+        port=1935,
+        stream_key="live",
+        fps=30,
+        crf=23,
+        os_name="Windows",
+    )
+
+    class RunningProcess:
+        stdout = None
+
+        @staticmethod
+        def poll():
+            return None
+
+    monkeypatch.setattr(
+        direct_sbs.subprocess, "Popen", lambda *args, **kwargs: RunningProcess()
+    )
+    monkeypatch.setattr(direct_sbs.time, "sleep", lambda _seconds: None)
+
+    output.start()
+
+    message = capsys.readouterr().out
+    assert "WARNING: RTMP selected" in message
+    assert "WebRTC is recommended" in message
+
+
 def test_stream_rate_uses_stable_windows_and_fixed_pacing():
     output = FfmpegDirectSbsOutput(
         base_dir="src",
@@ -276,6 +310,11 @@ def test_windows_rtmp_command_keeps_legacy_srt_transport_parameters():
     assert "libx264" in command
     assert "ultrafast" in command
     assert "zerolatency" in command
+    x264_params = command[command.index("-x264-params") + 1]
+    assert "keyint=30:min-keyint=30" in x264_params
+    assert "scenecut=0" in x264_params
+    assert "open-gop=0" in x264_params
+    assert "repeat-headers=1" in x264_params
     assert "mpegts" in command
     assert (
         "srt://127.0.0.1:8890?"
@@ -307,6 +346,200 @@ def test_nvenc_command_uses_low_latency_hardware_encoder():
     assert command[command.index("-strict_gop") + 1] == "1"
     assert "-use_wallclock_as_timestamps" not in command
     assert "-fps_mode" not in command
+
+
+def test_full_sbs_uses_hevc_nvenc_without_resizing(monkeypatch):
+    output = FfmpegDirectSbsOutput(
+        base_dir="src",
+        protocol="HLS",
+        port=8888,
+        stream_key="live",
+        fps=60,
+        crf=20,
+        os_name="Windows",
+        prefer_nvenc=True,
+        display_mode="Full-SBS",
+    )
+    monkeypatch.setattr(output, "_probe_nvenc", lambda width, height: True)
+
+    assert output._select_video_encoder(7680, 2160) == "hevc_nvenc"
+    output.video_encoder = "hevc_nvenc"
+    command = output._ffmpeg_command(7680, 2160)
+
+    assert "hevc_nvenc" in command
+    assert "h264_nvenc" not in command
+    assert "7680x2160" in command
+    assert "-vf" not in command
+    assert command[command.index("-b:v") + 1] == "75M"
+    assert command[command.index("-maxrate") + 1] == "87M"
+    assert command[command.index("-bufsize") + 1] == "87M"
+    assert command[command.index("-spatial-aq") + 1] == "1"
+    assert command[command.index("-temporal-aq") + 1] == "1"
+
+
+def test_full_sbs_hevc_falls_back_to_libx265(monkeypatch, capsys):
+    output = FfmpegDirectSbsOutput(
+        base_dir="src",
+        protocol="HLS",
+        port=8888,
+        stream_key="live",
+        fps=60,
+        crf=20,
+        os_name="Windows",
+        prefer_nvenc=True,
+        display_mode="Full-SBS",
+    )
+    monkeypatch.setattr(output, "_probe_nvenc", lambda width, height: False)
+
+    assert output._select_video_encoder(7680, 2160) == "libx265"
+    assert "falling back to libx265" in capsys.readouterr().out
+    output.video_encoder = "libx265"
+    command = output._ffmpeg_command(7680, 2160)
+    assert "libx265" in command
+    assert "-x265-params" in command
+    assert command[command.index("-maxrate") + 1] == "87M"
+    assert command[command.index("-bufsize") + 1] == "87M"
+
+
+def test_dynamic_stream_quality_tracks_codec_fps_resolution_and_crf():
+    h264 = FfmpegDirectSbsOutput(
+        base_dir="src",
+        protocol="HLS",
+        port=8888,
+        stream_key="live",
+        fps=30,
+        crf=20,
+        os_name="Windows",
+        display_mode="Half-SBS",
+    )
+    hevc_lower_quality = FfmpegDirectSbsOutput(
+        base_dir="src",
+        protocol="HLS",
+        port=8888,
+        stream_key="live",
+        fps=60,
+        crf=30,
+        os_name="Windows",
+        display_mode="Full-SBS",
+    )
+
+    assert h264._dynamic_stream_rate_budget(3840, 2160) == (30, 35, 35)
+    assert hevc_lower_quality._dynamic_stream_rate_budget(7680, 2160) == (
+        42,
+        49,
+        49,
+    )
+
+
+def test_dynamic_rate_budget_covers_rtmp_and_webrtc_but_not_rtsp():
+    output = FfmpegDirectSbsOutput(
+        base_dir="src",
+        protocol="RTMP",
+        port=1935,
+        stream_key="live",
+        fps=60,
+        crf=20,
+        os_name="Windows",
+        display_mode="Full-SBS",
+    )
+
+    assert output._dynamic_stream_rate_budget(7680, 2160) == (75, 87, 87)
+    command = output._ffmpeg_command(7680, 2160)
+    assert command[command.index("-maxrate") + 1] == "87M"
+    assert command[command.index("-bufsize") + 1] == "87M"
+
+    output.protocol = "WEBRTC"
+    output.display_mode = "Half-SBS"
+    output.use_hevc = False
+    output.fps = 50
+    output.crf = 23
+    output.video_encoder = "h264_nvenc"
+    command = output._ffmpeg_command(3840, 2160)
+    assert command[command.index("-b:v") + 1] == "42M"
+    assert command[command.index("-maxrate") + 1] == "49M"
+    assert command[command.index("-bufsize") + 1] == "49M"
+    assert command[command.index("-g") + 1] == "50"
+    assert command[command.index("-force_key_frames") + 1] == "expr:gte(t,n_forced*1)"
+
+    output.protocol = "RTSP"
+    command = output._ffmpeg_command(3840, 2160)
+    assert "-maxrate" not in command
+    assert "-bufsize" not in command
+
+
+def test_windows_stream_audio_uses_hls_compatible_aac():
+    output = FfmpegDirectSbsOutput(
+        base_dir="src",
+        protocol="HLS",
+        port=8888,
+        stream_key="live",
+        fps=30,
+        crf=20,
+        os_name="Windows",
+        stereo_mix_device="virtual-audio-capturer",
+    )
+
+    command = output._ffmpeg_command(3840, 1080)
+
+    assert command[command.index("-c:a") + 1] == "aac"
+    assert command[command.index("-ar") + 1] == "48000"
+    assert command[command.index("-b:a") + 1] == "128k"
+    assert "libopus" not in command
+
+
+def test_windows_webrtc_stream_audio_uses_opus():
+    output = FfmpegDirectSbsOutput(
+        base_dir="src",
+        protocol="WebRTC",
+        port=8889,
+        stream_key="live",
+        fps=30,
+        crf=20,
+        os_name="Windows",
+        stereo_mix_device="virtual-audio-capturer",
+    )
+
+    command = output._ffmpeg_command(3840, 1080)
+
+    assert command[command.index("-c:a") + 1] == "libopus"
+    assert command[command.index("-af") + 1] == "aresample=async=1000:first_pts=0"
+    assert command[command.index("-ar") + 1] == "48000"
+    assert command[command.index("-ac") + 1] == "2"
+    assert command[command.index("-b:a") + 1] == "96k"
+    assert command[command.index("-max_interleave_delta") + 1] == "0"
+    assert "aac" not in command
+
+
+def test_audio_delay_hot_update_restarts_only_ffmpeg(monkeypatch):
+    output = FfmpegDirectSbsOutput(
+        base_dir="src",
+        protocol="RTMP",
+        port=1935,
+        stream_key="live",
+        fps=30,
+        crf=20,
+        os_name="Windows",
+        stereo_mix_device="virtual-audio-capturer",
+        audio_delay=-0.15,
+    )
+    ffmpeg_process = object()
+    server_process = object()
+    stopped = []
+    started = []
+    output.ffmpeg_process = ffmpeg_process
+    output.server_process = server_process
+    output._frame_size = (2, 1)
+    monkeypatch.setattr(output, "_stop_process", stopped.append)
+    monkeypatch.setattr(output, "_start_ffmpeg", lambda width, height: started.append((width, height)))
+    monkeypatch.setattr(output, "_write_frame", lambda _frame: None)
+
+    assert output.request_audio_delay(0.25) is True
+    output.submit_frame(np.zeros((1, 2, 3), dtype=np.uint8))
+
+    assert output.audio_delay == 0.25
+    assert stopped == [ffmpeg_process]
+    assert started == [(2, 1)]
+    assert output.server_process is server_process
 
 
 def test_nvenc_selection_falls_back_when_probe_fails(monkeypatch, capsys):
@@ -347,6 +580,40 @@ def test_nvenc_probe_uses_actual_sbs_resolution(monkeypatch):
 
     assert output._probe_nvenc(5120, 1440)
     assert "color=c=black:s=5120x1440:r=1" in commands[0]
+
+
+def test_nvenc_probe_logs_ffmpeg_failure_detail(monkeypatch, capsys):
+    output = FfmpegDirectSbsOutput(
+        base_dir="src",
+        protocol="RTMP",
+        port=1935,
+        stream_key="live",
+        fps=60,
+        crf=20,
+        os_name="Windows",
+        prefer_nvenc=True,
+    )
+    monkeypatch.setattr(
+        direct_sbs.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=1,
+            stderr=b"[h264_nvenc] Width 7680 exceeds encoder limit\n",
+        ),
+    )
+
+    assert output._probe_nvenc(7680, 2160) is False
+    output_text = capsys.readouterr().out
+    assert "NVENC probe failed for 7680x2160" in output_text
+    assert "Width 7680 exceeds encoder limit" in output_text
+
+
+def test_mediamtx_hls_segment_limit_supports_high_bitrate_full_sbs():
+    config = Path("src/streaming/rtmp/mediamtx/mediamtx.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "hlsSegmentMaxSize: 256M" in config
 
 
 def test_rtsp_selection_uses_selected_port_for_internal_publish():

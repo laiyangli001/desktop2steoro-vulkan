@@ -42,7 +42,7 @@ class Desktop2StereoGUI(
         self._config = {}
         self.run_mode_key = DEFAULTS.get("Run Mode", "Local Viewer")
         self.capture_mode_key = DEFAULTS.get("Capture Mode", "Monitor")
-        self.stream_protocol_key = DEFAULTS.get("Stream Protocol", "RTMP")
+        self.stream_protocol_key = DEFAULTS.get("Stream Protocol", "WebRTC")
         self.selected_window_name = ""
         self.selected_window_handle = None
         self.selected_window_rect = None

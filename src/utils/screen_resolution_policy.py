@@ -38,6 +38,45 @@ class ScreenSamplingPlan:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class OutputSamplingPlan:
+    source_width: int
+    source_height: int
+    target_width: int
+    target_height: int
+    mode: str
+    target_kind: str
+
+    @property
+    def scale(self) -> float:
+        return self.target_width / float(self.source_width)
+
+
+def build_output_sampling_plan(
+    source_width: int,
+    source_height: int,
+    *,
+    headset_tier_k: int,
+) -> OutputSamplingPlan:
+    """Resolve the shared headset target for every output consumer."""
+    width = int(source_width)
+    height = int(source_height)
+    if width <= 0 or height <= 0:
+        raise ValueError("source resolution must be positive")
+    plan = build_screen_sampling_plan(width, height, int(headset_tier_k))
+    scale = plan.upscale_scale if plan.mode == "upscale_easu" else 1.0 / plan.filter_scale
+    out_width = max(2, int(round(width * scale)) // 2 * 2)
+    out_height = max(2, int(round(height * scale)) // 2 * 2)
+    return OutputSamplingPlan(
+        source_width=width,
+        source_height=height,
+        target_width=out_width,
+        target_height=out_height,
+        mode=plan.mode,
+        target_kind="headset",
+    )
+
+
 def classify_input_resolution(width: int, height: int) -> int:
     """Bucket input for the final screen-quality route.
 

@@ -58,8 +58,10 @@ def test_direct_stream_output_uses_uint8_nvenc_and_fps_provider() -> None:
     context_create = source.index("context = create_runtime_context(")
     assert uint8_enable < context_create
     assert "prefer_nvenc=" in stream_branch
+    assert 'display_mode=settings.get("Display Mode", "Half-SBS")' in stream_branch
     assert '"NVIDIA" in str(DEVICE_INFO).upper()' in stream_branch
     assert "show_fps_provider=callbacks.show_fps" in stream_branch
+    assert "observe_sbs_fps if adaptive_capture_rate.enabled else None" in stream_branch
 
 
 def test_openxr_starts_after_inference_load_and_first_ready_output() -> None:

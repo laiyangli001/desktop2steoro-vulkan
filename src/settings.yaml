@@ -1,7 +1,7 @@
 Capture Mode: Monitor
 Monitor Index: 1
 Window Title: ''
-Show FPS: true
+Show FPS: false
 Model List:
   Distill-Any-Depth-Small:
     resolutions:
@@ -503,9 +503,9 @@ Color Temperature: 0.0
 Color Tint: 0.0
 Vulkan Projection Min LOD: 0.0
 Vulkan Projection Max LOD: 0.35
-Vulkan Projection MIP LOD Bias: -0.7
+Vulkan Projection MIP LOD Bias: -0.35
 Vulkan Projection RCAS Sharpness: 0.5
-Display Mode: Full-SBS
+Display Mode: Half-SBS
 FP16: true
 torch.compile: true
 TensorRT: true
@@ -535,14 +535,14 @@ Render Min Dimension: 480
 Render Align: 1
 Upscaler: 'Off'
 Upscaler Sharpness: 0.0
-Stream Protocol: HLS
+Stream Protocol: WebRTC
 Streamer Port: 1122
 Stream Quality: 100
 Stream Key: live
 Stereo Mix: null
-CRF: 20
-Audio Delay: -0.15
-Controller Model: NONE
+CRF: 23
+Audio Delay: -0.1
+Controller Model: PICO
 Environment Model: Default
 Lossless Scaling Support: false
 Capture Tool: WindowsCaptureCUDA
@@ -551,6 +551,4 @@ Fix Viewer Aspect: false
 Stereo Output: 3
 Show Log Panel: true
 OpenVINO: null
-OpenXR Color Mode: sRGB
 Synthetic View: quality_4k
-OpenXR Render Scale: 1.0

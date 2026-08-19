@@ -521,8 +521,10 @@ class GUIHandlerMixin:
         is_openxr = mode == "OpenXR Link"
         self.display_mode_label.visible = not is_openxr
         self.display_mode_dd.visible = not is_openxr
-        self.xr_headset_label.visible = is_openxr
-        self.xr_headset_dd.visible = is_openxr
+        # The target headset preset is shared by every output mode, so keep its
+        # dedicated row available independently of the current run mode.
+        self.xr_headset_label.visible = True
+        self.xr_headset_dd.visible = True
         self._sync_device_advanced_visibility(mode)
         self.row7b.visible = is_openxr
         if is_openxr:

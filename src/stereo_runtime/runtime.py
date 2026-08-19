@@ -26,6 +26,7 @@ from .settings_snapshot import (
 )
 from .compute_backend import resolve_stereo_compute_backend
 from .output import make_sbs, match_depth
+from .output_quality import apply_output_quality, output_quality_requires_eye_images
 from .synthesis import StereoConfig, StereoResult, synthesize_stereo
 from .temporal import TemporalState, apply_temporal
 from .triton_runtime import probe_triton_runtime
@@ -1243,13 +1244,11 @@ class StereoRuntime:
             debug["runtime_output_pack_backend"] = "openxr_eyes_only"
             debug["runtime_output_dtype"] = str(sbs.dtype).replace("torch.", "")
         elif _runtime_output_uint8_enabled() and sbs.is_floating_point():
-            fused_uint8 = _try_make_runtime_uint8_sbs(stereo, self.stereo_config.output_format)
-            if fused_uint8 is not None:
-                sbs = fused_uint8
-                debug["runtime_output_pack_backend"] = "triton_half_sbs_uint8"
-            else:
-                sbs = sbs.detach().clamp(0.0, 1.0).mul(255.0).to(torch.uint8)
-                debug["runtime_output_pack_backend"] = "torch_float_to_uint8"
+            # The packed SBS is authoritative. Direct quality_4k synthesis can
+            # intentionally retain source RGB placeholders in left_eye/right_eye;
+            # rebuilding from those placeholders duplicates the same eye.
+            sbs = sbs.detach().clamp(0.0, 1.0).mul(255.0).round().to(torch.uint8)
+            debug["runtime_output_pack_backend"] = "torch_packed_sbs_to_uint8"
             debug["runtime_output_dtype"] = "uint8"
         else:
             if sbs.dtype == torch.uint8:
@@ -1392,6 +1391,10 @@ class StereoRuntime:
             stereo_config,
             depth_strength=max(0.0, float(openxr_config_for_frame.depth_strength)),
         )
+        if bool(getattr(openxr_stereo_config, "output_quality_enabled", False)):
+            # The shared quality stage runs on completed eye images before any
+            # output format branches, so OpenXR cannot remain on rgb+depth DIBR.
+            prewarp_eyes = True
         _record_cuda_event(cuda_events, "depth", rgb_frame)
 
         openxr_render_ms = 0.0
@@ -1461,12 +1464,20 @@ class StereoRuntime:
                     _record_cuda_event(cuda_events, "openxr_render", rgb_frame)
                 elif _is_triton_stereo_compute_backend(self._resolve_stereo_compute_backend(output_rgb)):
                     render_start = time.perf_counter()
-                    no_fill_fused, no_fill_fused_reason = _try_openxr_no_fill_fused_rgba_u8(
-                        output_rgb,
-                        depth,
+                    if output_quality_requires_eye_images(
                         openxr_stereo_config,
-                        cuda_events,
-                    )
+                        int(output_rgb.shape[-1]),
+                        int(output_rgb.shape[-2]),
+                    ):
+                        no_fill_fused = None
+                        no_fill_fused_reason = "common_output_quality_requires_eyes"
+                    else:
+                        no_fill_fused, no_fill_fused_reason = _try_openxr_no_fill_fused_rgba_u8(
+                            output_rgb,
+                            depth,
+                            openxr_stereo_config,
+                            cuda_events,
+                        )
                     if no_fill_fused is not None:
                         synthesis_left, synthesis_right, fused_debug = no_fill_fused
                         left_eye = synthesis_left
@@ -1533,6 +1544,11 @@ class StereoRuntime:
                     right_eye = openxr.right_eye
                     if bool(getattr(openxr_stereo_config, "cross_eyed", False)):
                         left_eye, right_eye = right_eye, left_eye
+                    left_eye, right_eye, quality_debug = apply_output_quality(
+                        left_eye,
+                        right_eye,
+                        openxr_stereo_config,
+                    )
                     _record_cuda_event(cuda_events, "openxr_pack_start", left_eye)
                     if _openxr_runtime_output_uint8_enabled():
                         packed_left, left_pack_backend = _pack_openxr_eye_rgba_u8_with_backend(left_eye)
@@ -1545,6 +1561,7 @@ class StereoRuntime:
                     _record_cuda_event(cuda_events, "openxr_pack", left_eye)
                     output_format = "openxr_eye_views"
                     render_backend = dict(openxr.debug_info)
+                    render_backend.update(quality_debug)
                     render_backend["openxr_prewarp_backend"] = "grid_sample_fallback"
                     render_backend["openxr_grid_sample_fallback"] = 1
                     render_backend["openxr_grid_sample_fallback_reason"] = str(vulkan_skip)
@@ -1666,6 +1683,10 @@ class StereoRuntime:
         stereo_config: Any,
     ) -> tuple[VulkanComputeRequest | None, str]:
         """Build a Presenter-owned Vulkan request without touching Vulkan here."""
+        if output_quality_requires_eye_images(
+            stereo_config, int(rgb_frame.shape[-1]), int(rgb_frame.shape[-2])
+        ):
+            return None, "common_output_quality_requires_eyes"
         backend = str(getattr(stereo_config, "backend", ""))
         if backend not in {"fast_plus", "quality_4k", "hq_4k"}:
             return None, f"backend={backend or 'unknown'}"
@@ -1845,6 +1866,10 @@ class StereoRuntime:
             return None, "cross_eyed"
         if bool(getattr(stereo_config, "debug_output", False)):
             return None, "debug_output"
+        if output_quality_requires_eye_images(
+            stereo_config, int(rgb_frame.shape[-1]), int(rgb_frame.shape[-2])
+        ):
+            return None, "common_output_quality_requires_eyes"
         if _layered_parallax_enabled(stereo_config):
             return None, "layered_parallax"
         if isinstance(getattr(stereo_config, "convergence", None), torch.Tensor):
@@ -1903,6 +1928,10 @@ class StereoRuntime:
         *,
         skip_sbs_output: bool,
     ) -> tuple[StereoResult | None, str]:
+        if output_quality_requires_eye_images(
+            stereo_config, int(rgb_frame.shape[-1]), int(rgb_frame.shape[-2])
+        ):
+            return None, "common_output_quality_requires_eyes"
         backend = str(getattr(stereo_config, "backend", ""))
         if backend in {"quality_4k", "hq_4k"}:
             return self._try_vulkan_layered_stereo(
@@ -2389,20 +2418,3 @@ def _env_flag(name: str, default: object = "0") -> bool:
 
 def _fast_plus_fused_enabled() -> bool:
     return str(os.environ.get("D2S_FAST_PLUS_FUSED", "1") or "1").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _try_make_runtime_uint8_sbs(stereo: StereoResult, output_format: str) -> torch.Tensor | None:
-    if output_format != "half_sbs":
-        return None
-    try:
-        from .output_triton import can_use_triton_half_sbs, make_half_sbs_uint8
-    except Exception:
-        return None
-    left = stereo.left_eye
-    right = stereo.right_eye
-    if not can_use_triton_half_sbs(left, right):
-        return None
-    try:
-        return make_half_sbs_uint8(left, right)
-    except Exception:
-        return None

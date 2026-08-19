@@ -11,7 +11,7 @@ from stereo_runtime.hot_reload import (
     runtime_stereo_overrides,
     to_bool_hot_reload,
 )
-from stereo_runtime.settings_snapshot import SnapshotChangeClass
+from stereo_runtime.settings_snapshot import RuntimeSettingsSnapshot, SnapshotChangeClass
 
 
 def make_config(**overrides):
@@ -87,8 +87,10 @@ def test_hot_reload_value_snapshot_parses_expected_fields():
         "Vulkan Projection Max LOD": "0.45",
         "Vulkan Projection MIP LOD Bias": "-0.25",
         "Vulkan Projection RCAS Sharpness": "0.65",
+        "XR Headset Model": "Pimax Crystal / Light",
         "Debug Stereo Output": "yes",
         "Show FPS": "yes",
+        "Audio Delay": "0.25",
     }
 
     values = hot_reload_value_snapshot(settings, config)
@@ -128,8 +130,10 @@ def test_hot_reload_value_snapshot_parses_expected_fields():
     assert values["vulkan_projection_max_lod"] == 0.45
     assert values["vulkan_projection_mip_lod_bias"] == -0.25
     assert values["vulkan_projection_rcas_sharpness"] == 0.65
+    assert values["output_headset_tier_k"] == 8
     assert values["debug_output"] is True
     assert values["debug_flags"] == {"debug_output": True}
+    assert values["audio_delay"] == 0.25
 
 
 def test_runtime_stereo_overrides_maps_runtime_config():
@@ -152,6 +156,30 @@ def test_runtime_stereo_overrides_maps_runtime_config():
     assert overrides["cross_eyed"] is False
     assert overrides["debug_output"] is False
     assert overrides["fused"] is True
+    assert overrides["output_headset_tier_k"] == 4
+    assert overrides["output_min_lod"] == 0.0
+    assert overrides["output_max_lod"] == 0.35
+    assert overrides["output_mip_lod_bias"] == -0.35
+    assert overrides["output_rcas_sharpness"] == 0.5
+
+
+def test_headset_and_rcas_hot_reload_update_common_output_quality() -> None:
+    snapshot = RuntimeSettingsSnapshot(
+        version=2,
+        timestamp=1.0,
+        output_headset_tier_k=2,
+        vulkan_projection_min_lod=0.25,
+        vulkan_projection_max_lod=1.25,
+        vulkan_projection_mip_lod_bias=-0.5,
+        vulkan_projection_rcas_sharpness=0.75,
+    )
+
+    assert snapshot.classify() is SnapshotChangeClass.HOT_RELOAD
+    assert snapshot.to_config_updates()["output_headset_tier_k"] == 2
+    assert snapshot.to_config_updates()["output_min_lod"] == 0.25
+    assert snapshot.to_config_updates()["output_max_lod"] == 1.25
+    assert snapshot.to_config_updates()["output_mip_lod_bias"] == -0.5
+    assert snapshot.to_config_updates()["output_rcas_sharpness"] == 0.75
 
 
 def test_hot_reload_hole_fill_off_disables_fill_and_ignores_stale_strength() -> None:

@@ -1,7 +1,33 @@
 # Desktop2Stereo Vulkan 项目日志
 
+## 2026-08-20
+
+- GUI 执行重置后，运行模式默认恢复为“本地查看”（`Local Viewer`）。
+- 修复重置后运行模式下拉框未切换的问题：配置应用现在会在保留可选配置关闭时也同步 `run_mode_key` 和界面控件。
+- 将电影模式的补洞默认保持为关闭，并将 GUI 重置后的补洞模式改为关闭（`none`）。
+- 修复点击重置后窗口高度未按左侧 GUI 内容重新计算的问题；重置完成会重新估算并调整窗口尺寸。
+- 将 CRF 默认值调整为 `23`，同步 GUI 默认/重置值、启动缺省回退、bootstrap 配置和 `src/settings.yaml`。
+- 修复 WebRTC 播放暂停后恢复时音频逐渐落后视频：WebRTC 音频使用 `aresample=async=1000:first_pts=0` 持续校正系统音频时钟并从首帧对齐，同时关闭 MPEG-TS 复用器的交错等待，避免暂停恢复后的秒级音画偏移。
+- 将 CRF 默认值恢复为 `20`，同步 GUI 默认/重置值、启动缺省回退、bootstrap 配置和 `src/settings.yaml`。
+
+## 2026-08-20
+
+- 修复 WebRTC 推流没有声音：WebRTC 发布链路改用浏览器与 MediaMTX 支持的 Opus 48 kHz 双声道音频，避免 AAC 音轨被报告为 `skipping track 2 (MPEG-4 Audio)` 并跳过；HLS、RTMP 与其他现有协议继续使用 AAC，保持原有兼容性。
+- 面向以无线网络为主的串流场景，将 CRF 默认值由 `20` 调整为 `23`，同步 GUI 初始/重置值、旧配置迁移补全值和运行入口缺失配置回退，以降低默认目标码率并减少带宽不足造成的马赛克。
+- 将网络串流的默认协议统一改为 WebRTC；用户选择 RTMP、HLS、RTSP 等非 WebRTC 协议启动时，日志会输出一次 WebRTC 低延迟浏览器串流建议，但仍按所选协议正常启动。
+- `RTMP Streamer` 运行模式接入与 Local Viewer/OpenXR 相同的自动捕捉限频：捕捉 FPS 设为 Auto 时，直接 SBS 推流消费者每 5 秒回报实际输出，控制器按 15 秒窗口内持续输出峰值 `+5 FPS` 调整捕捉目标，并继续忽略稀疏样本、受显示器刷新率限制；手动 FPS 不受影响。
+- 将动态码率预算从 HLS 扩展到 RTMP 与 WebRTC，并针对无线串流把峰值上限由目标码率的 `125%` 收紧为 `115%`、VBV 缓冲由峰值的 `2 倍` 收紧为 `1 倍`，降低局部运动引起的瞬时码率突发和无线丢包马赛克；每秒封闭 IDR、固定 GOP 与禁用场景切换保持不变。
+- RTMP 音频延迟支持运行时热调节：GUI 输入合法的 `-10` 到 `+10` 秒数值后自动保存，现有配置轮询会把新值转交给直接 SBS 推流输出；FFmpeg 发布进程在下一帧由自己的输出线程安全重启并应用新的 `-itsoffset`，MediaMTX 服务保持运行，避免端口和服务端整体重启。
+- RTMP 音频延迟默认值由 `-0.15` 秒调整为 `-0.1` 秒，并统一 GUI 初始/重置值、缺失配置回退、bootstrap 与 FFmpeg 输出构造默认值。
+
 ## 2026-08-19
 
+- 修复 RTMP、本地模式调节 Min LOD、Max LOD 与 MIP Bias 无效：三项参数从 OpenXR 专属 Vulkan sampler 配置迁移到所有模式共用的眼图质量阶段，在格式打包前选择并混合 mip 层，再执行 Lanczos2/EASU 与 RCAS；无投影导数路径使用 Max LOD 与 Bias 形成显式 LOD 请求，单独提高 Max LOD 即可生效，不再必须同时抬高 Min LOD。OpenXR 收到已处理眼图后使用中性 sampler，避免重复过滤。
+- 将“头显型号”提升为所有运行模式共用的最终目标显示预设，并在 GUI 中移到“运行模式”下方单独一行；OpenXR、浏览器推流与供 Virtual Desktop 等软件采集的本地输出统一按生成眼图分辨率和所选头显档位决定 Lanczos2/EASU/RCAS，物理显示器仅作为中间承载画布。配置键保持 `XR Headset Model` 不变，默认型号仍为 Pico 4 / 4 Ultra；切换头显型号与 RCAS 强度支持运行时热更新。
+- 修复直接推流丢失立体视差：推流专用 uint8 路径现在直接量化已经合成完成的 packed SBS，不再从 `quality_4k` 直出路径的左右眼占位张量重复打包。Half-SBS/Half-TAB 的每眼 2×缩小由两像素平均升级为 Lanczos2 预滤波，降低桌面文字、网格和细线条的摩尔纹；所有模式的公共眼图质量阶段会在格式打包前按头显档位执行 EASU/Lanczos2 与可选 RCAS，服务端不把 Half-SBS 隐式转换为 Full-SBS。
+- 增加 HLS 动态质量控制：按实际 SBS 分辨率、稳定输出帧率、H.264/H.265 编码效率和用户 CRF 自动计算目标码率、峰值码率与 VBV 缓冲，替代 NVENC 无上限的瞬时 VBR；硬件编码同时启用时空自适应量化，降低复杂运动画面因码率突发造成的缓冲不足和马赛克。Full-SBS 保持公共质量阶段输出的完整双眼尺寸，不做 Half-SBS 转换。
+- 优化 Full-SBS 网络推流：保持公共质量阶段输出的完整双眼画面，改用 H.265/HEVC（优先 `hevc_nvenc`，不可用时回退 `libx265`）；Half-SBS 继续使用 H.264。GUI 会提示 Half-SBS 具有更广泛的浏览器兼容性和更低解码负载，但不阻止 Full-SBS 启动。推流音频统一为 HLS 兼容性更好的 AAC 48 kHz/128 kbps。
+- 修复高码率 HLS 触发 MediaMTX `reached maximum segment size`：H.264/H.265 软件编码统一使用每秒封闭 IDR GOP、禁用场景切换 GOP并重复参数集，确保 HLS 按 1 秒切段；HLS 单 segment 安全上限由 `50M` 提高到 `256M`。NVENC 探测失败现在同时记录实际 SBS 尺寸与 FFmpeg 错误原因。
 - 新增直接消费运行时 SBS 帧的网络输出管线：RTMP、MJPEG 与旧网络推流不再依赖捕捉 Viewer 窗口；CUDA 帧使用固定页内存下载并以 RGB24 直接交给 FFmpeg，减少重复窗口捕捉和中间拷贝。
 - 完善 RTMP 运行环境与音频检测：项目内置 FFmpeg 和 MediaMTX，支持 `Stereo Mix` 与 Screen Capture Recorder 的 `virtual-audio-capturer`；补齐直播流密钥、启动检测、浏览器播放地址及明确的日志提示。
 - 优化不同显卡上的流媒体编码：启动时按实际 SBS 分辨率动态探测 NVIDIA NVENC 能力，失败时自动回退软件编码；输出帧率使用至少 5 个完整秒级窗口、最多 15 秒的稳定采样确定，并在 CUDA 转 CPU 前按目标节奏丢弃多余帧，避免短时峰值造成浏览器播放不连贯。

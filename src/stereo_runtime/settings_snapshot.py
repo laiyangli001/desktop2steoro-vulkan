@@ -61,6 +61,7 @@ _HOT_RELOAD_FIELDS = frozenset(
         "vulkan_projection_max_lod",
         "vulkan_projection_mip_lod_bias",
         "vulkan_projection_rcas_sharpness",
+        "output_headset_tier_k",
         "fused",
     }
 )
@@ -119,6 +120,7 @@ _CONFIG_UPDATE_FIELDS = frozenset(
         "color_gamma",
         "color_temperature",
         "color_tint",
+        "output_headset_tier_k",
         "fused",
         "debug_output",
         "depth_backend",
@@ -189,6 +191,7 @@ class RuntimeSettingsSnapshot:
     vulkan_projection_max_lod: float | None = None
     vulkan_projection_mip_lod_bias: float | None = None
     vulkan_projection_rcas_sharpness: float | None = None
+    output_headset_tier_k: int | None = None
     fused: bool | None = None
     depth_backend: str | None = None
     model_id: str | None = None
@@ -222,6 +225,14 @@ class RuntimeSettingsSnapshot:
             updates["hole_fill"] = "none" if mode == "none" else "edge_aware"
         if self.runtime_quality_mode is not None:
             updates["mode"] = _normalize_runtime_mode(self.runtime_quality_mode)
+        if self.vulkan_projection_min_lod is not None:
+            updates["output_min_lod"] = self.vulkan_projection_min_lod
+        if self.vulkan_projection_max_lod is not None:
+            updates["output_max_lod"] = self.vulkan_projection_max_lod
+        if self.vulkan_projection_mip_lod_bias is not None:
+            updates["output_mip_lod_bias"] = self.vulkan_projection_mip_lod_bias
+        if self.vulkan_projection_rcas_sharpness is not None:
+            updates["output_rcas_sharpness"] = self.vulkan_projection_rcas_sharpness
         return updates
 
     def _has_any(self, field_names: frozenset[str]) -> bool:

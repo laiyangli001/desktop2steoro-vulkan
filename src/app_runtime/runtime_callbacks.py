@@ -22,6 +22,10 @@ class RuntimeCallbacks:
         self._runtime_fps = 0.0
         self._capture_frame_ts = deque(maxlen=120)
         self._show_fps = bool(show_fps)
+        self.stream_output = None
+
+    def set_stream_output(self, output) -> None:
+        self.stream_output = output
 
     def show_fps(self) -> bool:
         return self._show_fps
@@ -344,6 +348,12 @@ class RuntimeCallbacks:
             if polled is None:
                 return False
             snapshot, _applied_preset, values = polled
+            request_audio_delay = getattr(
+                self.stream_output, "request_audio_delay", None
+            )
+            audio_delay = values.get("audio_delay")
+            if callable(request_audio_delay) and audio_delay is not None:
+                request_audio_delay(audio_delay)
             self.send_settings_snapshot(snapshot)
             self.update_openxr_runtime_config(snapshot=snapshot)
             log_snapshot = getattr(reloader, "log_settings_snapshot", None)

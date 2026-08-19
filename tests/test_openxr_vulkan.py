@@ -1163,6 +1163,28 @@ def test_projection_composer_sampling_uses_scaled_2k_eye_texture_not_4k_capture(
     assert plan.mode == "upscale_easu"
 
 
+def test_projection_does_not_repeat_the_shared_output_quality_pass() -> None:
+    presenter = OpenXrVulkanPresenter()
+    presenter._filament_screen = ((0.0, 0.0, -2.0), 2.0, 1.0, (0.0, 0.0, 0.0))
+    frame = VulkanStereoOutputFrame(
+        frame_id=1,
+        timestamp=0.0,
+        left_eye=SimpleNamespace(width=3840, height=2160),
+        right_eye=SimpleNamespace(width=3840, height=2160),
+        metadata={
+            "output_quality_applied": 1,
+            "output_quality_mode": "upscale_easu",
+        },
+    )
+
+    plan = presenter._apply_screen_sampling_policy(frame)
+
+    assert plan is not None
+    assert plan.mode == "native_mip"
+    assert plan.filter_scale == 1.0
+    assert plan.upscale_scale == 1.0
+
+
 def test_projection_composer_final_pass_samples_completed_quality_mips() -> None:
     presenter = OpenXrVulkanPresenter()
     source = SimpleNamespace(width=3840, height=2160)
@@ -1269,6 +1291,12 @@ def test_projection_quality_chain_disabled_forces_lod0_sampling() -> None:
     assert "max_lod=0.0" in source
     assert "mip_lod_bias=0.0" in source
     assert "rcas_sharpness=0.0" in source
+
+
+def test_projection_quality_chain_skips_mip_after_shared_output_processing() -> None:
+    source = inspect.getsource(OpenXrVulkanPresenter._render_vulkan_projection_composer)
+
+    assert source.count('get("output_quality_applied", 0)') >= 2
 
 
 def test_projection_quality_chain_bypasses_rcas_when_sharpness_is_zero() -> None:

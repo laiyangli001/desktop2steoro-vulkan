@@ -17,6 +17,7 @@ from stereo_runtime.adapter import (
 )
 from stereo_runtime.presets import normalize_preset
 from stereo_runtime.settings_snapshot import RuntimeSettingsSnapshot
+from utils.xr_headset_presets import resolve_xr_headset_preset
 
 def read_yaml(path: str) -> dict:
     import yaml
@@ -57,6 +58,12 @@ def runtime_stereo_overrides(runtime) -> dict:
         "anaglyph_method": config.anaglyph_method,
         "debug_output": getattr(config, "debug_output", False),
         "fused": config.fused,
+        "output_quality_enabled": getattr(config, "output_quality_enabled", False),
+        "output_headset_tier_k": getattr(config, "output_headset_tier_k", 4),
+        "output_min_lod": getattr(config, "output_min_lod", 0.0),
+        "output_max_lod": getattr(config, "output_max_lod", 0.35),
+        "output_mip_lod_bias": getattr(config, "output_mip_lod_bias", -0.35),
+        "output_rcas_sharpness": getattr(config, "output_rcas_sharpness", 0.5),
     }
 
 
@@ -231,12 +238,19 @@ def hot_reload_value_snapshot(settings_dict: dict, config) -> dict:
         "vulkan_projection_max_lod": max(0.0, min(16.0, float(settings_dict.get("Vulkan Projection Max LOD", 0.35)))),
         "vulkan_projection_mip_lod_bias": max(-1.5, min(0.0, float(settings_dict.get("Vulkan Projection MIP LOD Bias", -0.35)))),
         "vulkan_projection_rcas_sharpness": max(0.0, min(1.0, float(settings_dict.get("Vulkan Projection RCAS Sharpness", 0.5)))),
+        "output_headset_tier_k": int(
+            resolve_xr_headset_preset(settings_dict.get("XR Headset Model")).resolution_tier_k
+        ),
         "cross_eyed": to_bool_hot_reload(settings_dict.get("Cross Eyed", config.cross_eyed)),
         "presentation_flags": {
             "show_fps": to_bool_hot_reload(settings_dict.get("Show FPS", False))
         },
         "debug_output": debug_output_enabled,
         "debug_flags": {"debug_output": debug_output_enabled},
+        "audio_delay": max(
+            -10.0,
+            min(10.0, float(settings_dict.get("Audio Delay", -0.1))),
+        ),
     }
     _add_runtime_quality_mode_if_changed(values, settings_dict, config)
     _add_rebuild_fields_if_changed(values, settings_dict, config)

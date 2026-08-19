@@ -94,6 +94,12 @@ class StereoRuntimeConfig:
     debug_output: bool = False
     fused: bool = True
     stereo_compute_backend: StereoComputeBackendMode = "auto"
+    output_quality_enabled: bool = False
+    output_headset_tier_k: int = 4
+    output_min_lod: float = 0.0
+    output_max_lod: float = 0.35
+    output_mip_lod_bias: float = -0.35
+    output_rcas_sharpness: float = 0.5
 
     @property
     def resolved_model_id(self) -> str:
@@ -231,6 +237,7 @@ def runtime_config_from_d2s_settings(
     if not temporal_enabled:
         temporal_strength = 0.0
 
+    headset_tier = _output_headset_tier_from_settings(settings)
     return StereoRuntimeConfig(
         model_id=str(model_name),
         cache_dir=cache_dir,
@@ -292,6 +299,15 @@ def runtime_config_from_d2s_settings(
         stereo_compute_backend=_normalize_stereo_compute_backend(
             settings.get("Stereo Compute Backend", "auto")
         ),
+        output_quality_enabled=True,
+        output_headset_tier_k=headset_tier,
+        output_min_lod=max(0.0, min(16.0, float(settings.get("Vulkan Projection Min LOD", 0.0)))),
+        output_max_lod=max(0.0, min(16.0, float(settings.get("Vulkan Projection Max LOD", 0.35)))),
+        output_mip_lod_bias=max(-1.5, min(0.0, float(settings.get("Vulkan Projection MIP LOD Bias", -0.35)))),
+        output_rcas_sharpness=max(
+            0.0,
+            min(1.0, float(settings.get("Vulkan Projection RCAS Sharpness", 0.5))),
+        ),
     )
 
 
@@ -301,6 +317,13 @@ def _optional_float_setting(settings: dict[str, Any], *keys: str) -> float | Non
         if key in settings and settings[key] is not None:
             return float(settings[key])
     return None
+
+
+def _output_headset_tier_from_settings(settings: dict[str, Any]) -> int:
+    from utils.xr_headset_presets import resolve_xr_headset_preset
+
+    preset = resolve_xr_headset_preset(settings.get("XR Headset Model"))
+    return int(preset.resolution_tier_k)
 
 
 def _optional_int_setting(settings: dict[str, Any], *keys: str) -> int | None:
@@ -631,6 +654,12 @@ def stereo_config_from_runtime(config: StereoRuntimeConfig) -> "StereoConfig":
             "anaglyph_method": config.anaglyph_method,
             "debug_output": config.debug_output,
             "fused": config.fused,
+            "output_quality_enabled": config.output_quality_enabled,
+            "output_headset_tier_k": config.output_headset_tier_k,
+            "output_min_lod": config.output_min_lod,
+            "output_max_lod": config.output_max_lod,
+            "output_mip_lod_bias": config.output_mip_lod_bias,
+            "output_rcas_sharpness": config.output_rcas_sharpness,
         },
     )
 

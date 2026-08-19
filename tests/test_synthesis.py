@@ -555,15 +555,29 @@ def test_composite_display_output_semantics():
     assert torch.equal(leia[..., :, 1::2], right[..., :, 1::2])
 
 
-def test_half_sbs_fallback_uses_area_downsample():
+def test_half_sbs_fallback_uses_openxr_lanczos2_downsample():
     left = torch.arange(1 * 1 * 2 * 4, dtype=torch.float32).view(1, 1, 2, 4)
     right = left + 100.0
 
     actual = make_sbs(left, right, "half_sbs", fused=False)
+    left_padded = F.pad(left, (1, 2, 0, 0), mode="replicate")
+    right_padded = F.pad(right, (1, 2, 0, 0), mode="replicate")
     expected = torch.cat(
         [
-            F.interpolate(left, size=(2, 2), mode="area"),
-            F.interpolate(right, size=(2, 2), mode="area"),
+            (
+                -left_padded[..., 0:4:2]
+                + 9 * left_padded[..., 1:5:2]
+                + 9 * left_padded[..., 2:6:2]
+                - left_padded[..., 3:7:2]
+            )
+            / 16,
+            (
+                -right_padded[..., 0:4:2]
+                + 9 * right_padded[..., 1:5:2]
+                + 9 * right_padded[..., 2:6:2]
+                - right_padded[..., 3:7:2]
+            )
+            / 16,
         ],
         dim=-1,
     )

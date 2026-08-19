@@ -8,6 +8,13 @@ from .triton_runtime import triton_runtime_available
 
 
 @triton.jit
+def _lanczos2_half4(value_m1, value_0, value_1, value_2):
+    # Lanczos2 sampled at the center of a 2x reduction has the exact normalized
+    # weights [-1, 9, 9, -1] / 16.
+    return (-value_m1 + 9.0 * value_0 + 9.0 * value_1 - value_2) * 0.0625
+
+
+@triton.jit
 def _half_sbs_kernel(
     left,
     right,
@@ -28,14 +35,22 @@ def _half_sbs_kernel(
     use_left = x < half_width
     src_x_out = tl.where(use_left, x, x - half_width)
     x0 = src_x_out * 2
+    xm1 = tl.maximum(x0 - 1, 0)
     x1 = x0 + 1
+    x2 = tl.minimum(x0 + 2, width - 1)
     base = channel * pixels + y * width
 
+    left_vm1 = tl.load(left + base + xm1, mask=active & use_left, other=0.0)
     left_v0 = tl.load(left + base + x0, mask=active & use_left, other=0.0)
     left_v1 = tl.load(left + base + x1, mask=active & use_left, other=0.0)
+    left_v2 = tl.load(left + base + x2, mask=active & use_left, other=0.0)
+    right_vm1 = tl.load(right + base + xm1, mask=active & ~use_left, other=0.0)
     right_v0 = tl.load(right + base + x0, mask=active & ~use_left, other=0.0)
     right_v1 = tl.load(right + base + x1, mask=active & ~use_left, other=0.0)
-    value = tl.where(use_left, (left_v0 + left_v1) * 0.5, (right_v0 + right_v1) * 0.5)
+    right_v2 = tl.load(right + base + x2, mask=active & ~use_left, other=0.0)
+    left_value = _lanczos2_half4(left_vm1, left_v0, left_v1, left_v2)
+    right_value = _lanczos2_half4(right_vm1, right_v0, right_v1, right_v2)
+    value = tl.where(use_left, left_value, right_value)
     tl.store(out + offsets, value, mask=active)
 
 
@@ -141,14 +156,22 @@ def _half_sbs_uint8_kernel(
     use_left = x < half_width
     src_x_out = tl.where(use_left, x, x - half_width)
     x0 = src_x_out * 2
+    xm1 = tl.maximum(x0 - 1, 0)
     x1 = x0 + 1
+    x2 = tl.minimum(x0 + 2, width - 1)
     base = channel * pixels + y * width
 
+    left_vm1 = tl.load(left + base + xm1, mask=active & use_left, other=0.0)
     left_v0 = tl.load(left + base + x0, mask=active & use_left, other=0.0)
     left_v1 = tl.load(left + base + x1, mask=active & use_left, other=0.0)
+    left_v2 = tl.load(left + base + x2, mask=active & use_left, other=0.0)
+    right_vm1 = tl.load(right + base + xm1, mask=active & ~use_left, other=0.0)
     right_v0 = tl.load(right + base + x0, mask=active & ~use_left, other=0.0)
     right_v1 = tl.load(right + base + x1, mask=active & ~use_left, other=0.0)
-    value = tl.where(use_left, (left_v0 + left_v1) * 0.5, (right_v0 + right_v1) * 0.5)
+    right_v2 = tl.load(right + base + x2, mask=active & ~use_left, other=0.0)
+    left_value = _lanczos2_half4(left_vm1, left_v0, left_v1, left_v2)
+    right_value = _lanczos2_half4(right_vm1, right_v0, right_v1, right_v2)
+    value = tl.where(use_left, left_value, right_value)
     value = tl.minimum(tl.maximum(value, 0.0), 1.0) * 255.0
     tl.store(out + offsets, value.to(tl.uint8), mask=active)
 
@@ -276,14 +299,22 @@ def _half_tab_kernel(
     use_left = y < half_height
     src_y_out = tl.where(use_left, y, y - half_height)
     y0 = src_y_out * 2
+    ym1 = tl.maximum(y0 - 1, 0)
     y1 = y0 + 1
+    y2 = tl.minimum(y0 + 2, height - 1)
     channel_base = channel * pixels
 
+    left_vm1 = tl.load(left + channel_base + ym1 * width + x, mask=active & use_left, other=0.0)
     left_v0 = tl.load(left + channel_base + y0 * width + x, mask=active & use_left, other=0.0)
     left_v1 = tl.load(left + channel_base + y1 * width + x, mask=active & use_left, other=0.0)
+    left_v2 = tl.load(left + channel_base + y2 * width + x, mask=active & use_left, other=0.0)
+    right_vm1 = tl.load(right + channel_base + ym1 * width + x, mask=active & ~use_left, other=0.0)
     right_v0 = tl.load(right + channel_base + y0 * width + x, mask=active & ~use_left, other=0.0)
     right_v1 = tl.load(right + channel_base + y1 * width + x, mask=active & ~use_left, other=0.0)
-    value = tl.where(use_left, (left_v0 + left_v1) * 0.5, (right_v0 + right_v1) * 0.5)
+    right_v2 = tl.load(right + channel_base + y2 * width + x, mask=active & ~use_left, other=0.0)
+    left_value = _lanczos2_half4(left_vm1, left_v0, left_v1, left_v2)
+    right_value = _lanczos2_half4(right_vm1, right_v0, right_v1, right_v2)
+    value = tl.where(use_left, left_value, right_value)
     tl.store(out + offsets, value, mask=active)
 
 

@@ -18,6 +18,11 @@ from .hole_fill import (
 from .layers import composite_layers, make_depth_layers
 from .occlusion import make_occlusion_mask, occlusion_backend
 from .output import AnaglyphMethod, OutputFormat, ensure_bchw, make_sbs, match_depth, sbs_backend
+from .output_quality import (
+    apply_output_quality,
+    output_quality_requires_eye_images,
+    output_sampling_plan_for_config,
+)
 from .refine import refine_local
 from .temporal import TemporalState, apply_temporal, detect_scene_gate
 
@@ -63,6 +68,12 @@ class StereoConfig:
     anaglyph_method: AnaglyphMethod = "red_cyan"
     refine: bool = False
     fused: bool = True
+    output_quality_enabled: bool = False
+    output_headset_tier_k: int = 4
+    output_min_lod: float = 0.0
+    output_max_lod: float = 0.35
+    output_mip_lod_bias: float = -0.35
+    output_rcas_sharpness: float = 0.5
 
 
 @dataclass
@@ -135,6 +146,9 @@ def _layered_synthesis(
         and not bool(config.debug_output)
         and not bool(config.cross_eyed)
         and int(rgb.shape[-1]) % 2 == 0
+        and not output_quality_requires_eye_images(
+            config, int(rgb.shape[-1]), int(rgb.shape[-2])
+        )
     )
     direct_sbs_ms = 0.0
     if direct_sbs_eligible:
@@ -497,6 +511,22 @@ def synthesize_stereo(
     if config.cross_eyed:
         left, right = right, left
     stage_times["cross_eye_ms"] = (time.perf_counter() - stage_start) * 1000.0
+
+    stage_start = time.perf_counter()
+    if direct_sbs is None:
+        left, right, quality_debug = apply_output_quality(left, right, config)
+    else:
+        plan = output_sampling_plan_for_config(
+            config, int(left.shape[-1]), int(left.shape[-2])
+        )
+        quality_debug = {
+            "output_quality_applied": 0,
+            "output_quality_mode": "native_mip" if plan is not None else "disabled",
+            "output_quality_backend": "direct_sbs_native",
+        }
+    debug.update(quality_debug)
+    _record_cuda_event(cuda_events, "synth_output_quality", left)
+    stage_times["output_quality_ms"] = (time.perf_counter() - stage_start) * 1000.0
 
     stage_start = time.perf_counter()
     if config.debug_output:

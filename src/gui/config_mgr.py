@@ -183,14 +183,13 @@ class GUIConfigMixin:
         self.recompile_openvino_cb.visible = self.openvino_cb.value and self.openvino_cb.visible
         ct = cfg.get("Capture Tool", DEFAULTS["Capture Tool"])
         self.capture_tool_dd.value = ct if ct in self.capture_tool_dd.options else (self.capture_tool_dd.options[0] if self.capture_tool_dd.options else '')
-        if keep_optional:
-            run_mode = cfg.get("Run Mode", DEFAULTS.get("Run Mode", "Local Viewer"))
-            if run_mode == "3D Monitor" and OS_NAME != "Windows":
-                run_mode = "Local Viewer"
-            if run_mode == "OpenXR Link" and OS_NAME == "Darwin":
-                run_mode = "Local Viewer"
-            self.run_mode_key = run_mode
-        self.stream_protocol_key = cfg.get("Stream Protocol", DEFAULTS.get("Stream Protocol", "RTMP"))
+        run_mode = cfg.get("Run Mode", DEFAULTS.get("Run Mode", "Local Viewer"))
+        if run_mode == "3D Monitor" and OS_NAME != "Windows":
+            run_mode = "Local Viewer"
+        if run_mode == "OpenXR Link" and OS_NAME == "Darwin":
+            run_mode = "Local Viewer"
+        self.run_mode_key = run_mode
+        self.stream_protocol_key = cfg.get("Stream Protocol", DEFAULTS.get("Stream Protocol", "WebRTC"))
         self.stream_proto_dd.value = self.stream_protocol_key
         self.stream_port_tf.value = str(cfg.get("Streamer Port", DEFAULTS.get("Streamer Port", DEFAULT_PORT)))
         self.stream_quality_dd.value = str(cfg.get("Stream Quality", DEFAULTS["Stream Quality"]))
@@ -376,6 +375,14 @@ class GUIConfigMixin:
     def on_stereo_hot_param_change(self, e=None):
         self._schedule_stereo_hot_save()
 
+    def on_audio_delay_change(self, e=None):
+        try:
+            delay = float(self.audio_delay_tf.value)
+        except (TypeError, ValueError):
+            return
+        if -10.0 <= delay <= 10.0:
+            self._schedule_stereo_hot_save()
+
     def _schedule_stereo_hot_save(self, delay=0.15):
         task = getattr(self, "_hot_save_task", None)
         if task and not task.done():
@@ -458,6 +465,9 @@ class GUIConfigMixin:
             "Vulkan Projection MIP LOD Bias": self._parse_float(self.projection_mip_lod_bias_dd.value, DEFAULTS["Vulkan Projection MIP LOD Bias"]),
             "Vulkan Projection RCAS Sharpness": self._parse_float(self.projection_rcas_sharpness_dd.value, DEFAULTS["Vulkan Projection RCAS Sharpness"]),
             "Cross Eyed": bool(self.cross_eyed_cb.value),
+            "Audio Delay": self._parse_float(
+                self.audio_delay_tf.value, DEFAULTS["Audio Delay"]
+            ),
         })
         ok, err = save_yaml(path, cfg)
         if ok:

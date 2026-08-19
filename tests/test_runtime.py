@@ -574,3 +574,51 @@ def test_fast_plus_fused_runtime_emits_uint8_half_sbs(monkeypatch):
     assert result.debug_info["runtime_output_pack_backend"] == "triton_half_sbs_uint8"
     assert result.debug_info["fast_plus_fused_backend"] == "triton_half_sbs_uint8"
     assert result.debug_info["fast_plus_fused_temporal_bypass"] == 1
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for direct SBS")
+def test_quality_direct_sbs_uint8_preserves_packed_stereo_views(monkeypatch):
+    provider = FakeDepthProvider()
+    config = StereoRuntimeConfig(
+        model_id="lc700x/Distill-Any-Depth-Base-hf",
+        model_dir=r"D:\Desktop2Stereo\models\models--lc700x--Distill-Any-Depth-Base-hf",
+        depth_backend="pytorch_cuda",
+        stereo_quality="quality_4k",
+        output_format="half_sbs",
+        temporal=False,
+        depth_strength=1.0,
+        max_disparity_px=12.0,
+    )
+    runtime = StereoRuntime(
+        config,
+        depth_provider=provider,
+        collect_memory_stats=False,
+    )
+    runtime.configure_stereo(
+        StereoConfig(
+            backend="quality_4k",
+            layers=2,
+            output_format="half_sbs",
+            temporal=False,
+            hole_fill="none",
+            hole_fill_mode="none",
+            depth_strength=1.0,
+            max_disparity_px=12.0,
+        )
+    )
+    rgb = torch.rand(1, 3, 24, 40, device="cuda", dtype=torch.float32)
+
+    monkeypatch.delenv("D2S_RUNTIME_OUTPUT_UINT8", raising=False)
+    expected_float = runtime.process_rgb_frame(rgb).sbs
+    monkeypatch.setenv("D2S_RUNTIME_OUTPUT_UINT8", "1")
+    actual = runtime.process_rgb_frame(rgb)
+    torch.cuda.synchronize()
+
+    expected = expected_float.clamp(0.0, 1.0).mul(255.0).round().to(torch.uint8)
+    assert torch.equal(actual.sbs, expected)
+    half_width = actual.sbs.shape[-1] // 2
+    assert not torch.equal(
+        actual.sbs[..., :half_width],
+        actual.sbs[..., half_width:],
+    )
+    assert actual.debug_info["runtime_output_pack_backend"] == "torch_packed_sbs_to_uint8"

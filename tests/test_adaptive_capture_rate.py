@@ -93,7 +93,9 @@ def test_manual_capture_rate_is_not_adapted() -> None:
 def test_auto_capture_is_enabled_for_local_viewer_but_not_3d_monitor() -> None:
     assert adaptive_capture_enabled_for_mode("Local Viewer", 0)
     assert adaptive_capture_enabled_for_mode("OpenXR Link", 0)
+    assert adaptive_capture_enabled_for_mode("RTMP Streamer", 0)
     assert not adaptive_capture_enabled_for_mode("3D Monitor", 0)
+    assert not adaptive_capture_enabled_for_mode("RTMP Streamer", 60)
     assert not adaptive_capture_enabled_for_mode("Local Viewer", 60)
 
 

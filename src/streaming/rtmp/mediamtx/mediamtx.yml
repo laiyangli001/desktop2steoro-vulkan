@@ -352,7 +352,7 @@ hlsSegmentDuration: 1s
 hlsPartDuration: 200ms
 # Maximum size of each segment.
 # This prevents RAM exhaustion.
-hlsSegmentMaxSize: 50M
+hlsSegmentMaxSize: 256M
 # Directory in which to save segments, instead of keeping them in the RAM.
 # This decreases performance, since reading from disk is less performant than
 # reading from RAM, but allows to save RAM.
