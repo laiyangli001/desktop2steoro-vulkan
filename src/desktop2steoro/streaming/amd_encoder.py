@@ -14,7 +14,7 @@ from pathlib import Path
 
 
 def _library_candidates() -> list[Path]:
-    root = Path(__file__).resolve().parents[2]
+    root = Path(__file__).resolve().parents[1]
     return [
         root / "native" / "windows" / "d2s_amd_encoder.dll",
         root / "native" / "amd_encoder" / "d2s_amd_encoder.dll",
@@ -43,4 +43,3 @@ def probe_amd_amf() -> tuple[bool, str]:
         except OSError as exc:
             return False, f"AMD bridge load failed: {exc}"
     return False, "d2s_amd_encoder.dll is not installed"
-
