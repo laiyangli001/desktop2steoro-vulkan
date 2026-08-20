@@ -16,7 +16,7 @@ from pathlib import Path
 def _library_candidates() -> list[Path]:
     root = Path(__file__).resolve().parents[1]
     return [
-        Path(__file__).resolve().with_name("d2s_amd_encoder.dll"),
+        Path(__file__).resolve().with_name("amd_encoder") / "d2s_amd_encoder.dll",
         root / "native" / "windows" / "d2s_amd_encoder.dll",
         root / "native" / "amd_encoder" / "d2s_amd_encoder.dll",
         Path(os.environ.get("D2S_AMD_ENCODER_DLL", "")),
