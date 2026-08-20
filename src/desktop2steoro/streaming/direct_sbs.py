@@ -1094,13 +1094,31 @@ class FfmpegDirectSbsOutput:
                     "1",
                     "-max_interleave_delta",
                     "0",
-                    "-f",
-                    "mpegts",
-                    "-mpegts_flags",
-                    "+resend_headers",
-                    f"srt://127.0.0.1:8890?streamid=publish:{self.stream_key}&pkt_size=1316",
                 ]
             )
+            if self.protocol == "WEBRTC":
+                # Publish WebRTC's source through the local RTSP listener.
+                # This avoids waiting for SRT MPEG-TS stream discovery while
+                # MediaMTX still performs the RTSP→WebRTC conversion.
+                command.extend(
+                    [
+                        "-f",
+                        "rtsp",
+                        "-rtsp_transport",
+                        "tcp",
+                        f"rtsp://127.0.0.1:{self.publish_rtsp_port}/{self.stream_key}",
+                    ]
+                )
+            else:
+                command.extend(
+                    [
+                        "-f",
+                        "mpegts",
+                        "-mpegts_flags",
+                        "+resend_headers",
+                        f"srt://127.0.0.1:8890?streamid=publish:{self.stream_key}&pkt_size=1316",
+                    ]
+                )
         else:
             command.extend(
                 [
