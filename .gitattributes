@@ -8,6 +8,7 @@ src/desktop2steoro/streaming/rtmp/mediamtx/*.exe filter=lfs diff=lfs merge=lfs -
 src/desktop2steoro/streaming/rtmp/ffmpeg/bin/*.exe filter=lfs diff=lfs merge=lfs -text
 src/desktop2steoro/streaming/rtmp/ffmpeg/ffmpeg filter=lfs diff=lfs merge=lfs -text
 src/desktop2steoro/native/windows/*.dll binary -text
+src/desktop2steoro/streaming/*.dll binary -text
 src/desktop2steoro/streaming/rtmp/*.zip filter=lfs diff=lfs merge=lfs -text
 src/desktop2steoro/streaming/rtmp/*.tar.gz filter=lfs diff=lfs merge=lfs -text
 src/desktop2steoro/streaming/rtmp/*.tar.xz filter=lfs diff=lfs merge=lfs -text
