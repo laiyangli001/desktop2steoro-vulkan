@@ -2,6 +2,11 @@
 
 ## 2026-08-21
 
+- 新增“高级网络推流”的自动网络与性能校准：GUI 提供独立校准入口和实时进度弹窗，头显测试页通过 WHEP 自动重连并回传 WebRTC 解码帧率、丢帧、冻结、丢包、码率与抖动；运行时从安全档逐级测试实际捕获、CUDA→CPU 转换、FFmpeg 提交、局域网传输和头显解码，自动回退到最高稳定 FPS/码率并保存带设备、模型、头显和编码配置指纹的结果，相关配置变化后会提示重新校准。
+- 修复 NumPy 2.5 环境下 SoundCard 0.4.4 的 Windows WASAPI 回环采集在收到真实音频后触发 `The binary mode of fromstring is removed` 并降级静音的问题；安装依赖升级并锁定到 SoundCard 0.4.6，改用兼容 NumPy 2.x 的二进制缓冲区读取实现。
+- 修复“高级网络推流”使用 SoundCard/WASAPI 回环音频时，采集线程在启动后异常会令 FFmpeg 等待音频、继而使本机 RTSP 发布约 10 秒后 `i/o timeout` 的问题；音频异常现在会明确告警并按实时节奏降级为静音，视频和 WebRTC 会话保持在线。
+- 修复“高级网络串流”探测 FFmpeg NVENC 时误加载并输出 PyNvVideoCodec 可用状态的问题；该模式现在只报告实际选中的 `h264_nvenc`/`hevc_nvenc`，PyNvVideoCodec 状态仅由“GPU 推流”路径处理。
+- 修复 4K GPU WebRTC 推流在浏览器中花屏并持续出现 `reader is too slow`：MediaMTX 恢复 UDP 优先、保留 TCP 回退并扩大短时出口突发队列；PyNvVideoCodec 超低延迟编码改为无 B 帧的 IPPP GOP，避免 TCP 队头阻塞和参考帧重排导致浏览器连续丢包；内部 RTSP 发布包长固定为 IPv6 MTU 安全值 `1452`，无需 MediaMTX 再将 1460 字节 RTP 载荷重封装为 1440 字节。
 - 修复 Windows BAT/CMD/REG 文件被仓库全局 `eol=lf` 规则转换为 Linux 换行的问题；这些文件现在以 CRLF 原始字节提交并排除 Git 文本归一化，确保 Git 克隆、GitHub ZIP 和 raw 下载均可由 Windows 原生命令解释器直接运行。
 
 ## 2026-08-20

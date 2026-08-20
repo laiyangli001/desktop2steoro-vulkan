@@ -133,10 +133,13 @@ def test_direct_consumer_logs_fps_when_enabled(capsys):
 
 def test_direct_consumer_hides_fps_when_disabled(capsys):
     samples = []
+    calibration_samples = []
     consumer = DirectSbsOutputConsumer(
         runtime_q=queue.Queue(),
         shutdown_event=threading.Event(),
-        output=SimpleNamespace(),
+        output=SimpleNamespace(
+            observe_calibration_window=lambda **values: calibration_samples.append(values)
+        ),
         source_stat_inc=lambda *args, **kwargs: None,
         show_fps_provider=lambda: False,
         on_sbs_fps=lambda fps, **kwargs: samples.append((fps, kwargs)),
@@ -151,6 +154,12 @@ def test_direct_consumer_hides_fps_when_disabled(capsys):
 
     assert "SBS FPS" not in capsys.readouterr().out
     assert samples == [(30.0, {"frame_count": 30})]
+    assert calibration_samples == [{
+        "sbs_fps": 30.0,
+        "submitted_fps": 29.0,
+        "convert_ms": 0.0,
+        "submit_ms": 0.0,
+    }]
 
 
 def test_cuda_converter_reuses_pinned_host_buffer():
@@ -559,6 +568,23 @@ def test_dynamic_stream_quality_tracks_codec_fps_resolution_and_crf():
     )
 
 
+def test_calibrated_bitrate_overrides_dynamic_rate_budget():
+    output = FfmpegDirectSbsOutput(
+        base_dir=str(APP_ROOT),
+        protocol="WEBRTC",
+        port=1122,
+        stream_key="live",
+        fps=40,
+        crf=23,
+        os_name="Windows",
+        display_mode="Half-SBS",
+        target_bitrate_mbps=24,
+        peak_bitrate_mbps=28,
+    )
+
+    assert output._dynamic_stream_rate_budget(3840, 2160) == (24, 28, 28)
+
+
 def test_dynamic_rate_budget_covers_rtmp_and_webrtc_but_not_rtsp():
     output = FfmpegDirectSbsOutput(
         base_dir=str(APP_ROOT),
@@ -588,6 +614,8 @@ def test_dynamic_rate_budget_covers_rtmp_and_webrtc_but_not_rtsp():
     assert command[command.index("-bufsize") + 1] == "49M"
     assert command[command.index("-g") + 1] == "50"
     assert command[command.index("-force_key_frames") + 1] == "expr:gte(t,n_forced*1)"
+    assert command[command.index("-pkt_size") + 1] == "1452"
+    assert command[-1] == "rtsp://127.0.0.1:8554/live?pkt_size=1452"
 
     output.protocol = "RTSP"
     command = output._ffmpeg_command(3840, 2160)
@@ -705,6 +733,13 @@ def test_nvenc_probe_uses_actual_sbs_resolution(monkeypatch):
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(direct_sbs.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        direct_sbs,
+        "_load_pynvvideo_codec",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("FFmpeg NVENC probing must not load PyNvVideoCodec")
+        ),
+    )
 
     assert output._probe_nvenc(5120, 1440)
     assert "color=c=black:s=5120x1440:r=1" in commands[0]
@@ -742,6 +777,18 @@ def test_mediamtx_hls_segment_limit_supports_high_bitrate_full_sbs():
     )
 
     assert "hlsSegmentMaxSize: 256M" in config
+
+
+def test_mediamtx_webrtc_prefers_udp_with_tcp_fallback_and_burst_queue():
+    active = (APP_ROOT / "streaming/rtmp/mediamtx.yml").read_text(encoding="utf-8")
+    bundled = (APP_ROOT / "streaming/rtmp/mediamtx/mediamtx.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert active == bundled
+    assert "writeQueueSize: 2048" in active
+    assert "webrtcLocalUDPAddress: :8189" in active
+    assert "webrtcLocalTCPAddress: :8189" in active
 
 
 def test_rtsp_selection_uses_selected_port_for_internal_publish():
@@ -785,7 +832,7 @@ def test_pynv_encoder_uses_live_low_latency_nvenc_settings():
     assert captured["kwargs"]["rc"] == "cbr"
     assert captured["kwargs"]["gop"] == 25
     assert captured["kwargs"]["idrperiod"] == 25
-    assert captured["kwargs"]["bf"] == 1
+    assert captured["kwargs"]["bf"] == 0
     assert captured["kwargs"]["repeatspspps"] == 1
 
 
@@ -867,7 +914,9 @@ def test_pynv_output_uses_rtsp_for_webrtc_and_soundcard_loopback(monkeypatch):
         "rtsp",
         "-rtsp_transport",
         "tcp",
-        "rtsp://127.0.0.1:8554/live",
+        "-pkt_size",
+        "1452",
+        "rtsp://127.0.0.1:8554/live?pkt_size=1452",
     ]
     output._release_pynv_pipeline()
     assert events == [

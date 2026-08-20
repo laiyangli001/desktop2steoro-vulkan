@@ -65,6 +65,11 @@ class Desktop2StereoGUI(
         self._log_poll_task = None
         self._resize_repaint_task = None
         self._progress_log_spans = {}
+        self._calibration_run_requested = False
+        self._calibration_poll_task = None
+        self._calibration_dialog = None
+        self._calibration_active = False
+        self._calibration_previous_target_value = None
 
     async def setup(self):
         self.gui_log_handler = _setup_console_logging()
@@ -122,6 +127,7 @@ class Desktop2StereoGUI(
             self.apply_config(self._config)
 
         self.on_device_change(None)
+        self._refresh_stream_calibration_status()
         self.auto_enable_optimizers_based_on_device()
         self.page.on_keyboard_event = self._on_key
         self._esc_task = asyncio.ensure_future(self._esc_poll_task())

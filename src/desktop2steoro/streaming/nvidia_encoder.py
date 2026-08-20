@@ -89,7 +89,10 @@ class PyNvVideoCodecEncoder:
             rc="cbr",
             gop=frame_rate,
             idrperiod=frame_rate,
-            bf=1,
+            # WebRTC low-latency streams must remain IPPP. B-frames require
+            # display reordering and can make a slow browser reader lose the
+            # reference chain when MediaMTX has to discard queued packets.
+            bf=0,
             repeatspspps=1,
         )
 

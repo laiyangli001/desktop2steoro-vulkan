@@ -16,11 +16,20 @@ import flet as ft
 from utils import OS_NAME, DEFAULT_PORT, shutdown_event, read_yaml
 from . import devices as devices_module
 from .config import DEFAULTS, DEFAULT_MODEL_LIST, default_base_depth_model, save_yaml
-from .paths import BASE_DIR, DIAG_LOG, LOG_DIR, LOG_FILE, STOP_REQUEST_FILE
+from .paths import (
+    BASE_DIR,
+    DIAG_LOG,
+    LOG_DIR,
+    LOG_FILE,
+    STOP_REQUEST_FILE,
+    STREAM_CALIBRATION_PROFILE_FILE,
+    STREAM_CALIBRATION_STATE_FILE,
+)
 from .capture_sources import get_primary_monitor_index, list_windows
 from .localization import UI_MESSAGES
 from .log_handler import GuiLogHandler
 from utils.logging_setup import _NoisyThirdPartyDebugFilter
+from streaming.stream_calibration import build_calibration_fingerprint
 
 # ── module-level console helpers ──
 
@@ -337,7 +346,237 @@ class GUIProcessMixin:
     def _set_running_ui(self, running: bool):
         self.run_btn.disabled = running
         self.stop_btn.disabled = not running
-        self._safe_update(self.run_btn, self.stop_btn)
+        calibration_button = getattr(self, "stream_calibration_btn", None)
+        if calibration_button is not None:
+            calibration_button.disabled = running
+        self._safe_update(self.run_btn, self.stop_btn, calibration_button)
+
+    def _stream_calibration_auto_enabled(self) -> bool:
+        value = str(getattr(self.stream_calibration_mode_dd, "value", "") or "")
+        return value.casefold().startswith("auto") or value.startswith("自动")
+
+    def _refresh_stream_calibration_status(self) -> None:
+        control = getattr(self, "stream_calibration_status", None)
+        if control is None:
+            return
+        try:
+            with open(STREAM_CALIBRATION_PROFILE_FILE, "r", encoding="utf-8") as file:
+                profile = json.load(file)
+            if profile.get("fingerprint") != build_calibration_fingerprint(self._config):
+                control.value = UI_MESSAGES[self.locale].get(
+                    "Calibration expired", "Calibration expired"
+                )
+                control.color = ft.Colors.ORANGE
+                self._safe_update(control)
+                return
+            control.value = UI_MESSAGES[self.locale].get(
+                "calibration_profile_summary", "{fps} FPS · {target} Mbps"
+            ).format(
+                fps=int(profile.get("fps", 0)),
+                target=int(profile.get("target_mbps", 0)),
+            )
+            control.color = ft.Colors.GREEN
+        except (OSError, ValueError, TypeError):
+            control.value = UI_MESSAGES[self.locale].get(
+                "Not calibrated", "Not calibrated"
+            )
+            control.color = ft.Colors.GREY
+        self._safe_update(control)
+
+    def start_stream_calibration(self, _event=None) -> None:
+        if self._starting or (self.process and self.process.returncode is None):
+            self.set_status(UI_MESSAGES[self.locale]["A thread already running!"])
+            return
+        if self.run_mode_key != "RTMP Streamer":
+            self.set_status(UI_MESSAGES[self.locale].get(
+                "calibration_requires_advanced",
+                "Automatic calibration requires Advanced Network Streaming.",
+            ))
+            return
+        if str(self.stream_proto_dd.value).casefold() != "webrtc":
+            self.set_status(UI_MESSAGES[self.locale].get(
+                "calibration_requires_webrtc",
+                "Automatic calibration requires WebRTC.",
+            ))
+            return
+        if int(self.stream_port_tf.value or DEFAULT_PORT) >= 65535:
+            self.set_status(UI_MESSAGES[self.locale].get(
+                "calibration_port_unavailable",
+                "Automatic calibration needs the port immediately after the WebRTC port.",
+            ))
+            return
+        ok, error = self._validate_config_before_run()
+        if not ok:
+            self.set_status(error)
+            return
+        try:
+            os.remove(STREAM_CALIBRATION_STATE_FILE)
+        except FileNotFoundError:
+            pass
+        self._calibration_previous_target_value = self.target_fps_dd.value
+        self.target_fps_dd.value = self._target_fps_to_display(0)
+        self._calibration_active = True
+        self._calibration_run_requested = True
+        self._show_stream_calibration_dialog()
+        self.save_and_run(None)
+        previous = getattr(self, "_calibration_poll_task", None)
+        if previous is not None and not previous.done():
+            previous.cancel()
+        self._calibration_poll_task = asyncio.create_task(
+            self._poll_stream_calibration()
+        )
+
+    def _show_stream_calibration_dialog(self) -> None:
+        port = min(65535, int(self.stream_port_tf.value or DEFAULT_PORT) + 1)
+        local_ip = getattr(self, "_local_ip_cache", "127.0.0.1")
+        self._calibration_dialog_url = ft.Text(
+            f"http://{local_ip}:{port}/", selectable=True, color=ft.Colors.BLUE
+        )
+        self._calibration_dialog_stage = ft.Text(UI_MESSAGES[self.locale].get(
+            "calibration_waiting", "Waiting for the headset to open the test page..."
+        ))
+        self._calibration_dialog_detail = ft.Text("", selectable=True)
+        self._calibration_dialog_progress = ft.ProgressBar(value=0.0)
+        self._calibration_dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text(UI_MESSAGES[self.locale].get(
+                "Automatic Network and Performance Calibration",
+                "Automatic Network and Performance Calibration",
+            )),
+            content=ft.Column(
+                [
+                    ft.Text(UI_MESSAGES[self.locale].get(
+                        "calibration_open_headset_url",
+                        "Open this address in the headset browser and keep the page visible:",
+                    )),
+                    self._calibration_dialog_url,
+                    self._calibration_dialog_stage,
+                    self._calibration_dialog_progress,
+                    self._calibration_dialog_detail,
+                ],
+                width=520,
+                height=210,
+                spacing=12,
+            ),
+            actions=[ft.Button(
+                content=ft.Text(UI_MESSAGES[self.locale].get(
+                    "Cancel Calibration", "Cancel Calibration"
+                )),
+                on_click=self._cancel_stream_calibration,
+            )],
+        )
+        self.page.show_dialog(self._calibration_dialog)
+
+    def _cancel_stream_calibration(self, _event=None) -> None:
+        self._calibration_run_requested = False
+        self._restore_precalibration_target()
+        self.stop_process()
+        self._close_stream_calibration_dialog()
+
+    def _close_stream_calibration_dialog(self, _event=None) -> None:
+        if self._calibration_dialog is not None:
+            try:
+                self.page.pop_dialog()
+            except Exception:
+                pass
+            self._calibration_dialog = None
+
+    def _restore_precalibration_target(self) -> None:
+        previous = self._calibration_previous_target_value
+        self._calibration_previous_target_value = None
+        self._calibration_active = False
+        if previous is None:
+            return
+        self.target_fps_dd.value = previous
+        self._collect_config()
+        save_yaml(os.path.join(BASE_DIR, "settings.yaml"), self._config)
+
+    async def _poll_stream_calibration(self) -> None:
+        try:
+            while not getattr(self, "_closed", False):
+                await asyncio.sleep(0.5)
+                try:
+                    with open(STREAM_CALIBRATION_STATE_FILE, "r", encoding="utf-8") as file:
+                        state = json.load(file)
+                except (OSError, ValueError):
+                    if self.process is None and not self._starting:
+                        return
+                    continue
+                status = str(state.get("status", "waiting_receiver"))
+                tier = state.get("tier") or {}
+                progress = float(state.get("stage_progress", 0.0) or 0.0)
+                overall = (
+                    float(state.get("tier_index", 0)) + progress
+                ) / max(1.0, float(state.get("tier_count", 1)))
+                if getattr(self, "_calibration_dialog_progress", None) is not None:
+                    self._calibration_dialog_progress.value = min(1.0, overall)
+                    stage_key = {
+                        "waiting_receiver": "calibration_waiting",
+                        "testing": "calibration_testing",
+                        "reconnecting": "calibration_reconnecting",
+                        "complete": "calibration_complete",
+                    }.get(status, "calibration_waiting")
+                    self._calibration_dialog_stage.value = UI_MESSAGES[self.locale].get(
+                        stage_key, status
+                    ).format(fps=int(tier.get("fps", 0) or 0))
+                    sender = state.get("sender") or {}
+                    self._calibration_dialog_detail.value = (
+                        f"{int(tier.get('fps', 0) or 0)} FPS · "
+                        f"{int(tier.get('target_mbps', 0) or 0)} Mbps · "
+                        f"send {float(sender.get('submitted_fps', 0.0) or 0.0):.1f} FPS · "
+                        f"samples {int(state.get('receiver_samples', 0) or 0)}"
+                    )
+                    self._safe_update(
+                        self._calibration_dialog_progress,
+                        self._calibration_dialog_stage,
+                        self._calibration_dialog_detail,
+                    )
+                if status == "complete":
+                    await self._apply_stream_calibration_profile()
+                    return
+        except asyncio.CancelledError:
+            return
+
+    async def _apply_stream_calibration_profile(self) -> None:
+        try:
+            with open(STREAM_CALIBRATION_PROFILE_FILE, "r", encoding="utf-8") as file:
+                profile = json.load(file)
+            fps = int(profile["fps"])
+            target = int(profile["target_mbps"])
+            peak = int(profile["peak_mbps"])
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            self.set_status(f"Calibration result error: {exc}")
+            return
+        self.target_fps_dd.value = str(fps)
+        self._calibration_previous_target_value = None
+        self._calibration_active = False
+        self.stream_calibration_mode_dd.value = UI_MESSAGES[self.locale].get(
+            "Auto Calibration", "Auto Calibration"
+        )
+        self._config["Target FPS"] = fps
+        self._config["Use Stream Calibration"] = True
+        self._config["Stream Target Bitrate Mbps"] = target
+        self._config["Stream Peak Bitrate Mbps"] = peak
+        self._collect_config()
+        ok, error = save_yaml(os.path.join(BASE_DIR, "settings.yaml"), self._config)
+        if not ok:
+            self.set_status(UI_MESSAGES[self.locale]["failed_save_yaml"].format(error))
+            return
+        self._refresh_stream_calibration_status()
+        self.set_status(UI_MESSAGES[self.locale].get(
+            "calibration_applied", "Calibration applied: {fps} FPS, {target} Mbps"
+        ).format(fps=fps, target=target))
+        if self._calibration_dialog is not None:
+            self._calibration_dialog.actions = [ft.Button(
+                content=ft.Text(UI_MESSAGES[self.locale].get("Close", "Close")),
+                on_click=self._close_stream_calibration_dialog,
+            )]
+            self._calibration_dialog_progress.value = 1.0
+            self._calibration_dialog_detail.value = UI_MESSAGES[self.locale].get(
+                "calibration_result",
+                "Recommended profile: {fps} FPS · {target} Mbps · peak {peak} Mbps",
+            ).format(fps=fps, target=target, peak=peak)
+            self._safe_update(self._calibration_dialog)
 
     def _diag(self, msg, error=False):
         os.makedirs(LOG_DIR, exist_ok=True)
@@ -465,6 +704,10 @@ class GUIProcessMixin:
             child_env = os.environ.copy()
             child_env["DESKTOP2STEREO_LOCALE"] = self.locale
             child_env["PYTHONIOENCODING"] = "utf-8"
+            calibration_requested = self._calibration_run_requested
+            self._calibration_run_requested = False
+            if calibration_requested:
+                child_env["D2S_STREAM_CALIBRATE"] = "1"
             if self.run_mode_key == "OpenXR Link":
                 child_env.setdefault("D2S_FPS_BREAKDOWN", "1")
                 child_env.setdefault("D2S_OPENXR_DEBUG", "1")
@@ -503,6 +746,9 @@ class GUIProcessMixin:
             save_yaml(os.path.join(BASE_DIR, "settings.yaml"), self._config)
         except Exception as e:
             self._diag(f"_countdown_and_run failed:\n{traceback.format_exc()}", error=True)
+            if self._calibration_active:
+                self._restore_precalibration_target()
+                self._close_stream_calibration_dialog()
             self.set_status(UI_MESSAGES[self.locale]["err_start_failed"].format(e))
             self.page.update()
         finally:
@@ -603,6 +849,15 @@ class GUIProcessMixin:
             if self.process is proc:
                 self.process = None
             self._starting = False
+            if self._calibration_active:
+                try:
+                    with open(STREAM_CALIBRATION_STATE_FILE, "r", encoding="utf-8") as file:
+                        calibration_complete = json.load(file).get("status") == "complete"
+                except (OSError, ValueError):
+                    calibration_complete = False
+                if not calibration_complete:
+                    self._restore_precalibration_target()
+                    self._close_stream_calibration_dialog()
             code = proc.returncode if proc else None
             if code and code != 0:
                 self._diag(f"child exited rc={code}; see {LOG_FILE} for details", error=True)
@@ -625,6 +880,8 @@ class GUIProcessMixin:
             self._esc_task.cancel()
         if hasattr(self, '_log_poll_task') and self._log_poll_task and not self._log_poll_task.done():
             self._log_poll_task.cancel()
+        if self._calibration_poll_task and not self._calibration_poll_task.done():
+            self._calibration_poll_task.cancel()
         await self._async_stop()
 
     async def _kill_process_tree(self, proc, pid):

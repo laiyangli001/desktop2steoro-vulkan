@@ -767,6 +767,20 @@ class GUIHandlerMixin:
         self.stream_quality_label.value = t["Stream Quality:"]
         self.stream_proto_label.value = t["Stream Protocol:"]
         self.stream_key_label.value = t["Stream Key"]
+        calibration_auto = self._stream_calibration_auto_enabled()
+        self.stream_calibration_label.value = t.get(
+            "Transmission Profile:", "Transmission Profile:"
+        )
+        self.stream_calibration_mode_dd.options = [
+            t.get("Auto Calibration", "Auto Calibration"),
+            t.get("Manual", "Manual"),
+        ]
+        self.stream_calibration_mode_dd.value = self.stream_calibration_mode_dd.options[
+            0 if calibration_auto else 1
+        ]
+        self.stream_calibration_btn.content.value = t.get(
+            "Start Calibration", "Start Calibration"
+        )
         self.audio_label.value = t["Stereo Mix"]
         self.crf_label.value = t["CRF"]
         self.audio_delay_label.value = t["Audio Delay"]
@@ -848,6 +862,7 @@ class GUIHandlerMixin:
             (self.audio_delay_tf, "tooltip_audio_delay"),
         ]:
             _set_tooltip(ctrl, t.get(key, UI_MESSAGES["EN"].get(key, key)))
+        self._refresh_stream_calibration_status()
         self._auto_align_labels(force=True)
 
     def _safe_update(self, *controls):

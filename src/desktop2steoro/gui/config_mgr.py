@@ -198,6 +198,11 @@ class GUIConfigMixin:
         self.stream_proto_dd.value = self.stream_protocol_key
         self.stream_port_tf.value = str(cfg.get("Streamer Port", DEFAULTS.get("Streamer Port", DEFAULT_PORT)))
         self.stream_quality_dd.value = str(cfg.get("Stream Quality", DEFAULTS["Stream Quality"]))
+        self.stream_calibration_mode_dd.value = (
+            UI_MESSAGES[self.locale].get("Auto Calibration", "Auto Calibration")
+            if bool(cfg.get("Use Stream Calibration", True))
+            else UI_MESSAGES[self.locale].get("Manual", "Manual")
+        )
         self.stream_key_tf.value = cfg.get("Stream Key", DEFAULTS["Stream Key"])
         self.audio_dd.value = cfg.get("Stereo Mix", "")
         self.video_backend_dd.value = {
@@ -329,6 +334,17 @@ class GUIConfigMixin:
             "Stream Protocol": self.stream_proto_dd.value,
             "Streamer Port": self._parse_int(self.stream_port_tf.value, DEFAULTS["Streamer Port"]),
             "Stream Quality": self._parse_int(self.stream_quality_dd.value, DEFAULTS["Stream Quality"]),
+            "Use Stream Calibration": self._stream_calibration_auto_enabled(),
+            "Stream Target Bitrate Mbps": self._parse_int(
+                self._config.get("Stream Target Bitrate Mbps", 0), 0
+            ),
+            "Stream Peak Bitrate Mbps": self._parse_int(
+                self._config.get("Stream Peak Bitrate Mbps", 0), 0
+            ),
+            "Stream Calibration Port": self._parse_int(
+                min(65535, self._parse_int(self.stream_port_tf.value, DEFAULT_PORT) + 1),
+                min(65535, self._parse_int(self.stream_port_tf.value, DEFAULT_PORT) + 1),
+            ),
             "torch.compile": self.torch_compile_cb.value,
             **accelerator_values,
             "Parallel Inference": self.parallel_inference_dd.value != "单路推理",

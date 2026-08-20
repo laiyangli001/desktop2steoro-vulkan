@@ -541,6 +541,7 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
                 MjpegDirectSbsOutput,
                 PyNvDirectSbsOutput,
             )
+            from streaming.stream_calibration import build_calibration_fingerprint
 
             if configured_run_mode in {"RTMP Streamer", "GPU Streamer"}:
                 audio_backend = str(
@@ -566,6 +567,28 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
                         and "NVIDIA" in str(DEVICE_INFO).upper()
                     ),
                     display_mode=settings.get("Display Mode", "Half-SBS"),
+                    target_bitrate_mbps=(
+                        int(settings.get("Stream Target Bitrate Mbps", 0) or 0)
+                        if bool(settings.get("Use Stream Calibration", True))
+                        else 0
+                    ),
+                    peak_bitrate_mbps=(
+                        int(settings.get("Stream Peak Bitrate Mbps", 0) or 0)
+                        if bool(settings.get("Use Stream Calibration", True))
+                        else 0
+                    ),
+                    auto_calibration=(
+                        configured_run_mode == "RTMP Streamer"
+                        and os.environ.get("D2S_STREAM_CALIBRATE", "0") == "1"
+                    ),
+                    calibration_port=int(
+                        settings.get(
+                            "Stream Calibration Port",
+                            min(65535, int(settings.get("Streamer Port", 1122)) + 1),
+                        )
+                    ),
+                    on_calibration_fps=adaptive_capture_rate.set_calibration_limit,
+                    calibration_fingerprint=build_calibration_fingerprint(settings),
                 )
                 video_backend = str(
                     settings.get("Video Encoder Backend", "ffmpeg") or "ffmpeg"

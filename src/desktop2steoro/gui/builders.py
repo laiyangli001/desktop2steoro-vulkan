@@ -932,6 +932,33 @@ class GUIBuilderMixin:
         self.video_backend_row = ft.Row(
             [self.video_backend_label, self.video_backend_dd], spacing=1
         )
+        self.stream_calibration_label = ft.Text(
+            "Transmission Profile:", size=FONT_SIZE, width=S(150)
+        )
+        self.stream_calibration_mode_dd = CompactDropdown(
+            options=["Auto Calibration", "Manual"],
+            value="Auto Calibration",
+            width=S(150),
+        )
+        self.stream_calibration_btn = ft.Button(
+            content=ft.Text("Start Calibration", size=FONT_SIZE),
+            width=S(150),
+            on_click=self.start_stream_calibration,
+        )
+        self.stream_calibration_status = ft.Text(
+            "Not calibrated", size=FONT_SIZE, color=ft.Colors.GREY
+        )
+        self.stream_calibration_row = ft.Row(
+            [
+                self.stream_calibration_label,
+                self.stream_calibration_mode_dd,
+                ft.Container(width=S(16)),
+                self.stream_calibration_btn,
+                ft.Container(width=S(8)),
+                self.stream_calibration_status,
+            ],
+            spacing=1,
+        )
         self.crf_label = ft.Text("CRF:", size=FONT_SIZE, width=S(150))
         self.crf_tf = CompactTextField(value=str(DEFAULTS["CRF"]), width=S(130), filter=r"[0-9]", max_length=2)
         self.audio_delay_label = ft.Text("Audio Delay (s):", size=FONT_SIZE, width=S(130))
@@ -942,6 +969,7 @@ class GUIBuilderMixin:
         self._streamer_rows = [
             self.stream_url_row, self.stream_port_quality_row, self.stream_proto_row,
             self.crf_row, self.audio_row, self.video_backend_row,
+            self.stream_calibration_row,
         ]
         self.stream_container = ft.Container(
             ft.Column([], spacing=S(8)), visible=False,
@@ -965,7 +993,7 @@ class GUIBuilderMixin:
         return {
             "Local Viewer": [], "3D Monitor": [], "OpenXR Link": [],
             "MJPEG Streamer": [0, 1],
-            "RTMP Streamer": [0, 1, 2, 3, 4],
+            "RTMP Streamer": [0, 1, 2, 3, 4, 6],
             "GPU Streamer": [0, 1, 2, 3, 4],
         }
 

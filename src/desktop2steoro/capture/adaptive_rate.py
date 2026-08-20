@@ -35,12 +35,22 @@ class AdaptiveCaptureRate:
         self.activity_guard_enabled = bool(activity_guard_enabled)
         self.minimum_sample_frames = max(1, int(minimum_sample_frames))
         self._target_fps = self.base_fps
+        self._calibration_limit: int | None = None
         self._window_started: float | None = None
         self._window_samples: list[float] = []
         self._lock = threading.Lock()
 
     def current_fps(self) -> int:
         with self._lock:
+            return int(self._target_fps)
+
+    def set_calibration_limit(self, fps: int | None) -> int:
+        with self._lock:
+            self._calibration_limit = (
+                None if fps is None else max(1, min(self.base_fps, int(fps)))
+            )
+            if self._calibration_limit is not None:
+                self._target_fps = self._calibration_limit
             return int(self._target_fps)
 
     def observe_sbs_fps(
@@ -80,8 +90,11 @@ class AdaptiveCaptureRate:
             if timestamp - self._window_started < self.evaluation_interval_s:
                 return int(self._target_fps)
             peak_fps = max(self._window_samples)
+            ceiling = self.base_fps
+            if self._calibration_limit is not None:
+                ceiling = min(ceiling, self._calibration_limit)
             self._target_fps = min(
-                self.base_fps,
+                ceiling,
                 max(1, int(math.ceil(peak_fps + 5.0))),
             )
             self._window_started = timestamp

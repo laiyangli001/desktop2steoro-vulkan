@@ -24,7 +24,7 @@ readTimeout: 10s
 writeTimeout: 10s
 # Size of the queue of outgoing packets.
 # A higher value allows to increase throughput, a lower value allows to save RAM.
-writeQueueSize: 512
+writeQueueSize: 2048
 # Maximum size of outgoing UDP packets.
 # This can be decreased to avoid fragmentation on networks with a low UDP MTU.
 udpMaxPayloadSize: 1452
@@ -389,12 +389,12 @@ webrtcAllowOrigins: ['*']
 webrtcTrustedProxies: []
 # Address of a local UDP listener that will receive connections.
 # Use a blank string to disable.
-# Force TCP temporarily to avoid UDP RTP packet loss/macroblocking.
-webrtcLocalUDPAddress: ''
+# Prefer UDP for real-time video so a delayed packet cannot block newer frames.
+webrtcLocalUDPAddress: :8189
 # Address of a local TCP listener that will receive connections.
 # This is disabled by default since TCP is less efficient than UDP and
 # introduces a progressive delay when network is congested.
-# TCP fallback for networks that lose or block WebRTC UDP packets.
+# Keep TCP as a fallback for networks that block WebRTC UDP packets.
 webrtcLocalTCPAddress: :8189
 # WebRTC clients need to know the IP of the server.
 # Gather IPs from interfaces and send them to clients.

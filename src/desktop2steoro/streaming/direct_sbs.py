@@ -20,6 +20,7 @@ from streaming.encoder_profile import EncoderProfile
 from streaming.mjpeg_streamer import MJPEGStreamer
 from streaming.runtime_manager import ensure_runtime
 from streaming.nvidia_encoder import PyNvSrtVideoOutput, PyNvVideoCodecEncoder
+from streaming.stream_calibration import StreamCalibrationController
 from streaming.wasapi_audio import SoundcardLoopbackSender
 
 
@@ -200,25 +201,33 @@ class DirectSbsOutputConsumer:
         if elapsed < self.fps_report_interval:
             return
         sbs_fps = self._fps_sbs_frames / elapsed
+        submitted_fps = self._fps_submitted_frames / elapsed
+        convert_ms = (
+            self._fps_convert_seconds * 1000.0 / self._fps_sbs_frames
+            if self._fps_sbs_frames
+            else 0.0
+        )
+        submit_ms = (
+            self._fps_submit_seconds * 1000.0 / self._fps_submitted_frames
+            if self._fps_submitted_frames
+            else 0.0
+        )
         if self.on_sbs_fps is not None:
             self.on_sbs_fps(sbs_fps, frame_count=self._fps_sbs_frames)
+        observe_calibration = getattr(self.output, "observe_calibration_window", None)
+        if callable(observe_calibration):
+            observe_calibration(
+                sbs_fps=sbs_fps,
+                submitted_fps=submitted_fps,
+                convert_ms=convert_ms,
+                submit_ms=submit_ms,
+            )
         show_fps = (
             bool(self.show_fps_provider())
             if self.show_fps_provider is not None
             else False
         )
         if show_fps:
-            submitted_fps = self._fps_submitted_frames / elapsed
-            convert_ms = (
-                self._fps_convert_seconds * 1000.0 / self._fps_sbs_frames
-                if self._fps_sbs_frames
-                else 0.0
-            )
-            submit_ms = (
-                self._fps_submit_seconds * 1000.0 / self._fps_submitted_frames
-                if self._fps_submitted_frames
-                else 0.0
-            )
             print(
                 f"[DirectSbsStream] SBS FPS: {sbs_fps:.1f} "
                 f"submitted={submitted_fps:.1f} "
@@ -305,7 +314,10 @@ class _PyNvDirectSbsOutputMixin:
                 "rtsp",
                 "-rtsp_transport",
                 "tcp",
-                f"rtsp://127.0.0.1:{self.publish_rtsp_port}/{self.stream_key}",
+                "-pkt_size",
+                "1452",
+                f"rtsp://127.0.0.1:{self.publish_rtsp_port}/{self.stream_key}"
+                "?pkt_size=1452",
             ]
         return [
             "-f",
@@ -463,6 +475,12 @@ class FfmpegDirectSbsOutput:
         os_name: str | None = None,
         prefer_nvenc: bool = False,
         display_mode: str = "Half-SBS",
+        target_bitrate_mbps: int = 0,
+        peak_bitrate_mbps: int = 0,
+        auto_calibration: bool = False,
+        calibration_port: int | None = None,
+        on_calibration_fps: Callable[[int], Any] | None = None,
+        calibration_fingerprint: dict[str, str] | None = None,
     ) -> None:
         self.base_dir = Path(base_dir)
         self.protocol = str(protocol or "RTMP").strip().upper()
@@ -478,6 +496,12 @@ class FfmpegDirectSbsOutput:
         self.prefer_nvenc = bool(prefer_nvenc)
         self.display_mode = str(display_mode or "Half-SBS").strip()
         self.use_hevc = self.display_mode.casefold() == "full-sbs"
+        self.target_bitrate_mbps = max(0, int(target_bitrate_mbps))
+        self.peak_bitrate_mbps = max(0, int(peak_bitrate_mbps))
+        self.auto_calibration = bool(auto_calibration and self.protocol == "WEBRTC")
+        self.calibration_port = int(calibration_port or min(65535, self.port + 1))
+        self._on_calibration_fps = on_calibration_fps
+        self._calibration_controller: StreamCalibrationController | None = None
         self.video_encoder = "libx265" if self.use_hevc else "libx264"
         self._active_rate_budget: tuple[int, int, int] | None = None
         self._encoder_selected = False
@@ -526,6 +550,19 @@ class FfmpegDirectSbsOutput:
         self._pending_audio_delay: float | None = None
         self._audio_delay_lock = threading.Lock()
         self._packet_loss_warning_emitted = False
+        if self.auto_calibration:
+            logs_dir = self.base_dir / "logs"
+            self._calibration_controller = StreamCalibrationController(
+                bind_port=self.calibration_port,
+                stream_port=self.port,
+                stream_key=self.stream_key,
+                maximum_fps=self.requested_fps,
+                state_path=logs_dir / "stream_calibration_state.json",
+                profile_path=logs_dir / "stream_calibration_profile.json",
+                hevc=self.use_hevc,
+                fingerprint=calibration_fingerprint,
+            )
+            self._stream_rate_calibrated = True
 
     @staticmethod
     def _find_executable(env_name: str, bundled: Path, command: str) -> Path:
@@ -616,18 +653,6 @@ class FfmpegDirectSbsOutput:
     def _probe_nvenc(self, width: int, height: int) -> bool:
         if self.os_name == "Darwin":
             return False
-        if _load_pynvvideo_codec() is not None:
-            print(
-                "[DirectSbsStream] PyNvVideoCodec GPU encoder API is available; "
-                "FFmpeg NVENC remains the transport fallback",
-                flush=True,
-            )
-        elif _PYNVVIDEO_CODEC_ERROR:
-            print(
-                f"[DirectSbsStream] PyNvVideoCodec unavailable; using FFmpeg NVENC: "
-                f"{_PYNVVIDEO_CODEC_ERROR}",
-                flush=True,
-            )
         return self._probe_encoder(
             "hevc_nvenc" if self.use_hevc else "h264_nvenc", width, height
         )
@@ -684,6 +709,11 @@ class FfmpegDirectSbsOutput:
         """Return wireless-friendly target, peak and VBV rates in Mbps."""
         if self.protocol not in {"HLS", "HLS M3U8", "RTMP", "WEBRTC"}:
             return None
+        configured_target = int(getattr(self, "target_bitrate_mbps", 0) or 0)
+        if configured_target > 0:
+            configured_peak = int(getattr(self, "peak_bitrate_mbps", 0) or 0)
+            peak = max(configured_target, configured_peak)
+            return configured_target, peak, peak
         pixels_per_second = max(1, int(width)) * max(1, int(height)) * self.fps
         bits_per_pixel = 0.075 if self.use_hevc else 0.12
         quality_factor = max(0.5, min(2.0, 2.0 ** ((20 - self.crf) / 12.0)))
@@ -729,6 +759,7 @@ class FfmpegDirectSbsOutput:
         return float(ordered[max(0, int((len(ordered) - 1) * 0.20))])
 
     def should_submit_frame(self, now: float | None = None) -> bool:
+        self._apply_pending_calibration_tier()
         timestamp = time.perf_counter() if now is None else float(now)
         if not self._stream_rate_calibrated:
             if self._rate_probe_started is None:
@@ -778,6 +809,53 @@ class FfmpegDirectSbsOutput:
         else:
             self._next_submit_at += interval
         return True
+
+    def _apply_pending_calibration_tier(self) -> None:
+        controller = getattr(self, "_calibration_controller", None)
+        if controller is None:
+            return
+        tier = controller.take_pending_tier()
+        if tier is None:
+            return
+        changed = (
+            self.fps != tier.fps
+            or self.target_bitrate_mbps != tier.target_mbps
+            or self.peak_bitrate_mbps != tier.peak_mbps
+        )
+        self.fps = tier.fps
+        self.target_bitrate_mbps = tier.target_mbps
+        self.peak_bitrate_mbps = tier.peak_mbps
+        self._next_submit_at = 0.0
+        if callable(self._on_calibration_fps):
+            self._on_calibration_fps(tier.fps)
+        if changed and self.ffmpeg_process is not None:
+            print(
+                f"[StreamCalibration] Testing {tier.fps} FPS "
+                f"target={tier.target_mbps}M peak={tier.peak_mbps}M",
+                flush=True,
+            )
+            self._stop_process(self.ffmpeg_process)
+            self.ffmpeg_process = None
+            self._frame_size = None
+
+    def observe_calibration_window(
+        self,
+        *,
+        sbs_fps: float,
+        submitted_fps: float,
+        convert_ms: float,
+        submit_ms: float,
+    ) -> None:
+        if getattr(self, "_calibration_controller", None) is None:
+            return
+        self._calibration_controller.observe_sender(
+            {
+                "sbs_fps": round(float(sbs_fps), 3),
+                "submitted_fps": round(float(submitted_fps), 3),
+                "convert_ms": round(float(convert_ms), 3),
+                "submit_ms": round(float(submit_ms), 3),
+            }
+        )
 
     @staticmethod
     def _looks_like_packet_loss(message: str) -> bool:
@@ -855,6 +933,8 @@ class FfmpegDirectSbsOutput:
             daemon=True,
         )
         self._server_log_thread.start()
+        if self._calibration_controller is not None:
+            self._calibration_controller.start()
         print(
             f"[DirectSbsStream] MediaMTX started for {self.protocol} on port {self.port}",
             flush=True,
@@ -1149,7 +1229,10 @@ class FfmpegDirectSbsOutput:
                         "rtsp",
                         "-rtsp_transport",
                         "tcp",
-                        f"rtsp://127.0.0.1:{self.publish_rtsp_port}/{self.stream_key}",
+                        "-pkt_size",
+                        "1452",
+                        f"rtsp://127.0.0.1:{self.publish_rtsp_port}/{self.stream_key}"
+                        "?pkt_size=1452",
                     ]
                 )
             else:
@@ -1174,7 +1257,10 @@ class FfmpegDirectSbsOutput:
                     "rtsp",
                     "-rtsp_transport",
                     "tcp",
-                    f"rtsp://127.0.0.1:{self.publish_rtsp_port}/{self.stream_key}",
+                    "-pkt_size",
+                    "1452",
+                    f"rtsp://127.0.0.1:{self.publish_rtsp_port}/{self.stream_key}"
+                    "?pkt_size=1452",
                 ]
             )
         return command
@@ -1350,6 +1436,9 @@ class FfmpegDirectSbsOutput:
                 process.wait(timeout=3.0)
 
     def close(self) -> None:
+        if self._calibration_controller is not None:
+            self._calibration_controller.close()
+            self._calibration_controller = None
         if self._soundcard_audio is not None:
             self._soundcard_audio.close()
             self._soundcard_audio = None

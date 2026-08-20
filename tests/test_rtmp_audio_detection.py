@@ -1,6 +1,11 @@
 import logging
 import sys
+import time
 import types
+from pathlib import Path
+
+import numpy as np
+import pytest
 
 
 DSHOW_OUTPUT = """
@@ -15,6 +20,15 @@ NEW_FFMPEG_DSHOW_OUTPUT = """
 [in#0 @ 000001] "virtual-audio-capturer" (audio)
 [in#0 @ 000001]   Alternative name "@device_sw_..."
 """
+
+
+def test_windows_soundcard_version_supports_pinned_numpy_binary_buffers() -> None:
+    requirements = (
+        Path(__file__).resolve().parents[1] / "src/env_install/requirements.txt"
+    ).read_text(encoding="utf-8")
+
+    assert "numpy==2.5.0" in requirements
+    assert 'soundcard==0.4.6; platform_system == "Windows"' in requirements
 
 
 def _target():
@@ -154,5 +168,132 @@ def test_soundcard_sender_resolves_speaker_to_loopback_microphone(monkeypatch) -
     sender = SoundcardLoopbackSender("virtual-audio-capturer")
     try:
         assert sender._loopback is loopback
+    finally:
+        sender.close()
+
+
+def test_soundcard_sender_stays_healthy_during_continuous_capture(monkeypatch) -> None:
+    from streaming.wasapi_audio import SoundcardLoopbackSender
+
+    class Recorder:
+        calls = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def record(self, *, numframes):
+            self.calls += 1
+            time.sleep(0.001)
+            return np.zeros((numframes, 2), dtype=np.float32)
+
+    recorder = Recorder()
+    speaker = types.SimpleNamespace(id="speaker-id", name="Default speakers")
+    loopback = types.SimpleNamespace(
+        isloopback=True,
+        recorder=lambda **_kwargs: recorder,
+    )
+    fake_soundcard = types.SimpleNamespace(
+        all_speakers=lambda: [speaker],
+        default_speaker=lambda: speaker,
+        get_microphone=lambda **_kwargs: loopback,
+    )
+    monkeypatch.setitem(sys.modules, "soundcard", fake_soundcard)
+
+    sender = SoundcardLoopbackSender()
+    try:
+        sender.start()
+        for _ in range(100):
+            if recorder.calls >= 3:
+                break
+            time.sleep(0.002)
+        assert recorder.calls >= 3
+        assert sender._thread is not None and sender._thread.is_alive()
+        assert sender._startup_error is None
+        assert sender._runtime_error is None
+    finally:
+        sender.close()
+
+
+def test_soundcard_sender_rejects_failure_before_first_pcm(monkeypatch) -> None:
+    from streaming.wasapi_audio import SoundcardLoopbackSender
+
+    class FailingRecorder:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def record(self, *, numframes):
+            raise RuntimeError(f"failed before {numframes} frames")
+
+    speaker = types.SimpleNamespace(id="speaker-id", name="Default speakers")
+    loopback = types.SimpleNamespace(
+        isloopback=True,
+        recorder=lambda **_kwargs: FailingRecorder(),
+    )
+    fake_soundcard = types.SimpleNamespace(
+        all_speakers=lambda: [speaker],
+        default_speaker=lambda: speaker,
+        get_microphone=lambda **_kwargs: loopback,
+    )
+    monkeypatch.setitem(sys.modules, "soundcard", fake_soundcard)
+
+    sender = SoundcardLoopbackSender()
+    try:
+        with pytest.raises(RuntimeError, match="failed before 1024 frames"):
+            sender.start()
+        assert isinstance(sender._startup_error, RuntimeError)
+        assert sender._runtime_error is None
+        assert sender._stop.is_set()
+    finally:
+        sender.close()
+
+
+def test_soundcard_sender_keeps_ffmpeg_alive_with_silence_after_capture_failure(
+    monkeypatch, capsys
+) -> None:
+    from streaming.wasapi_audio import SoundcardLoopbackSender
+
+    class FailingRecorder:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def record(self, *, numframes):
+            if getattr(self, "sent_once", False):
+                raise RuntimeError("capture endpoint changed")
+            self.sent_once = True
+            return np.zeros((numframes, 2), dtype=np.float32)
+
+    speaker = types.SimpleNamespace(id="speaker-id", name="Default speakers")
+    loopback = types.SimpleNamespace(
+        isloopback=True,
+        recorder=lambda **_kwargs: FailingRecorder(),
+    )
+    fake_soundcard = types.SimpleNamespace(
+        all_speakers=lambda: [speaker],
+        default_speaker=lambda: speaker,
+        get_microphone=lambda **_kwargs: loopback,
+    )
+    monkeypatch.setitem(sys.modules, "soundcard", fake_soundcard)
+
+    sender = SoundcardLoopbackSender()
+    try:
+        sender.start()
+        for _ in range(100):
+            if sender._runtime_error is not None:
+                break
+            time.sleep(0.005)
+        assert sender._startup_error is None
+        assert isinstance(sender._runtime_error, RuntimeError)
+        assert sender._thread is not None and sender._thread.is_alive()
+        assert not sender._stop.is_set()
+        assert "continuing with silent audio" in capsys.readouterr().out
     finally:
         sender.close()

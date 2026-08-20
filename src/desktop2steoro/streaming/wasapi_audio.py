@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import socket
 import threading
+import time
 from typing import Any
 
 import numpy as np
@@ -25,6 +26,7 @@ class SoundcardLoopbackSender:
         self._stop = threading.Event()
         self._startup_done = threading.Event()
         self._startup_error: Exception | None = None
+        self._runtime_error: Exception | None = None
         self._thread: threading.Thread | None = None
 
     def _resolve_loopback(self, device_name: str | None) -> Any:
@@ -69,6 +71,7 @@ class SoundcardLoopbackSender:
             ) from error
 
     def _run(self) -> None:
+        produced_pcm = False
         try:
             with self._loopback.recorder(
                 samplerate=self.samplerate,
@@ -83,12 +86,42 @@ class SoundcardLoopbackSender:
                         (pcm * 32767.0).astype(np.int16).tobytes(),
                         ("127.0.0.1", self.port),
                     )
+                    produced_pcm = True
                     self._startup_done.set()
         except Exception as exc:
-            self._startup_error = exc
-            self._startup_done.set()
-            if not self._stop.is_set():
+            if self._stop.is_set():
+                return
+            if not produced_pcm:
+                self._startup_error = exc
+                self._startup_done.set()
                 self._stop.set()
+                return
+            self._runtime_error = exc
+            print(
+                "[DirectSbsStream] Windows loopback capture interrupted: "
+                f"{type(exc).__name__}: {exc}; continuing with silent audio",
+                flush=True,
+            )
+            self._send_silence_until_stopped()
+
+    def _send_silence_until_stopped(self) -> None:
+        """Keep FFmpeg's mapped audio input alive after a capture interruption."""
+        frames_per_packet = 1024
+        packet = np.zeros(
+            frames_per_packet * self.channels,
+            dtype=np.int16,
+        ).tobytes()
+        interval = frames_per_packet / float(self.samplerate)
+        deadline = time.monotonic()
+        while not self._stop.is_set():
+            try:
+                self._socket.sendto(packet, ("127.0.0.1", self.port))
+            except OSError:
+                if not self._stop.is_set():
+                    raise
+                return
+            deadline += interval
+            self._stop.wait(max(0.0, deadline - time.monotonic()))
 
     def close(self) -> None:
         self._stop.set()
