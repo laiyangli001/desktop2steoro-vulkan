@@ -110,12 +110,14 @@ class PyNvSrtVideoOutput:
         packet = self.encoder.encode(frame)
         if packet:
             self.process.stdin.write(packet)
+            self.process.stdin.flush()
 
     def close(self) -> None:
         try:
             tail = self.encoder.flush()
             if tail and self.process.stdin is not None:
                 self.process.stdin.write(tail)
+                self.process.stdin.flush()
         finally:
             if self.process.stdin is not None:
                 self.process.stdin.close()

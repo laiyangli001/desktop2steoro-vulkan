@@ -1189,6 +1189,7 @@ class FfmpegDirectSbsOutput:
                 f"FFmpeg exited with code {process.returncode}: {detail}"
             )
         process.stdin.write(memoryview(frame).cast("B"))
+        process.stdin.flush()
 
     def _drain_ffmpeg_stderr(self, process: subprocess.Popen) -> None:
         stream = process.stderr
