@@ -16,7 +16,7 @@ class SoundcardLoopbackSender:
         self.samplerate = int(samplerate)
         self.channels = 2
         self._soundcard = sc
-        self._speaker = self._resolve_speaker(device_name)
+        self._loopback = self._resolve_loopback(device_name)
         reservation = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         reservation.bind(("127.0.0.1", 0))
         self.port = int(reservation.getsockname()[1])
@@ -27,16 +27,27 @@ class SoundcardLoopbackSender:
         self._startup_error: Exception | None = None
         self._thread: threading.Thread | None = None
 
-    def _resolve_speaker(self, device_name: str | None) -> Any:
+    def _resolve_loopback(self, device_name: str | None) -> Any:
         requested = str(device_name or "").strip()
+        speaker = None
         if requested:
-            for speaker in self._soundcard.all_speakers():
-                if str(getattr(speaker, "name", "")) == requested:
-                    return speaker
-        speaker = self._soundcard.default_speaker()
+            for candidate in self._soundcard.all_speakers():
+                if str(getattr(candidate, "name", "")) == requested:
+                    speaker = candidate
+                    break
+        if speaker is None:
+            speaker = self._soundcard.default_speaker()
         if speaker is None:
             raise RuntimeError("No Windows default speaker is available")
-        return speaker
+        loopback = self._soundcard.get_microphone(
+            id=speaker.id,
+            include_loopback=True,
+        )
+        if loopback is None or not bool(getattr(loopback, "isloopback", False)):
+            raise RuntimeError(
+                f"No WASAPI loopback endpoint is available for speaker {speaker.name!r}"
+            )
+        return loopback
 
     @property
     def ffmpeg_url(self) -> str:
@@ -59,7 +70,7 @@ class SoundcardLoopbackSender:
 
     def _run(self) -> None:
         try:
-            with self._speaker.loopback().recorder(
+            with self._loopback.recorder(
                 samplerate=self.samplerate,
                 channels=self.channels,
                 blocksize=1024,

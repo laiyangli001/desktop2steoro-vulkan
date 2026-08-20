@@ -135,3 +135,24 @@ def test_windows_detection_falls_back_to_sounddevice(
 
     assert target.audio_devices == ["Stereo Mix (Realtek(R) Audio)"]
     assert not caplog.messages
+
+
+def test_soundcard_sender_resolves_speaker_to_loopback_microphone(monkeypatch) -> None:
+    from streaming.wasapi_audio import SoundcardLoopbackSender
+
+    speaker = types.SimpleNamespace(id="speaker-id", name="Default speakers")
+    loopback = types.SimpleNamespace(isloopback=True, name="Default speakers loopback")
+    fake_soundcard = types.SimpleNamespace(
+        all_speakers=lambda: [speaker],
+        default_speaker=lambda: speaker,
+        get_microphone=lambda *, id, include_loopback: (
+            loopback if id == speaker.id and include_loopback else None
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "soundcard", fake_soundcard)
+
+    sender = SoundcardLoopbackSender("virtual-audio-capturer")
+    try:
+        assert sender._loopback is loopback
+    finally:
+        sender.close()
