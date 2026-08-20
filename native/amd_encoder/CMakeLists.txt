@@ -7,7 +7,7 @@ endif()
 
 add_library(d2s_amd_encoder SHARED amd_encoder.cpp)
 target_compile_features(d2s_amd_encoder PRIVATE cxx_std_17)
-target_compile_definitions(d2s_amd_encoder PRIVATE D2S_AMD_ENCODER_BUILD=1 WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
+target_compile_definitions(d2s_amd_encoder PRIVATE D2S_AMD_ENCODER_BUILD=1 WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE NTSTATUS=LONG)
 target_link_libraries(d2s_amd_encoder PRIVATE d3d11 dxgi)
 if(MSVC)
     target_compile_options(d2s_amd_encoder PRIVATE /FIwinternl.h)
