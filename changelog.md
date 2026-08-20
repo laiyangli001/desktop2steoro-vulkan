@@ -2,6 +2,9 @@
 
 ## 2026-08-20
 
+- 修复 CUDA 独立安装器错误地将 Python 路径拼成 `src/env_install/..python3`、从而忽略已有 `src/python3` 并重复全新安装的问题；安装器现在规范化 `src` 目录并明确使用 `src/python3`。同时为 TensorRT 等 CUDA requirements 增加继承到 PEP 517 构建子进程的网络重试/超时配置，以及最多三次整步重试，缓解镜像 `IncompleteRead` 临时断流。
+- 检查并修复其余平台安装脚本：Linux CUDA、Linux ROCm 和 macOS MPS 激活环境后统一调用 `src/python3` 内的解释器，各依赖步骤独立检查失败状态，避免前序安装失败被后一条命令掩盖；macOS 的 `run_mac` 权限路径适配新目录结构；Windows ROCm 安装器规范化并验证 Python 3.12 x64 路径，同时检查 ROCm requirements 与 SDK 初始化结果。
+
 - 统一 GPU 推流运行模式：GUI 使用“GPU 推流”，旧的 NVIDIA GPU 推流名称自动归一化；运行时根据显卡型号选择 NVIDIA PyNvVideoCodec 或 AMD/其他平台的硬件编码探测链，并在初始化失败时安全回退，不改变音频、协议和 MediaMTX 配置。
 - 新增 Windows AMD 原生编码桥接工程 `native/amd_encoder`：动态检测 AMD AMF 运行时 `amfrt64.dll` 与 Radeon DXGI 适配器，提供 Python 可选加载接口；GitHub Actions 已成功编译并将 `src/desktop2steoro/streaming/amd_encoder/d2s_amd_encoder.dll` 随项目发布，运行时未安装 AMD AMF 或 HIP 时仍保持 FFmpeg 回退。桥接现在可将 ROCm HIP RGBA device tensor 通过共享 D3D11 texture 导入 AMF，并用 FFmpeg 仅复用 H.264/H.265 包送入 SRT；音频开启时继续使用原有 FFmpeg 音视频路径。
 - 完成项目目录重组后的路径统一：源码归档到 `src/desktop2steoro`，Python 运行环境统一位于 `src/python3`，安装脚本位于 `src/env_install`，脚本、测试和启动入口通过统一项目路径配置解析。

@@ -8,8 +8,8 @@ echo - Setting up the virtual environment
 @REM The official NuGet package provides a complete relocatable runtime layout.
 Set "PYTHON_VERSION=3.12.10"
 Set "SCRIPT_DIR=%~dp0"
-Set "PROJECT_ROOT=%SCRIPT_DIR%.."
-Set "PYTHON_ROOT=%PROJECT_ROOT%python3"
+for %%I in ("%SCRIPT_DIR%..") do Set "PROJECT_ROOT=%%~fI"
+Set "PYTHON_ROOT=%PROJECT_ROOT%\python3"
 Set "PYTHON_STAGING=%SCRIPT_DIR%python3.installing"
 Set "PYTHON_ARCHIVE=%TEMP%\python-%PYTHON_VERSION%-nuget.zip"
 Set "PYTHON_URL=https://www.nuget.org/api/v2/package/python/%PYTHON_VERSION%"
@@ -50,6 +50,8 @@ if not exist "%PYTHON_ROOT%\python.exe" (
 
 @REM Set paths
 Set "PYTHON_EXE=%PYTHON_ROOT%\python.exe"
+Set "PIP_RETRIES=10"
+Set "PIP_TIMEOUT=180"
 
 @REM Bootstrap pip from the complete runtime without another network download.
 "%PYTHON_EXE%" -m pip --version >nul 2>nul
@@ -75,7 +77,22 @@ if %errorlevel% neq 0 (
 @REM Install requirements
 echo.
 echo - Installing the requirements
-"%PYTHON_EXE%" -m pip install -r "%SCRIPT_DIR%requirements-cuda.txt" --no-cache-dir --no-warn-script-location --retries 5 --timeout 120
+call :install_cuda_requirements
+if errorlevel 1 (
+    echo - CUDA requirements download failed; retrying 1/2
+    timeout /t 3 /nobreak >nul
+    call :install_cuda_requirements
+)
+if errorlevel 1 (
+    echo - CUDA requirements download failed; retrying 2/2
+    timeout /t 3 /nobreak >nul
+    call :install_cuda_requirements
+)
+if errorlevel 1 (
+    echo Failed to install CUDA requirements after 3 attempts
+    pause
+    exit /b 1
+)
 "%PYTHON_EXE%" -m pip install -r "%SCRIPT_DIR%requirements.txt" --no-cache-dir --no-warn-script-location --retries 5 --timeout 120
 if %errorlevel% neq 0 (
     echo Failed to install requirements
@@ -85,3 +102,8 @@ if %errorlevel% neq 0 (
 
 echo Python environment deployed successfully.
 pause
+exit /b 0
+
+:install_cuda_requirements
+"%PYTHON_EXE%" -m pip install -r "%SCRIPT_DIR%requirements-cuda.txt" --no-cache-dir --no-warn-script-location --retries 5 --timeout 120
+exit /b %errorlevel%
