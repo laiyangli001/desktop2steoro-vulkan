@@ -114,7 +114,7 @@ extern "C" D2S_AMD_API void* d2s_amd_encoder_create(
     state->encoder->SetProperty(AMF_VIDEO_ENCODER_FRAMESIZE, AMFConstructSize(width, height));
     state->encoder->SetProperty(AMF_VIDEO_ENCODER_FRAMERATE, AMFConstructRate(fps, 1));
     state->encoder->SetProperty(AMF_VIDEO_ENCODER_TARGET_BITRATE, rate);
-    result = state->encoder->Init(AMF_SURFACE_NV12, width, height);
+    result = state->encoder->Init(amf::AMF_SURFACE_NV12, width, height);
     if (result != AMF_OK) { set_error("AMF encoder initialization failed"); delete state; return nullptr; }
     g_last_error.clear();
     return state;
