@@ -1,3 +1,7 @@
+# Keep source, scripts and documentation normalized as LF in both the
+# repository and Windows worktrees. Binary/LFS rules below remain explicit.
+* text=auto eol=lf
+
 src/desktop2steoro/xr_viewer/environments/**/*.hdr filter=lfs diff=lfs merge=lfs -text
 src/desktop2steoro/xr_viewer/environments/**/*.glb filter=lfs diff=lfs merge=lfs -text
 src/desktop2steoro/streaming/rtmp/mediamtx/*.exe filter=lfs diff=lfs merge=lfs -text
