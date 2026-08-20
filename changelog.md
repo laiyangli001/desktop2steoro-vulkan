@@ -1,5 +1,9 @@
 # Desktop2Stereo Vulkan 项目日志
 
+## 2026-08-21
+
+- 修复 Windows BAT/CMD/REG 文件被仓库全局 `eol=lf` 规则转换为 Linux 换行的问题；这些文件现在以 CRLF 原始字节提交并排除 Git 文本归一化，确保 Git 克隆、GitHub ZIP 和 raw 下载均可由 Windows 原生命令解释器直接运行。
+
 ## 2026-08-20
 
 - 修复 CUDA 独立安装器错误地将 Python 路径拼成 `src/env_install/..python3`、从而忽略已有 `src/python3` 并重复全新安装的问题；安装器现在规范化 `src` 目录并明确使用 `src/python3`。同时为 TensorRT 等 CUDA requirements 增加继承到 PEP 517 构建子进程的网络重试/超时配置，以及最多三次整步重试，缓解镜像 `IncompleteRead` 临时断流。

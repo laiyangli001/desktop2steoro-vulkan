@@ -69,7 +69,7 @@ if errorlevel 1 (
 )
 echo Python environment deployed successfully.
 
-echo To enable torch.compile on AMD ROCm7 supported GPUs, you must install vs_buildtools https://aka.ms/vs/17/release/vs_buildtools.exe and select the "Desktop development with C++" to install (~6GB). OR you can just run with the torch.compile unchecked. 
+echo To enable torch.compile on AMD ROCm7 supported GPUs, you must install vs_buildtools https://aka.ms/vs/17/release/vs_buildtools.exe and select the "Desktop development with C++" to install (~6GB). OR you can just run with the torch.compile unchecked.
 
 pause
 exit /b 0

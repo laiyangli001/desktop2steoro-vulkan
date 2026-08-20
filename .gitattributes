@@ -2,6 +2,12 @@
 # repository and Windows worktrees. Binary/LFS rules below remain explicit.
 * text=auto eol=lf
 
+# Preserve CRLF bytes in Windows command scripts and registry files, including
+# GitHub source archives and raw downloads where checkout EOL filters do not run.
+*.bat -text whitespace=cr-at-eol
+*.cmd -text whitespace=cr-at-eol
+*.reg -text whitespace=cr-at-eol
+
 src/desktop2steoro/xr_viewer/environments/**/*.hdr filter=lfs diff=lfs merge=lfs -text
 src/desktop2steoro/xr_viewer/environments/**/*.glb filter=lfs diff=lfs merge=lfs -text
 src/desktop2steoro/streaming/rtmp/mediamtx/*.exe filter=lfs diff=lfs merge=lfs -text

@@ -2,6 +2,8 @@ from pathlib import Path
 
 from path_config import ENV_INSTALL_ROOT
 
+REPO_ROOT = ENV_INSTALL_ROOT.parents[1]
+
 
 def test_cuda_installer_uses_complete_project_local_python() -> None:
     script = (ENV_INSTALL_ROOT / "install-cuda_standalone.bat").read_text(
@@ -49,3 +51,21 @@ def test_posix_installers_use_the_virtualenv_python_and_current_layout() -> None
         script = (ENV_INSTALL_ROOT / name).read_text(encoding="utf-8")
         assert 'chmod a+x "$PROJECT_ROOT/run_mac" "$0"' in script
         assert '"$PROJECT_ROOT/../run_mac"' not in script
+
+
+def test_windows_scripts_are_preserved_as_crlf_bytes() -> None:
+    attributes = (REPO_ROOT / ".gitattributes").read_text(encoding="utf-8")
+    assert "*.bat -text" in attributes
+    assert "*.cmd -text" in attributes
+    assert "*.reg -text" in attributes
+
+    windows_files = [
+        path
+        for pattern in ("*.bat", "*.cmd", "*.reg")
+        for path in REPO_ROOT.rglob(pattern)
+        if ".git" not in path.parts and "..python3" not in path.parts
+    ]
+    assert windows_files
+    for path in windows_files:
+        data = path.read_bytes()
+        assert b"\n" not in data.replace(b"\r\n", b""), path
