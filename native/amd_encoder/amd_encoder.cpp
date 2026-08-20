@@ -261,25 +261,58 @@ extern "C" D2S_AMD_API void* d2s_amd_encoder_create(
     auto* state = new AmdEncoder();
     state->width = width; state->height = height; state->fps = fps; state->hevc = hevc != 0;
     AMF_RESULT result = g_AMFFactory.Init();
-    if (result != AMF_OK) { set_error("AMF factory initialization failed"); delete state; return nullptr; }
+    if (result != AMF_OK) {
+        set_error("AMF factory initialization failed");
+        release_native_resources(state);
+        delete state;
+        return nullptr;
+    }
     result = g_AMFFactory.GetFactory()->CreateContext(&state->context);
-    if (result != AMF_OK || !state->context) { set_error("AMF context creation failed"); delete state; return nullptr; }
+    if (result != AMF_OK || !state->context) {
+        set_error("AMF context creation failed");
+        release_native_resources(state);
+        g_AMFFactory.Terminate();
+        delete state;
+        return nullptr;
+    }
     if (!create_shared_rgba_texture(state) || !import_shared_texture_into_hip(state)) {
         release_native_resources(state);
         delete state;
         return nullptr;
     }
     result = state->context->InitDX11(state->device);
-    if (result != AMF_OK) { set_error("AMF DX11 context initialization failed"); delete state; return nullptr; }
+    if (result != AMF_OK) {
+        set_error("AMF DX11 context initialization failed");
+        state->context->Terminate();
+        release_native_resources(state);
+        g_AMFFactory.Terminate();
+        delete state;
+        return nullptr;
+    }
     const wchar_t* component = state->hevc ? AMFVideoEncoder_HEVC : AMFVideoEncoderVCE_AVC;
     result = g_AMFFactory.GetFactory()->CreateComponent(state->context, component, &state->encoder);
-    if (result != AMF_OK || !state->encoder) { set_error("AMF video encoder component creation failed"); delete state; return nullptr; }
+    if (result != AMF_OK || !state->encoder) {
+        set_error("AMF video encoder component creation failed");
+        state->context->Terminate();
+        release_native_resources(state);
+        g_AMFFactory.Terminate();
+        delete state;
+        return nullptr;
+    }
     const amf_int64 rate = static_cast<amf_int64>(bitrate);
     state->encoder->SetProperty(AMF_VIDEO_ENCODER_FRAMESIZE, AMFConstructSize(width, height));
     state->encoder->SetProperty(AMF_VIDEO_ENCODER_FRAMERATE, AMFConstructRate(fps, 1));
     state->encoder->SetProperty(AMF_VIDEO_ENCODER_TARGET_BITRATE, rate);
     result = state->encoder->Init(amf::AMF_SURFACE_RGBA, width, height);
-    if (result != AMF_OK) { set_error("AMF encoder initialization failed"); delete state; return nullptr; }
+    if (result != AMF_OK) {
+        set_error("AMF encoder initialization failed");
+        state->encoder->Terminate();
+        state->context->Terminate();
+        release_native_resources(state);
+        g_AMFFactory.Terminate();
+        delete state;
+        return nullptr;
+    }
     g_last_error.clear();
     return state;
 #endif
