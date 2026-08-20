@@ -20,8 +20,17 @@ if(D2S_AMF_ROOT AND EXISTS "${D2S_AMF_ROOT}/amf/public/include/core/Context.h")
     if(EXISTS "${D2S_AMF_ROOT}/amf/public/common/AMFFactory.cpp")
         target_sources(d2s_amd_encoder PRIVATE "${D2S_AMF_ROOT}/amf/public/common/AMFFactory.cpp")
     endif()
-    if(EXISTS "${D2S_AMF_ROOT}/amf/public/common/Windows/UtilsWindows.cpp")
-        target_sources(d2s_amd_encoder PRIVATE "${D2S_AMF_ROOT}/amf/public/common/Windows/UtilsWindows.cpp")
-    endif()
+    foreach(_amf_source
+        AMFSTL.cpp
+        TraceAdapter.cpp
+        CurrentTimeImpl.cpp
+        Thread.cpp
+        Windows/ThreadWindows.cpp
+        Windows/UtilsWindows.cpp
+    )
+        if(EXISTS "${D2S_AMF_ROOT}/amf/public/common/${_amf_source}")
+            target_sources(d2s_amd_encoder PRIVATE "${D2S_AMF_ROOT}/amf/public/common/${_amf_source}")
+        endif()
+    endforeach()
 endif()
 set_target_properties(d2s_amd_encoder PROPERTIES OUTPUT_NAME "d2s_amd_encoder")
