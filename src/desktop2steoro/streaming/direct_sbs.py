@@ -1261,3 +1261,164 @@ class FfmpegDirectSbsOutput:
 
 class PyNvDirectSbsOutput(_PyNvDirectSbsOutputMixin, FfmpegDirectSbsOutput):
     pass
+
+
+class _AmdAmfDirectSbsOutputMixin:
+    """Submit ROCm tensors to the native HIP→D3D11→AMF bridge."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._amd_encoder = None
+        self._amd_packet_process: subprocess.Popen | None = None
+        self._amd_fallback: FfmpegDirectSbsOutput | None = None
+
+    @staticmethod
+    def _hip_rgba_tensor(frame):
+        import torch
+
+        image = getattr(frame, "sbs", frame)
+        if not isinstance(image, torch.Tensor) or not bool(getattr(image, "is_cuda", False)):
+            raise RuntimeError("AMD AMF requires a ROCm device tensor")
+        if image.ndim == 4:
+            if int(image.shape[0]) != 1:
+                raise RuntimeError("AMD AMF accepts one SBS frame at a time")
+            image = image[0]
+        if image.ndim != 3:
+            raise RuntimeError(f"unsupported AMD AMF tensor shape: {tuple(image.shape)!r}")
+        if int(image.shape[0]) in (3, 4):
+            image = image.permute(1, 2, 0)
+        if int(image.shape[-1]) not in (3, 4):
+            raise RuntimeError(f"AMD AMF requires RGB/RGBA tensor: {tuple(image.shape)!r}")
+        if image.dtype != torch.uint8:
+            image = image.clamp(0.0, 1.0).mul(255.0).round().to(torch.uint8)
+        if int(image.shape[-1]) == 3:
+            alpha = torch.full(
+                (*image.shape[:2], 1), 255, dtype=torch.uint8, device=image.device
+            )
+            image = torch.cat((image, alpha), dim=-1)
+        return image.contiguous()
+
+    def _start_amd_encoder(self, image) -> None:
+        if self.stereo_mix_device:
+            raise RuntimeError("native AMD AMF path requires audio to be disabled")
+        from streaming.amd_encoder import AmdAmfSurfaceEncoder
+
+        height, width = int(image.shape[0]), int(image.shape[1])
+        budget = self._dynamic_stream_rate_budget(width, height)
+        bitrate = int((budget[0] if budget is not None else 10) * 1_000_000)
+        self._amd_encoder = AmdAmfSurfaceEncoder(
+            width, height, self.fps, bitrate, hevc=self.use_hevc
+        )
+        codec = "hevc" if self.use_hevc else "h264"
+        destination = (
+            f"srt://127.0.0.1:8890?streamid=publish:{self.stream_key}&pkt_size=1316"
+        )
+        self._amd_packet_process = subprocess.Popen(
+            [
+                str(self.ffmpeg_path),
+                "-hide_banner",
+                "-loglevel",
+                "warning",
+                "-fflags",
+                "nobuffer",
+                "-f",
+                codec,
+                "-r",
+                str(self.fps),
+                "-i",
+                "pipe:0",
+                "-an",
+                "-c:v",
+                "copy",
+                "-f",
+                "mpegts",
+                destination,
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=(
+                getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                if self.os_name == "Windows"
+                else 0
+            ),
+        )
+        self._frame_size = (width, height)
+        print(
+            f"[DirectSbsStream] AMD HIP→D3D11→AMF GPU path active: "
+            f"{width}x{height}@{self.fps}",
+            flush=True,
+        )
+
+    def _submit_amd_packet(self, image) -> None:
+        import torch
+
+        if self._amd_encoder is None or self._amd_packet_process is None:
+            self._start_amd_encoder(image)
+        assert self._amd_encoder is not None
+        process = self._amd_packet_process
+        if process.poll() is not None or process.stdin is None:
+            raise RuntimeError("AMF packet muxer is unavailable")
+        stream = int(torch.cuda.current_stream(device=image.device).cuda_stream)
+        self._amd_encoder.submit_hip_rgba(
+            int(image.data_ptr()), int(image.stride(0) * image.element_size()), stream
+        )
+        while True:
+            packet = self._amd_encoder.read_packet()
+            if not packet:
+                break
+            process.stdin.write(packet)
+            process.stdin.flush()
+
+    def _fallback_to_ffmpeg(self, frame, reason: Exception) -> None:
+        print(
+            f"[DirectSbsStream] AMD native GPU path unavailable: {reason}; "
+            "falling back to FFmpeg hardware/software encoding",
+            flush=True,
+        )
+        if self._amd_packet_process is not None:
+            self._stop_process(self._amd_packet_process)
+            self._amd_packet_process = None
+        if self._amd_encoder is not None:
+            self._amd_encoder.close()
+            self._amd_encoder = None
+        self._amd_fallback = FfmpegDirectSbsOutput(
+            base_dir=self.base_dir,
+            protocol=self.protocol,
+            port=self.port,
+            stream_key=self.stream_key,
+            fps=self.fps,
+            crf=self.crf,
+            stereo_mix_device=self.stereo_mix_device,
+            audio_delay=self.audio_delay,
+            os_name=self.os_name,
+            prefer_nvenc=self.prefer_nvenc,
+            display_mode=self.display_mode,
+        )
+        self._amd_fallback.server_process = self.server_process
+        self._amd_fallback.submit_frame(runtime_sbs_to_rgb(frame))
+
+    def submit_cuda_frame(self, frame: Any) -> None:
+        if self._amd_fallback is not None:
+            self._amd_fallback.submit_frame(runtime_sbs_to_rgb(frame))
+            return
+        try:
+            self._submit_amd_packet(self._hip_rgba_tensor(frame))
+        except Exception as exc:
+            self._fallback_to_ffmpeg(frame, exc)
+
+    def close(self) -> None:
+        if self._amd_packet_process is not None:
+            self._stop_process(self._amd_packet_process)
+            self._amd_packet_process = None
+        if self._amd_encoder is not None:
+            self._amd_encoder.close()
+            self._amd_encoder = None
+        if self._amd_fallback is not None:
+            self._amd_fallback.close()
+            self._amd_fallback = None
+        super().close()
+
+
+class AmdAmfDirectSbsOutput(_AmdAmfDirectSbsOutputMixin, FfmpegDirectSbsOutput):
+    pass

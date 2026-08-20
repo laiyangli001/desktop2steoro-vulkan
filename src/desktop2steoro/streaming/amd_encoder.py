@@ -1,9 +1,8 @@
 """Optional Windows AMD AMF bridge loader.
 
-The native bridge is intentionally optional. It only reports whether the AMD
-AMF runtime and an AMD DXGI adapter are available; surface encoding is enabled
-by the follow-up AMF/D3D11 frame path and never falls back silently to a CPU
-"zero-copy" claim.
+The native bridge is intentionally optional. On ROCm it imports a HIP RGBA
+device tensor into a shared D3D11 texture and submits that texture to AMF;
+unsupported systems fall back to the regular FFmpeg path.
 """
 
 from __future__ import annotations
@@ -64,6 +63,13 @@ class AmdAmfSurfaceEncoder:
         self._dll.d2s_amd_encoder_create.argtypes = [ctypes.c_int] * 4 + [ctypes.c_int]
         self._dll.d2s_amd_encoder_submit_texture.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
         self._dll.d2s_amd_encoder_submit_texture.restype = ctypes.c_int
+        self._dll.d2s_amd_encoder_submit_hip_rgba.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_int,
+            ctypes.c_void_p,
+        ]
+        self._dll.d2s_amd_encoder_submit_hip_rgba.restype = ctypes.c_int
         self._dll.d2s_amd_encoder_read_packet.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int]
         self._dll.d2s_amd_encoder_read_packet.restype = ctypes.c_int
         self._dll.d2s_amd_encoder_destroy.argtypes = [ctypes.c_void_p]
@@ -74,6 +80,16 @@ class AmdAmfSurfaceEncoder:
     def submit_d3d11_texture(self, texture_pointer: int) -> None:
         if self._dll.d2s_amd_encoder_submit_texture(self._handle, ctypes.c_void_p(texture_pointer)) <= 0:
             raise RuntimeError("AMF rejected the D3D11 texture")
+
+    def submit_hip_rgba(self, device_pointer: int, pitch_bytes: int, stream: int) -> None:
+        result = self._dll.d2s_amd_encoder_submit_hip_rgba(
+            self._handle,
+            ctypes.c_void_p(int(device_pointer)),
+            int(pitch_bytes),
+            ctypes.c_void_p(int(stream)),
+        )
+        if result <= 0:
+            raise RuntimeError("AMF rejected the HIP RGBA surface")
 
     def read_packet(self, capacity: int = 2 * 1024 * 1024) -> bytes | None:
         buffer = ctypes.create_string_buffer(capacity)

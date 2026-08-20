@@ -536,6 +536,7 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
         }:
             from streaming.direct_sbs import (
                 DirectSbsOutputConsumer,
+                AmdAmfDirectSbsOutput,
                 FfmpegDirectSbsOutput,
                 MjpegDirectSbsOutput,
                 PyNvDirectSbsOutput,
@@ -570,8 +571,14 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
                     settings.get("Video Encoder Backend", "ffmpeg") or "ffmpeg"
                 ).strip().casefold()
                 has_nvidia_gpu = "NVIDIA" in str(DEVICE_INFO).upper()
+                has_amd_gpu = any(
+                    token in str(DEVICE_INFO).upper()
+                    for token in ("AMD", "RADEON")
+                )
                 if configured_run_mode == "GPU Streamer" and has_nvidia_gpu:
                     video_backend = "pynv"
+                elif configured_run_mode == "GPU Streamer" and has_amd_gpu:
+                    video_backend = "amd"
                 network_output = FfmpegDirectSbsOutput(**output_kwargs)
                 if video_backend in {"auto", "pynv"} and has_nvidia_gpu and not selected_audio:
                     try:
@@ -584,6 +591,29 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
                             flush=True,
                         )
                         network_output = FfmpegDirectSbsOutput(**output_kwargs)
+                elif video_backend in {"auto", "amd"} and has_amd_gpu and not selected_audio:
+                    try:
+                        network_output.close()
+                        network_output = AmdAmfDirectSbsOutput(**output_kwargs)
+                    except Exception as exc:
+                        print(
+                            f"[DirectSbsStream] AMD AMF bridge unavailable: {exc}; "
+                            "falling back to FFmpeg without changing MediaMTX settings",
+                            flush=True,
+                        )
+                        network_output = FfmpegDirectSbsOutput(**output_kwargs)
+                elif video_backend == "amd" and not has_amd_gpu:
+                    print(
+                        "[DirectSbsStream] AMD AMF backend requires an AMD/Radeon GPU; "
+                        "falling back to FFmpeg hardware/software encoder",
+                        flush=True,
+                    )
+                elif video_backend == "amd" and selected_audio:
+                    print(
+                        "[DirectSbsStream] native AMD AMF path requires audio disabled; "
+                        "falling back to FFmpeg to preserve audio",
+                        flush=True,
+                    )
                 elif video_backend == "pynv" and not has_nvidia_gpu:
                     print(
                         "[DirectSbsStream] PyNvVideoCodec is NVIDIA-only; "
