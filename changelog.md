@@ -2,6 +2,13 @@
 
 ## 2026-08-20
 
+- 网络串流启动时按操作系统和实际 SBS 分辨率探测编码能力并自动降级：Windows 依次尝试 NVENC、Intel QSV、AMD AMF，Linux 尝试 QSV/VAAPI，macOS 尝试 VideoToolbox，均不可用时回退 `libx264`/`libx265`；VAAPI 自动配置设备与硬件帧上传。硬件编码器仅在实际 FFmpeg 探测成功后启用。
+
+- 补充跨平台推流参数：macOS 音频使用 FFmpeg `avfoundation` 设备索引；QSV 使用 `global_quality` 并关闭 look-ahead，AMF 使用低延迟 `vbr_peak`，避免套用 NVENC 专属参数。
+- 完善跨平台串流运行时打包：新增平台/架构压缩包清单，启动时只解压当前系统所需的 FFmpeg 与 MediaMTX；MediaMTX 官方模板保存在 `mediamtx/mediamtx.yml`，项目最终配置固定使用根目录 `mediamtx.yml`，后续升级不会覆盖用户自定义配置；打包文档补充 MediaMTX、FFmpeg 官方下载地址。
+
+- 合并旧网络推流与低级网络推流：GUI 不再显示 `Legacy Streamer`，旧配置读取时自动归一化为 `MJPEG Streamer`；高级网络串流的内部配置键保持 `RTMP Streamer` 以兼容已有设置。
+
 - GUI 执行重置后，运行模式默认恢复为“本地查看”（`Local Viewer`）。
 - 修复重置后运行模式下拉框未切换的问题：配置应用现在会在保留可选配置关闭时也同步 `run_mode_key` 和界面控件。
 - 将电影模式的补洞默认保持为关闭，并将 GUI 重置后的补洞模式改为关闭（`none`）。

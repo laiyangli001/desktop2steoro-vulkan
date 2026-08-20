@@ -21,6 +21,20 @@ def _load_environment_resolver():
     return namespace["_resolve_filament_environment_paths"]
 
 
+def test_legacy_streamer_normalizes_to_mjpeg() -> None:
+    from utils.run_mode import normalize_run_mode, resolve_run_mode
+
+    assert normalize_run_mode("Legacy Streamer") == "MJPEG Streamer"
+    resolved = resolve_run_mode(
+        "Legacy Streamer",
+        os_name="Windows",
+        fix_viewer_aspect=False,
+        lossless_scaling_support=True,
+    )
+    assert resolved.run_mode == "Viewer"
+    assert resolved.stream_mode == "MJPEG"
+
+
 def test_only_windows_3d_display_is_excluded_from_capture() -> None:
     from app_runtime.runtime_entry import _exclude_local_output_from_capture
 

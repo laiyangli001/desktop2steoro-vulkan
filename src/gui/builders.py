@@ -955,7 +955,7 @@ class GUIBuilderMixin:
     def _get_streamer_row_map():
         return {
             "Local Viewer": [], "3D Monitor": [], "OpenXR Link": [],
-            "MJPEG Streamer": [0, 1], "Legacy Streamer": [0, 1],
+            "MJPEG Streamer": [0, 1],
             "RTMP Streamer": [0, 1, 2, 3, 4],
         }
 

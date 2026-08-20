@@ -171,6 +171,27 @@ def test_cuda_converter_reuses_pinned_host_buffer():
     assert converter._host_rgb.is_pinned()
 
 
+def test_streaming_runtime_dir_overrides_bundled_paths(monkeypatch, tmp_path):
+    runtime_root = tmp_path / "streaming"
+    ffmpeg_bin = runtime_root / "ffmpeg" / "bin"
+    mediamtx_dir = runtime_root / "mediamtx"
+    ffmpeg_bin.mkdir(parents=True)
+    mediamtx_dir.mkdir(parents=True)
+    (ffmpeg_bin / "ffmpeg").write_bytes(b"ffmpeg")
+    (mediamtx_dir / "mediamtx").write_bytes(b"mediamtx")
+    (runtime_root / "mediamtx.yml").write_text("paths: {}", encoding="utf-8")
+    monkeypatch.setenv("D2S_STREAMING_RUNTIME_DIR", str(runtime_root))
+
+    output = FfmpegDirectSbsOutput(
+        base_dir="src", protocol="RTMP", port=1935, stream_key="live",
+        fps=30, crf=20, os_name="Linux"
+    )
+
+    assert output.ffmpeg_path == (ffmpeg_bin / "ffmpeg").resolve()
+    assert output.mediamtx_path == (mediamtx_dir / "mediamtx").resolve()
+    assert output.mediamtx_config == (runtime_root / "mediamtx.yml").resolve()
+
+
 def test_ffmpeg_output_finds_bundled_encoder_and_config():
     output = FfmpegDirectSbsOutput(
         base_dir="src",
@@ -320,6 +341,96 @@ def test_windows_rtmp_command_keeps_legacy_srt_transport_parameters():
         "srt://127.0.0.1:8890?"
         "streamid=publish:legacy-compatible&pkt_size=1316"
     ) == command[-1]
+
+
+def test_encoder_candidates_cover_platform_hardware_fallbacks(monkeypatch):
+    output = FfmpegDirectSbsOutput(
+        base_dir="src",
+        protocol="RTMP",
+        port=1935,
+        stream_key="live",
+        fps=30,
+        crf=20,
+        os_name="Windows",
+    )
+
+    monkeypatch.setattr(direct_sbs.platform, "system", lambda: "Windows")
+    assert [name for name, _label in output._encoder_candidates()] == [
+        "h264_nvenc",
+        "h264_qsv",
+        "h264_amf",
+        "libx264",
+    ]
+
+    linux_output = object.__new__(FfmpegDirectSbsOutput)
+    linux_output.os_name = "Linux"
+    linux_output.use_hevc = False
+    linux_output.prefer_nvenc = False
+    assert [name for name, _label in linux_output._encoder_candidates()] == [
+        "h264_qsv", "h264_vaapi", "libx264"
+    ]
+
+    mac_output = object.__new__(FfmpegDirectSbsOutput)
+    mac_output.os_name = "Darwin"
+    mac_output.use_hevc = False
+    mac_output.prefer_nvenc = False
+    assert [name for name, _label in mac_output._encoder_candidates()] == [
+        "h264_videotoolbox", "libx264"
+    ]
+
+
+def test_macos_audio_uses_avfoundation_device_index():
+    output = object.__new__(FfmpegDirectSbsOutput)
+    output.os_name = "Darwin"
+    output.stereo_mix_device = "2"
+    output.audio_delay = -0.1
+
+    assert output._audio_input_args() == [
+        "-itsoffset", "-0.1", "-f", "avfoundation", "-i", ":2"
+    ]
+
+
+def test_qsv_and_amf_commands_avoid_nvenc_only_options():
+    output = object.__new__(FfmpegDirectSbsOutput)
+    output.os_name = "Windows"
+    output.protocol = "RTMP"
+    output.fps = 30
+    output.crf = 23
+    output.use_hevc = False
+    output.video_encoder = "h264_qsv"
+    output.stream_key = "live"
+    output._active_rate_budget = None
+    output.stereo_mix_device = ""
+    output.audio_delay = -0.1
+    output.ffmpeg_path = Path("ffmpeg")
+    qsv_command = output._ffmpeg_command(1920, 1080)
+    assert "-global_quality" in qsv_command
+    assert "-look_ahead" in qsv_command
+    assert "-cq" not in qsv_command
+
+    output.video_encoder = "h264_amf"
+    amf_command = output._ffmpeg_command(1920, 1080)
+    assert "ultralowlatency" in amf_command
+    assert "vbr_peak" in amf_command
+    assert "-cq" not in amf_command
+
+
+def test_vaapi_command_uploads_frames_to_hardware():
+    output = FfmpegDirectSbsOutput(
+        base_dir="src",
+        protocol="RTMP",
+        port=1935,
+        stream_key="live",
+        fps=30,
+        crf=20,
+        os_name="Windows",
+    )
+    output.video_encoder = "h264_vaapi"
+
+    command = output._ffmpeg_command(1920, 1080)
+
+    assert command[command.index("-c:v") + 1] == "h264_vaapi"
+    assert command[command.index("-vf") + 1] == "format=nv12,hwupload"
 
 
 def test_nvenc_command_uses_low_latency_hardware_encoder():

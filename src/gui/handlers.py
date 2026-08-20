@@ -472,12 +472,12 @@ class GUIHandlerMixin:
             texts.get("OpenXR Link", "OpenXR Link"): "OpenXR Link",
             texts.get("RTMP Streamer", "RTMP Streamer"): "RTMP Streamer",
             texts.get("MJPEG Streamer", "MJPEG Streamer"): "MJPEG Streamer",
-            texts.get("Legacy Streamer", "Legacy Streamer"): "Legacy Streamer",
             texts.get("3D Monitor", "3D Monitor"): "3D Monitor",
         }
         self.run_mode_key = mode_map.get(label, "Local Viewer")
         self._config["Run Mode"] = self.run_mode_key
         self._sync_visibility()
+        self._fit_window_to_content(update=True, resize_window=True)
 
     def on_advanced_device_change(self, e):
         self._sync_visibility()
@@ -515,7 +515,7 @@ class GUIHandlerMixin:
         mode_reverse = {
             "Local Viewer": texts["Local Viewer"], "OpenXR Link": texts["OpenXR Link"],
             "RTMP Streamer": texts["RTMP Streamer"], "MJPEG Streamer": texts["MJPEG Streamer"],
-            "Legacy Streamer": texts["Legacy Streamer"], "3D Monitor": texts["3D Monitor"],
+            "3D Monitor": texts["3D Monitor"],
         }
         self.run_mode_dd.value = mode_reverse.get(mode, texts["Local Viewer"])
         is_openxr = mode == "OpenXR Link"
@@ -535,7 +535,7 @@ class GUIHandlerMixin:
             self.showfps_cb.visible = True
             self.fill_16_9_cb.visible = True
             self.fix_aspect_cb.visible = mode in ["Local Viewer", "3D Monitor"]
-        if mode in ["Legacy Streamer", "3D Monitor"]:
+        if mode == "3D Monitor":
             self.display_mode_dd.options = ["Half-SBS", "Full-SBS", "Half-TAB", "Full-TAB"]
         else:
             self.display_mode_dd.options = [
@@ -744,13 +744,12 @@ class GUIHandlerMixin:
         if OS_NAME == "Darwin":
             run_mode_texts = {
                 "Local Viewer": t["Local Viewer"], "RTMP Streamer": t["RTMP Streamer"],
-                "MJPEG Streamer": t["MJPEG Streamer"], "Legacy Streamer": t["Legacy Streamer"],
+                "MJPEG Streamer": t["MJPEG Streamer"],
             }
         else:
             run_mode_texts = {
                 "Local Viewer": t["Local Viewer"], "OpenXR Link": t["OpenXR Link"],
                 "RTMP Streamer": t["RTMP Streamer"], "MJPEG Streamer": t["MJPEG Streamer"],
-                "Legacy Streamer": t["Legacy Streamer"],
             }
             if OS_NAME == "Windows":
                 run_mode_texts["3D Monitor"] = t["3D Monitor"]
@@ -860,7 +859,7 @@ class GUIHandlerMixin:
     # ── stream URL ──
 
     def _format_stream_url(self, local_ip, protocol, port, stream_key):
-        if self.run_mode_key in ["MJPEG Streamer", "Legacy Streamer"]:
+        if self.run_mode_key == "MJPEG Streamer":
             return f"http://{local_ip}:{port}/"
         templates = {
             "RTMP": f"rtmp://{local_ip}:{port}/{stream_key}",

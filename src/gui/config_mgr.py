@@ -2,6 +2,7 @@
 import os
 import asyncio
 from utils import OS_NAME, ALL_MODELS, DEFAULT_PORT, read_yaml
+from utils.run_mode import normalize_run_mode
 from utils.xr_headset_presets import display_to_xr_headset, xr_headset_to_display
 from .config import (
     DEFAULTS, DEFAULT_FAMILIES, DEFAULT_MODEL_LIST, FAMILY_TO_SIZES,
@@ -18,6 +19,10 @@ class GUIConfigMixin:
     # ── config apply ──
 
     def apply_config(self, cfg, keep_optional=True):
+        cfg = cfg.copy()
+        cfg["Run Mode"] = normalize_run_mode(
+            cfg.get("Run Mode", DEFAULTS.get("Run Mode", "Local Viewer"))
+        )
         self._config = cfg.copy()
         self._config.pop("Debug Mode", None)
         current_primary = get_primary_monitor_index()

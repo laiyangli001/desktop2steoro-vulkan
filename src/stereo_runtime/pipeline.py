@@ -528,7 +528,7 @@ def _application_target_debug_label(run_mode, *, application_runtime_target=None
         return str(application_runtime_target)
     if run_mode == "OpenXR":
         return "openxr"
-    if run_mode in {"MJPEG", "RTMP", "Streamer", "Legacy Streamer", "MJPEG Streamer", "RTMP Streamer"}:
+    if run_mode in {"MJPEG", "RTMP", "Streamer", "MJPEG Streamer", "RTMP Streamer"}:
         return "network_stream"
     return "local_viewer"
 

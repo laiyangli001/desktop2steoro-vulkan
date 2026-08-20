@@ -55,3 +55,4 @@ src\python3\python.exe src\tools\openxr_vulkan_smoke.py `
 - [工程设计规范](docs/02-desktop2stereo-engineering-design-specification.md)
 - [Vulkan迁移技术报告](docs/03-d2s_vulkan_migration_technical_report.md)
 - [迁移清单](docs/MIGRATION_MANIFEST.md)
+- [跨平台串流运行时打包](docs/streaming-runtime-packaging.md)

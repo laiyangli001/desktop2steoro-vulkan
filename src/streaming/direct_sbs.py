@@ -16,6 +16,7 @@ import numpy as np
 
 from streaming.encoder_profile import EncoderProfile
 from streaming.mjpeg_streamer import MJPEGStreamer
+from streaming.runtime_manager import ensure_runtime
 
 
 def runtime_sbs_to_rgb(frame_or_result: Any) -> np.ndarray:
@@ -284,21 +285,32 @@ class FfmpegDirectSbsOutput:
         self.video_encoder = "libx265" if self.use_hevc else "libx264"
         self._active_rate_budget: tuple[int, int, int] | None = None
         self._encoder_selected = False
+        runtime_root = Path(
+            os.environ.get(
+                "D2S_STREAMING_RUNTIME_DIR",
+                self.base_dir / "streaming" / "rtmp",
+            )
+        )
+        ffmpeg_name = "ffmpeg.exe" if self.os_name == "Windows" else "ffmpeg"
+        mediamtx_name = "mediamtx.exe" if self.os_name == "Windows" else "mediamtx"
+        if (runtime_root / "runtime-manifest.json").is_file():
+            ensure_runtime(runtime_root)
         self.ffmpeg_path = self._find_executable(
             "D2S_FFMPEG_PATH",
-            self.base_dir / "streaming" / "rtmp" / "ffmpeg" / "bin" / (
-                "ffmpeg.exe" if self.os_name == "Windows" else "ffmpeg"
-            ),
+            runtime_root / "ffmpeg" / "bin" / ffmpeg_name,
             "ffmpeg",
         )
         self.mediamtx_path = self._find_executable(
             "D2S_MEDIAMTX_PATH",
-            self.base_dir / "streaming" / "rtmp" / "mediamtx" / (
-                "mediamtx.exe" if self.os_name == "Windows" else "mediamtx"
-            ),
+            runtime_root / "mediamtx" / mediamtx_name,
             "mediamtx",
         )
-        self.mediamtx_config = self.mediamtx_path.with_name("mediamtx.yml")
+        self.mediamtx_config = Path(
+            os.environ.get(
+                "D2S_MEDIAMTX_CONFIG",
+                runtime_root / "mediamtx.yml",
+            )
+        )
         if not self.mediamtx_config.is_file():
             raise FileNotFoundError(f"MediaMTX config not found: {self.mediamtx_config}")
         self.server_process: subprocess.Popen | None = None
@@ -347,48 +359,33 @@ class FfmpegDirectSbsOutput:
     def publish_rtsp_port(self) -> int:
         return self.port if self.protocol == "RTSP" else 8554
 
-    def _probe_nvenc(self, width: int, height: int) -> bool:
-        if self.os_name == "Darwin":
-            return False
+    def _probe_encoder(self, encoder: str, width: int, height: int) -> bool:
         creationflags = (
             getattr(subprocess, "CREATE_NO_WINDOW", 0)
             if self.os_name == "Windows"
             else 0
         )
+        command = [
+            str(self.ffmpeg_path), "-hide_banner", "-loglevel", "error",
+            "-f", "lavfi", "-i", f"color=c=black:s={int(width)}x{int(height)}:r=1",
+            "-frames:v", "1", "-an",
+        ]
+        if encoder.endswith("_vaapi"):
+            vaapi_device = os.environ.get("D2S_VAAPI_DEVICE", "/dev/dri/renderD128")
+            command[1:1] = ["-vaapi_device", vaapi_device]
+            command.extend(["-vf", "format=nv12,hwupload"])
+        command.extend([
+            "-c:v",
+            encoder,
+            "-pix_fmt",
+            "nv12" if encoder.endswith("_vaapi") else "yuv420p",
+            "-f",
+            "null",
+            "-",
+        ])
         try:
             result = subprocess.run(
-                [
-                    str(self.ffmpeg_path),
-                    "-hide_banner",
-                    "-loglevel",
-                    "error",
-                    "-f",
-                    "lavfi",
-                    "-i",
-                    f"color=c=black:s={int(width)}x{int(height)}:r=1",
-                    "-frames:v",
-                    "1",
-                    "-an",
-                    "-c:v",
-                    "hevc_nvenc" if self.use_hevc else "h264_nvenc",
-                    "-preset",
-                    "p1",
-                    "-tune",
-                    "ll",
-                    "-rc",
-                    "vbr",
-                    "-cq",
-                    str(self.crf),
-                    "-b:v",
-                    "0",
-                    "-pix_fmt",
-                    "yuv420p",
-                    "-zerolatency",
-                    "1",
-                    "-f",
-                    "null",
-                    "-",
-                ],
+                command,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
                 timeout=8.0,
@@ -396,7 +393,7 @@ class FfmpegDirectSbsOutput:
             )
         except (OSError, subprocess.SubprocessError) as exc:
             print(
-                f"[DirectSbsStream] NVENC probe failed for {int(width)}x{int(height)}: "
+                f"[DirectSbsStream] {encoder} probe failed for {int(width)}x{int(height)}: "
                 f"{type(exc).__name__}: {exc}",
                 flush=True,
             )
@@ -408,28 +405,66 @@ class FfmpegDirectSbsOutput:
             stderr = stderr.decode("utf-8", errors="replace")
         detail_lines = [line.strip() for line in str(stderr or "").splitlines() if line.strip()]
         detail = detail_lines[-1] if detail_lines else f"FFmpeg exited with code {result.returncode}"
-        print(
-            f"[DirectSbsStream] NVENC probe failed for {int(width)}x{int(height)}: {detail}",
-            flush=True,
-        )
+        if encoder.endswith("_nvenc"):
+            print(
+                f"[DirectSbsStream] NVENC probe failed for {int(width)}x{int(height)}: {detail}",
+                flush=True,
+            )
+        else:
+            print(f"[DirectSbsStream] {encoder} unavailable: {detail}", flush=True)
         return False
 
-    def _select_video_encoder(self, width: int, height: int) -> str:
-        nvenc_encoder = "hevc_nvenc" if self.use_hevc else "h264_nvenc"
+    def _probe_nvenc(self, width: int, height: int) -> bool:
+        if self.os_name == "Darwin":
+            return False
+        return self._probe_encoder(
+            "hevc_nvenc" if self.use_hevc else "h264_nvenc", width, height
+        )
+
+    def _encoder_candidates(self) -> list[tuple[str, str]]:
+        codec = "hevc" if self.use_hevc else "h264"
+        candidates: list[tuple[str, str]] = []
+        if self.os_name == "Darwin":
+            candidates.append((f"{codec}_videotoolbox", "Apple VideoToolbox"))
+        else:
+            if self.os_name == "Windows":
+                candidates.append((f"{codec}_nvenc", "NVIDIA NVENC"))
+                candidates.extend([
+                    (f"{codec}_qsv", "Intel Quick Sync"),
+                    (f"{codec}_amf", "AMD AMF"),
+                ])
+            elif self.os_name == "Linux":
+                candidates.extend([
+                    (f"{codec}_qsv", "Intel Quick Sync"),
+                    (f"{codec}_vaapi", "VAAPI"),
+                ])
         software_encoder = "libx265" if self.use_hevc else "libx264"
+        candidates.append((software_encoder, "software"))
+        return candidates
+
+    def _select_video_encoder(self, width: int, height: int) -> str:
         codec_label = "H.265/HEVC" if self.use_hevc else "H.264"
-        if self.prefer_nvenc and self._probe_nvenc(width, height):
-            print(
-                f"[DirectSbsStream] NVIDIA NVENC {codec_label} encoder active",
-                flush=True,
+        candidates = self._encoder_candidates()
+        for encoder, label in candidates[:-1]:
+            supported = (
+                self._probe_nvenc(width, height)
+                if encoder.endswith("_nvenc")
+                else self._probe_encoder(encoder, width, height)
             )
-            return nvenc_encoder
-        if self.prefer_nvenc:
-            print(
-                f"[DirectSbsStream] {codec_label} NVENC unavailable; "
-                f"falling back to {software_encoder}",
-                flush=True,
-            )
+            if supported:
+                self._encoder_selection_reason = label
+                print(
+                    f"[DirectSbsStream] {label} {codec_label} encoder active: {encoder}",
+                    flush=True,
+                )
+                return encoder
+        software_encoder, _ = candidates[-1]
+        self._encoder_selection_reason = "software fallback"
+        print(
+            f"[DirectSbsStream] {codec_label} hardware encoders unavailable; "
+            f"falling back to {software_encoder}",
+            flush=True,
+        )
         return software_encoder
 
     def _dynamic_stream_rate_budget(
@@ -615,6 +650,20 @@ class FfmpegDirectSbsOutput:
                 "-i",
                 device,
             ]
+        if self.os_name == "Darwin":
+            audio_device = device
+            if audio_device.isdigit():
+                audio_device = f":{audio_device}"
+            elif not audio_device.startswith(":"):
+                audio_device = f":{audio_device}"
+            return [
+                "-itsoffset",
+                str(self.audio_delay),
+                "-f",
+                "avfoundation",
+                "-i",
+                audio_device,
+            ]
         return []
 
     def _ffmpeg_command(self, width: int, height: int) -> list[str]:
@@ -654,11 +703,11 @@ class FfmpegDirectSbsOutput:
         ]
         if audio_args:
             command.extend(["-map", "1:a:0"])
-        if self.os_name == "Darwin":
+        if self.video_encoder in {"h264_videotoolbox", "hevc_videotoolbox"}:
             command.extend(
                 [
                     "-c:v",
-                    "hevc_videotoolbox" if self.use_hevc else "h264_videotoolbox",
+                    self.video_encoder,
                     "-profile:v",
                     "main" if self.use_hevc else "high",
                     "-pix_fmt",
@@ -673,21 +722,31 @@ class FfmpegDirectSbsOutput:
                     "true",
                 ]
             )
-        elif self.video_encoder in {"h264_nvenc", "hevc_nvenc"}:
+        elif self.video_encoder in {
+            "h264_nvenc", "hevc_nvenc",
+            "h264_qsv", "hevc_qsv",
+            "h264_amf", "hevc_amf",
+            "h264_vaapi", "hevc_vaapi",
+        }:
             command.extend(
                 [
                     "-c:v",
                     self.video_encoder,
                     "-preset",
-                    "p1",
+                    "p1" if self.video_encoder.endswith("_nvenc") else "fast",
                     "-tune",
-                    "ll",
+                    "ll" if self.video_encoder.endswith(("_nvenc", "_qsv")) else "zerolatency",
                     "-rc",
                     "vbr",
                     "-cq",
                     str(self.crf),
                     "-b:v",
                     target_rate,
+                    *(
+                        ["-vf", "format=nv12,hwupload"]
+                        if self.video_encoder.endswith("_vaapi")
+                        else []
+                    ),
                     "-pix_fmt",
                     "yuv420p",
                     "-bf",
@@ -758,6 +817,28 @@ class FfmpegDirectSbsOutput:
                     "rc-lookahead=0:open-gop=0:repeat-headers=1",
                 ]
             )
+        if self.video_encoder.endswith("_vaapi"):
+            vaapi_device = os.environ.get("D2S_VAAPI_DEVICE", "/dev/dri/renderD128")
+            command[1:1] = ["-vaapi_device", vaapi_device]
+            pix_fmt_index = command.index("-pix_fmt")
+            command[pix_fmt_index + 1] = "nv12"
+            for option in ("-tune", "-rc", "-cq", "-zerolatency", "-forced-idr", "-strict_gop", "-spatial-aq", "-temporal-aq", "-aq-strength"):
+                while option in command:
+                    index = command.index(option)
+                    del command[index:index + 2]
+        elif self.video_encoder.endswith("_qsv"):
+            for option in ("-tune", "-rc", "-cq", "-zerolatency", "-forced-idr", "-strict_gop", "-spatial-aq", "-temporal-aq", "-aq-strength"):
+                while option in command:
+                    index = command.index(option)
+                    del command[index:index + 2]
+            command.extend(["-global_quality", str(self.crf), "-look_ahead", "0"])
+        elif self.video_encoder.endswith("_amf"):
+            for option in ("-tune", "-rc", "-cq", "-zerolatency", "-forced-idr", "-strict_gop", "-spatial-aq", "-temporal-aq", "-aq-strength"):
+                while option in command:
+                    index = command.index(option)
+                    del command[index:index + 2]
+            command.extend(["-usage", "ultralowlatency", "-quality", "speed", "-rc", "vbr_peak"])
+
         if self._active_rate_budget is not None:
             _, peak_mbps, buffer_mbps = self._active_rate_budget
             command.extend(

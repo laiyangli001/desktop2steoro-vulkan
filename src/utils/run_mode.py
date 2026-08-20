@@ -12,6 +12,13 @@ class RunModeConfig:
     fix_viewer_aspect: bool
 
 
+def normalize_run_mode(raw_run_mode: str) -> str:
+    run_mode = str(raw_run_mode or "").strip()
+    if run_mode.casefold() == "legacy streamer":
+        return "MJPEG Streamer"
+    return run_mode
+
+
 def resolve_run_mode(
     raw_run_mode: str,
     *,
@@ -19,6 +26,7 @@ def resolve_run_mode(
     fix_viewer_aspect: bool,
     lossless_scaling_support: bool,
 ) -> RunModeConfig:
+    raw_run_mode = normalize_run_mode(raw_run_mode)
     use_3d_monitor = False
     stream_mode = None
     resolved_lossless_scaling = False

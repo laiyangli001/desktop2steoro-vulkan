@@ -36,6 +36,7 @@ from utils import (
     _get_settings,
     shutdown_event,
 )
+from utils.run_mode import normalize_run_mode
 from utils.xr_headset_presets import DEFAULT_XR_HEADSET_MODEL
 
 from .runtime_callbacks import RuntimeCallbacks
@@ -363,11 +364,12 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
 
     shutdown_event.clear()
     settings = _get_settings()
-    configured_run_mode = str(settings.get("Run Mode", "Local Viewer"))
+    configured_run_mode = normalize_run_mode(
+        settings.get("Run Mode", "Local Viewer")
+    )
     direct_stream_mode = configured_run_mode in {
         "RTMP Streamer",
         "MJPEG Streamer",
-        "Legacy Streamer",
     }
     if direct_stream_mode:
         os.environ["D2S_RUNTIME_OUTPUT_UINT8"] = "1"
@@ -378,7 +380,7 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
     adaptive_capture_rate = AdaptiveCaptureRate(
         FPS,
         enabled=adaptive_capture_enabled_for_mode(
-            settings.get("Run Mode", RUN_MODE), configured_target_fps
+            configured_run_mode, configured_target_fps
         ),
     )
     context = create_runtime_context(
@@ -529,7 +531,6 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
         elif configured_run_mode in {
             "RTMP Streamer",
             "MJPEG Streamer",
-            "Legacy Streamer",
         }:
             from streaming.direct_sbs import (
                 DirectSbsOutputConsumer,

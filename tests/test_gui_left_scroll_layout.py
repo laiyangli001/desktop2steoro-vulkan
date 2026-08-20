@@ -64,6 +64,15 @@ def test_reset_defaults_disable_depth_antialiasing() -> None:
     assert 'options=[v for v in aa_options], value="0"' in source
 
 
+def test_run_mode_change_refits_native_window_height() -> None:
+    source = HANDLERS_SOURCE.read_text(encoding="utf-8")
+    start = source.index("def on_run_mode_change")
+    end = source.index("def on_advanced_device_change", start)
+    handler = source[start:end]
+
+    assert "self._fit_window_to_content(update=True, resize_window=True)" in handler
+
+
 def test_reset_defaults_refits_window_to_left_gui_content() -> None:
     source = (ROOT / "src" / "gui" / "process.py").read_text(encoding="utf-8")
     reset_start = source.index("def reset_defaults")
