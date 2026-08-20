@@ -469,6 +469,8 @@ class FfmpegDirectSbsOutput:
             raise FileNotFoundError(f"MediaMTX config not found: {self.mediamtx_config}")
         self.server_process: subprocess.Popen | None = None
         self.ffmpeg_process: subprocess.Popen | None = None
+        self._ffmpeg_log_thread: threading.Thread | None = None
+        self._ffmpeg_stderr_tail: list[str] = []
         self._server_log_thread: threading.Thread | None = None
         self._frame_size: tuple[int, int] | None = None
         self._rate_probe_started: float | None = None
@@ -1094,6 +1096,8 @@ class FfmpegDirectSbsOutput:
                     "0",
                     "-f",
                     "mpegts",
+                    "-mpegts_flags",
+                    "+resend_headers",
                     f"srt://127.0.0.1:8890?streamid=publish:{self.stream_key}&pkt_size=1316",
                 ]
             )
@@ -1142,9 +1146,26 @@ class FfmpegDirectSbsOutput:
             command,
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
             creationflags=creationflags,
         )
+        self._ffmpeg_stderr_tail = []
+        self._ffmpeg_log_thread = threading.Thread(
+            target=self._drain_ffmpeg_stderr,
+            args=(self.ffmpeg_process,),
+            name="DirectSbsFfmpegLog",
+            daemon=True,
+        )
+        self._ffmpeg_log_thread.start()
+        time.sleep(0.05)
+        if self.ffmpeg_process.poll() is not None:
+            detail = "; ".join(self._ffmpeg_stderr_tail[-3:]) or "no FFmpeg diagnostic"
+            raise RuntimeError(
+                f"FFmpeg exited during startup with code {self.ffmpeg_process.returncode}: {detail}"
+            )
         self._frame_size = (width, height)
         if self._active_rate_budget is not None:
             target_mbps, peak_mbps, buffer_mbps = self._active_rate_budget
@@ -1166,8 +1187,27 @@ class FfmpegDirectSbsOutput:
         if process is None or process.stdin is None:
             raise RuntimeError("FFmpeg stdin is unavailable")
         if process.poll() is not None:
-            raise RuntimeError(f"FFmpeg exited with code {process.returncode}")
+            detail = "; ".join(self._ffmpeg_stderr_tail[-3:]) or "no FFmpeg diagnostic"
+            raise RuntimeError(
+                f"FFmpeg exited with code {process.returncode}: {detail}"
+            )
         process.stdin.write(memoryview(frame).cast("B"))
+
+    def _drain_ffmpeg_stderr(self, process: subprocess.Popen) -> None:
+        stream = process.stderr
+        if stream is None:
+            return
+        try:
+            for raw_line in stream:
+                line = str(raw_line).strip()
+                if not line:
+                    continue
+                self._ffmpeg_stderr_tail.append(line)
+                del self._ffmpeg_stderr_tail[:-20]
+                if any(token in line.casefold() for token in ("error", "failed", "invalid", "cannot")):
+                    print(f"[DirectSbsStream] FFmpeg: {line}", flush=True)
+        except (OSError, ValueError):
+            return
 
     def request_audio_delay(self, delay: float) -> bool:
         delay = max(-10.0, min(10.0, float(delay)))
@@ -1257,6 +1297,8 @@ class FfmpegDirectSbsOutput:
         self.ffmpeg_process = None
         self.server_process = None
         self._server_log_thread = None
+        self._ffmpeg_log_thread = None
+        self._ffmpeg_stderr_tail = []
 
 
 class PyNvDirectSbsOutput(_PyNvDirectSbsOutputMixin, FfmpegDirectSbsOutput):
