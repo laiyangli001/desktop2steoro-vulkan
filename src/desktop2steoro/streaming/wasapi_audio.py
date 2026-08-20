@@ -23,6 +23,8 @@ class SoundcardLoopbackSender:
         reservation.close()
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._stop = threading.Event()
+        self._startup_done = threading.Event()
+        self._startup_error: Exception | None = None
         self._thread: threading.Thread | None = None
 
     def _resolve_speaker(self, device_name: str | None) -> Any:
@@ -40,11 +42,20 @@ class SoundcardLoopbackSender:
     def ffmpeg_url(self) -> str:
         return f"udp://127.0.0.1:{self.port}?fifo_size=65536&overrun_nonfatal=1"
 
-    def start(self) -> None:
+    def start(self, *, timeout: float = 2.0) -> None:
         if self._thread is not None:
             return
         self._thread = threading.Thread(target=self._run, name="WasapiLoopback", daemon=True)
         self._thread.start()
+        if not self._startup_done.wait(max(0.1, float(timeout))):
+            self.close()
+            raise RuntimeError("Windows loopback capture produced no PCM data")
+        if self._startup_error is not None:
+            error = self._startup_error
+            self.close()
+            raise RuntimeError(
+                f"Windows loopback capture failed: {type(error).__name__}: {error}"
+            ) from error
 
     def _run(self) -> None:
         try:
@@ -61,7 +72,10 @@ class SoundcardLoopbackSender:
                         (pcm * 32767.0).astype(np.int16).tobytes(),
                         ("127.0.0.1", self.port),
                     )
-        except Exception:
+                    self._startup_done.set()
+        except Exception as exc:
+            self._startup_error = exc
+            self._startup_done.set()
             if not self._stop.is_set():
                 self._stop.set()
 
