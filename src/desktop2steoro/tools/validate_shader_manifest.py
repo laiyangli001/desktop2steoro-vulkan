@@ -124,7 +124,7 @@ def validate_manifest(root: Path) -> list[str]:
 
 
 def main() -> int:
-    root = Path(__file__).resolve().parents[2]
+    root = Path(__file__).resolve().parents[3]
     errors = validate_manifest(root)
     if errors:
         for error in errors:
