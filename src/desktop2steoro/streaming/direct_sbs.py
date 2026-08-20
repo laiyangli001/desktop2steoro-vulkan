@@ -1147,9 +1147,6 @@ class FfmpegDirectSbsOutput:
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
             creationflags=creationflags,
         )
         self._ffmpeg_stderr_tail = []
@@ -1199,7 +1196,10 @@ class FfmpegDirectSbsOutput:
             return
         try:
             for raw_line in stream:
-                line = str(raw_line).strip()
+                if isinstance(raw_line, bytes):
+                    line = raw_line.decode("utf-8", errors="replace").strip()
+                else:
+                    line = str(raw_line).strip()
                 if not line:
                     continue
                 self._ffmpeg_stderr_tail.append(line)
