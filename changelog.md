@@ -6,7 +6,8 @@
 - 新增 Windows AMD 原生编码桥接工程 `native/amd_encoder`：动态检测 AMD AMF 运行时 `amfrt64.dll` 与 Radeon DXGI 适配器，提供 Python 可选加载接口；GitHub Actions 已成功编译并将 `src/desktop2steoro/streaming/amd_encoder/d2s_amd_encoder.dll` 随项目发布，运行时未安装 AMD AMF 或 HIP 时仍保持 FFmpeg 回退。桥接现在可将 ROCm HIP RGBA device tensor 通过共享 D3D11 texture 导入 AMF，并用 FFmpeg 仅复用 H.264/H.265 包送入 SRT；音频开启时继续使用原有 FFmpeg 音视频路径。
 - 完成项目目录重组后的路径统一：源码归档到 `src/desktop2steoro`，Python 运行环境统一位于 `src/python3`，安装脚本位于 `src/env_install`，脚本、测试和启动入口通过统一项目路径配置解析。
 
-- 兼容旧的“NVIDIA GPU 推流”配置名称：读取时自动归一化为“GPU 推流”，选择该模式后程序自动尝试 PyNvVideoCodec 的 CUDA/NVENC 编码路径，不需要修改代码；PyNvVideoCodec 不可用、初始化失败或检测到音频输入时自动回退 FFmpeg，原有高级网络推流的音频、协议和 MediaMTX 配置保持不变。
+- 兼容旧的“NVIDIA GPU 推流”配置名称：读取时自动归一化为“GPU 推流”；NVIDIA 模式现在通过 PyNvVideoCodec 在 CUDA/NVENC 内完成 NV12 转换与 H.264/H.265 编码，同时允许 SoundCard WASAPI 回环音频由 FFmpeg 编码为 Opus/AAC 并与已编码视频复用，不再因启用音频退回 RGB24 CPU 管线。PyNvVideoCodec、音频或复用器启动失败时仍自动回退现有 FFmpeg 硬件/软件编码，并保持高级网络推流使用独立的 FFmpeg 自动编码后端。
+- 修复 WebRTC 音视频发布约 10 秒后被 MediaMTX 以 RTSP `i/o timeout` 断开的情况：将 FFmpeg `max_interleave_delta` 从会无限等待稀疏音视频包的 `0` 改为 `100000` 微秒，SoundCard 或视频短暂无包时仍会持续刷新 RTSP。
 
 - 网络串流启动时按操作系统和实际 SBS 分辨率探测编码能力并自动降级：Windows 依次尝试 NVENC、Intel QSV、AMD AMF，Linux 尝试 QSV/VAAPI，macOS 尝试 VideoToolbox，均不可用时回退 `libx264`/`libx265`；VAAPI 自动配置设备与硬件帧上传。硬件编码器仅在实际 FFmpeg 探测成功后启用。
 

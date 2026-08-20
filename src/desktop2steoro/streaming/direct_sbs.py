@@ -276,7 +276,7 @@ class DirectSbsOutputConsumer:
 
 
 class _PyNvDirectSbsOutputMixin:
-    """Optional CUDA video path; audio-enabled streams remain on FFmpeg."""
+    """Encode CUDA video with PyNvVideoCodec and mux optional PCM audio."""
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -284,12 +284,54 @@ class _PyNvDirectSbsOutputMixin:
         self._pynv_encoder: PyNvVideoCodecEncoder | None = None
         self._fallback_output: FfmpegDirectSbsOutput | None = None
 
+    def _start_pynv_audio(self) -> str | None:
+        if not self.stereo_mix_device:
+            return None
+        if self.os_name != "Windows" or not self.stereo_mix_device.casefold().startswith(
+            "soundcard:"
+        ):
+            raise RuntimeError(
+                "PyNvVideoCodec audio mux currently requires Windows soundcard loopback"
+            )
+        device_name = self.stereo_mix_device.split(":", 1)[1].strip()
+        self._soundcard_audio = SoundcardLoopbackSender(device_name or None)
+        self._soundcard_audio.start()
+        return self._soundcard_audio.ffmpeg_url
+
+    def _pynv_output_args(self) -> list[str]:
+        if self.protocol == "WEBRTC":
+            return [
+                "-f",
+                "rtsp",
+                "-rtsp_transport",
+                "tcp",
+                f"rtsp://127.0.0.1:{self.publish_rtsp_port}/{self.stream_key}",
+            ]
+        return [
+            "-f",
+            "mpegts",
+            "-mpegts_flags",
+            "+resend_headers",
+            f"srt://127.0.0.1:8890?streamid=publish:{self.stream_key}&pkt_size=1316",
+        ]
+
+    def _release_pynv_pipeline(self) -> None:
+        if self._pynv_output is not None:
+            try:
+                self._pynv_output.close()
+            except Exception:
+                pass
+            self._pynv_output = None
+        self._pynv_encoder = None
+        if self._soundcard_audio is not None:
+            self._soundcard_audio.close()
+            self._soundcard_audio = None
+
     def _start_ffmpeg(self, width: int, height: int) -> None:
-        if self.stereo_mix_device:
-            raise RuntimeError("PyNvVideoCodec backend requires audio to be disabled")
         nvc = _load_pynvvideo_codec()
         if nvc is None:
             raise RuntimeError(f"PyNvVideoCodec unavailable: {_PYNVVIDEO_CODEC_ERROR}")
+        audio_url = self._start_pynv_audio()
         codec = "hevc" if self.use_hevc else "h264"
         self._pynv_encoder = PyNvVideoCodecEncoder(
             nvc,
@@ -297,84 +339,84 @@ class _PyNvDirectSbsOutputMixin:
             height,
             hevc=self.use_hevc,
             fps=self.fps,
-            bitrate=max(1, int((self._dynamic_stream_rate_budget(width, height) or (10,))[0] * 1_000_000)),
+            bitrate=max(
+                1,
+                int(
+                    (self._dynamic_stream_rate_budget(width, height) or (10,))[0]
+                    * 1_000_000
+                ),
+            ),
         )
         self._pynv_output = PyNvSrtVideoOutput(
             self._pynv_encoder,
             str(self.ffmpeg_path),
-            f"srt://127.0.0.1:8890?streamid=publish:{self.stream_key}&pkt_size=1316",
             codec=codec,
+            fps=self.fps,
+            audio_url=audio_url,
+            audio_delay=self.audio_delay,
+            audio_codec="libopus" if self.protocol == "WEBRTC" else "aac",
+            output_args=self._pynv_output_args(),
+            creationflags=(
+                getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                if self.os_name == "Windows"
+                else 0
+            ),
         )
+        time.sleep(0.05)
+        if self._pynv_output.process.poll() is not None:
+            raise RuntimeError(
+                "PyNvVideoCodec FFmpeg muxer exited during startup with code "
+                f"{self._pynv_output.process.returncode}"
+            )
         self._frame_size = (width, height)
+        audio_codec_label = "Opus" if self.protocol == "WEBRTC" else "AAC"
+        audio_label = f" + SoundCard/{audio_codec_label}" if audio_url else ""
         print(
-            f"[DirectSbsStream] PyNvVideoCodec {codec} GPU path active: "
-            f"{width}x{height}@{self.fps}",
+            f"[DirectSbsStream] PyNvVideoCodec {codec} GPU path active"
+            f"{audio_label}: {width}x{height}@{self.fps}",
             flush=True,
         )
+
+    def _fallback_to_ffmpeg(self, frame: Any, reason: Exception) -> None:
+        print(
+            f"[DirectSbsStream] PyNvVideoCodec runtime failure: {reason}; "
+            "falling back to FFmpeg video/audio encoding",
+            flush=True,
+        )
+        self._release_pynv_pipeline()
+        self._fallback_output = FfmpegDirectSbsOutput(
+            base_dir=self.base_dir,
+            protocol=self.protocol,
+            port=self.port,
+            stream_key=self.stream_key,
+            fps=self.fps,
+            crf=self.crf,
+            stereo_mix_device=self.stereo_mix_device,
+            audio_delay=self.audio_delay,
+            os_name=self.os_name,
+            prefer_nvenc=self.prefer_nvenc,
+            display_mode=self.display_mode,
+        )
+        self._fallback_output.server_process = self.server_process
+        self._fallback_output.submit_frame(runtime_sbs_to_rgb(frame))
 
     def submit_cuda_frame(self, frame: Any) -> None:
         if self._fallback_output is not None:
             self._fallback_output.submit_frame(runtime_sbs_to_rgb(frame))
             return
-        if self._pynv_output is None:
-            try:
+        try:
+            if self._pynv_output is None:
                 height, width = int(frame.shape[-2]), int(frame.shape[-1])
                 if int(frame.shape[0]) not in (1, 3, 4):
                     height, width = int(frame.shape[0]), int(frame.shape[1])
                 self._start_ffmpeg(width, height)
-            except Exception as exc:
-                print(
-                    f"[DirectSbsStream] PyNvVideoCodec runtime failure: {exc}; "
-                    "falling back to FFmpeg video encoding",
-                    flush=True,
-                )
-                self._fallback_output = FfmpegDirectSbsOutput(
-                    base_dir=self.base_dir,
-                    protocol=self.protocol,
-                    port=self.port,
-                    stream_key=self.stream_key,
-                    fps=self.fps,
-                    crf=self.crf,
-                    stereo_mix_device=self.stereo_mix_device,
-                    audio_delay=self.audio_delay,
-                    os_name=self.os_name,
-                    prefer_nvenc=self.prefer_nvenc,
-                    display_mode=self.display_mode,
-                )
-                self._fallback_output.server_process = self.server_process
-                self._fallback_output.submit_frame(runtime_sbs_to_rgb(frame))
-                return
-        assert self._pynv_output is not None
-        try:
+            assert self._pynv_output is not None
             self._pynv_output.submit_cuda_frame(frame)
         except Exception as exc:
-            print(
-                f"[DirectSbsStream] PyNvVideoCodec encode failure: {exc}; "
-                "falling back to FFmpeg video encoding",
-                flush=True,
-            )
-            self._pynv_output.close()
-            self._pynv_output = None
-            self._fallback_output = FfmpegDirectSbsOutput(
-                base_dir=self.base_dir,
-                protocol=self.protocol,
-                port=self.port,
-                stream_key=self.stream_key,
-                fps=self.fps,
-                crf=self.crf,
-                stereo_mix_device=self.stereo_mix_device,
-                audio_delay=self.audio_delay,
-                os_name=self.os_name,
-                prefer_nvenc=self.prefer_nvenc,
-                display_mode=self.display_mode,
-            )
-            self._fallback_output.server_process = self.server_process
-            self._fallback_output.submit_frame(runtime_sbs_to_rgb(frame))
+            self._fallback_to_ffmpeg(frame, exc)
 
     def close(self) -> None:
-        if self._pynv_output is not None:
-            self._pynv_output.close()
-            self._pynv_output = None
+        self._release_pynv_pipeline()
         if self._fallback_output is not None:
             self._fallback_output.close()
             self._fallback_output = None
@@ -1092,8 +1134,9 @@ class FfmpegDirectSbsOutput:
                     "0",
                     "-flush_packets",
                     "1",
+                    # Zero waits indefinitely for every stream and can starve RTSP.
                     "-max_interleave_delta",
-                    "0",
+                    "100000",
                 ]
             )
             if self.protocol == "WEBRTC":
@@ -1124,8 +1167,9 @@ class FfmpegDirectSbsOutput:
                 [
                     "-threads",
                     "2",
+                    # Bound sparse-stream interleaving to 100 ms.
                     "-max_interleave_delta",
-                    "0",
+                    "100000",
                     "-f",
                     "rtsp",
                     "-rtsp_transport",

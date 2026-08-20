@@ -580,7 +580,7 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
                 elif configured_run_mode == "GPU Streamer" and has_amd_gpu:
                     video_backend = "amd"
                 network_output = FfmpegDirectSbsOutput(**output_kwargs)
-                if video_backend in {"auto", "pynv"} and has_nvidia_gpu and not selected_audio:
+                if video_backend == "pynv" and has_nvidia_gpu:
                     try:
                         network_output.close()
                         network_output = PyNvDirectSbsOutput(**output_kwargs)
@@ -591,7 +591,7 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
                             flush=True,
                         )
                         network_output = FfmpegDirectSbsOutput(**output_kwargs)
-                elif video_backend in {"auto", "amd"} and has_amd_gpu and not selected_audio:
+                elif video_backend == "amd" and has_amd_gpu and not selected_audio:
                     try:
                         network_output.close()
                         network_output = AmdAmfDirectSbsOutput(**output_kwargs)
@@ -618,12 +618,6 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
                     print(
                         "[DirectSbsStream] PyNvVideoCodec is NVIDIA-only; "
                         "falling back to FFmpeg hardware/software encoder",
-                        flush=True,
-                    )
-                elif video_backend == "pynv":
-                    print(
-                        "[DirectSbsStream] PyNvVideoCodec requires audio to be disabled; "
-                        "falling back to FFmpeg to preserve audio",
                         flush=True,
                     )
             else:

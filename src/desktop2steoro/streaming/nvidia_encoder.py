@@ -27,9 +27,11 @@ def rgb_cuda_to_nv12(frame: Any) -> tuple[Any, Any]:
     height, width = (int(image.shape[0]), int(image.shape[1]))
     if height % 2 or width % 2:
         raise ValueError("NV12 requires even width and height")
-    rgb = image.float()
-    if float(rgb.detach().amax().item()) <= 1.0:
-        rgb = rgb * 255.0
+    if image.dtype == torch.uint8:
+        rgb = image.float()
+    else:
+        # Runtime floating-point SBS output is normalized to 0..1.
+        rgb = image.float().clamp(0.0, 1.0) * 255.0
     r, g, b = rgb.unbind(dim=-1)
     y = (0.257 * r + 0.504 * g + 0.098 * b + 16.0).clamp(0, 255).to(torch.uint8)
     u = (-0.148 * r - 0.291 * g + 0.439 * b + 128.0).clamp(0, 255)
@@ -59,11 +61,36 @@ class Nv12CudaFrame:
 class PyNvVideoCodecEncoder:
     """Small encoder adapter; muxing and transport remain outside this class."""
 
-    def __init__(self, nvc: Any, width: int, height: int, *, hevc: bool, fps: int, bitrate: int):
+    def __init__(
+        self,
+        nvc: Any,
+        width: int,
+        height: int,
+        *,
+        hevc: bool,
+        fps: int,
+        bitrate: int,
+    ):
         codec = "hevc" if hevc else "h264"
+        frame_rate = max(1, int(fps))
+        target_bitrate = max(1, int(bitrate))
         self._encoder = nvc.CreateEncoder(
-            int(width), int(height), "NV12", False,
-            codec=codec, fps=int(fps), bitrate=int(bitrate), gpu_id=0,
+            int(width),
+            int(height),
+            "NV12",
+            False,
+            codec=codec,
+            fps=frame_rate,
+            bitrate=target_bitrate,
+            maxbitrate=max(target_bitrate, int(target_bitrate * 1.2)),
+            gpu_id=0,
+            tuning_info="ultra_low_latency",
+            preset="P1",
+            rc="cbr",
+            gop=frame_rate,
+            idrperiod=frame_rate,
+            bf=1,
+            repeatspspps=1,
         )
 
     def encode(self, rgb_cuda: Any) -> bytes:
@@ -89,24 +116,107 @@ class PyNvVideoCodecEncoder:
 
 
 class PyNvSrtVideoOutput:
-    """Encode CUDA frames and remux H.264/HEVC packets to MPEG-TS/SRT."""
+    """Mux PyNvVideoCodec packets with optional PCM audio through FFmpeg."""
 
-    def __init__(self, encoder: PyNvVideoCodecEncoder, ffmpeg_path: str, srt_url: str, *, codec: str = "h264"):
+    def __init__(
+        self,
+        encoder: PyNvVideoCodecEncoder,
+        ffmpeg_path: str,
+        srt_url: str | None = None,
+        *,
+        codec: str = "h264",
+        fps: int = 30,
+        audio_url: str | None = None,
+        audio_delay: float = 0.0,
+        audio_codec: str = "libopus",
+        output_args: list[str] | None = None,
+        creationflags: int = 0,
+    ):
         self.encoder = encoder
-        self.process = subprocess.Popen(
+        if output_args is None:
+            if not srt_url:
+                raise ValueError("srt_url or output_args is required")
+            output_args = ["-f", "mpegts", srt_url]
+        command = [
+            str(ffmpeg_path),
+            "-hide_banner",
+            "-loglevel",
+            "warning",
+            "-fflags",
+            "nobuffer",
+            "-flags",
+            "low_delay",
+            "-f",
+            "hevc" if codec.casefold() in {"hevc", "h265"} else "h264",
+            "-r",
+            str(max(1, int(fps))),
+            "-i",
+            "pipe:0",
+        ]
+        if audio_url:
+            command.extend(
+                [
+                    "-itsoffset",
+                    str(float(audio_delay)),
+                    "-f",
+                    "s16le",
+                    "-ar",
+                    "48000",
+                    "-ac",
+                    "2",
+                    "-i",
+                    audio_url,
+                ]
+            )
+        command.extend(["-map", "0:v:0"])
+        if audio_url:
+            command.extend(["-map", "1:a:0"])
+        command.extend(["-c:v", "copy"])
+        if audio_url:
+            if audio_codec == "libopus":
+                command.extend(
+                    [
+                        "-af",
+                        "aresample=async=1000:first_pts=0",
+                        "-c:a",
+                        "libopus",
+                        "-ar",
+                        "48000",
+                        "-ac",
+                        "2",
+                        "-b:a",
+                        "96k",
+                    ]
+                )
+            else:
+                command.extend(["-c:a", "aac", "-ar", "48000", "-b:a", "128k"])
+        else:
+            command.append("-an")
+        command.extend(
             [
-                str(ffmpeg_path), "-hide_banner", "-loglevel", "warning",
-                "-f", "hevc" if codec.casefold() in {"hevc", "h265"} else "h264",
-                "-i", "pipe:0", "-c:v", "copy", "-f", "mpegts", srt_url,
-            ],
+                "-flush_packets",
+                "1",
+                "-max_interleave_delta",
+                "100000",
+                *output_args,
+            ]
+        )
+        self.command = command
+        self.process = subprocess.Popen(
+            command,
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            creationflags=int(creationflags),
         )
 
     def submit_cuda_frame(self, frame: Any) -> None:
+        if self.process.poll() is not None:
+            raise RuntimeError(
+                f"PyNvVideoCodec muxer exited with code {self.process.returncode}"
+            )
         if self.process.stdin is None:
-            raise RuntimeError("SRT remuxer stdin is unavailable")
+            raise RuntimeError("PyNvVideoCodec muxer stdin is unavailable")
         packet = self.encoder.encode(frame)
         if packet:
             self.process.stdin.write(packet)
@@ -114,11 +224,20 @@ class PyNvSrtVideoOutput:
 
     def close(self) -> None:
         try:
-            tail = self.encoder.flush()
-            if tail and self.process.stdin is not None:
-                self.process.stdin.write(tail)
-                self.process.stdin.flush()
+            if self.process.poll() is None:
+                tail = self.encoder.flush()
+                if tail and self.process.stdin is not None:
+                    self.process.stdin.write(tail)
+                    self.process.stdin.flush()
         finally:
             if self.process.stdin is not None:
-                self.process.stdin.close()
-            self.process.wait(timeout=5.0)
+                try:
+                    self.process.stdin.close()
+                except (BrokenPipeError, OSError):
+                    pass
+            if self.process.poll() is None:
+                try:
+                    self.process.wait(timeout=5.0)
+                except subprocess.TimeoutExpired:
+                    self.process.terminate()
+                    self.process.wait(timeout=3.0)

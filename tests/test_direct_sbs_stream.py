@@ -9,12 +9,15 @@ import numpy as np
 import pytest
 
 import streaming.direct_sbs as direct_sbs
+import streaming.nvidia_encoder as nvidia_encoder
 from streaming.direct_sbs import (
     DirectSbsOutputConsumer,
     FfmpegDirectSbsOutput,
+    PyNvDirectSbsOutput,
     RuntimeSbsRgbConverter,
     runtime_sbs_to_rgb,
 )
+from streaming.nvidia_encoder import PyNvSrtVideoOutput
 
 
 def test_runtime_sbs_to_rgb_converts_chw_float_to_hwc_uint8():
@@ -631,7 +634,7 @@ def test_windows_webrtc_stream_audio_uses_opus():
     assert command[command.index("-ar") + 1] == "48000"
     assert command[command.index("-ac") + 1] == "2"
     assert command[command.index("-b:a") + 1] == "96k"
-    assert command[command.index("-max_interleave_delta") + 1] == "0"
+    assert command[command.index("-max_interleave_delta") + 1] == "100000"
     assert "aac" not in command
 
 
@@ -754,3 +757,121 @@ def test_rtsp_selection_uses_selected_port_for_internal_publish():
 
     assert output.publish_rtsp_port == 9554
     assert output._server_environment()["MTX_RTSPADDRESS"] == ":9554"
+
+
+def test_pynv_encoder_uses_live_low_latency_nvenc_settings():
+    captured = {}
+
+    class FakeNvc:
+        @staticmethod
+        def CreateEncoder(*args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+            return SimpleNamespace()
+
+    nvidia_encoder.PyNvVideoCodecEncoder(
+        FakeNvc(),
+        3840,
+        2160,
+        hevc=False,
+        fps=25,
+        bitrate=21_000_000,
+    )
+
+    assert captured["args"] == (3840, 2160, "NV12", False)
+    assert captured["kwargs"]["codec"] == "h264"
+    assert captured["kwargs"]["tuning_info"] == "ultra_low_latency"
+    assert captured["kwargs"]["preset"] == "P1"
+    assert captured["kwargs"]["rc"] == "cbr"
+    assert captured["kwargs"]["gop"] == 25
+    assert captured["kwargs"]["idrperiod"] == 25
+    assert captured["kwargs"]["bf"] == 1
+    assert captured["kwargs"]["repeatspspps"] == 1
+
+
+def test_pynv_muxer_copies_video_and_encodes_soundcard_pcm_as_opus(monkeypatch):
+    captured = {}
+
+    class RunningProcess:
+        stdin = object()
+        returncode = None
+
+        @staticmethod
+        def poll():
+            return None
+
+    def fake_popen(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return RunningProcess()
+
+    monkeypatch.setattr(nvidia_encoder.subprocess, "Popen", fake_popen)
+    output = PyNvSrtVideoOutput(
+        SimpleNamespace(),
+        "ffmpeg",
+        codec="h264",
+        fps=25,
+        audio_url="udp://127.0.0.1:54321",
+        audio_delay=-0.1,
+        audio_codec="libopus",
+        output_args=[
+            "-f",
+            "rtsp",
+            "-rtsp_transport",
+            "tcp",
+            "rtsp://127.0.0.1:8554/live",
+        ],
+    )
+
+    command = output.command
+    assert command[command.index("-r") + 1] == "25"
+    assert command[command.index("-c:v") + 1] == "copy"
+    assert command[command.index("-c:a") + 1] == "libopus"
+    assert command[command.index("-max_interleave_delta") + 1] == "100000"
+    assert "udp://127.0.0.1:54321" in command
+    assert command[-1] == "rtsp://127.0.0.1:8554/live"
+    assert captured["kwargs"]["creationflags"] == 0
+
+
+def test_pynv_output_uses_rtsp_for_webrtc_and_soundcard_loopback(monkeypatch):
+    events = []
+
+    class FakeSoundcardSender:
+        ffmpeg_url = "udp://127.0.0.1:54321"
+
+        def __init__(self, device_name):
+            events.append(("init", device_name))
+
+        def start(self):
+            events.append(("start", None))
+
+        def close(self):
+            events.append(("close", None))
+
+    monkeypatch.setattr(direct_sbs, "SoundcardLoopbackSender", FakeSoundcardSender)
+    output = PyNvDirectSbsOutput(
+        base_dir=str(APP_ROOT),
+        protocol="WebRTC",
+        port=1122,
+        stream_key="live",
+        fps=25,
+        crf=23,
+        os_name="Windows",
+        prefer_nvenc=True,
+        stereo_mix_device="soundcard:virtual-audio-capturer",
+    )
+
+    assert output._start_pynv_audio() == "udp://127.0.0.1:54321"
+    assert output._pynv_output_args() == [
+        "-f",
+        "rtsp",
+        "-rtsp_transport",
+        "tcp",
+        "rtsp://127.0.0.1:8554/live",
+    ]
+    output._release_pynv_pipeline()
+    assert events == [
+        ("init", "virtual-audio-capturer"),
+        ("start", None),
+        ("close", None),
+    ]
