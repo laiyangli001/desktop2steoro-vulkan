@@ -2,6 +2,12 @@
 
 ## 2026-08-20
 
+- 统一 GPU 推流运行模式：GUI 使用“GPU 推流”，旧的 NVIDIA GPU 推流名称自动归一化；运行时根据显卡型号选择 NVIDIA PyNvVideoCodec 或 AMD/其他平台的硬件编码探测链，并在初始化失败时安全回退，不改变音频、协议和 MediaMTX 配置。
+- 新增 Windows AMD 原生编码桥接工程 `native/amd_encoder`：动态检测 AMD AMF 运行时 `amfrt64.dll` 与 Radeon DXGI 适配器，提供 Python 可选加载接口；后续由 GitHub Actions 编译并产出 DLL，未安装时保持 FFmpeg 回退。
+- 完成项目目录重组后的路径统一：源码归档到 `src/desktop2steoro`，Python 运行环境统一位于 `src/python3`，安装脚本位于 `src/env_install`，脚本、测试和启动入口通过统一项目路径配置解析。
+
+- 兼容旧的“NVIDIA GPU 推流”配置名称：读取时自动归一化为“GPU 推流”，选择该模式后程序自动尝试 PyNvVideoCodec 的 CUDA/NVENC 编码路径，不需要修改代码；PyNvVideoCodec 不可用、初始化失败或检测到音频输入时自动回退 FFmpeg，原有高级网络推流的音频、协议和 MediaMTX 配置保持不变。
+
 - 网络串流启动时按操作系统和实际 SBS 分辨率探测编码能力并自动降级：Windows 依次尝试 NVENC、Intel QSV、AMD AMF，Linux 尝试 QSV/VAAPI，macOS 尝试 VideoToolbox，均不可用时回退 `libx264`/`libx265`；VAAPI 自动配置设备与硬件帧上传。硬件编码器仅在实际 FFmpeg 探测成功后启用。
 
 - 补充跨平台推流参数：macOS 音频使用 FFmpeg `avfoundation` 设备索引；QSV 使用 `global_quality` 并关闭 look-ahead，AMF 使用低延迟 `vbr_peak`，避免套用 NVENC 专属参数。

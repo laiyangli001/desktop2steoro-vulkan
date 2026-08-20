@@ -2,11 +2,13 @@ import sys
 import threading
 from pathlib import Path
 
+from path_config import APP_ROOT
+
 import pytest
 import torch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(APP_ROOT))
 
 from stereo_runtime.depth_provider import (
     DepthProviderConfig,

@@ -12,6 +12,12 @@ import zipfile
 from pathlib import Path
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+from project_paths import load_project_paths
+
+
 MEDIAMTX_API = "https://api.github.com/repos/bluenviron/mediamtx/releases/latest"
 
 
@@ -69,6 +75,7 @@ def _find_file(root: Path, name: str) -> Path:
 
 
 def install(runtime_root: Path, system: str, machine: str) -> None:
+    paths = load_project_paths()
     ffmpeg_url, ffmpeg_format = _asset_url(system, machine)
     mediamtx_release = json.loads(
         urllib.request.urlopen(
@@ -100,7 +107,7 @@ def install(runtime_root: Path, system: str, machine: str) -> None:
         shutil.copy2(source_mediamtx, mediamtx_dir / source_mediamtx.name)
     template_config = runtime_root / "mediamtx" / "mediamtx.yml"
     project_config = runtime_root / "mediamtx.yml"
-    bundled_config = Path(__file__).resolve().parents[1] / "src" / "streaming" / "rtmp" / "mediamtx" / "mediamtx.yml"
+    bundled_config = paths.app_dir / "streaming" / "rtmp" / "mediamtx" / "mediamtx.yml"
     if not template_config.exists() and bundled_config.exists():
         template_config.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(bundled_config, template_config)
@@ -111,11 +118,13 @@ def install(runtime_root: Path, system: str, machine: str) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Download FFmpeg and MediaMTX for Desktop2Stereo")
-    parser.add_argument("--output", type=Path, default=Path("src/streaming/rtmp"))
+    parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--system", choices=("Windows", "Linux", "Darwin"), default=platform.system())
     parser.add_argument("--machine", default=platform.machine())
     args = parser.parse_args()
-    install(args.output, args.system, args.machine)
+    paths = load_project_paths()
+    output = args.output or (paths.app_dir / "streaming" / "rtmp")
+    install(output, args.system, args.machine)
     return 0
 
 

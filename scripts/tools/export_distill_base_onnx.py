@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(APP_ROOT))
 
 from stereo_runtime.model_artifacts import artifact_paths_for_model
 from stereo_runtime.onnx_export import (

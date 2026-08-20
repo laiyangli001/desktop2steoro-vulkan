@@ -3,9 +3,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+from path_config import APP_ROOT
+
 
 ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / "src"
+SRC = APP_ROOT
 
 
 def _run_python(code, cwd):

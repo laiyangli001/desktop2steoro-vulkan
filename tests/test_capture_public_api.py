@@ -1,6 +1,8 @@
 import importlib.util
 from pathlib import Path
 
+from path_config import APP_ROOT
+
 
 def test_capture_public_api_imports():
     from capture import (  # noqa: PLC0415
@@ -21,7 +23,7 @@ def test_capture_public_api_imports():
 
 
 def test_capture_select_loads_without_importing_capture_package():
-    path = Path(__file__).resolve().parents[1] / "src" / "capture" / "capture_select.py"
+    path = APP_ROOT / "capture" / "capture_select.py"
     spec = importlib.util.spec_from_file_location("_test_capture_select", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

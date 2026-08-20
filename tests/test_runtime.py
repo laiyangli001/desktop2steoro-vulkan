@@ -2,12 +2,14 @@ import os
 import sys
 from pathlib import Path
 
+from path_config import APP_ROOT
+
 import logging
 import pytest
 import torch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(APP_ROOT))
 
 from stereo_runtime import StereoRuntime, StereoRuntimeConfig
 from stereo_runtime.depth_provider import (
@@ -516,8 +518,8 @@ def test_stereo_runtime_exports_new_public_names():
 
 
 def test_fast_plus_fused_uses_resolved_parallax_budget_contract():
-    fused_source = (ROOT / "src" / "stereo_runtime" / "fast_plus_fused_triton.py").read_text(encoding="utf-8")
-    runtime_source = (ROOT / "src" / "stereo_runtime" / "runtime.py").read_text(encoding="utf-8")
+    fused_source = (APP_ROOT / "stereo_runtime" / "fast_plus_fused_triton.py").read_text(encoding="utf-8")
+    runtime_source = (APP_ROOT / "stereo_runtime" / "runtime.py").read_text(encoding="utf-8")
 
     assert "max_disparity_px: tl.constexpr" in fused_source
     assert "max_disparity_px: float" in fused_source

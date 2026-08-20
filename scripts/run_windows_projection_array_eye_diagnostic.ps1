@@ -1,8 +1,15 @@
 $ErrorActionPreference = "Stop"
 
 $repoRoot = $PSScriptRoot
-$srcRoot = Join-Path $repoRoot "src"
-$pythonExe = Join-Path $srcRoot "python3\python.exe"
+$layoutFile = Join-Path $repoRoot "project_paths.env"
+$layout = @{}
+Get-Content -LiteralPath $layoutFile -Encoding UTF8 | ForEach-Object {
+    if ($_ -match '^\s*([^#=]+?)\s*=\s*(.*?)\s*$') {
+        $layout[$matches[1].Trim()] = $matches[2].Trim()
+    }
+}
+$srcRoot = Join-Path $repoRoot $layout["D2S_APP_DIR"]
+$pythonExe = Join-Path $repoRoot ($layout["D2S_PYTHON_DIR"] + "\python.exe")
 
 if (-not (Test-Path -LiteralPath $pythonExe -PathType Leaf)) {
     throw "Bundled Python not found: $pythonExe"

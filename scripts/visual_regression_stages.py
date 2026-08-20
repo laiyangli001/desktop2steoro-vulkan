@@ -7,7 +7,7 @@ import sys
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT / "src"))
+sys.path.insert(0, str(APP_ROOT))
 
 from stereo_runtime.stage_visual_regression import (  # noqa: E402
     StageVisualRegressionConfig,

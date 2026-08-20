@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+from path_config import APP_ROOT, PROJECT_ROOT
+
 from app_runtime.probe import build_capability_report
 from stereo_runtime import VulkanImageCopyPass as PublicVulkanImageCopyPass
 from stereo_runtime.vulkan_graph import (
@@ -21,7 +23,6 @@ from viewer.vulkan_descriptors import DescriptorBinding, DescriptorBudget
 from stereo_runtime.vulkan_image_pass import VulkanImageCopyPass
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_capability_report_identifies_new_project():
@@ -35,27 +36,27 @@ def test_capability_report_identifies_new_project():
 
 def test_current_style_source_layout_is_present():
     expected = [
-        "src/main.py",
-        "src/app_runtime",
-        "src/capture",
-        "src/gui",
-        "src/stereo_runtime",
-        "src/viewer",
-        "src/xr_viewer",
-        "native/filament/bridge/CMakeLists.txt",
-        ".github/workflows/filament-bridge.yml",
+        APP_ROOT / "main.py",
+        APP_ROOT / "app_runtime",
+        APP_ROOT / "capture",
+        APP_ROOT / "gui",
+        APP_ROOT / "stereo_runtime",
+        APP_ROOT / "viewer",
+        APP_ROOT / "xr_viewer",
+        PROJECT_ROOT / "native/filament/bridge/CMakeLists.txt",
+        PROJECT_ROOT / ".github/workflows/filament-bridge.yml",
     ]
-    for relative in expected:
-        assert (PROJECT_ROOT / relative).exists(), relative
+    for path in expected:
+        assert path.exists(), path
 
 
 def test_forbidden_legacy_runtime_directories_are_not_migrated():
     forbidden = [
-        "src/xr_viewer/panda_runtime",
-        "src/capture/dxgi/native",
+        APP_ROOT / "xr_viewer/panda_runtime",
+        APP_ROOT / "capture/dxgi/native",
     ]
-    for relative in forbidden:
-        assert not (PROJECT_ROOT / relative).exists(), relative
+    for path in forbidden:
+        assert not path.exists(), path
 
 
 def test_vulkan_submission_contract_is_python_native():

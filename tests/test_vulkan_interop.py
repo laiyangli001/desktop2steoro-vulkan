@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+from path_config import APP_ROOT
+
 import pytest
 
 from viewer.vulkan_context import VulkanContext
@@ -86,7 +88,7 @@ def test_interop_close_is_idempotent() -> None:
 def test_sampling_transition_is_explicitly_separate_from_cuda_prepare() -> None:
     from pathlib import Path
 
-    source = (Path(__file__).resolve().parents[1] / "src/viewer/vulkan_context.py").read_text(
+    source = (APP_ROOT / "viewer/vulkan_context.py").read_text(
         encoding="utf-8"
     )
     assert "def prepare_external_image_for_sampling" in source

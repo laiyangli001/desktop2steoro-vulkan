@@ -1,7 +1,7 @@
 param(
-    [string]$Font = "$PSScriptRoot\..\..\src\xr_viewer\fonts\NotoSansSC-Regular.otf",
-    [string]$Charset = "$PSScriptRoot\..\..\src\xr_viewer\fonts\overlay_charset.txt",
-    [string]$Output = "$PSScriptRoot\..\..\src\xr_viewer\fonts\d2s_overlay_msdf",
+    [string]$Font = "$PSScriptRoot\..\..\src\desktop2steoro\xr_viewer\fonts\NotoSansSC-Regular.otf",
+    [string]$Charset = "$PSScriptRoot\..\..\src\desktop2steoro\xr_viewer\fonts\overlay_charset.txt",
+    [string]$Output = "$PSScriptRoot\..\..\src\desktop2steoro\xr_viewer\fonts\d2s_overlay_msdf",
     [int]$FontSize = 48,
     [int]$TextureSize = 2048,
     [int]$DistanceRange = 4

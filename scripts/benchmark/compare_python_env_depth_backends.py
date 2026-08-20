@@ -6,6 +6,13 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from project_paths import load_project_paths
+
+PATHS = load_project_paths(ROOT)
+APP_ROOT = PATHS.app_dir
+PYTHON_ROOT = PATHS.python_dir
 
 
 def load_json(path: Path) -> dict:
@@ -109,7 +116,7 @@ def main() -> None:
     parser.add_argument("--iters", type=int, default=5)
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--backend", action="append", default=None)
-    parser.add_argument("--python3", default=str(ROOT / "python3" / "python.exe"))
+    parser.add_argument("--python3", default=str(PYTHON_ROOT / "python.exe"))
     parser.add_argument("--python-cu13", default=str(ROOT / "python-cu13" / "python.exe"))
     args = parser.parse_args()
 

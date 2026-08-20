@@ -1,4 +1,6 @@
 from pathlib import Path
+
+from path_config import APP_ROOT
 from types import SimpleNamespace
 import sys
 import threading
@@ -7,7 +9,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(APP_ROOT))
 
 from app_runtime.runtime_callbacks import RuntimeCallbacks
 from stereo_runtime.settings_snapshot import RuntimeSettingsSnapshot

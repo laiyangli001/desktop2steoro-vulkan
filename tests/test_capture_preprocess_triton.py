@@ -2,12 +2,14 @@ import math
 import sys
 from pathlib import Path
 
+from path_config import APP_ROOT
+
 import pytest
 import torch
 import torch.nn.functional as F
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(APP_ROOT))
 
 from capture.preprocess_triton import bgr_to_rgb_resize_norm, can_use_triton_preprocess
 

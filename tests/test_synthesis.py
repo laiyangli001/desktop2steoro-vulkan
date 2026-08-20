@@ -1,6 +1,8 @@
 import sys
 from pathlib import Path
 
+from path_config import APP_ROOT
+
 import pytest
 import torch
 import torch.nn.functional as F
@@ -8,7 +10,7 @@ import torch.nn.functional as F
 import stereo_runtime.synthesis as synthesis_module
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(APP_ROOT))
 
 from stereo_runtime.hole_fill import (
     box_blur,
@@ -26,7 +28,7 @@ from stereo_runtime.temporal import TemporalState, _scene_sample
 
 
 def test_triton_occlusion_hot_path_has_no_cpu_scalar_sync():
-    source = (ROOT / "src" / "stereo_runtime" / "occlusion_triton.py").read_text(encoding="utf-8")
+    source = (APP_ROOT / "stereo_runtime" / "occlusion_triton.py").read_text(encoding="utf-8")
     assert ".item()" not in source
 
 
@@ -38,7 +40,7 @@ def test_scene_sample_uses_bounded_spatial_sample():
 
 
 def test_scene_reset_hot_path_has_no_cuda_cpu_sync():
-    source = (ROOT / "src" / "stereo_runtime" / "temporal.py").read_text(encoding="utf-8")
+    source = (APP_ROOT / "stereo_runtime" / "temporal.py").read_text(encoding="utf-8")
     assert ".item()" not in source
     assert "event.query()" not in source
     assert "pending_scene_event" not in source
@@ -1209,7 +1211,7 @@ def test_negative_depth_pop_uses_realtime_compression_without_pow():
     expected = torch.tensor([[[[0.25, 0.375, 0.5, 0.625, 0.75]]]], dtype=torch.float32)
     assert torch.allclose(actual, expected)
 
-    source = ROOT / "src" / "stereo_runtime" / "depth_postprocess.py"
+    source = APP_ROOT / "stereo_runtime" / "depth_postprocess.py"
     code = source.read_text(encoding="utf-8")
     negative_branch = code.index("if depth_pop < 0.0:")
     pow_branch = code.index(".pow(exponent)")

@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from path_config import APP_ROOT
+
 from stereo_runtime import DepthRuntimeConfig, ModelRegistry, resolve_model_dir
 from stereo_runtime.adapter import depth_provider_config_from_runtime
 
@@ -79,9 +81,9 @@ def test_model_registry_is_d2s_model_mapping_source():
 
 
 def test_utils_model_mapping_delegates_to_runtime_registry():
-    utils_source = (ROOT / "src" / "utils" / "__init__.py").read_text(encoding="utf-8")
-    runtime_exports_source = (ROOT / "src" / "utils" / "runtime_exports.py").read_text(encoding="utf-8")
-    capabilities_source = (ROOT / "src" / "stereo_runtime" / "model_capabilities.py").read_text(encoding="utf-8")
+    utils_source = (APP_ROOT / "utils" / "__init__.py").read_text(encoding="utf-8")
+    runtime_exports_source = (APP_ROOT / "utils" / "runtime_exports.py").read_text(encoding="utf-8")
+    capabilities_source = (APP_ROOT / "stereo_runtime" / "model_capabilities.py").read_text(encoding="utf-8")
 
     assert "model_name_mapping" in runtime_exports_source
     assert "from .model_registry import ModelRegistry" in capabilities_source

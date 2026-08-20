@@ -1,10 +1,12 @@
 import sys
 from pathlib import Path
+
+from path_config import APP_ROOT
 import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(APP_ROOT))
 
 
 def test_nvidia_provider_compat_imports():

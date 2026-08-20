@@ -4,7 +4,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+from project_paths import load_project_paths
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -70,12 +77,14 @@ def render_preview(root: Path, text: str, output: Path, scale: int) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--root", type=Path, default=Path("src/xr_viewer/fonts"))
+    parser.add_argument("--root", type=Path, default=None)
     parser.add_argument("--text", default="Size 1920 x 1080 m  Dist 2.50 m  预设 性能")
     parser.add_argument("--output", type=Path, default=Path(".tmp/msdf_text_preview.png"))
     parser.add_argument("--scale", type=int, default=3)
     args = parser.parse_args()
-    render_preview(args.root, args.text, args.output, max(1, args.scale))
+    paths = load_project_paths(REPO_ROOT)
+    root = args.root or (paths.app_dir / "xr_viewer/fonts")
+    render_preview(root, args.text, args.output, max(1, args.scale))
 
 
 if __name__ == "__main__":

@@ -14,12 +14,12 @@ downloads/
 models/
 outputs/
 logs/
-src/models/
 src/python3/
-src/logs/
-src/gui/flet_clients/
-src/gui/flet_packages/*.partial
-src/.env
+src/desktop2steoro/models/
+src/desktop2steoro/logs/
+src/desktop2steoro/gui/flet_clients/
+src/desktop2steoro/gui/flet_packages/*.partial
+src/env_install/python3.installing/
 native/filament/sdk/
 native/filament/build/
 native/filament/bridge/*.obj

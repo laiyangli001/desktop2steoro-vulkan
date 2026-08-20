@@ -3,6 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+from path_config import APP_ROOT
+
+from path_config import APP_ROOT
+
 from stereo_runtime.vulkan_glow_source import VulkanGlowSourceComputeBackend
 from stereo_runtime.vulkan_glow_source_pass import VulkanGlowSourcePass
 
@@ -123,8 +127,8 @@ def test_glow_frame_lease_is_counted_once_and_released() -> None:
 
 def test_glow_shader_and_spirv_are_checked_in_together() -> None:
     root = Path(__file__).resolve().parents[1]
-    source = (root / "src/shaders/d2s_glow_source.comp").read_text(encoding="utf-8")
-    spirv = (root / "src/shaders/d2s_glow_source.spv").read_bytes()
+    source = (APP_ROOT / "shaders/d2s_glow_source.comp").read_text(encoding="utf-8")
+    spirv = (APP_ROOT / "shaders/d2s_glow_source.spv").read_bytes()
 
     assert "max(base_footprint, vec2(max(params.prefilter_scale, 1.0)))" in source
     assert "srgb_to_linear" in source

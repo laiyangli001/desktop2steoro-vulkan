@@ -10,6 +10,12 @@ DSHOW_OUTPUT = """
 [dshow @ 000001]   Alternative name "@device_cm_..."
 """
 
+NEW_FFMPEG_DSHOW_OUTPUT = """
+[in#0 @ 000001] "screen-capture-recorder" (video)
+[in#0 @ 000001] "virtual-audio-capturer" (audio)
+[in#0 @ 000001]   Alternative name "@device_sw_..."
+"""
+
 
 def _target():
     from gui.handlers import GUIHandlerMixin
@@ -22,6 +28,14 @@ def test_parse_ffmpeg_dshow_audio_devices() -> None:
 
     assert parse_ffmpeg_dshow_audio_devices(DSHOW_OUTPUT) == [
         "Stereo Mix (Realtek(R) Audio)",
+        "virtual-audio-capturer",
+    ]
+
+
+def test_parse_new_ffmpeg_dshow_audio_devices() -> None:
+    from streaming.audio import parse_ffmpeg_dshow_audio_devices
+
+    assert parse_ffmpeg_dshow_audio_devices(NEW_FFMPEG_DSHOW_OUTPUT) == [
         "virtual-audio-capturer",
     ]
 

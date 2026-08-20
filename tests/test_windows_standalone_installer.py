@@ -1,8 +1,10 @@
 from pathlib import Path
 
+from path_config import ENV_INSTALL_ROOT
+
 
 def test_cuda_installer_uses_complete_project_local_python() -> None:
-    script = (Path(__file__).resolve().parents[1] / "src" / "install-cuda_standalone.bat").read_text(
+    script = (ENV_INSTALL_ROOT / "install-cuda_standalone.bat").read_text(
         encoding="utf-8"
     )
 

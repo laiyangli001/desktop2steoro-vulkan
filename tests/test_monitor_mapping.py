@@ -3,9 +3,11 @@ import sys
 import types
 from pathlib import Path
 
+from path_config import APP_ROOT
+
 
 ROOT = Path(__file__).resolve().parents[1]
-BUILDERS_SOURCE = ROOT / "src" / "gui" / "builders.py"
+BUILDERS_SOURCE = APP_ROOT / "gui" / "builders.py"
 
 
 def _load_monitor_methods(monitors, primary_index):

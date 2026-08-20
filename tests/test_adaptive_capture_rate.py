@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from path_config import APP_ROOT
+
 from capture.adaptive_rate import (
     AdaptiveCaptureRate,
     adaptive_capture_enabled_for_mode,
@@ -8,8 +10,8 @@ from gui.localization import get_messages
 
 
 ROOT = Path(__file__).resolve().parents[1]
-BUILDERS_SOURCE = ROOT / "src" / "gui" / "builders.py"
-HANDLERS_SOURCE = ROOT / "src" / "gui" / "handlers.py"
+BUILDERS_SOURCE = APP_ROOT / "gui" / "builders.py"
+HANDLERS_SOURCE = APP_ROOT / "gui" / "handlers.py"
 
 
 def test_auto_capture_calibrates_from_sustained_sbs_after_15_seconds() -> None:

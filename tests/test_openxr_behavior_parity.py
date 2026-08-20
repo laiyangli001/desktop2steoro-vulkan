@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from path_config import APP_ROOT
+
 import numpy as np
 
 from xr_viewer.core_openxr_vulkan import OpenXrVulkanPresenter
@@ -30,7 +32,7 @@ def test_behavior_matrix_tracks_old_and_vulkan_functions() -> None:
 
 def test_laser_hit_rings_use_the_vulkan_quad_contract() -> None:
     source = (
-        ROOT / "src" / "xr_viewer" / "core_openxr_vulkan.py"
+        APP_ROOT / "xr_viewer" / "core_openxr_vulkan.py"
     ).read_text(encoding="utf-8")
 
     assert "def _cursor_overlay_specs" in source

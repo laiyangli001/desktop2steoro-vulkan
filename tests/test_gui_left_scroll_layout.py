@@ -1,11 +1,13 @@
 from pathlib import Path
 
+from path_config import APP_ROOT
+
 from gui.config import DEFAULTS
 
 
 ROOT = Path(__file__).resolve().parents[1]
-BUILDERS_SOURCE = ROOT / "src" / "gui" / "builders.py"
-HANDLERS_SOURCE = ROOT / "src" / "gui" / "handlers.py"
+BUILDERS_SOURCE = APP_ROOT / "gui" / "builders.py"
+HANDLERS_SOURCE = APP_ROOT / "gui" / "handlers.py"
 
 
 def test_left_settings_area_uses_a_bounded_scroll_viewport() -> None:
@@ -74,7 +76,7 @@ def test_run_mode_change_refits_native_window_height() -> None:
 
 
 def test_reset_defaults_refits_window_to_left_gui_content() -> None:
-    source = (ROOT / "src" / "gui" / "process.py").read_text(encoding="utf-8")
+    source = (APP_ROOT / "gui" / "process.py").read_text(encoding="utf-8")
     reset_start = source.index("def reset_defaults")
     reset_end = source.index("# ── URL actions ──", reset_start)
     reset_source = source[reset_start:reset_end]

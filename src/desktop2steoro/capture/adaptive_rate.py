@@ -1,0 +1,89 @@
+from __future__ import annotations
+
+import math
+import threading
+import time
+
+
+def adaptive_capture_enabled_for_mode(run_mode: str, target_fps: int) -> bool:
+    mode = str(run_mode or "").strip().lower()
+    return int(target_fps) <= 0 and mode in {
+        "local viewer",
+        "viewer",
+        "openxr",
+        "openxr link",
+        "rtmp streamer",
+        "nvidia gpu streamer",
+    }
+
+
+class AdaptiveCaptureRate:
+    """Keep capture slightly ahead of sustained SBS output capacity."""
+
+    def __init__(
+        self,
+        base_fps: int,
+        *,
+        enabled: bool,
+        evaluation_interval_s: float = 15.0,
+        activity_guard_enabled: bool = False,
+        minimum_sample_frames: int = 60,
+    ) -> None:
+        self.base_fps = max(1, int(base_fps))
+        self.enabled = bool(enabled and self.base_fps > 24)
+        self.evaluation_interval_s = max(1.0, float(evaluation_interval_s))
+        self.activity_guard_enabled = bool(activity_guard_enabled)
+        self.minimum_sample_frames = max(1, int(minimum_sample_frames))
+        self._target_fps = self.base_fps
+        self._window_started: float | None = None
+        self._window_samples: list[float] = []
+        self._lock = threading.Lock()
+
+    def current_fps(self) -> int:
+        with self._lock:
+            return int(self._target_fps)
+
+    def observe_sbs_fps(
+        self,
+        sbs_fps: float,
+        *,
+        capture_fps: float | None = None,
+        frame_count: int | None = None,
+        now: float | None = None,
+    ) -> int:
+        try:
+            measured = max(0.0, float(sbs_fps))
+        except (TypeError, ValueError):
+            return self.current_fps()
+        timestamp = time.monotonic() if now is None else float(now)
+        with self._lock:
+            if not self.enabled or measured <= 0.0:
+                return int(self._target_fps)
+            if self.activity_guard_enabled:
+                recovery_floor = max(1.0, self._target_fps * 0.25)
+                if (
+                    self._target_fps < self.base_fps
+                    and capture_fps is not None
+                    and capture_fps < recovery_floor
+                ):
+                    self._target_fps = self.base_fps
+                    self._window_started = timestamp
+                    self._window_samples.clear()
+                    return int(self._target_fps)
+            if frame_count is not None and int(frame_count) < self.minimum_sample_frames:
+                return int(self._target_fps)
+            if self._window_started is None:
+                self._window_started = timestamp
+                self._window_samples = [measured]
+                return int(self._target_fps)
+            self._window_samples.append(measured)
+            if timestamp - self._window_started < self.evaluation_interval_s:
+                return int(self._target_fps)
+            peak_fps = max(self._window_samples)
+            self._target_fps = min(
+                self.base_fps,
+                max(1, int(math.ceil(peak_fps + 5.0))),
+            )
+            self._window_started = timestamp
+            self._window_samples.clear()
+            return int(self._target_fps)

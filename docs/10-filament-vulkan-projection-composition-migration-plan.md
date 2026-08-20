@@ -93,8 +93,8 @@ Virtual Desktop 实机验证不接受此 swapchain，因此该环境变量现在
 
 新增最小 Vulkan Projection Composer，先只清屏并绘制左右眼虚拟屏幕：
 
-- 复用 `src/viewer/vulkan_context.py` 的资源状态和 timeline 提交。
-- 复用 `src/utils/screen_resolution_policy.py` 的分辨率档位策略。
+- 复用 `src/desktop2steoro/viewer/vulkan_context.py` 的资源状态和 timeline 提交。
+- 复用 `src/desktop2steoro/utils/screen_resolution_policy.py` 的分辨率档位策略。
 - 屏幕纹理直接由 Vulkan 采样，不创建 Filament 外部屏幕纹理。
 - Projection 优先创建 `array_size=2`，layer 0/1 对应左右眼。
 - 创建、合成或 Runtime 能力失败时回退为两个 `array_size=1` per-eye swapchain。
@@ -231,7 +231,7 @@ Glow 纹理更新频率由独立 Profile 字段 `glow_sample_hz` 控制，默认
 
 Glow：
 
-- 保留 `src/stereo_runtime/vulkan_glow_source_pass.py` 的 Vulkan Compute 预处理。
+- 保留 `src/desktop2steoro/stereo_runtime/vulkan_glow_source_pass.py` 的 Vulkan Compute 预处理。
 - 删除 Glow 外部图像导入 Filament 的步骤。
 - Vulkan Projection Composer 直接采样 Glow 图像并完成合成。
 - Glow 不参与手柄照明，也不改变基础环境光、头顶光或独立的屏幕补光。

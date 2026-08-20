@@ -1,0 +1,162 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+from viewer.vulkan_compute_pipeline import VulkanComputePipeline
+from viewer.vulkan_descriptors import (
+    DescriptorBinding,
+    DescriptorBudget,
+    VulkanDescriptorArena,
+)
+
+from .vulkan_stereo_pass import VulkanLayeredStereoParams
+
+
+class VulkanStereoImagePass:
+    """Write stereo eyes directly into presenter-owned storage images."""
+
+    WORKGROUP_SIZE = 16
+    PUSH_CONSTANTS_SIZE = 76
+    BUFFER_COUNT = 4
+
+    def __init__(
+        self,
+        context: Any,
+        *,
+        width: int,
+        height: int,
+        shader_path: str | Path = Path(__file__).resolve().parents[1] / "shaders" / "d2s_stereo_layered_output.spv",
+    ) -> None:
+        if int(width) < 1 or int(height) < 1:
+            raise ValueError("Vulkan stereo image dimensions must be positive")
+        self.context = context
+        self.width = int(width)
+        self.height = int(height)
+        self.pipeline: VulkanComputePipeline | None = None
+        self.descriptor_arena: VulkanDescriptorArena | None = None
+        self.descriptor_sets: list[Any] = []
+        self._descriptor_index = 0
+        self._active_descriptor_set: Any | None = None
+        self._active_push_constants: bytes | None = None
+        try:
+            vk = context.vk
+            self.pipeline = VulkanComputePipeline(
+                context,
+                shader_path,
+                descriptor_bindings=[
+                    DescriptorBinding(binding=0, descriptor_type=vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
+                    DescriptorBinding(binding=1, descriptor_type=vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
+                    DescriptorBinding(binding=2, descriptor_type=vk.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
+                    DescriptorBinding(binding=3, descriptor_type=vk.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
+                ],
+                push_constants_size=self.PUSH_CONSTANTS_SIZE,
+            )
+            frame_count = max(1, int(getattr(context, "frame_context_count", 3)))
+            self.descriptor_arena = VulkanDescriptorArena(
+                context,
+                DescriptorBudget(
+                    max_sets=frame_count,
+                    storage_buffers_per_set=2,
+                    storage_images_per_set=2,
+                ),
+            )
+            self.descriptor_sets = [
+                self.descriptor_arena.allocate(self.pipeline.descriptor_set_layout)
+                for _ in range(frame_count)
+            ]
+        except Exception:
+            self.close()
+            raise
+
+    @property
+    def group_counts(self) -> tuple[int, int, int]:
+        return (
+            (self.width + self.WORKGROUP_SIZE - 1) // self.WORKGROUP_SIZE,
+            (self.height + self.WORKGROUP_SIZE - 1) // self.WORKGROUP_SIZE,
+            1,
+        )
+
+    @property
+    def input_buffer_sizes(self) -> dict[str, int]:
+        pixels = self.width * self.height
+        return {"rgb": pixels * 3 * 4, "depth": pixels * 4}
+
+    def _record_active(self, command_buffer: Any) -> None:
+        if self.pipeline is None or self._active_descriptor_set is None:
+            raise RuntimeError("Vulkan stereo image pass is not ready")
+        self.pipeline.record_dispatch(
+            command_buffer,
+            group_count_x=self.group_counts[0],
+            group_count_y=self.group_counts[1],
+            group_count_z=1,
+            descriptor_set=self._active_descriptor_set,
+            push_constants=self._active_push_constants,
+        )
+
+    def submit(
+        self,
+        rgb: Any,
+        depth: Any,
+        left_eye: Any,
+        right_eye: Any,
+        *,
+        params: VulkanLayeredStereoParams,
+        frame_id: int,
+        config_version: int,
+        ready_timeline: int | None = None,
+        wait_semaphore: Any | None = None,
+        signal_semaphore: Any | None = None,
+    ) -> int:
+        if self.pipeline is None or self.descriptor_arena is None:
+            raise RuntimeError("Vulkan stereo image pass is closed")
+        buffers = (rgb, depth)
+        images = (left_eye, right_eye)
+        expected = self.input_buffer_sizes
+        for name, buffer in zip(("rgb", "depth"), buffers):
+            if getattr(buffer, "context", None) is not self.context:
+                raise ValueError(f"{name} buffer belongs to a different Vulkan context")
+            if int(getattr(buffer, "size", 0)) < expected[name]:
+                raise ValueError(f"{name} buffer is too small")
+        for image in images:
+            if getattr(image, "context", None) is not self.context:
+                raise ValueError("stereo output image belongs to a different Vulkan context")
+            if int(getattr(image, "width", 0)) != self.width or int(getattr(image, "height", 0)) != self.height:
+                raise ValueError("stereo output image dimensions do not match")
+            state = self.context.image_state(image.image)
+            if state.layout != self.context.vk.VK_IMAGE_LAYOUT_GENERAL:
+                raise ValueError("stereo output image must be in GENERAL layout before dispatch")
+
+        descriptor_set = self.descriptor_sets[self._descriptor_index]
+        self._descriptor_index = (self._descriptor_index + 1) % len(self.descriptor_sets)
+        self.descriptor_arena.update_storage_buffer(descriptor_set, 0, buffers[0])
+        self.descriptor_arena.update_storage_buffer(descriptor_set, 1, buffers[1])
+        self.descriptor_arena.update_storage_image(descriptor_set, 2, images[0])
+        self.descriptor_arena.update_storage_image(descriptor_set, 3, images[1])
+        self._active_descriptor_set = descriptor_set
+        self._active_push_constants = params.pack(self.width, self.height)
+        submit_kwargs = {}
+        if ready_timeline is not None:
+            submit_kwargs["wait_for_timeline"] = int(ready_timeline)
+        if wait_semaphore is not None:
+            submit_kwargs["wait_semaphore"] = wait_semaphore
+        if signal_semaphore is not None:
+            submit_kwargs["signal_semaphore"] = signal_semaphore
+        return self.context.submit_on("compute", self._record_active, **submit_kwargs)
+
+    def close(self) -> None:
+        if self.pipeline is not None:
+            self.pipeline.close()
+        if self.descriptor_arena is not None:
+            self.descriptor_arena.close()
+        self.pipeline = None
+        self.descriptor_arena = None
+        self.descriptor_sets = []
+        self._active_descriptor_set = None
+        self._active_push_constants = None
+
+    def __enter__(self) -> "VulkanStereoImagePass":
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        self.close()

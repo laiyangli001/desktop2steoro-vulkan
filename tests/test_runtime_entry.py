@@ -3,8 +3,11 @@ import json
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[1]
-RUNTIME_ENTRY = ROOT / "src/app_runtime/runtime_entry.py"
+from path_config import APP_ROOT, PROJECT_ROOT
+
+
+ROOT = PROJECT_ROOT
+RUNTIME_ENTRY = APP_ROOT / "app_runtime/runtime_entry.py"
 
 
 def _load_environment_resolver():
@@ -33,6 +36,21 @@ def test_legacy_streamer_normalizes_to_mjpeg() -> None:
     )
     assert resolved.run_mode == "Viewer"
     assert resolved.stream_mode == "MJPEG"
+
+
+def test_gpu_streamer_is_an_explicit_viewer_stream_mode() -> None:
+    from utils.run_mode import normalize_run_mode, resolve_run_mode
+
+    assert normalize_run_mode("NVIDIA Streamer") == "GPU Streamer"
+    resolved = resolve_run_mode(
+        "GPU Streamer",
+        os_name="Windows",
+        fix_viewer_aspect=False,
+        lossless_scaling_support=True,
+    )
+    assert resolved.run_mode == "Viewer"
+    assert resolved.stream_mode == "GPU"
+    assert resolved.fix_viewer_aspect
 
 
 def test_only_windows_3d_display_is_excluded_from_capture() -> None:

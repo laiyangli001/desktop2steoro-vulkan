@@ -82,11 +82,11 @@ xrWaitFrame
 
 当前相关入口：
 
-- OpenXR 帧循环与双眼提交：[`src/xr_viewer/core_openxr_vulkan.py`](../src/xr_viewer/core_openxr_vulkan.py)
+- OpenXR 帧循环与双眼提交：[`src/desktop2steoro/xr_viewer/core_openxr_vulkan.py`](../src/desktop2steoro/xr_viewer/core_openxr_vulkan.py)
 - Filament 原生帧边界：[`native/filament/bridge/bridge_eye.cpp`](../native/filament/bridge/bridge_eye.cpp)
-- Vulkan 提交和 FrameContext：[`src/viewer/vulkan_context.py`](../src/viewer/vulkan_context.py)
-- Vulkan Compute 输入环：[`src/stereo_runtime/vulkan_backend.py`](../src/stereo_runtime/vulkan_backend.py)
-- Runtime 输出调度：[`src/app_runtime/runtime_output.py`](../src/app_runtime/runtime_output.py)
+- Vulkan 提交和 FrameContext：[`src/desktop2steoro/viewer/vulkan_context.py`](../src/desktop2steoro/viewer/vulkan_context.py)
+- Vulkan Compute 输入环：[`src/desktop2steoro/stereo_runtime/vulkan_backend.py`](../src/desktop2steoro/stereo_runtime/vulkan_backend.py)
+- Runtime 输出调度：[`src/desktop2steoro/app_runtime/runtime_output.py`](../src/desktop2steoro/app_runtime/runtime_output.py)
 
 ## 4. 分阶段实施
 

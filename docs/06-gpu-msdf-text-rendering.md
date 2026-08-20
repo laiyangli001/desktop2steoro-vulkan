@@ -3,7 +3,7 @@
 ## Asset contract
 
 The MSDF text path uses one shared MSDF atlas. The source charset is
-`src/xr_viewer/fonts/overlay_charset.txt`,
+`src/desktop2steoro/xr_viewer/fonts/overlay_charset.txt`,
 copied from `E:\VAM2\UI字符中文字库\3500.txt` and currently contains 3,958
 unique characters. The atlas is generated offline; the runtime
 does not load a system font and does not rasterize text with Pillow on the
@@ -15,8 +15,8 @@ missing or invalid; it must not silently fall back to a partial system font.
 
 The generated files are:
 
-- `src/xr_viewer/fonts/d2s_overlay_msdf.*.png`: RGB MSDF atlas pages
-- `src/xr_viewer/fonts/d2s_overlay_msdf.json`: glyph metrics and page layout
+- `src/desktop2steoro/xr_viewer/fonts/d2s_overlay_msdf.*.png`: RGB MSDF atlas pages
+- `src/desktop2steoro/xr_viewer/fonts/d2s_overlay_msdf.json`: glyph metrics and page layout
 
 The checked-in atlas is repacked by `scripts/tools/repack_msdf_grid.py` after
 MSDF generation. It uses fixed 64x64 cells and the source charset order from
@@ -60,8 +60,8 @@ Generate the atlas:
 ./scripts/tools/generate_msdf_overlay_font.ps1
 
 python scripts/tools/repack_msdf_grid.py \
-  src/xr_viewer/fonts/d2s_overlay_msdf.0.png \
-  src/xr_viewer/fonts/grid-repacked
+  src/desktop2steoro/xr_viewer/fonts/d2s_overlay_msdf.0.png \
+  src/desktop2steoro/xr_viewer/fonts/grid-repacked
 ```
 
 The production font must be distributed under a license compatible with the

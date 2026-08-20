@@ -3,12 +3,13 @@ chcp 65001>nul
 setlocal
 
 set "LAB_DIR=%~dp0..\.."
-set "PYTHON_EXE=%LAB_DIR%\python3\python.exe"
+for /f "tokens=1,* delims==" %%A in (%LAB_DIR%\project_paths.env) do if "%%A"=="D2S_PYTHON_DIR" set "D2S_PYTHON_DIR=%%B"
+set "PYTHON_EXE=%LAB_DIR%\%D2S_PYTHON_DIR%\python.exe"
 set "ONNX_DIR=%LAB_DIR%\models\models--lc700x--Distill-Any-Depth-Base-hf"
 
 if not exist "%PYTHON_EXE%" (
   echo [Error] Python not found: %PYTHON_EXE%
-  echo [Hint] Copy Desktop2Stereo\python3 into this lab as python3 first.
+  echo [Hint] Install the project Python runtime under src\python3 first.
   pause
   exit /b 1
 )

@@ -3,6 +3,10 @@ import threading
 from types import SimpleNamespace
 from pathlib import Path
 
+from path_config import APP_ROOT
+
+from path_config import APP_ROOT
+
 from stereo_runtime.pipeline import (
     _ParallelDepthScheduler,
     RuntimePipelineLoop,
@@ -206,7 +210,7 @@ def test_motion_sample_is_snapshot_when_input_storage_is_reused():
 
 
 def test_openxr_pipeline_keeps_deferred_vulkan_request_path():
-    source = (Path(__file__).resolve().parents[1] / "src/stereo_runtime/pipeline.py").read_text(
+    source = (APP_ROOT / "stereo_runtime/pipeline.py").read_text(
         encoding="utf-8"
     )
 

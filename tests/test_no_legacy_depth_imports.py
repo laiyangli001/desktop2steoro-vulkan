@@ -1,11 +1,13 @@
 import ast
 from pathlib import Path
 
+from path_config import APP_ROOT
+
 
 ROOT = Path(__file__).resolve().parents[1]
-SCAN_DIRS = (ROOT / "src", ROOT / "scripts", ROOT / "tests")
+SCAN_DIRS = (APP_ROOT, ROOT / "scripts", ROOT / "tests")
 ALLOW = {
-    ROOT / "src" / "depth.py",
+    APP_ROOT / "depth.py",
 }
 SKIP_PARTS = {"python3", "python-cu13", "__pycache__"}
 

@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from path_config import APP_ROOT
 from xr_viewer.filament_vulkan_bridge import (
     FilamentBridgeError,
     FilamentVulkanBridge,
@@ -123,7 +124,7 @@ def test_environment_reflection_material_uses_continuous_screen_area_light() -> 
 def test_small_theater_uses_shared_continuous_screen_area_light() -> None:
     root = Path(__file__).resolve().parents[1]
     profile = json.loads((
-        root / "src/xr_viewer/environments/3d_theater/profile.json"
+        APP_ROOT / "xr_viewer/environments/3d_theater/profile.json"
     ).read_text(encoding="utf-8"))
 
     assert profile["screen_light_intensity"] == pytest.approx(6.0)
@@ -248,7 +249,7 @@ def test_controller_material_override_is_not_enabled_by_default_profiles() -> No
     assert 'hasParameter("specularColorFactor")' in controller
     for brand in ("HP", "INDEX", "PICO", "QUEST", "VIVE", "YVR"):
         profile = json.loads(
-            (root / f"src/xr_viewer/controllers/{brand}/profile.json").read_text(
+            (APP_ROOT / f"xr_viewer/controllers/{brand}/profile.json").read_text(
                 encoding="utf-8"
             )
         )["overrides"]
@@ -267,7 +268,7 @@ def test_controller_material_override_is_not_enabled_by_default_profiles() -> No
 
 def test_legacy_filament_screen_texture_light_path_stays_removed() -> None:
     root = Path(__file__).resolve().parents[1]
-    source = (root / "src/xr_viewer/core_openxr_vulkan.py").read_text(
+    source = (APP_ROOT / "xr_viewer/core_openxr_vulkan.py").read_text(
         encoding="utf-8"
     )
     facade = (root / "native/filament/bridge/filament_bridge.cpp").read_text(
@@ -280,16 +281,16 @@ def test_legacy_filament_screen_texture_light_path_stays_removed() -> None:
 
 def test_artemis_controller_lighting_matches_legacy_head_light() -> None:
     root = Path(__file__).resolve().parents[1]
-    profile_path = root / "src/xr_viewer/environments/3D_Artemis/profile.json"
+    profile_path = APP_ROOT / "xr_viewer/environments/3D_Artemis/profile.json"
     if not profile_path.is_file():
-        profile_path = root / "src/xr_viewer/environments/Artemis/profile.json"
+        profile_path = APP_ROOT / "xr_viewer/environments/Artemis/profile.json"
     profile = json.loads(
         profile_path.read_text(encoding="utf-8")
     )
     assert profile["env_head_light_color"] == [0.45, 0.45, 0.48]
     assert profile["env_ambient_color"] == [0.06, 0.05, 0.05]
     assert profile["preview_exposure"] == 0.0
-    config = (root / "src/xr_viewer/core_openxr_vulkan.py").read_text(
+    config = (APP_ROOT / "xr_viewer/core_openxr_vulkan.py").read_text(
         encoding="utf-8"
     )
     assert "filament_fill_light_intensity: float = 1.0" in config
@@ -315,7 +316,7 @@ def test_artemis_controller_lighting_matches_legacy_head_light() -> None:
     assert "struct FilamentBridgeLightingConfig;" in material_header
 
     common = json.loads(
-        (root / "src/xr_viewer/environments/common.json").read_text(encoding="utf-8")
+        (APP_ROOT / "xr_viewer/environments/common.json").read_text(encoding="utf-8")
     )["filament"]
     assert common["controller_head_light_weight"] == pytest.approx(0.85)
     assert common["controller_top_light_weight"] == pytest.approx(0.6)
@@ -336,12 +337,7 @@ def test_artemis_controller_lighting_matches_legacy_head_light() -> None:
 def test_packaged_controller_glb_animation_triplets_have_native_fallbacks(
     brand: str, hand: str
 ) -> None:
-    path = (
-        Path(__file__).resolve().parents[1]
-        / "src/xr_viewer/controllers"
-        / brand
-        / f"{hand}.glb"
-    )
+    path = APP_ROOT / "xr_viewer/controllers" / brand / f"{hand}.glb"
     payload = path.read_bytes()
     assert payload[:4] == b"glTF"
     json_length, json_type = struct.unpack_from("<II", payload, 12)
@@ -418,13 +414,13 @@ def test_native_controller_multiview_eye_diagnostic_replaces_glb_materials() -> 
 def test_controller_eye_diagnostic_launcher_enables_backend_stereo_trace() -> None:
     root = Path(__file__).resolve().parents[1]
     launcher = (
-        root / "run_windows_filament_multiview_controller_eye_diagnostic.ps1"
+        root / "scripts/run_windows_filament_multiview_controller_eye_diagnostic.ps1"
     ).read_text(encoding="utf-8")
 
     assert '$env:D2S_FILAMENT_CONTROLLER_EYE_DIAGNOSTIC = "1"' in launcher
     assert '$env:D2S_FILAMENT_EYE_DIAGNOSTIC = "1"' in launcher
     assert '$env:D2S_FILAMENT_SHADER_DUMP_DIR = $shaderDumpDir' in launcher
-    assert 'commonLightingPath = Join-Path $repoRoot "src\\xr_viewer\\environments\\common.json"' in launcher
+    assert 'commonLightingPath = Join-Path $repoRoot "src\\desktop2steoro\\xr_viewer\\environments\\common.json"' in launcher
     assert 'controller_head_light_weight' in launcher
     assert 'controller_top_light_weight' in launcher
     assert 'controller_screen_light_intensity_lux' in launcher
@@ -433,7 +429,7 @@ def test_controller_eye_diagnostic_launcher_enables_backend_stereo_trace() -> No
 
 def test_formal_launcher_clears_filament_diagnostics() -> None:
     root = Path(__file__).resolve().parents[1]
-    launcher = (root / "run_windows.bat").read_text(encoding="utf-8")
+    launcher = (root / "src/run_windows.bat").read_text(encoding="utf-8")
 
     for name in (
         "D2S_FILAMENT_CONTROLLER_EYE_DIAGNOSTIC",

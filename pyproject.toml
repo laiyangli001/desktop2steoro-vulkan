@@ -6,7 +6,7 @@ requires-python = ">=3.11,<3.13"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src/desktop2steoro"]
 
 [tool.ruff]
 target-version = "py311"

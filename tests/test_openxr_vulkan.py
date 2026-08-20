@@ -12,6 +12,8 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 import vulkan as vk
+
+from path_config import APP_ROOT
 import xr
 
 from app_runtime.output_contract import VulkanStereoOutputFrame
@@ -405,8 +407,7 @@ def test_b_button_position_is_resolved_from_each_controller_glb(
     brand_name: str, expected: tuple[float, float, float]
 ) -> None:
     path = (
-        Path(__file__).resolve().parents[1]
-        / f"src/xr_viewer/controllers/{brand_name}/right.glb"
+        APP_ROOT / f"xr_viewer/controllers/{brand_name}/right.glb"
     )
 
     position = controller_button_local_position(str(path), "b_button")
@@ -637,8 +638,8 @@ def test_controller_button_position_does_not_require_opengl_renderer(
 ) -> None:
     import builtins
 
-    path = (Path(__file__).resolve().parents[1] /
-            "src/xr_viewer/controllers/PICO/right.glb")
+    path = (APP_ROOT /
+            "xr_viewer/controllers/PICO/right.glb")
     original_import = builtins.__import__
 
     def reject_moderngl(name, *args, **kwargs):
@@ -699,8 +700,8 @@ def test_controller_guide_stays_head_facing_while_endpoint_follows_b_button() ->
 
 
 def test_controller_callout_uses_projection_layer_not_quad_layer() -> None:
-    source = (Path(__file__).resolve().parents[1] /
-              "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
+    source = (APP_ROOT /
+              "xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
 
     assert "return self._render_tool_quad_layers(output_frame)" in source
     assert "bridge.set_controller_guide_texture(self._controller_callout_rgba)" in source
@@ -722,8 +723,8 @@ def test_controller_callout_uses_projection_layer_not_quad_layer() -> None:
 
 
 def test_keyboard_quad_tracks_hover_and_held_indices() -> None:
-    source = (Path(__file__).resolve().parents[1] /
-              "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
+    source = (APP_ROOT /
+              "xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
 
     assert "hover_indices = tuple(" in source
     assert "held_indices = tuple(" in source
@@ -930,8 +931,8 @@ def test_presenter_inference_pressure_tracks_projection_and_queued_output() -> N
 
 
 def test_openxr_vulkan_uses_deeper_command_ring_for_multi_pass_projection() -> None:
-    source = (Path(__file__).resolve().parents[1] /
-              "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
+    source = (APP_ROOT /
+              "xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
 
     assert '"D2S_OPENXR_VULKAN_FRAME_CONTEXTS", 9, minimum=3.0' in source
     assert "frame_context_count=frame_context_count" in source
@@ -1592,8 +1593,8 @@ def test_screen_quad_reprojection_eye_diagnostic_clears_each_eye(monkeypatch) ->
 
 
 def test_projection_composer_uses_direct_vulkan_rasterization_in_opaque_runtime() -> None:
-    source = (Path(__file__).resolve().parents[1] /
-              "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
+    source = (APP_ROOT /
+              "xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
     render_source = inspect.getsource(
         OpenXrVulkanPresenter._render_vulkan_projection_composer
     )
@@ -1627,8 +1628,8 @@ def test_projection_pass_reports_creation_stage_and_fallback_traceback() -> None
 
 
 def test_filament_screen_image_abi_is_absent_from_presenter() -> None:
-    source = (Path(__file__).resolve().parents[1] /
-              "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
+    source = (APP_ROOT /
+              "xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
 
     for symbol in (
         "set_screen_image(",
@@ -1865,10 +1866,10 @@ def test_filament_controller_lifecycle_hides_each_idle_hand_independently() -> N
 
 def test_controller_touch_actions_cover_thumbstick_trackpad_and_thumbrest() -> None:
     root = Path(__file__).resolve().parents[1]
-    actions = (root / "src/xr_viewer/core_controller_actions.py").read_text(
+    actions = (APP_ROOT / "xr_viewer/core_controller_actions.py").read_text(
         encoding="utf-8"
     )
-    inputs = (root / "src/xr_viewer/core_controller_input.py").read_text(
+    inputs = (APP_ROOT / "xr_viewer/core_controller_input.py").read_text(
         encoding="utf-8"
     )
 
@@ -2823,14 +2824,12 @@ def test_vulkan_controller_proxy_packs_both_openxr_grip_poses() -> None:
     assert values[68:71] == pytest.approx((12.0, 1.0, 1.0))
 
     vertex_shader = (
-        Path(__file__).parents[1]
-        / "src"
+        APP_ROOT
         / "shaders"
         / "d2s_projection_controller_proxy_vert.vert"
     ).read_text(encoding="utf-8")
     fragment_shader = (
-        Path(__file__).parents[1]
-        / "src"
+        APP_ROOT
         / "shaders"
         / "d2s_projection_controller_proxy_frag.frag"
     ).read_text(encoding="utf-8")
@@ -2933,8 +2932,8 @@ def test_vulkan_shortcut_toggles_legacy_green_passthrough_backdrop() -> None:
 
 
 def test_openxr_frame_gate_waits_for_runtime_output_before_filament() -> None:
-    source = (Path(__file__).resolve().parents[1] /
-              "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
+    source = (APP_ROOT /
+              "xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
 
     assert "self._pending_output is None" in source
     assert "and not self._has_presented_frame" in source
@@ -2948,8 +2947,8 @@ def test_openxr_frame_gate_waits_for_runtime_output_before_filament() -> None:
 
 
 def test_quad_layer_uses_runtime_output_size_and_openxr_visibility() -> None:
-    source = (Path(__file__).resolve().parents[1] /
-              "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
+    source = (APP_ROOT /
+              "xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
 
     assert "_ensure_quad_swapchains(width, height)" in source
     assert '_select_swapchain_format(vk, formats, "srgb")' in source
@@ -2958,8 +2957,8 @@ def test_quad_layer_uses_runtime_output_size_and_openxr_visibility() -> None:
 
 
 def test_tool_quad_layer_enables_unpremultiplied_source_alpha() -> None:
-    source = (Path(__file__).resolve().parents[1] /
-              "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
+    source = (APP_ROOT /
+              "xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
 
     assert "CompositionLayerFlags.BLEND_TEXTURE_SOURCE_ALPHA_BIT" in source
     assert "CompositionLayerFlags.UNPREMULTIPLIED_ALPHA_BIT" in source
@@ -2969,16 +2968,16 @@ def test_tool_quad_layer_enables_unpremultiplied_source_alpha() -> None:
 
 
 def test_profile_reference_space_is_shared_with_controller_pose_queries() -> None:
-    source = (Path(__file__).resolve().parents[1] /
-              "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
+    source = (APP_ROOT /
+              "xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
 
     assert "self.reference_space = new_space" in source
     assert "self._xr_space = new_space" in source
 
 
 def test_profile_screen_height_defaults_to_16_9_width() -> None:
-    source = (Path(__file__).resolve().parents[1] /
-              "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
+    source = (APP_ROOT /
+              "xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
 
     assert 'float(screen.get("width", 2.4)) * 9.0 / 16.0' in source
     assert "EyeVisibility.RIGHT" in source
@@ -2988,16 +2987,16 @@ def test_profile_screen_height_defaults_to_16_9_width() -> None:
 
 
 def test_vulkan_copy_allows_srgb_unorm_quad_conversion() -> None:
-    source = (Path(__file__).resolve().parents[1] /
-              "src/viewer/vulkan_context.py").read_text(encoding="utf-8")
+    source = (APP_ROOT /
+              "viewer/vulkan_context.py").read_text(encoding="utf-8")
 
     assert "formats_are_srgb_compatible" in source
     assert "or not formats_match" in source
 
 
 def test_profile_pose_uses_two_frame_closed_loop_reference_space_calibration() -> None:
-    source = (Path(__file__).resolve().parents[1] /
-              "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
+    source = (APP_ROOT /
+              "xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
 
     assert "_apply_profile_reference_space(views)" in source
     assert "self._profile_space_calibration_pass >= 2" in source
@@ -3235,8 +3234,8 @@ def test_default_screen_is_initialized_from_head_pose() -> None:
 
 def test_packaged_default_profile_uses_neutral_filament_exposure() -> None:
     profile_path = (
-        Path(__file__).resolve().parents[1]
-        / "src/xr_viewer/environments/Default/profile.json"
+        APP_ROOT
+        / "xr_viewer/environments/Default/profile.json"
     )
     profile = json.loads(profile_path.read_text(encoding="utf-8"))
 
@@ -3250,7 +3249,7 @@ def test_packaged_default_profile_uses_neutral_filament_exposure() -> None:
 
 def test_packaged_3d_room_profiles_use_neutral_filament_exposure() -> None:
     environments_dir = (
-        Path(__file__).resolve().parents[1] / "src/xr_viewer/environments"
+        APP_ROOT / "xr_viewer/environments"
     )
     room_profiles = []
     for profile_path in environments_dir.glob("*/profile.json"):
@@ -3281,8 +3280,8 @@ def test_legacy_environment_exposure_does_not_override_filament_ev() -> None:
 
 def test_3d_cinema_profile_screen_faces_the_default_audience() -> None:
     profile_path = (
-        Path(__file__).resolve().parents[1]
-        / "src/xr_viewer/environments/3d_cinema/profile.json"
+        APP_ROOT
+        / "xr_viewer/environments/3d_cinema/profile.json"
     )
     profile = json.loads(profile_path.read_text(encoding="utf-8"))
 
@@ -3291,8 +3290,8 @@ def test_3d_cinema_profile_screen_faces_the_default_audience() -> None:
 
 
 def test_controller_profile_rotation_uses_local_x_axis() -> None:
-    source = (Path(__file__).resolve().parents[1] /
-              "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
+    source = (APP_ROOT /
+              "xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
     assert (
         "0.0, math.radians(self._controller_calibration_rotation_deg), 0.0"
         in source
@@ -3310,8 +3309,8 @@ def test_quad_profile_rotation_uses_legacy_yaw_pitch_roll_order() -> None:
 
 
 def test_projection_layer_routes_runtime_eyes_to_vulkan_composer() -> None:
-    source = (Path(__file__).resolve().parents[1] /
-              "src/xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
+    source = (APP_ROOT /
+              "xr_viewer/core_openxr_vulkan.py").read_text(encoding="utf-8")
     assert "_render_vulkan_projection_composer(" in source
     assert "bridge.set_screen_image(" not in source
     assert "The main SBS screen is Projection Composer-only" in source
@@ -3464,8 +3463,7 @@ def test_projection_glow_uses_reduced_surround_density_and_stable_order() -> Non
     assert "vk.VK_BLEND_OP_MAX if maximum else vk.VK_BLEND_OP_ADD" in pipeline_source
 
     shader = (
-        Path(__file__).parents[1]
-        / "src"
+        APP_ROOT
         / "shaders"
         / "d2s_projection_glow_vert.vert"
     ).read_text(encoding="utf-8")
@@ -3483,8 +3481,7 @@ def test_projection_glow_uses_reduced_surround_density_and_stable_order() -> Non
 
 def test_projection_glow_does_not_repeat_the_producer_y_flip() -> None:
     shader = (
-        Path(__file__).parents[1]
-        / "src"
+        APP_ROOT
         / "shaders"
         / "d2s_projection_glow_frag.frag"
     ).read_text(encoding="utf-8")
@@ -4157,10 +4154,10 @@ def test_pure_vulkan_multiview_diagnostic_bypasses_filament(monkeypatch) -> None
 
     assert presenter.filament_bridge is None
     root = Path(__file__).resolve().parents[1]
-    vertex_shader = (root / "src/shaders/d2s_multiview_eye_diag.vert").read_text(
+    vertex_shader = (APP_ROOT / "shaders/d2s_multiview_eye_diag.vert").read_text(
         encoding="utf-8"
     )
-    fragment_shader = (root / "src/shaders/d2s_multiview_eye_diag.frag").read_text(
+    fragment_shader = (APP_ROOT / "shaders/d2s_multiview_eye_diag.frag").read_text(
         encoding="utf-8"
     )
     assert "viewIndexFromVertex = gl_ViewIndex" in vertex_shader

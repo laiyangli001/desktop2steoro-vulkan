@@ -1,6 +1,8 @@
 import importlib.util
 from pathlib import Path
 
+from path_config import APP_ROOT
+
 import numpy as np
 
 
@@ -14,8 +16,8 @@ def _load_module(name, relative_path):
     return module
 
 
-display_module = _load_module("display_module", Path("src") / "utils" / "display.py")
-preprocess_module = _load_module("preprocess_module", Path("src") / "capture" / "preprocess.py")
+display_module = _load_module("display_module", APP_ROOT / "utils" / "display.py")
+preprocess_module = _load_module("preprocess_module", APP_ROOT / "capture" / "preprocess.py")
 compute_output_resolution = display_module.compute_output_resolution
 capture_frame_to_rgb = preprocess_module.capture_frame_to_rgb
 

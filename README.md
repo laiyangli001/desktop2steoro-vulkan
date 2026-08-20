@@ -17,13 +17,13 @@ Desktop2Stereo的Python Vulkan迁移项目。项目保持原工程的`src/`目�
 ## 启动
 
 ```powershell
-src\python3\python.exe src\main.py
+src\python3\python.exe src\desktop2steoro\main.py
 ```
 
-默认启动进入新的 Flet GUI；颜色、立体参数和运行配置由 GUI 写入`src/settings.yaml`。能力检查仍可使用：
+默认启动进入新的 Flet GUI；颜色、立体参数和运行配置由 GUI 写入`src/desktop2steoro/settings.yaml`。能力检查仍可使用：
 
 ```powershell
-src\python3\python.exe src\main.py --probe
+src\python3\python.exe src\desktop2steoro\main.py --probe
 ```
 
 GUI 的“运行”按钮已使用独立的`--runtime`子进程入口，不会递归打开第二个 GUI；完整捕捉、推理和输出运行时仍按迁移计划继续装配。
@@ -31,7 +31,7 @@ GUI 的“运行”按钮已使用独立的`--runtime`子进程入口，不会�
 连接并唤醒头显、确认目标OpenXR Runtime处于活动状态后，可执行Phase 1双眼纯色帧实测：
 
 ```powershell
-src\python3\python.exe src\tools\openxr_vulkan_smoke.py --frames 300
+src\python3\python.exe src\desktop2steoro\tools\openxr_vulkan_smoke.py --frames 300
 ```
 
 该入口只验证OpenXR Vulkan会话与交换链闭环，不代表Filament场景渲染已经接入。
@@ -39,11 +39,11 @@ src\python3\python.exe src\tools\openxr_vulkan_smoke.py --frames 300
 启用Filament GLB场景渲染时，显式指定当前平台Bridge和GLB资源：
 
 ```powershell
-src\python3\python.exe src\tools\openxr_vulkan_smoke.py `
+src\python3\python.exe src\desktop2steoro\tools\openxr_vulkan_smoke.py `
   --seconds 120 `
-  --filament-bridge src\xr_viewer\native\filament_bridge.dll `
-  --filament-glb src\xr_viewer\environments\Artemis\environment.glb `
-  --filament-profile src\xr_viewer\environments\Artemis\profile.json
+  --filament-bridge src\desktop2steoro\xr_viewer\native\windows\filament_bridge.dll `
+  --filament-glb src\desktop2steoro\xr_viewer\environments\Artemis\environment.glb `
+  --filament-profile src\desktop2steoro\xr_viewer\environments\Artemis\profile.json
 ```
 
 `--filament-profile`会把profile中选中的座位映射到初始头部位置，同时保留后续头部移动和双眼视差；`--seconds`用于按时间进行长测。Linux使用`libfilament_bridge.so`，macOS使用`libfilament_bridge.dylib`。该模式需要连接并唤醒头显。

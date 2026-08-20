@@ -1,8 +1,10 @@
 from pathlib import Path
 
+from path_config import APP_ROOT
+
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "src" / "capture" / "backends" / "macos_coregraphics.py"
+SOURCE = APP_ROOT / "capture" / "backends" / "macos_coregraphics.py"
 
 
 def _source() -> str:

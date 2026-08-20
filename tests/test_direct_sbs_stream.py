@@ -1,6 +1,8 @@
 import queue
 import threading
 from pathlib import Path
+
+from path_config import APP_ROOT
 from types import SimpleNamespace
 
 import numpy as np
@@ -171,6 +173,18 @@ def test_cuda_converter_reuses_pinned_host_buffer():
     assert converter._host_rgb.is_pinned()
 
 
+def test_packet_loss_detector_matches_transport_loss_messages():
+    assert FfmpegDirectSbsOutput._looks_like_packet_loss(
+        "[WebRTC] packet missed: sequence gap"
+    )
+    assert FfmpegDirectSbsOutput._looks_like_packet_loss(
+        "RTP buffer underflow"
+    )
+    assert not FfmpegDirectSbsOutput._looks_like_packet_loss(
+        "[WebRTC] peer connected"
+    )
+
+
 def test_streaming_runtime_dir_overrides_bundled_paths(monkeypatch, tmp_path):
     runtime_root = tmp_path / "streaming"
     ffmpeg_bin = runtime_root / "ffmpeg" / "bin"
@@ -183,7 +197,7 @@ def test_streaming_runtime_dir_overrides_bundled_paths(monkeypatch, tmp_path):
     monkeypatch.setenv("D2S_STREAMING_RUNTIME_DIR", str(runtime_root))
 
     output = FfmpegDirectSbsOutput(
-        base_dir="src", protocol="RTMP", port=1935, stream_key="live",
+        base_dir=str(APP_ROOT), protocol="RTMP", port=1935, stream_key="live",
         fps=30, crf=20, os_name="Linux"
     )
 
@@ -194,7 +208,7 @@ def test_streaming_runtime_dir_overrides_bundled_paths(monkeypatch, tmp_path):
 
 def test_ffmpeg_output_finds_bundled_encoder_and_config():
     output = FfmpegDirectSbsOutput(
-        base_dir="src",
+        base_dir=str(APP_ROOT),
         protocol="RTMP",
         port=1935,
         stream_key="live",
@@ -212,7 +226,7 @@ def test_ffmpeg_output_finds_bundled_encoder_and_config():
 
 def test_mediamtx_startup_error_includes_server_output(monkeypatch):
     output = FfmpegDirectSbsOutput(
-        base_dir="src",
+        base_dir=str(APP_ROOT),
         protocol="RTMP",
         port=1935,
         stream_key="live",
@@ -245,7 +259,7 @@ def test_mediamtx_startup_error_includes_server_output(monkeypatch):
 
 def test_non_webrtc_start_recommends_webrtc(monkeypatch, capsys):
     output = FfmpegDirectSbsOutput(
-        base_dir="src",
+        base_dir=str(APP_ROOT),
         protocol="RTMP",
         port=1935,
         stream_key="live",
@@ -275,7 +289,7 @@ def test_non_webrtc_start_recommends_webrtc(monkeypatch, capsys):
 
 def test_stream_rate_uses_stable_windows_and_fixed_pacing():
     output = FfmpegDirectSbsOutput(
-        base_dir="src",
+        base_dir=str(APP_ROOT),
         protocol="RTMP",
         port=1935,
         stream_key="live",
@@ -314,7 +328,7 @@ def test_unstable_stream_rate_uses_low_recent_percentile():
 
 def test_windows_rtmp_command_keeps_legacy_srt_transport_parameters():
     output = FfmpegDirectSbsOutput(
-        base_dir="src",
+        base_dir=str(APP_ROOT),
         protocol="RTMP",
         port=1935,
         stream_key="legacy-compatible",
@@ -345,7 +359,7 @@ def test_windows_rtmp_command_keeps_legacy_srt_transport_parameters():
 
 def test_encoder_candidates_cover_platform_hardware_fallbacks(monkeypatch):
     output = FfmpegDirectSbsOutput(
-        base_dir="src",
+        base_dir=str(APP_ROOT),
         protocol="RTMP",
         port=1935,
         stream_key="live",
@@ -417,7 +431,7 @@ def test_qsv_and_amf_commands_avoid_nvenc_only_options():
 
 def test_vaapi_command_uploads_frames_to_hardware():
     output = FfmpegDirectSbsOutput(
-        base_dir="src",
+        base_dir=str(APP_ROOT),
         protocol="RTMP",
         port=1935,
         stream_key="live",
@@ -435,7 +449,7 @@ def test_vaapi_command_uploads_frames_to_hardware():
 
 def test_nvenc_command_uses_low_latency_hardware_encoder():
     output = FfmpegDirectSbsOutput(
-        base_dir="src",
+        base_dir=str(APP_ROOT),
         protocol="RTMP",
         port=1935,
         stream_key="live",
@@ -461,7 +475,7 @@ def test_nvenc_command_uses_low_latency_hardware_encoder():
 
 def test_full_sbs_uses_hevc_nvenc_without_resizing(monkeypatch):
     output = FfmpegDirectSbsOutput(
-        base_dir="src",
+        base_dir=str(APP_ROOT),
         protocol="HLS",
         port=8888,
         stream_key="live",
@@ -490,7 +504,7 @@ def test_full_sbs_uses_hevc_nvenc_without_resizing(monkeypatch):
 
 def test_full_sbs_hevc_falls_back_to_libx265(monkeypatch, capsys):
     output = FfmpegDirectSbsOutput(
-        base_dir="src",
+        base_dir=str(APP_ROOT),
         protocol="HLS",
         port=8888,
         stream_key="live",
@@ -514,7 +528,7 @@ def test_full_sbs_hevc_falls_back_to_libx265(monkeypatch, capsys):
 
 def test_dynamic_stream_quality_tracks_codec_fps_resolution_and_crf():
     h264 = FfmpegDirectSbsOutput(
-        base_dir="src",
+        base_dir=str(APP_ROOT),
         protocol="HLS",
         port=8888,
         stream_key="live",
@@ -524,7 +538,7 @@ def test_dynamic_stream_quality_tracks_codec_fps_resolution_and_crf():
         display_mode="Half-SBS",
     )
     hevc_lower_quality = FfmpegDirectSbsOutput(
-        base_dir="src",
+        base_dir=str(APP_ROOT),
         protocol="HLS",
         port=8888,
         stream_key="live",
@@ -544,7 +558,7 @@ def test_dynamic_stream_quality_tracks_codec_fps_resolution_and_crf():
 
 def test_dynamic_rate_budget_covers_rtmp_and_webrtc_but_not_rtsp():
     output = FfmpegDirectSbsOutput(
-        base_dir="src",
+        base_dir=str(APP_ROOT),
         protocol="RTMP",
         port=1935,
         stream_key="live",
@@ -580,7 +594,7 @@ def test_dynamic_rate_budget_covers_rtmp_and_webrtc_but_not_rtsp():
 
 def test_windows_stream_audio_uses_hls_compatible_aac():
     output = FfmpegDirectSbsOutput(
-        base_dir="src",
+        base_dir=str(APP_ROOT),
         protocol="HLS",
         port=8888,
         stream_key="live",
@@ -600,7 +614,7 @@ def test_windows_stream_audio_uses_hls_compatible_aac():
 
 def test_windows_webrtc_stream_audio_uses_opus():
     output = FfmpegDirectSbsOutput(
-        base_dir="src",
+        base_dir=str(APP_ROOT),
         protocol="WebRTC",
         port=8889,
         stream_key="live",
@@ -623,7 +637,7 @@ def test_windows_webrtc_stream_audio_uses_opus():
 
 def test_audio_delay_hot_update_restarts_only_ffmpeg(monkeypatch):
     output = FfmpegDirectSbsOutput(
-        base_dir="src",
+        base_dir=str(APP_ROOT),
         protocol="RTMP",
         port=1935,
         stream_key="live",
@@ -655,7 +669,7 @@ def test_audio_delay_hot_update_restarts_only_ffmpeg(monkeypatch):
 
 def test_nvenc_selection_falls_back_when_probe_fails(monkeypatch, capsys):
     output = FfmpegDirectSbsOutput(
-        base_dir="src",
+        base_dir=str(APP_ROOT),
         protocol="RTMP",
         port=1935,
         stream_key="live",
@@ -672,7 +686,7 @@ def test_nvenc_selection_falls_back_when_probe_fails(monkeypatch, capsys):
 
 def test_nvenc_probe_uses_actual_sbs_resolution(monkeypatch):
     output = FfmpegDirectSbsOutput(
-        base_dir="src",
+        base_dir=str(APP_ROOT),
         protocol="RTMP",
         port=1935,
         stream_key="live",
@@ -695,7 +709,7 @@ def test_nvenc_probe_uses_actual_sbs_resolution(monkeypatch):
 
 def test_nvenc_probe_logs_ffmpeg_failure_detail(monkeypatch, capsys):
     output = FfmpegDirectSbsOutput(
-        base_dir="src",
+        base_dir=str(APP_ROOT),
         protocol="RTMP",
         port=1935,
         stream_key="live",
@@ -720,7 +734,7 @@ def test_nvenc_probe_logs_ffmpeg_failure_detail(monkeypatch, capsys):
 
 
 def test_mediamtx_hls_segment_limit_supports_high_bitrate_full_sbs():
-    config = Path("src/streaming/rtmp/mediamtx/mediamtx.yml").read_text(
+    config = (APP_ROOT / "streaming/rtmp/mediamtx/mediamtx.yml").read_text(
         encoding="utf-8"
     )
 
@@ -729,7 +743,7 @@ def test_mediamtx_hls_segment_limit_supports_high_bitrate_full_sbs():
 
 def test_rtsp_selection_uses_selected_port_for_internal_publish():
     output = FfmpegDirectSbsOutput(
-        base_dir="src",
+        base_dir=str(APP_ROOT),
         protocol="RTSP",
         port=9554,
         stream_key="live",

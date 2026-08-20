@@ -1,10 +1,12 @@
 import sys
 from pathlib import Path
 
+from path_config import APP_ROOT
+
 import torch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(APP_ROOT))
 
 from stereo_runtime.model_artifacts import artifact_paths_for_model
 from stereo_runtime.onnx_export import _quiet_onnx_export_warnings, choose_export_dtype, export_depth_model_onnx, probe_model_dtype
