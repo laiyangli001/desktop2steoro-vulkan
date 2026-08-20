@@ -21,7 +21,8 @@ jobs:
       - name: Download AMD AMF SDK headers
         shell: pwsh
         run: |
-          git clone --depth 1 https://github.com/GPUOpen-LibrariesAndSDKs/AMF.git "$env:RUNNER_TEMP\AMF"
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/GPUOpen-LibrariesAndSDKs/AMF.git "$env:RUNNER_TEMP\AMF"
+          git -C "$env:RUNNER_TEMP\AMF" sparse-checkout set amf/public/include
 
       - name: Configure CMake
         shell: pwsh
