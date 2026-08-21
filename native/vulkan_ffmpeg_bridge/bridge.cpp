@@ -444,7 +444,7 @@ extern "C" void* d2s_vulkan_ffmpeg_encoder_create(
     // Vulkan Video input on the target NVIDIA driver.
     vulkan_frames->usage = static_cast<VkImageUsageFlagBits>(
         VK_IMAGE_USAGE_VIDEO_ENCODE_SRC_BIT_KHR | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
-    vulkan_frames->flags = 0;
+    vulkan_frames->flags = static_cast<AVVkFrameFlags>(0);
     vulkan_frames->create_pnext = &video_profiles;
     if (av_hwframe_ctx_init(result->frames) < 0) {
         destroy_encoder(result);
