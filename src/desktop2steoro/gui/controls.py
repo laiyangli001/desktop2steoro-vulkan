@@ -100,6 +100,68 @@ class CompactTextField(ft.Container):
         self.update()
 
 
+class CompactDisplayField(ft.Container):
+    """Read-only compact field with content-driven min/max width constraints."""
+
+    def __init__(self, value="", min_width=None, max_width=None, on_click=None):
+        super().__init__()
+        self._value = str(value or "")
+        self._min = min_width or 0
+        self._max = max_width or 0
+        self.height = S(32)
+        self.padding = ft.Padding(S(8), 0, S(8), 0)
+        self.border = ft.Border(
+            ft.BorderSide(1, ft.Colors.OUTLINE),
+            ft.BorderSide(1, ft.Colors.OUTLINE),
+            ft.BorderSide(1, ft.Colors.OUTLINE),
+            ft.BorderSide(1, ft.Colors.OUTLINE),
+        )
+        self.border_radius = 4
+        self.clip_behavior = ft.ClipBehavior.HARD_EDGE
+        self.on_click = on_click
+        self._label = ft.Text(
+            self._value,
+            size=FONT_SIZE,
+            no_wrap=True,
+            overflow=ft.TextOverflow.ELLIPSIS,
+        )
+        self.content = ft.Row(
+            [self._label],
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+        self._apply_width()
+
+    def _calc_auto_width(self):
+        text_width = sum(
+            FONT_SIZE * (1.0 if ord(char) > 127 else 0.5)
+            for char in self._value
+        )
+        return int(text_width) + S(24)
+
+    def _apply_width(self):
+        width = self._calc_auto_width()
+        if self._min:
+            width = max(width, self._min)
+        if self._max:
+            width = min(width, self._max)
+        self.width = width
+
+    @property
+    def value(self):
+        return self._value
+
+    @value.setter
+    def value(self, value):
+        self._value = str(value or "")
+        self._label.value = self._value
+        self._apply_width()
+        try:
+            self._label.update()
+            self.update()
+        except RuntimeError:
+            pass
+
+
 class CompactDropdown(ft.Container):
     """Compact dropdown, PopupMenuButton with controllable width."""
 

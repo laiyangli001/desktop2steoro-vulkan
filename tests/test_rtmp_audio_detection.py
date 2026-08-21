@@ -26,9 +26,38 @@ def test_windows_soundcard_version_supports_pinned_numpy_binary_buffers() -> Non
     requirements = (
         Path(__file__).resolve().parents[1] / "src/env_install/requirements.txt"
     ).read_text(encoding="utf-8")
+    mediafoundation = (
+        Path(__file__).resolve().parents[1]
+        / "src/python3/Lib/site-packages/soundcard/mediafoundation.py"
+    ).read_text(encoding="utf-8")
 
     assert "numpy==2.5.0" in requirements
     assert 'soundcard==0.4.6; platform_system == "Windows"' in requirements
+    assert "numpy.frombuffer" in mediafoundation
+    assert "numpy.fromstring" not in mediafoundation
+
+
+def test_soundcard_loopback_lists_windows_default_speaker_first(monkeypatch):
+    from streaming.wasapi_audio import query_soundcard_loopback_devices
+
+    class Speaker:
+        def __init__(self, speaker_id, name):
+            self.id = speaker_id
+            self.name = name
+
+    default = Speaker("default-id", "Default Headphones")
+    other = Speaker("other-id", "Other Speakers")
+    fake_soundcard = types.SimpleNamespace(
+        default_speaker=lambda: default,
+        all_speakers=lambda: [other, default],
+        get_microphone=lambda **kwargs: types.SimpleNamespace(isloopback=True),
+    )
+    monkeypatch.setitem(sys.modules, "soundcard", fake_soundcard)
+
+    assert query_soundcard_loopback_devices() == [
+        "Default Headphones",
+        "Other Speakers",
+    ]
 
 
 def _target():
@@ -75,6 +104,7 @@ def test_windows_detection_prefers_dshow_virtual_audio(
 
     caplog.set_level(logging.WARNING, logger="gui.handlers")
     monkeypatch.setattr(handlers, "OS_NAME", "Windows")
+    monkeypatch.setattr(handlers, "query_soundcard_loopback_devices", lambda: None)
     monkeypatch.setattr(
         handlers,
         "query_ffmpeg_dshow_audio_devices",
@@ -94,13 +124,52 @@ def test_windows_detection_prefers_dshow_virtual_audio(
     assert not caplog.messages
 
 
-def test_windows_detection_warns_when_dshow_has_no_loopback(
+def test_windows_detection_prefers_soundcard_loopback(
     monkeypatch, caplog
 ) -> None:
     from gui import handlers
 
     caplog.set_level(logging.WARNING, logger="gui.handlers")
     monkeypatch.setattr(handlers, "OS_NAME", "Windows")
+    monkeypatch.setattr(
+        handlers,
+        "query_soundcard_loopback_devices",
+        lambda: ["Default speakers"],
+    )
+    monkeypatch.setattr(
+        handlers,
+        "query_ffmpeg_wasapi_audio_devices",
+        lambda path: (_ for _ in ()).throw(
+            AssertionError("FFmpeg probing must not run when SoundCard loopback works")
+        ),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "query_ffmpeg_dshow_audio_devices",
+        lambda path: ["virtual-audio-capturer"],
+    )
+
+    target = _target()
+    target._populate_audio_generic()
+    target.audio_dd = types.SimpleNamespace(value=None, update=lambda: None)
+    target.auto_select_stereo_mix()
+
+    assert target.audio_devices == [
+        "soundcard:Default speakers",
+        "virtual-audio-capturer",
+    ]
+    assert target.audio_dd.value == "soundcard:Default speakers"
+    assert not caplog.messages
+
+
+def test_windows_detection_silently_falls_back_when_dshow_has_no_loopback(
+    monkeypatch, caplog
+) -> None:
+    from gui import handlers
+
+    caplog.set_level(logging.WARNING, logger="gui.handlers")
+    monkeypatch.setattr(handlers, "OS_NAME", "Windows")
+    monkeypatch.setattr(handlers, "query_soundcard_loopback_devices", lambda: None)
     monkeypatch.setattr(
         handlers,
         "query_ffmpeg_dshow_audio_devices",
@@ -111,14 +180,7 @@ def test_windows_detection_warns_when_dshow_has_no_loopback(
     target._populate_audio_generic()
 
     assert target.audio_devices == ["virtual-audio-capturer"]
-    assert caplog.messages == [
-        "No Stereo Mix devices found, please enable it in audio settings.",
-        "If no Stereo Mix, install 'Screen Capture Recorder':",
-        (
-            "https://github.com/rdp/"
-            "screen-capture-recorder-to-video-windows-free/releases"
-        ),
-    ]
+    assert not caplog.messages
 
 
 def test_windows_detection_falls_back_to_sounddevice(
@@ -128,6 +190,7 @@ def test_windows_detection_falls_back_to_sounddevice(
 
     caplog.set_level(logging.WARNING, logger="gui.handlers")
     monkeypatch.setattr(handlers, "OS_NAME", "Windows")
+    monkeypatch.setattr(handlers, "query_soundcard_loopback_devices", lambda: None)
     monkeypatch.setattr(
         handlers,
         "query_ffmpeg_dshow_audio_devices",

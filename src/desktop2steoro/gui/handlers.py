@@ -6,7 +6,7 @@ import re
 import subprocess
 import flet as ft
 from utils import (
-    OS_NAME, ALL_MODELS, DEFAULT_PORT, STEREO_MIX_NAMES,
+    OS_NAME, DEFAULT_PORT, STEREO_MIX_NAMES,
     DISABLE_TRT_KEYWORDS, DISABLE_COREML_KEYWORDS, DISABLE_OPENVINO_KEYWORDS,
     DISABLE_MIGRAPHX_KEYWORDS,
     get_local_ip,
@@ -16,6 +16,7 @@ from streaming.audio import (
     query_ffmpeg_dshow_audio_devices,
     query_ffmpeg_wasapi_audio_devices,
 )
+from streaming.wasapi_audio import query_soundcard_loopback_devices
 from utils.xr_headset_presets import display_to_xr_headset, xr_headset_options, xr_headset_to_display
 from . import devices as devices_module
 from .capture_sources import (
@@ -154,6 +155,8 @@ class GUIHandlerMixin:
     # ── device / accelerator handlers ──
 
     def on_device_change(self, e):
+        if getattr(self, "_startup_defer_devices", False):
+            return
         device_label = e.control.value if e else self.device_dd.value
         self._config["Computing Device"] = self.device_label_to_index.get(device_label, 0)
         if OS_NAME in ("Windows", "Darwin"):
@@ -319,6 +322,8 @@ class GUIHandlerMixin:
         self._on_migraphx_toggle(None)
 
     def auto_enable_optimizers_based_on_device(self):
+        if getattr(self, "_startup_defer_devices", False):
+            return
         if (
             "CUDA" in (self.device_dd.value or "")
             and not devices_module.IS_ROCM
@@ -559,11 +564,13 @@ class GUIHandlerMixin:
         if mode == "Local Viewer":
             self._auto_select_stereo_monitor()
         if mode in {"RTMP Streamer", "GPU Streamer"}:
-            self.populate_audio_devices()
-            self.auto_select_stereo_mix()
-            saved_mix = self._config.get("Stereo Mix", "")
-            if saved_mix and saved_mix in (self.audio_dd.options or []):
-                self.audio_dd.value = saved_mix
+            if getattr(self, "_startup_defer_audio", False):
+                # The slow SoundCard/WASAPI scan runs after the window is shown.
+                self.audio_dd.options = []
+                self.audio_dd.value = ""
+            elif not self.audio_devices:
+                self.populate_audio_devices()
+                self.auto_select_stereo_mix()
         self.update_stream_url()
         self._fit_window_to_content()
         self.page.update()
@@ -687,7 +694,12 @@ class GUIHandlerMixin:
         self.acceleration_label.value = t["Inference Acceleration:"]
         self.torch_compile_cb.label = t["torch.compile"]
         self.tensorrt_cb.label = t["TensorRT"]
+        parallel_workers = self._display_to_parallel_inference_workers(
+            self.parallel_inference_dd.value
+        )
         self.parallel_inference_label.value = t.get("Parallel Inference", "Parallel Inference") + ":"
+        self.parallel_inference_dd.options = self._parallel_inference_options()
+        self.parallel_inference_dd.value = self._parallel_inference_to_display(parallel_workers)
         self.coreml_cb.label = t["CoreML"]
         self.openvino_cb.label = t["OpenVINO"]
         self.recompile_trt_cb.label = t["Recompile TensorRT"]
@@ -916,7 +928,7 @@ class GUIHandlerMixin:
         port = self.stream_port_tf.value or str(DEFAULT_PORT)
         stream_key = self.stream_key_tf.value or "live"
         local_ip = getattr(self, "_local_ip_cache", "127.0.0.1")
-        self.stream_url_tf.content.controls[0].value = self._format_stream_url(local_ip, protocol, port, stream_key)
+        self.stream_url_tf.value = self._format_stream_url(local_ip, protocol, port, stream_key)
         self._safe_update(self.stream_url_tf)
         self.preview_btn.visible = protocol not in ["RTMP", "RTSP"]
         self._safe_update(self.preview_btn)
@@ -943,6 +955,9 @@ class GUIHandlerMixin:
             self._populate_audio_linux()
         else:
             self._populate_audio_generic()
+        self._apply_audio_devices_to_dropdown()
+
+    def _apply_audio_devices_to_dropdown(self):
         if self.audio_devices:
             self.audio_dd.options = [d for d in self.audio_devices]
             self.audio_dd.value = self.audio_devices[0]
@@ -950,18 +965,20 @@ class GUIHandlerMixin:
             if self.audio_devices[0] in ["No Stereo Mix device found", "sounddevice not available"]:
                 self.set_status(self.audio_devices[0])
 
-    @staticmethod
-    def _log_missing_windows_audio_capture():
-        logger.warning(
-            "No Stereo Mix devices found, please enable it in audio settings."
-        )
-        logger.warning(
-            "If no Stereo Mix, install 'Screen Capture Recorder':"
-        )
-        logger.warning(
-            "https://github.com/rdp/"
-            "screen-capture-recorder-to-video-windows-free/releases"
-        )
+    async def populate_audio_devices_after_startup(self):
+        """Discover slow audio backends without delaying the first GUI frame."""
+        try:
+            if OS_NAME == "Linux":
+                await asyncio.to_thread(self._populate_audio_linux)
+            else:
+                await asyncio.to_thread(self._populate_audio_generic)
+            if getattr(self, "_closed", False):
+                return
+            self._apply_audio_devices_to_dropdown()
+            self.auto_select_stereo_mix()
+            self._fit_window_to_content(update=True, resize_window=True)
+        except (asyncio.CancelledError, RuntimeError):
+            return
 
     def _populate_audio_generic(self):
         self.audio_devices = []
@@ -974,9 +991,32 @@ class GUIHandlerMixin:
                 "bin",
                 "ffmpeg.exe",
             )
+
+            def append_virtual_audio_capture(devices):
+                for device in devices or []:
+                    if (
+                        "virtual-audio-capturer" in str(device).casefold()
+                        and device not in self.audio_devices
+                    ):
+                        self.audio_devices.append(device)
+
+            soundcard_devices = query_soundcard_loopback_devices()
+            if soundcard_devices:
+                self.audio_devices = [f"soundcard:{name}" for name in soundcard_devices]
+                append_virtual_audio_capture(
+                    query_ffmpeg_dshow_audio_devices(ffmpeg_path)
+                )
+                logger.info(
+                    "Using SoundCard WASAPI loopback audio devices: %s",
+                    self.audio_devices,
+                )
+                return
             wasapi_devices = query_ffmpeg_wasapi_audio_devices(ffmpeg_path)
             if wasapi_devices:
                 self.audio_devices = [f"wasapi:{name}" for name in wasapi_devices]
+                append_virtual_audio_capture(
+                    query_ffmpeg_dshow_audio_devices(ffmpeg_path)
+                )
                 logger.info(
                     "Using Windows WASAPI loopback audio devices: %s",
                     self.audio_devices,
@@ -986,7 +1026,6 @@ class GUIHandlerMixin:
             if dshow_devices is not None:
                 self.audio_devices = find_loopback_audio_devices(dshow_devices)
                 if not self.audio_devices:
-                    self._log_missing_windows_audio_capture()
                     self.audio_devices = ["virtual-audio-capturer"]
                 return
         try:
@@ -1006,7 +1045,6 @@ class GUIHandlerMixin:
                 logger.info("No audio capture devices found on MacOS. Recommended tools: BlackHole, Virtual Desktop Streamer, Loopback")
                 self.audio_devices = ["No audio capture devices found"]
             elif not found and OS_NAME == "Windows":
-                self._log_missing_windows_audio_capture()
                 self.audio_devices = ["virtual-audio-capturer"]
             else:
                 self.audio_devices = found or ["No Stereo Mix device found"]
@@ -1033,6 +1071,10 @@ class GUIHandlerMixin:
             return
         for dev in self.audio_devices:
             dl = dev.lower()
+            if dl.startswith(("soundcard:", "wasapi:")):
+                self.audio_dd.value = dev
+                self.audio_dd.update()
+                return
             for mix in STEREO_MIX_NAMES:
                 if mix in dl and "audio stereo input" not in dl:
                     self.audio_dd.value = dev

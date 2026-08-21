@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import math
 import os
+import re
 from pathlib import Path
 import platform
 import queue
@@ -13,6 +14,8 @@ import sys
 import threading
 import time
 from typing import Any, Callable
+from urllib.parse import quote
+from urllib.request import urlopen
 
 import numpy as np
 
@@ -248,6 +251,15 @@ class DirectSbsOutputConsumer:
             try:
                 runtime_result, _capture_timestamp = item
                 self._fps_sbs_frames += 1
+                prepare_calibration = getattr(
+                    self.output, "prepare_calibration_source", None
+                )
+                if callable(prepare_calibration) and prepare_calibration(runtime_result):
+                    self._fps_submitted_frames += 1
+                    self.source_stat_inc("runtime_output_frames")
+                    self.source_stat_inc("network_stream_frames")
+                    self._report_fps_if_due()
+                    continue
                 should_submit = getattr(self.output, "should_submit_frame", None)
                 if callable(should_submit) and not should_submit(self._clock()):
                     self._report_fps_if_due()
@@ -537,6 +549,11 @@ class FfmpegDirectSbsOutput:
         self.ffmpeg_process: subprocess.Popen | None = None
         self._ffmpeg_log_thread: threading.Thread | None = None
         self._ffmpeg_stderr_tail: list[str] = []
+        self._ffmpeg_bitrate_mbps = 0.0
+        self._mediamtx_inbound_bitrate_mbps = 0.0
+        self._mediamtx_metrics_stop = threading.Event()
+        self._mediamtx_metrics_thread: threading.Thread | None = None
+        self._mediamtx_metrics_address = "127.0.0.1:9998"
         self._server_log_thread: threading.Thread | None = None
         self._frame_size: tuple[int, int] | None = None
         self._rate_probe_started: float | None = None
@@ -564,6 +581,39 @@ class FfmpegDirectSbsOutput:
             )
             self._stream_rate_calibrated = True
 
+    def prepare_calibration_source(self, runtime_result: Any) -> bool:
+        """Start or retune the independent probe without converting RGB frames."""
+        if self._calibration_controller is None:
+            return False
+        display_size = getattr(runtime_result, "output_display_size", None)
+        if not display_size:
+            frame = getattr(runtime_result, "sbs", runtime_result)
+            shape = tuple(int(value) for value in getattr(frame, "shape", ()))
+            if len(shape) == 4:
+                display_size = (shape[-1], shape[-2])
+            elif len(shape) == 3 and shape[0] in {1, 3, 4}:
+                display_size = (shape[-1], shape[-2])
+            elif len(shape) == 3:
+                display_size = (shape[1], shape[0])
+            else:
+                raise ValueError("Unable to determine calibration stream resolution")
+        output_width, output_height = (int(display_size[0]), int(display_size[1]))
+        input_width = output_width
+        if self.display_mode.casefold() == "full-sbs":
+            input_width = max(1, output_width // 2)
+        self._calibration_controller.configure_input_resolution(
+            input_width, output_height
+        )
+        self._apply_pending_calibration_tier()
+        size = (output_width, output_height)
+        if self.ffmpeg_process is None:
+            self._start_ffmpeg(*size)
+        elif self._frame_size != size:
+            raise RuntimeError(
+                f"Calibration stream size changed from {self._frame_size} to {size}"
+            )
+        return True
+
     @staticmethod
     def _find_executable(env_name: str, bundled: Path, command: str) -> Path:
         configured = os.environ.get(env_name)
@@ -581,6 +631,9 @@ class FfmpegDirectSbsOutput:
 
     def _server_environment(self) -> dict[str, str]:
         env = os.environ.copy()
+        if self._calibration_controller is not None:
+            env["MTX_METRICS"] = "yes"
+            env["MTX_METRICSADDRESS"] = self._mediamtx_metrics_address
         if self.protocol == "RTMP":
             env["MTX_RTMPADDRESS"] = f":{self.port}"
         elif self.protocol == "RTSP":
@@ -590,6 +643,53 @@ class FfmpegDirectSbsOutput:
         elif self.protocol == "WEBRTC":
             env["MTX_WEBRTCADDRESS"] = f":{self.port}"
         return env
+
+    @staticmethod
+    def _parse_mediamtx_path_inbound_bytes(metrics: str, path: str) -> int | None:
+        for line in str(metrics or "").splitlines():
+            if not line.startswith(("paths_inbound_bytes{", "paths_bytes_received{")):
+                continue
+            labels, separator, value = line.partition("}")
+            if not separator or f'name="{path}"' not in labels:
+                continue
+            try:
+                return int(float(value.strip()))
+            except ValueError:
+                return None
+        return None
+
+    def _read_mediamtx_path_inbound_bytes(self) -> int | None:
+        try:
+            with urlopen(
+                f"http://{self._mediamtx_metrics_address}/metrics"
+                f"?type=paths&path={quote(self.stream_key)}",
+                timeout=0.5,
+            ) as response:
+                payload = response.read().decode("utf-8", errors="replace")
+        except OSError:
+            return None
+        return self._parse_mediamtx_path_inbound_bytes(payload, self.stream_key)
+
+    def _sample_mediamtx_metrics(self) -> None:
+        previous_bytes: int | None = None
+        previous_time: float | None = None
+        while not self._mediamtx_metrics_stop.wait(1.0):
+            current_bytes = self._read_mediamtx_path_inbound_bytes()
+            current_time = time.monotonic()
+            if current_bytes is None:
+                continue
+            if (
+                previous_bytes is not None
+                and previous_time is not None
+                and current_bytes >= previous_bytes
+            ):
+                elapsed = current_time - previous_time
+                if elapsed > 0:
+                    self._mediamtx_inbound_bitrate_mbps = (
+                        (current_bytes - previous_bytes) * 8.0 / elapsed / 1_000_000.0
+                    )
+            previous_bytes = current_bytes
+            previous_time = current_time
 
     @property
     def publish_rtsp_port(self) -> int:
@@ -848,12 +948,22 @@ class FfmpegDirectSbsOutput:
     ) -> None:
         if getattr(self, "_calibration_controller", None) is None:
             return
+        measured_bitrate = float(
+            self._mediamtx_inbound_bitrate_mbps
+            or self._ffmpeg_bitrate_mbps
+            or 0.0
+        )
         self._calibration_controller.observe_sender(
             {
                 "sbs_fps": round(float(sbs_fps), 3),
-                "submitted_fps": round(float(submitted_fps), 3),
+                "submitted_fps": (
+                    30.0
+                    if self._calibration_controller is not None
+                    else round(float(submitted_fps), 3)
+                ),
                 "convert_ms": round(float(convert_ms), 3),
                 "submit_ms": round(float(submit_ms), 3),
+                "encoded_bitrate_mbps": round(measured_bitrate, 3),
             }
         )
 
@@ -934,6 +1044,13 @@ class FfmpegDirectSbsOutput:
         )
         self._server_log_thread.start()
         if self._calibration_controller is not None:
+            self._mediamtx_metrics_stop.clear()
+            self._mediamtx_metrics_thread = threading.Thread(
+                target=self._sample_mediamtx_metrics,
+                name="MediaMTXMetrics",
+                daemon=True,
+            )
+            self._mediamtx_metrics_thread.start()
             self._calibration_controller.start()
         print(
             f"[DirectSbsStream] MediaMTX started for {self.protocol} on port {self.port}",
@@ -1003,12 +1120,37 @@ class FfmpegDirectSbsOutput:
         return []
 
     def _ffmpeg_command(self, width: int, height: int) -> list[str]:
-        audio_args = self._audio_input_args()
+        calibration_stream = getattr(self, "_calibration_controller", None) is not None
+        # Calibration must not inherit inference/RGB24 throughput. FFmpeg owns
+        # the clock and produces a deterministic 30 FPS pressure stream.
+        audio_args = [] if calibration_stream else self._audio_input_args()
         self._active_rate_budget = self._dynamic_stream_rate_budget(width, height)
         target_rate = (
             f"{self._active_rate_budget[0]}M"
             if self._active_rate_budget is not None
             else "0"
+        )
+        input_args = (
+            [
+                "-re",
+                "-f",
+                "lavfi",
+                "-i",
+                f"testsrc2=size={width}x{height}:rate={self.fps}",
+            ]
+            if calibration_stream
+            else [
+                "-f",
+                "rawvideo",
+                "-pixel_format",
+                "rgb24",
+                "-video_size",
+                f"{width}x{height}",
+                "-framerate",
+                str(self.fps),
+                "-i",
+                "pipe:0",
+            ]
         )
         command = [
             str(self.ffmpeg_path),
@@ -1023,16 +1165,7 @@ class FfmpegDirectSbsOutput:
             "64",
             "-analyzeduration",
             "0",
-            "-f",
-            "rawvideo",
-            "-pixel_format",
-            "rgb24",
-            "-video_size",
-            f"{width}x{height}",
-            "-framerate",
-            str(self.fps),
-            "-i",
-            "pipe:0",
+            *input_args,
             *audio_args,
             "-map",
             "0:v:0",
@@ -1175,8 +1308,29 @@ class FfmpegDirectSbsOutput:
                     del command[index:index + 2]
             command.extend(["-usage", "ultralowlatency", "-quality", "speed", "-rc", "vbr_peak"])
 
+        if calibration_stream:
+            # Normal playback remains quality-oriented VBR. Calibration uses
+            # constant-rate output so each tier applies the requested load to
+            # the PC-to-headset network instead of merely changing a VBR cap.
+            for option in ("-cq", "-crf", "-global_quality"):
+                while option in command:
+                    index = command.index(option)
+                    del command[index:index + 2]
+            if self.video_encoder.endswith("_nvenc"):
+                rc_index = command.index("-rc")
+                command[rc_index + 1] = "cbr"
+            elif self.video_encoder.endswith("_amf"):
+                rc_index = command.index("-rc")
+                command[rc_index + 1] = "cbr"
+            if "-b:v" not in command:
+                command.extend(["-b:v", target_rate])
+            command.extend(["-minrate", target_rate])
+
         if self._active_rate_budget is not None:
-            _, peak_mbps, buffer_mbps = self._active_rate_budget
+            target_mbps, peak_mbps, buffer_mbps = self._active_rate_budget
+            if calibration_stream:
+                peak_mbps = target_mbps
+                buffer_mbps = target_mbps
             command.extend(
                 [
                     "-maxrate",
@@ -1203,6 +1357,10 @@ class FfmpegDirectSbsOutput:
                 )
             else:
                 command.extend(["-c:a", "aac", "-ar", "48000", "-b:a", "128k"])
+        if getattr(self, "_calibration_controller", None) is not None:
+            # FFmpeg reports the actual encoded/muxed output rate, which is
+            # different from the configured target bitrate for VBR content.
+            command.extend(["-progress", "pipe:2", "-stats_period", "1"])
         if self.os_name == "Windows":
             command.extend(
                 [
@@ -1266,8 +1424,10 @@ class FfmpegDirectSbsOutput:
         return command
 
     def _start_ffmpeg(self, width: int, height: int) -> None:
-        if self.os_name == "Windows" and self.stereo_mix_device.casefold().startswith(
-            "soundcard:"
+        if (
+            self._calibration_controller is None
+            and self.os_name == "Windows"
+            and self.stereo_mix_device.casefold().startswith("soundcard:")
         ):
             try:
                 device_name = self.stereo_mix_device.split(":", 1)[1].strip()
@@ -1292,7 +1452,7 @@ class FfmpegDirectSbsOutput:
         )
         self.ffmpeg_process = subprocess.Popen(
             command,
-            stdin=subprocess.PIPE,
+            stdin=(subprocess.DEVNULL if self._calibration_controller is not None else subprocess.PIPE),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             creationflags=creationflags,
@@ -1321,11 +1481,18 @@ class FfmpegDirectSbsOutput:
                 f"resolution={width}x{height} fps={self.fps} crf={self.crf}",
                 flush=True,
             )
-        print(
-            f"[DirectSbsStream] FFmpeg consumes RGB24 SBS directly: "
-            f"{width}x{height}@{self.fps} encoder={self.video_encoder}",
-            flush=True,
-        )
+        if self._calibration_controller is not None:
+            print(
+                f"[StreamCalibration] Independent CBR pressure stream active: "
+                f"{width}x{height}@{self.fps} encoder={self.video_encoder}",
+                flush=True,
+            )
+        else:
+            print(
+                f"[DirectSbsStream] FFmpeg consumes RGB24 SBS directly: "
+                f"{width}x{height}@{self.fps} encoder={self.video_encoder}",
+                flush=True,
+            )
 
     def _write_frame(self, frame: np.ndarray) -> None:
         process = self.ffmpeg_process
@@ -1351,6 +1518,20 @@ class FfmpegDirectSbsOutput:
                     line = str(raw_line).strip()
                 if not line:
                     continue
+                match = re.match(
+                    r"bitrate=\s*([0-9.]+)([kmg]?bits/s)",
+                    line,
+                    re.IGNORECASE,
+                )
+                if match:
+                    value = float(match.group(1))
+                    unit = match.group(2).casefold()
+                    multiplier = {
+                        "bits/s": 1e-6,
+                        "kbits/s": 1e-3,
+                        "mbits/s": 1.0,
+                    }[unit]
+                    self._ffmpeg_bitrate_mbps = value * multiplier
                 self._ffmpeg_stderr_tail.append(line)
                 del self._ffmpeg_stderr_tail[:-20]
                 if any(token in line.casefold() for token in ("error", "failed", "invalid", "cannot")):
@@ -1400,6 +1581,11 @@ class FfmpegDirectSbsOutput:
             raise RuntimeError(
                 f"SBS stream size changed from {self._frame_size} to {size}; restart required"
             )
+        if self._calibration_controller is not None:
+            # The independent lavfi source runs continuously at 30 FPS. Runtime
+            # frames are intentionally ignored so RGB conversion/inference
+            # speed cannot throttle the bandwidth probe.
+            return
         try:
             self._write_frame(frame)
         except (BrokenPipeError, OSError, RuntimeError):
@@ -1436,6 +1622,10 @@ class FfmpegDirectSbsOutput:
                 process.wait(timeout=3.0)
 
     def close(self) -> None:
+        self._mediamtx_metrics_stop.set()
+        if self._mediamtx_metrics_thread is not None:
+            self._mediamtx_metrics_thread.join(timeout=1.5)
+            self._mediamtx_metrics_thread = None
         if self._calibration_controller is not None:
             self._calibration_controller.close()
             self._calibration_controller = None

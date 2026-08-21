@@ -2,6 +2,7 @@
 import os
 import re
 import sys
+import base64
 import time
 import asyncio
 import ctypes
@@ -81,6 +82,139 @@ _file_log_handler = None
 logger = logging.getLogger(__name__)
 status_logger = logging.getLogger("status")
 child_logger = logging.getLogger("child")
+
+
+class FirewallProbeError(RuntimeError):
+    """Raised when Windows Firewall rules cannot be inspected reliably."""
+
+
+def _parse_firewall_block_output(output):
+    """Parse the compact JSON emitted by the Windows firewall probe."""
+    text = str(output or "").strip()
+    if not text:
+        return []
+    try:
+        value = json.loads(text)
+    except (TypeError, ValueError):
+        return []
+    if isinstance(value, dict):
+        value = [value]
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _detect_windows_firewall_blocks(executable=None):
+    """Return enabled inbound block rules targeting the supplied executable."""
+    if OS_NAME != "Windows":
+        return []
+    executable = os.path.normcase(os.path.abspath(executable or sys.executable))
+    probe = r'''
+$exe = [Environment]::GetEnvironmentVariable('D2S_FIREWALL_EXE')
+Get-NetFirewallRule -Direction Inbound -Action Block -Enabled True -ErrorAction SilentlyContinue |
+  ForEach-Object {
+    $rule = $_
+    $app = $rule | Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue
+    if ($app.Program -and ([IO.Path]::GetFullPath($app.Program) -ieq $exe)) {
+      $port = $rule | Get-NetFirewallPortFilter -ErrorAction SilentlyContinue
+      [PSCustomObject]@{
+        Protocol = [string]$port.Protocol
+        LocalPort = [string]$port.LocalPort
+        DisplayName = [string]$rule.DisplayName
+        Name = [string]$rule.Name
+      }
+    }
+  } | ConvertTo-Json -Compress
+'''
+    env = os.environ.copy()
+    env["D2S_FIREWALL_EXE"] = executable
+    try:
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", probe],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=20,
+            env=env,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise FirewallProbeError(
+            "Windows Firewall detection timed out after 20 seconds."
+        ) from exc
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise FirewallProbeError(
+            f"Windows Firewall detection could not start: {exc}"
+        ) from exc
+    if result.returncode != 0:
+        detail = result.stderr.strip() or f"PowerShell exit code {result.returncode}"
+        raise FirewallProbeError(f"Windows Firewall detection failed: {detail}")
+    return _parse_firewall_block_output(result.stdout)
+
+
+def _remove_windows_firewall_blocks(executable=None):
+    """Remove only matching inbound block rules; return (success, error)."""
+    if OS_NAME != "Windows":
+        return True, ""
+    executable = os.path.normcase(os.path.abspath(executable or sys.executable))
+    command = r'''
+$exe = [Environment]::GetEnvironmentVariable('D2S_FIREWALL_EXE')
+Get-NetFirewallRule -Direction Inbound -Action Block -Enabled True -ErrorAction SilentlyContinue |
+  ForEach-Object {
+    $rule = $_
+    $app = $rule | Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue
+    if ($app.Program -and ([IO.Path]::GetFullPath($app.Program) -ieq $exe)) {
+      Remove-NetFirewallRule -Name $rule.Name -ErrorAction Stop
+    }
+  }
+'''
+    env = os.environ.copy()
+    env["D2S_FIREWALL_EXE"] = executable
+    try:
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5,
+            env=env,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, str(exc)
+    if result.returncode == 0:
+        return True, ""
+
+    # Firewall rule changes normally require elevation. Retry the same narrow
+    # rule deletion through one standard Windows UAC prompt.
+    encoded = base64.b64encode(command.encode("utf-16le")).decode("ascii")
+    elevated = (
+        "$p = Start-Process powershell.exe -Verb RunAs -Wait -PassThru "
+        f"-ArgumentList @('-NoProfile','-NonInteractive','-EncodedCommand','{encoded}'); "
+        "exit $p.ExitCode"
+    )
+    try:
+        elevated_result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", elevated],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=20,
+            env=env,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, str(exc)
+    if elevated_result.returncode != 0:
+        return False, (
+            elevated_result.stderr.strip()
+            or result.stderr.strip()
+            or "Windows UAC authorization was cancelled"
+        )
+    return True, ""
 
 
 def _is_asyncio_shutdown_unraisable(unraisable):
@@ -225,9 +359,13 @@ def _setup_console_logging():
         pass
 
     try:
+        persistent_paths = {
+            os.path.abspath(LOG_FILE),
+            os.path.abspath(STREAM_CALIBRATION_PROFILE_FILE),
+        }
         for name in os.listdir(LOG_DIR):
             path = os.path.join(LOG_DIR, name)
-            if os.path.isfile(path) and os.path.abspath(path) != os.path.abspath(LOG_FILE):
+            if os.path.isfile(path) and os.path.abspath(path) not in persistent_paths:
                 try:
                     os.remove(path)
                 except Exception:
@@ -355,20 +493,126 @@ class GUIProcessMixin:
         value = str(getattr(self.stream_calibration_mode_dd, "value", "") or "")
         return value.casefold().startswith("auto") or value.startswith("自动")
 
-    def _refresh_stream_calibration_status(self) -> None:
-        control = getattr(self, "stream_calibration_status", None)
-        if control is None:
-            return
+    def _stream_calibration_profile_status(self) -> str:
+        """Return current, missing, or stale for the saved calibration profile."""
+        if not self._stream_calibration_auto_enabled():
+            return "current"
         try:
             with open(STREAM_CALIBRATION_PROFILE_FILE, "r", encoding="utf-8") as file:
                 profile = json.load(file)
             if profile.get("fingerprint") != build_calibration_fingerprint(self._config):
+                return "stale"
+            if profile.get("stability", "stable") != "stable":
+                return "missing"
+            valid = all(
+                int(profile.get(key, 0) or 0) > 0
+                for key in ("fps", "target_mbps", "peak_mbps")
+            )
+            return "current" if valid else "missing"
+        except (OSError, ValueError, TypeError, AttributeError):
+            return "missing"
+
+    def _stream_calibration_profile_is_current(self) -> bool:
+        return self._stream_calibration_profile_status() == "current"
+
+    def _refresh_stream_calibration_status(self) -> None:
+        control = getattr(self, "stream_calibration_status", None)
+        if control is None:
+            return
+        warning = getattr(self, "stream_calibration_warning", None)
+        warning_row = getattr(self, "stream_calibration_warning_row", None)
+        result = getattr(self, "stream_calibration_result", None)
+        result_row = getattr(self, "stream_calibration_result_row", None)
+
+        def clear_warning():
+            if warning is not None:
+                warning.value = ""
+                warning.visible = False
+            if warning_row is not None:
+                warning_row.visible = False
+
+        def clear_result():
+            if result is not None:
+                result.value = ""
+                result.visible = False
+            if result_row is not None:
+                result_row.visible = False
+
+        def show_result(
+            fps,
+            target,
+            peak,
+            measured=None,
+            network_max=None,
+            stable=True,
+        ):
+            network_bitrate = (
+                int(round(float(network_max or 0.0)))
+                or int(round(float(measured or 0.0)))
+                or target
+            )
+            if result is not None:
+                result.value = UI_MESSAGES[self.locale].get(
+                    "calibration_result_stable" if stable else "calibration_result_limited",
+                    "Stable network limit: {network_max} Mbps, safe bitrate: "
+                    "{safe_target} Mbps (peak {safe_peak} Mbps), {fps} FPS.",
+                ).format(
+                    fps=fps,
+                    network_max=network_bitrate,
+                    safe_target=target,
+                    safe_peak=peak,
+                )
+                result.color = ft.Colors.GREEN if stable else ft.Colors.ORANGE
+                result.visible = True
+            if result_row is not None:
+                result_row.visible = True
+
+        def show_warning(message):
+            if warning is not None:
+                warning.value = message
+                warning.visible = True
+            if warning_row is not None:
+                warning_row.visible = True
+
+        try:
+            with open(STREAM_CALIBRATION_PROFILE_FILE, "r", encoding="utf-8") as file:
+                profile = json.load(file)
+            clear_result()
+            if profile.get("fingerprint") != build_calibration_fingerprint(self._config):
                 control.value = UI_MESSAGES[self.locale].get(
-                    "Calibration expired", "Calibration expired"
+                    "calibration_profile_stale",
+                    "Settings changed, please recalibrate",
                 )
                 control.color = ft.Colors.ORANGE
+                show_warning(control.value)
+                control.value = UI_MESSAGES[self.locale].get("Calibration expired", "Calibration expired")
                 self._safe_update(control)
+                self._safe_update(warning, warning_row, result, result_row)
                 return
+            if profile.get("stability", "stable") != "stable":
+                control.value = UI_MESSAGES[self.locale].get("Not calibrated", "Not calibrated")
+                control.color = ft.Colors.ORANGE
+                clear_warning()
+                show_result(
+                    int(profile.get("fps", 0)),
+                    int(profile.get("target_mbps", 0)),
+                    int(profile.get("peak_mbps", 0)),
+                    profile.get("measured_bitrate_mbps"),
+                    profile.get("network_max_mbps"),
+                    stable=False,
+                )
+                self._safe_update(control)
+                self._safe_update(warning, warning_row, result, result_row)
+                return
+            clear_warning()
+            show_result(
+                int(profile.get("fps", 0)),
+                int(profile.get("target_mbps", 0)),
+                int(profile.get("peak_mbps", 0)),
+                profile.get("measured_bitrate_mbps"),
+                profile.get("network_max_mbps"),
+                stable=True,
+            )
             control.value = UI_MESSAGES[self.locale].get(
                 "calibration_profile_summary", "{fps} FPS · {target} Mbps"
             ).format(
@@ -377,11 +621,36 @@ class GUIProcessMixin:
             )
             control.color = ft.Colors.GREEN
         except (OSError, ValueError, TypeError):
+            saved = getattr(self, "_config", {}) or {}
+            saved_fps = int(saved.get("Target FPS", 0) or 0)
+            saved_target = int(saved.get("Stream Target Bitrate Mbps", 0) or 0)
+            if (
+                bool(saved.get("Use Stream Calibration", False))
+                and saved_fps > 0
+                and saved_target > 0
+            ):
+                control.value = UI_MESSAGES[self.locale].get(
+                    "calibration_profile_summary", "{fps} FPS · {target} Mbps"
+                ).format(fps=saved_fps, target=saved_target)
+                control.color = ft.Colors.GREEN
+                clear_warning()
+                show_result(
+                    saved_fps,
+                    saved_target,
+                    int(saved.get("Stream Peak Bitrate Mbps", 0) or 0),
+                    stable=True,
+                )
+                self._safe_update(control)
+                self._safe_update(result, result_row)
+                return
+            clear_warning()
+            clear_result()
             control.value = UI_MESSAGES[self.locale].get(
                 "Not calibrated", "Not calibrated"
             )
             control.color = ft.Colors.GREY
         self._safe_update(control)
+        self._safe_update(warning, warning_row, result, result_row)
 
     def start_stream_calibration(self, _event=None) -> None:
         if self._starting or (self.process and self.process.returncode is None):
@@ -437,6 +706,19 @@ class GUIProcessMixin:
         ))
         self._calibration_dialog_detail = ft.Text("", selectable=True)
         self._calibration_dialog_progress = ft.ProgressBar(value=0.0)
+        self._calibration_dialog_firewall_hint = ft.Text(
+            UI_MESSAGES[self.locale].get(
+                "calibration_firewall_manual_hint",
+                "If the headset does not respond when opening port {port}, click Detect Firewall Rules.",
+            ).format(port=port),
+            color=ft.Colors.ORANGE,
+        )
+        self._calibration_firewall_btn = ft.Button(
+            content=ft.Text(UI_MESSAGES[self.locale].get(
+                "Detect Firewall Rules", "Detect Firewall Rules"
+            )),
+            on_click=self.check_stream_calibration_firewall,
+        )
         self._calibration_dialog = ft.AlertDialog(
             modal=True,
             title=ft.Text(UI_MESSAGES[self.locale].get(
@@ -453,19 +735,105 @@ class GUIProcessMixin:
                     self._calibration_dialog_stage,
                     self._calibration_dialog_progress,
                     self._calibration_dialog_detail,
+                    self._calibration_dialog_firewall_hint,
                 ],
                 width=520,
-                height=210,
+                height=250,
                 spacing=12,
             ),
-            actions=[ft.Button(
-                content=ft.Text(UI_MESSAGES[self.locale].get(
-                    "Cancel Calibration", "Cancel Calibration"
-                )),
-                on_click=self._cancel_stream_calibration,
-            )],
+            actions=[
+                self._calibration_firewall_btn,
+                ft.Button(
+                    content=ft.Text(UI_MESSAGES[self.locale].get(
+                        "Cancel Calibration", "Cancel Calibration"
+                    )),
+                    on_click=self._cancel_stream_calibration,
+                ),
+            ],
         )
         self.page.show_dialog(self._calibration_dialog)
+
+    def check_stream_calibration_firewall(self, _event=None) -> None:
+        task = getattr(self, "_calibration_firewall_task", None)
+        if task is not None and not task.done():
+            return
+        self._calibration_firewall_task = asyncio.create_task(
+            self._check_stream_calibration_firewall_async()
+        )
+
+    async def _check_stream_calibration_firewall_async(self) -> None:
+        button = getattr(self, "_calibration_firewall_btn", None)
+        hint = getattr(self, "_calibration_dialog_firewall_hint", None)
+        checking = UI_MESSAGES[self.locale].get(
+            "calibration_firewall_checking",
+            "Checking Windows Firewall rules...",
+        )
+        if button is not None:
+            button.disabled = True
+        if hint is not None:
+            hint.value = checking
+        self.set_status(checking)
+        self._safe_update(button, hint)
+        try:
+            firewall_blocks = await asyncio.to_thread(
+                _detect_windows_firewall_blocks
+            )
+            if not firewall_blocks:
+                message = UI_MESSAGES[self.locale].get(
+                    "calibration_firewall_no_blocks",
+                    "No inbound block rules were found for the bundled Python.",
+                )
+            else:
+                protocols = sorted({
+                    str(item.get("Protocol", "")).upper()
+                    for item in firewall_blocks
+                    if item.get("Protocol")
+                })
+                rule_names = sorted({
+                    str(item.get("DisplayName", "")).strip()
+                    for item in firewall_blocks
+                    if item.get("DisplayName")
+                })
+                protocol_text = "/".join(protocols) or "TCP/UDP"
+                logger.warning(
+                    "[StreamCalibration] Windows Firewall inbound block detected: protocols=%s rules=%s",
+                    protocol_text,
+                    ", ".join(rule_names) or "(unnamed)",
+                )
+                removed, remove_error = await asyncio.to_thread(
+                    _remove_windows_firewall_blocks
+                )
+                if not removed:
+                    message = UI_MESSAGES[self.locale].get(
+                        "calibration_firewall_remove_failed",
+                        "Windows Firewall is blocking the bundled Python inbound connection ({protocol}), and the rule could not be removed. Run Desktop2Stereo as administrator and try again.",
+                    ).format(protocol=protocol_text)
+                    logger.error(
+                        "[StreamCalibration] Failed to remove Windows Firewall block: %s",
+                        remove_error,
+                    )
+                else:
+                    message = UI_MESSAGES[self.locale].get(
+                        "calibration_firewall_removed",
+                        "Matching Windows Firewall block rules were removed. Open the headset page again.",
+                    )
+                    logger.info(
+                        "[StreamCalibration] Removed Windows Firewall inbound block rules for %s",
+                        sys.executable,
+                    )
+        except FirewallProbeError as exc:
+            message = UI_MESSAGES[self.locale].get(
+                "calibration_firewall_probe_failed",
+                "Windows Firewall detection failed: {error}",
+            ).format(error=exc)
+            logger.error("[StreamCalibration] %s", message)
+        finally:
+            if button is not None:
+                button.disabled = False
+        if hint is not None:
+            hint.value = message
+        self.set_status(message)
+        self._safe_update(button, hint)
 
     def _cancel_stream_calibration(self, _event=None) -> None:
         self._calibration_run_requested = False
@@ -512,6 +880,7 @@ class GUIProcessMixin:
                     self._calibration_dialog_progress.value = min(1.0, overall)
                     stage_key = {
                         "waiting_receiver": "calibration_waiting",
+                        "settling": "calibration_settling",
                         "testing": "calibration_testing",
                         "reconnecting": "calibration_reconnecting",
                         "complete": "calibration_complete",
@@ -520,12 +889,25 @@ class GUIProcessMixin:
                         stage_key, status
                     ).format(fps=int(tier.get("fps", 0) or 0))
                     sender = state.get("sender") or {}
-                    self._calibration_dialog_detail.value = (
+                    sender_detail = (
                         f"{int(tier.get('fps', 0) or 0)} FPS · "
                         f"{int(tier.get('target_mbps', 0) or 0)} Mbps · "
                         f"send {float(sender.get('submitted_fps', 0.0) or 0.0):.1f} FPS · "
                         f"samples {int(state.get('receiver_samples', 0) or 0)}"
                     )
+                    receiver = state.get("receiver_latest") or {}
+                    receiver_detail = UI_MESSAGES[self.locale].get(
+                        "calibration_receiver_metrics",
+                        "decode {decoded} FPS · bitrate {bitrate} Mbps · dropped {dropped} · freeze {freeze} · lost {lost} · jitter {jitter} ms",
+                    ).format(
+                        decoded=float(receiver.get("decoded_fps", 0.0) or 0.0),
+                        bitrate=float(receiver.get("bitrate_mbps", 0.0) or 0.0),
+                        dropped=int(receiver.get("dropped_frames", 0) or 0),
+                        freeze=int(receiver.get("freeze_count", 0) or 0),
+                        lost=int(receiver.get("packets_lost", 0) or 0),
+                        jitter=float(receiver.get("jitter_buffer_ms", 0.0) or 0.0),
+                    )
+                    self._calibration_dialog_detail.value = f"{sender_detail}\n{receiver_detail}"
                     self._safe_update(
                         self._calibration_dialog_progress,
                         self._calibration_dialog_stage,
@@ -544,9 +926,35 @@ class GUIProcessMixin:
             fps = int(profile["fps"])
             target = int(profile["target_mbps"])
             peak = int(profile["peak_mbps"])
+            network_max = int(
+                profile.get("network_max_mbps", 0)
+                or round(float(profile.get("measured_bitrate_mbps", 0.0) or 0.0))
+                or target
+            )
         except (OSError, ValueError, TypeError, KeyError) as exc:
             self.set_status(f"Calibration result error: {exc}")
             return
+        if profile.get("stability", "stable") != "stable":
+            await self._async_stop()
+            self._restore_precalibration_target()
+            message = UI_MESSAGES[self.locale].get(
+                "calibration_bandwidth_insufficient",
+                "Bandwidth is insufficient for the current resolution; lower the resolution and recalibrate.",
+            )
+            self._refresh_stream_calibration_status()
+            self.set_status(message)
+            if self._calibration_dialog is not None:
+                self._calibration_dialog.actions = [ft.Button(
+                    content=ft.Text(UI_MESSAGES[self.locale].get("Close", "Close")),
+                    on_click=self._close_stream_calibration_dialog,
+                )]
+                self._calibration_dialog_progress.value = 1.0
+                self._calibration_dialog_detail.value = message
+                self._safe_update(self._calibration_dialog)
+            return
+        # Calibration is a temporary run. Stop MediaMTX/FFmpeg/the calibration
+        # HTTP server before applying and presenting the final profile.
+        await self._async_stop()
         self.target_fps_dd.value = str(fps)
         self._calibration_previous_target_value = None
         self._calibration_active = False
@@ -574,8 +982,14 @@ class GUIProcessMixin:
             self._calibration_dialog_progress.value = 1.0
             self._calibration_dialog_detail.value = UI_MESSAGES[self.locale].get(
                 "calibration_result",
-                "Recommended profile: {fps} FPS · {target} Mbps · peak {peak} Mbps",
-            ).format(fps=fps, target=target, peak=peak)
+                "Stable network limit: {network_max} Mbps · safe bitrate: "
+                "{target} Mbps · peak {peak} Mbps · {fps} FPS",
+            ).format(
+                fps=fps,
+                target=target,
+                peak=peak,
+                network_max=network_max,
+            )
             self._safe_update(self._calibration_dialog)
 
     def _diag(self, msg, error=False):
@@ -641,6 +1055,23 @@ class GUIProcessMixin:
             self.set_status(UI_MESSAGES[self.locale]["A thread already running!"])
             self.page.update()
             return
+        if (
+            self.run_mode_key == "RTMP Streamer"
+            and str(self.stream_proto_dd.value).casefold() == "webrtc"
+            and self._stream_calibration_auto_enabled()
+            and not self._calibration_run_requested
+        ):
+            # Collect the current controls before comparing the fingerprint;
+            # unsaved GUI changes must invalidate the previous profile too.
+            self._collect_config()
+            profile_status = self._stream_calibration_profile_status()
+            if profile_status != "current":
+                logger.info(
+                    "[StreamCalibration] Automatic calibration required before run: profile %s",
+                    profile_status,
+                )
+                self.start_stream_calibration()
+                return
         ok, err = self._validate_config_before_run()
         if not ok:
             self.set_status(err)
@@ -1396,7 +1827,7 @@ class GUIProcessMixin:
     def preview_in_browser(self, e):
         try:
             import webbrowser
-            url = self.stream_url_tf.content.controls[0].value
+            url = self.stream_url_tf.value
             if not url.startswith(("http://", "https://")):
                 self.set_status(UI_MESSAGES[self.locale]["invalid_url_scheme"].format(url))
                 return
@@ -1406,7 +1837,7 @@ class GUIProcessMixin:
             self.set_status(UI_MESSAGES[self.locale]["error_preview"].format(ex))
 
     def copy_url_to_clipboard(self, e):
-        url = self.stream_url_tf.content.controls[0].value
+        url = self.stream_url_tf.value
         if url:
             try:
                 import pyperclip

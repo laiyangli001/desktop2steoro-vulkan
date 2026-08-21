@@ -1,16 +1,20 @@
 """GUI Builder Mixin — UI construction, layout calculation, window sizing."""
 import os
 import asyncio
+import logging
 import flet as ft
-from utils import OS_NAME, ALL_MODELS, DEFAULT_PORT
+from utils import OS_NAME, DEFAULT_PORT
 from utils.xr_headset_presets import xr_headset_options, xr_headset_to_display
 from .config import (
     DEFAULTS, DEFAULT_FAMILIES, DEFAULT_MODEL_LIST,
     FAMILY_SIZE_TO_MODEL, FAMILY_TO_SIZES,
     environment_display_label, get_environment_model_options,
-    load_environment_display_names, parse_model_name,
+    load_environment_display_names, parse_model_name, GUI_MODEL_CATALOG,
 )
-from .controls import FONT_SIZE, SCALE, CompactDropdown, CompactTextField, S, set_label_align_width
+from .controls import (
+    FONT_SIZE, SCALE, CompactDisplayField, CompactDropdown, CompactTextField,
+    S, set_label_align_width,
+)
 from .paths import BASE_DIR
 from .localization import UI_MESSAGES
 from .capture_sources import (
@@ -18,6 +22,9 @@ from .capture_sources import (
     get_primary_monitor_index, list_monitors, list_windows,
 )
 from .devices import DEVICES
+
+
+logger = logging.getLogger(__name__)
 
 
 class GUIBuilderMixin:
@@ -94,10 +101,8 @@ class GUIBuilderMixin:
 
     def _on_page_resize(self, e=None):
         """Debounce a repaint after Windows minimize/restore transitions."""
-        if e is not None and getattr(self, "_startup_fit_pending", False):
-            event_width = getattr(e, "width", 0) or 0
-            if event_width < getattr(self, "_startup_fit_width", 0) + 100:
-                self._startup_fit_pending = False
+        if getattr(self, "_startup_fit_armed", False):
+            self._schedule_startup_fit()
         task = getattr(self, "_resize_repaint_task", None)
         if task is not None and not task.done():
             task.cancel()
@@ -106,25 +111,37 @@ class GUIBuilderMixin:
             return
         self._resize_repaint_task = loop.create_task(self._repaint_after_resize())
 
+    def _schedule_startup_fit(self):
+        """Fit once the first client-side layout/resize burst has settled."""
+        task = getattr(self, "_startup_fit_task", None)
+        if task is not None and not task.done():
+            task.cancel()
+        loop = getattr(self, "_loop", None)
+        if loop is None or loop.is_closed() or getattr(self, "_closed", False):
+            return
+        self._startup_fit_task = loop.create_task(self._apply_startup_fit())
+
     async def _apply_startup_fit(self):
         try:
-            self._startup_fit_pending = False
-            for _ in range(8):
-                if getattr(self, "_closed", False):
-                    return
-                await asyncio.sleep(0.4)
-                if getattr(self, "_closed", False):
-                    return
-                self._startup_fit_width = self._estimate_window_width()
-                self._startup_fit_pending = True
-                # Mimic the log visibility link's resize action, which is known
-                # to work once the client is ready; retry until the client
-                # confirms via a resize event (early resizes get dropped).
-                await self._resize_window_after_log_visibility_change()
-                await asyncio.sleep(0.4)
-                if not getattr(self, "_startup_fit_pending", False):
-                    return
-            self._startup_fit_pending = False
+            # Language, visibility and adaptive control widths are committed in
+            # the first client-side resize burst. Wait for that burst to go
+            # quiet, then use the exact same fit path as a manual log toggle.
+            await asyncio.sleep(0.25)
+            if getattr(self, "_closed", False):
+                return
+            self._startup_fit_armed = False
+            await self._resize_window_after_log_visibility_change()
+            if getattr(self, "_closed", False):
+                return
+            # Flet suppresses a repeated assignment when window.width already
+            # equals the fitted value, even if the native startup window did not
+            # apply that value. Nudge the property so the final fitted width is
+            # emitted as a real diff, just like a later adaptive option change.
+            target_width = self._estimate_window_width()
+            self.page.window.width = target_width + 1
+            self.page.window.update()
+            await asyncio.sleep(0)
+            await self._resize_window_after_log_visibility_change()
         except (asyncio.CancelledError, RuntimeError):
             return
 
@@ -156,13 +173,15 @@ class GUIBuilderMixin:
         if isinstance(ctrl, ft.Container):
             content = getattr(ctrl, "content", None)
             if content is not None:
-                child_width = self._estimate_control_width(content)
                 explicit = getattr(ctrl, "width", None) or 0
+                if explicit:
+                    return explicit
+                child_width = self._estimate_control_width(content)
                 padding = getattr(ctrl, "padding", None)
                 pad_x = 0
                 if padding is not None:
                     pad_x = (getattr(padding, "left", 0) or 0) + (getattr(padding, "right", 0) or 0)
-                return max(explicit, child_width + pad_x)
+                return child_width + pad_x
         if isinstance(ctrl, ft.Row):
             controls = getattr(ctrl, "controls", []) or []
             return sum(self._estimate_control_width(c) for c in controls) + self._spacing_width(controls, getattr(ctrl, "spacing", 0))
@@ -275,6 +294,7 @@ class GUIBuilderMixin:
             self.stereo_output_label, self.controller_label, self.lang_label,
             self.stream_url_label, self.stream_port_label,
             self.stream_proto_label, self.audio_label, self.crf_label,
+            self.stream_calibration_label,
             self.color_brightness_label, self.color_saturation_label,
             self.color_temperature_label, self.projection_min_lod_label,
             self.projection_mip_lod_bias_label,
@@ -344,8 +364,8 @@ class GUIBuilderMixin:
             tooltip=parallel_inference_tooltip,
         )
         self.parallel_inference_dd = CompactDropdown(
-            options=["单路推理", "两路推理", "三路推理"],
-            value="单路推理",
+            options=self._parallel_inference_options(),
+            value=self._parallel_inference_to_display(1),
             width=S(130),
             on_select=self.on_stereo_hot_param_change,
             tooltip=parallel_inference_tooltip,
@@ -578,9 +598,12 @@ class GUIBuilderMixin:
 
         # Row 6: Computing device
         self.computing_device_label = ft.Text("Computing Device:", size=FONT_SIZE, width=S(130))
-        device_names = [v["name"] for v in DEVICES.values()]
-        self.device_dd = CompactDropdown(options=[n for n in device_names],
-            on_select=self.on_device_change, min_width=S(180))
+        self.device_dd = CompactDropdown(
+            options=["Detecting compute devices..."],
+            value="Detecting compute devices...",
+            on_select=self.on_device_change,
+            min_width=S(180),
+        )
         self.showfps_cb = ft.Checkbox(
             scale=SCALE,
             visual_density=ft.VisualDensity.COMPACT,
@@ -609,7 +632,7 @@ class GUIBuilderMixin:
 
         # Row 7: Capture tool
         self.capture_tool_label = ft.Text("Capture Tool:", size=FONT_SIZE, width=S(130))
-        ct_options = get_capture_tool_options(DEVICES.get(0, {}).get("name", ""))
+        ct_options = get_capture_tool_options("")
         self.capture_tool_dd = CompactDropdown(options=[o for o in ct_options],
             on_select=self.on_capture_tool_change, min_width=S(160))
         row6 = ft.Row([self.capture_tool_label, self.capture_tool_dd,
@@ -713,7 +736,7 @@ class GUIBuilderMixin:
             width=S(130), on_click=self.refresh_monitor_and_window)
         self._row8_spacer = ft.Container(width=S(60))
         row8 = ft.Row([self.capture_mode_dd, self._row8_spacer, self.monitor_dd, self.window_dd,
-            ft.Container(width=S(8)), ft.Container(expand=True), self.refresh_btn], spacing=1)
+            ft.Container(width=S(8)), self.refresh_btn], spacing=1)
 
         # Row 10: Stereo output + checkboxes
         self.stereo_output_label = ft.Text("Stereo Output:", size=FONT_SIZE, width=S(130))
@@ -739,7 +762,7 @@ class GUIBuilderMixin:
         self.stop_btn = ft.Button(content=ft.Text("Stop", size=FONT_SIZE),
             width=S(130), on_click=self.stop_process)
         self.run_btn = ft.Button(content=ft.Text("Run", size=FONT_SIZE),
-            width=S(150), on_click=self.save_and_run)
+            width=S(130), on_click=self.save_and_run, disabled=True)
         lang_row = ft.Row([self.lang_label, self.lang_dd, ft.Container(width=S(40)),
             self.theme_label, self.theme_dd], spacing=1)
 
@@ -863,7 +886,7 @@ class GUIBuilderMixin:
 
         btn_row = ft.Row([self.reset_btn, ft.Container(expand=True),
             ft.Container(content=ft.Row([self.stop_btn, self.run_btn], spacing=S(20)),
-                         padding=ft.Padding(0, 0, S(10), 0))])
+                         padding=ft.Padding(0, 0, S(20), 0))])
         self._btn_bar = ft.Container(content=btn_row)
         self._status_bar = ft.Row([
             ft.Container(content=self.status_text, bgcolor=ft.Colors.SURFACE_CONTAINER,
@@ -892,12 +915,11 @@ class GUIBuilderMixin:
 
     def _build_streamer_rows(self):
         self.stream_url_label = ft.Text("Stream URL:", size=FONT_SIZE, width=S(150))
-        self.stream_url_tf = ft.Container(
-            content=ft.Row([ft.Text("", size=FONT_SIZE)], vertical_alignment=ft.CrossAxisAlignment.CENTER),
-            height=S(32), padding=ft.Padding(S(8), 0, S(8), 0), expand=True,
-            border=ft.Border(ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE),
-                             ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE)),
-            border_radius=4, on_click=self.copy_url_to_clipboard)
+        self.stream_url_tf = CompactDisplayField(
+            min_width=S(130),
+            max_width=S(230),
+            on_click=self.copy_url_to_clipboard,
+        )
         self.preview_btn = ft.Button(content=ft.Text("Preview", size=FONT_SIZE),
             width=S(130), on_click=self.preview_in_browser)
         self.stream_url_row = ft.Row(
@@ -938,23 +960,39 @@ class GUIBuilderMixin:
         self.stream_calibration_mode_dd = CompactDropdown(
             options=["Auto Calibration", "Manual"],
             value="Auto Calibration",
-            width=S(150),
+            width=S(130),
         )
         self.stream_calibration_btn = ft.Button(
             content=ft.Text("Start Calibration", size=FONT_SIZE),
-            width=S(150),
+            width=S(130),
             on_click=self.start_stream_calibration,
         )
         self.stream_calibration_status = ft.Text(
             "Not calibrated", size=FONT_SIZE, color=ft.Colors.GREY
         )
+        self.stream_calibration_warning = ft.Text(
+            "", size=FONT_SIZE, color=ft.Colors.ORANGE, visible=False
+        )
+        self.stream_calibration_warning_row = ft.Row(
+            [ft.Container(width=S(150)), self.stream_calibration_warning],
+            spacing=1,
+            visible=False,
+        )
+        self.stream_calibration_result = ft.Text(
+            "", size=FONT_SIZE, color=ft.Colors.GREEN, visible=False
+        )
+        self.stream_calibration_result_row = ft.Row(
+            [ft.Container(width=S(150)), self.stream_calibration_result],
+            spacing=1,
+            visible=False,
+        )
         self.stream_calibration_row = ft.Row(
             [
                 self.stream_calibration_label,
                 self.stream_calibration_mode_dd,
-                ft.Container(width=S(16)),
+                ft.Container(width=S(10)),
                 self.stream_calibration_btn,
-                ft.Container(width=S(8)),
+                ft.Container(width=S(10)),
                 self.stream_calibration_status,
             ],
             spacing=1,
@@ -970,6 +1008,8 @@ class GUIBuilderMixin:
             self.stream_url_row, self.stream_port_quality_row, self.stream_proto_row,
             self.crf_row, self.audio_row, self.video_backend_row,
             self.stream_calibration_row,
+            self.stream_calibration_warning_row,
+            self.stream_calibration_result_row,
         ]
         self.stream_container = ft.Container(
             ft.Column([], spacing=S(8)), visible=False,
@@ -993,7 +1033,7 @@ class GUIBuilderMixin:
         return {
             "Local Viewer": [], "3D Monitor": [], "OpenXR Link": [],
             "MJPEG Streamer": [0, 1],
-            "RTMP Streamer": [0, 1, 2, 3, 4, 6],
+            "RTMP Streamer": [0, 1, 2, 3, 4, 6, 7, 8],
             "GPU Streamer": [0, 1, 2, 3, 4],
         }
 
@@ -1049,6 +1089,43 @@ class GUIBuilderMixin:
         self.device_dd.value = default_label or (opts[0] if opts else "")
         self.device_dd.update()
         return self.device_label_to_index
+
+    async def populate_devices_after_startup(self):
+        """Load Torch and enumerate compute devices after the GUI is visible."""
+        try:
+            await asyncio.to_thread(lambda: list(DEVICES.items()))
+            if getattr(self, "_closed", False):
+                return
+            self._startup_defer_devices = False
+            self.device_label_to_index = self.populate_devices()
+            saved_index = self._config.get(
+                "Computing Device", DEFAULTS["Computing Device"]
+            )
+            saved_label = next(
+                (
+                    label
+                    for label, index in self.device_label_to_index.items()
+                    if index == saved_index
+                ),
+                None,
+            )
+            if saved_label:
+                self.device_dd.value = saved_label
+            self.on_device_change(None)
+            saved_capture_tool = self._config.get(
+                "Capture Tool", DEFAULTS["Capture Tool"]
+            )
+            if saved_capture_tool in (self.capture_tool_dd.options or []):
+                self.capture_tool_dd.value = saved_capture_tool
+            self.run_btn.disabled = False
+            self._safe_update(
+                self.device_dd,
+                self.capture_tool_dd,
+                self.run_btn,
+            )
+            self._fit_window_to_content(update=True, resize_window=True)
+        except (asyncio.CancelledError, RuntimeError):
+            return
 
     def _apply_stereo_output(self, cfg):
         mon_count = self._get_monitor_count()
@@ -1109,7 +1186,7 @@ class GUIBuilderMixin:
         self.stereo_monitor_dd.update()
 
     def update_depth_resolution_options(self, model_name):
-        resolutions = ALL_MODELS.get(model_name, {}).get("resolutions", [DEFAULTS["Depth Resolution"]])
+        resolutions = GUI_MODEL_CATALOG.get(model_name, {}).get("resolutions", [DEFAULTS["Depth Resolution"]])
         self.depth_res_dd.options = [str(r) for r in resolutions]
         cur = self.depth_res_dd.value
         if cur and cur in [str(r) for r in resolutions]:

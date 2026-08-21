@@ -1,4 +1,8 @@
 import asyncio
+import json
+from types import SimpleNamespace
+
+import pytest
 
 import gui.process as gui_process
 
@@ -61,3 +65,251 @@ def test_mediamtx_warning_is_not_promoted_by_error_text(monkeypatch):
 
 def test_graceful_stop_timeout_allows_runtime_cleanup():
     assert gui_process._GRACEFUL_PROCESS_STOP_TIMEOUT_S >= 8.0
+
+
+def test_firewall_probe_parses_single_and_multiple_rules():
+    single = gui_process._parse_firewall_block_output(json.dumps({"Protocol": "TCP"}))
+    multiple = gui_process._parse_firewall_block_output(
+        json.dumps([{"Protocol": "TCP"}, {"Protocol": "UDP"}])
+    )
+
+    assert single == [{"Protocol": "TCP"}]
+    assert multiple == [{"Protocol": "TCP"}, {"Protocol": "UDP"}]
+
+
+def test_firewall_probe_is_read_only_and_targets_bundled_python(monkeypatch):
+    calls = []
+
+    class Result:
+        returncode = 0
+        stdout = json.dumps({"Protocol": "TCP", "DisplayName": "Python"})
+        stderr = ""
+
+    def fake_run(args, **kwargs):
+        calls.append((args, kwargs))
+        return Result()
+
+    monkeypatch.setattr(gui_process, "OS_NAME", "Windows")
+    monkeypatch.setattr(gui_process.subprocess, "run", fake_run)
+
+    result = gui_process._detect_windows_firewall_blocks(r"C:\D2S\python.exe")
+
+    assert result[0]["DisplayName"] == "Python"
+    assert calls[0][0][0:3] == ["powershell.exe", "-NoProfile", "-NonInteractive"]
+    assert "Get-NetFirewallRule" in calls[0][0][-1]
+    assert calls[0][1]["env"]["D2S_FIREWALL_EXE"].casefold().endswith(r"c:\d2s\python.exe")
+    assert calls[0][1]["timeout"] == 20
+
+
+def test_firewall_probe_timeout_is_not_treated_as_no_block_rules(monkeypatch):
+    def fake_run(*_args, **_kwargs):
+        raise gui_process.subprocess.TimeoutExpired("powershell.exe", 20)
+
+    monkeypatch.setattr(gui_process, "OS_NAME", "Windows")
+    monkeypatch.setattr(gui_process.subprocess, "run", fake_run)
+
+    with pytest.raises(gui_process.FirewallProbeError, match="timed out"):
+        gui_process._detect_windows_firewall_blocks(r"C:\D2S\python.exe")
+
+
+def test_manual_firewall_check_removes_matching_rules_in_background(monkeypatch):
+    events = []
+
+    class Harness(gui_process.GUIProcessMixin):
+        def set_status(self, message, key=None):
+            events.append(message)
+
+        def _safe_update(self, *controls):
+            pass
+
+    gui = Harness()
+    gui.locale = "EN"
+    gui._calibration_firewall_btn = SimpleNamespace(disabled=False)
+    gui._calibration_dialog_firewall_hint = SimpleNamespace(value="")
+    monkeypatch.setattr(
+        gui_process,
+        "_detect_windows_firewall_blocks",
+        lambda: [{"Protocol": "TCP", "DisplayName": "Python"}],
+    )
+    monkeypatch.setattr(
+        gui_process,
+        "_remove_windows_firewall_blocks",
+        lambda: (True, ""),
+    )
+
+    asyncio.run(gui._check_stream_calibration_firewall_async())
+
+    assert gui._calibration_firewall_btn.disabled is False
+    assert "were removed" in gui._calibration_dialog_firewall_hint.value
+    assert events[0] == "Checking Windows Firewall rules..."
+
+
+def test_calibration_stops_runtime_before_showing_result(monkeypatch, tmp_path):
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_text(
+        json.dumps({"fps": 30, "target_mbps": 25, "peak_mbps": 29}),
+        encoding="utf-8",
+    )
+    events = []
+
+    class Harness(gui_process.GUIProcessMixin):
+        async def _async_stop(self):
+            events.append("stop")
+
+        def set_status(self, message, key=None):
+            events.append(message)
+
+        def _refresh_stream_calibration_status(self):
+            events.append("refresh")
+
+        def _collect_config(self):
+            events.append("collect")
+
+        def _safe_update(self, *controls):
+            pass
+
+    gui = Harness()
+    gui.locale = "EN"
+    gui._config = {}
+    gui.target_fps_dd = SimpleNamespace(value="0")
+    gui.stream_calibration_mode_dd = SimpleNamespace(value="")
+    gui._calibration_previous_target_value = "Auto"
+    gui._calibration_active = True
+    gui._calibration_dialog = None
+
+    monkeypatch.setattr(gui_process, "STREAM_CALIBRATION_PROFILE_FILE", str(profile_path))
+    monkeypatch.setattr(gui_process, "BASE_DIR", str(tmp_path))
+    monkeypatch.setattr(gui_process, "save_yaml", lambda *args: (True, ""))
+
+    asyncio.run(gui._apply_stream_calibration_profile())
+
+    assert events.index("stop") < events.index("refresh")
+    assert events.index("stop") < events.index(
+        "Calibration applied: 30 FPS, 25 Mbps"
+    )
+
+
+def test_calibration_profile_status_distinguishes_stale_from_missing(monkeypatch, tmp_path):
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_text(
+        json.dumps({
+            "fps": 30,
+            "target_mbps": 25,
+            "peak_mbps": 29,
+            "fingerprint": {"old": "settings"},
+        }),
+        encoding="utf-8",
+    )
+
+    class Harness(gui_process.GUIProcessMixin):
+        pass
+
+    gui = Harness()
+    gui.stream_calibration_mode_dd = SimpleNamespace(value="Auto Calibration")
+    gui._config = {"Streamer Port": 1122}
+    monkeypatch.setattr(gui_process, "STREAM_CALIBRATION_PROFILE_FILE", str(profile_path))
+
+    assert gui._stream_calibration_profile_status() == "stale"
+
+    profile_path.unlink()
+    assert gui._stream_calibration_profile_status() == "missing"
+
+
+def test_limited_calibration_profile_is_not_treated_as_current(monkeypatch, tmp_path):
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_text(
+        json.dumps({
+            "fps": 30,
+            "target_mbps": 22,
+            "peak_mbps": 25,
+            "stability": "limited",
+            "fingerprint": gui_process.build_calibration_fingerprint({"Streamer Port": 1122}),
+        }),
+        encoding="utf-8",
+    )
+
+    class Harness(gui_process.GUIProcessMixin):
+        pass
+
+    gui = Harness()
+    gui.stream_calibration_mode_dd = SimpleNamespace(value="Auto Calibration")
+    gui._config = {"Streamer Port": 1122}
+    monkeypatch.setattr(gui_process, "STREAM_CALIBRATION_PROFILE_FILE", str(profile_path))
+
+    assert gui._stream_calibration_profile_status() == "missing"
+
+
+def test_limited_calibration_result_is_visible_below_transport_profile(monkeypatch, tmp_path):
+    profile_path = tmp_path / "profile.json"
+    settings = {"Streamer Port": 1122}
+    profile_path.write_text(
+        json.dumps({
+            "fps": 30,
+            "target_mbps": 24,
+            "peak_mbps": 30,
+            "measured_bitrate_mbps": 21.4,
+            "network_max_mbps": 30,
+            "stability": "limited",
+            "fingerprint": gui_process.build_calibration_fingerprint(settings),
+        }),
+        encoding="utf-8",
+    )
+
+    class Harness(gui_process.GUIProcessMixin):
+        def _safe_update(self, *controls):
+            pass
+
+    gui = Harness()
+    gui.locale = "CN"
+    gui._config = settings
+    gui.stream_calibration_status = SimpleNamespace(value="", color=None)
+    gui.stream_calibration_warning = SimpleNamespace(value="", visible=False)
+    gui.stream_calibration_warning_row = SimpleNamespace(visible=False)
+    gui.stream_calibration_result = SimpleNamespace(value="", color=None, visible=False)
+    gui.stream_calibration_result_row = SimpleNamespace(visible=False)
+    monkeypatch.setattr(gui_process, "STREAM_CALIBRATION_PROFILE_FILE", str(profile_path))
+
+    gui._refresh_stream_calibration_status()
+
+    assert gui.stream_calibration_result.visible is True
+    assert gui.stream_calibration_result_row.visible is True
+    assert "网络校准在 30 Mbps 未通过" in gui.stream_calibration_result.value
+    assert "降低分辨率后重新校准" in gui.stream_calibration_result.value
+
+
+def test_stable_calibration_result_shows_network_limit_and_safe_rates(
+    monkeypatch, tmp_path
+):
+    profile_path = tmp_path / "profile.json"
+    settings = {"Streamer Port": 1122}
+    profile_path.write_text(
+        json.dumps({
+            "fps": 30,
+            "target_mbps": 32,
+            "peak_mbps": 36,
+            "network_max_mbps": 40,
+            "stability": "stable",
+            "fingerprint": gui_process.build_calibration_fingerprint(settings),
+        }),
+        encoding="utf-8",
+    )
+
+    class Harness(gui_process.GUIProcessMixin):
+        def _safe_update(self, *controls):
+            pass
+
+    gui = Harness()
+    gui.locale = "CN"
+    gui._config = settings
+    gui.stream_calibration_status = SimpleNamespace(value="", color=None)
+    gui.stream_calibration_warning = SimpleNamespace(value="", visible=False)
+    gui.stream_calibration_warning_row = SimpleNamespace(visible=False)
+    gui.stream_calibration_result = SimpleNamespace(value="", color=None, visible=False)
+    gui.stream_calibration_result_row = SimpleNamespace(visible=False)
+    monkeypatch.setattr(gui_process, "STREAM_CALIBRATION_PROFILE_FILE", str(profile_path))
+
+    gui._refresh_stream_calibration_status()
+
+    assert "网络稳定上限：40 Mbps" in gui.stream_calibration_result.value
+    assert "安全码率：32 Mbps（峰值 36 Mbps）" in gui.stream_calibration_result.value
+    assert "帧率 30 FPS" in gui.stream_calibration_result.value

@@ -338,6 +338,20 @@ def test_unstable_stream_rate_uses_low_recent_percentile():
     assert sample([42.0, 35.0, 41.0, 36.0, 40.0, 37.0]) == 36.0
 
 
+def test_mediamtx_metrics_extract_actual_path_inbound_bytes():
+    metrics = """
+paths_inbound_bytes{name="live",state="ready"} 5898240
+paths_outbound_bytes{name="live",state="ready"} 4718592
+"""
+
+    assert FfmpegDirectSbsOutput._parse_mediamtx_path_inbound_bytes(
+        metrics, "live"
+    ) == 5898240
+    assert FfmpegDirectSbsOutput._parse_mediamtx_path_inbound_bytes(
+        metrics, "other"
+    ) is None
+
+
 def test_windows_rtmp_command_keeps_legacy_srt_transport_parameters():
     output = FfmpegDirectSbsOutput(
         base_dir=str(APP_ROOT),
@@ -483,6 +497,35 @@ def test_nvenc_command_uses_low_latency_hardware_encoder():
     assert command[command.index("-strict_gop") + 1] == "1"
     assert "-use_wallclock_as_timestamps" not in command
     assert "-fps_mode" not in command
+
+
+def test_calibration_uses_independent_30_fps_cbr_pressure_stream():
+    output = FfmpegDirectSbsOutput(
+        base_dir=str(APP_ROOT),
+        protocol="WEBRTC",
+        port=1122,
+        stream_key="live",
+        fps=30,
+        crf=23,
+        os_name="Windows",
+        target_bitrate_mbps=30,
+        peak_bitrate_mbps=34,
+    )
+    output._calibration_controller = SimpleNamespace()
+    output.video_encoder = "h264_nvenc"
+
+    command = output._ffmpeg_command(3840, 2160)
+
+    assert "lavfi" in command
+    assert "testsrc2=size=3840x2160:rate=30" in command
+    assert "rawvideo" not in command
+    assert "pipe:0" not in command
+    assert command[command.index("-rc") + 1] == "cbr"
+    assert "-cq" not in command
+    assert command[command.index("-b:v") + 1] == "30M"
+    assert command[command.index("-minrate") + 1] == "30M"
+    assert command[command.index("-maxrate") + 1] == "30M"
+    assert command[command.index("-bufsize") + 1] == "30M"
 
 
 def test_full_sbs_uses_hevc_nvenc_without_resizing(monkeypatch):

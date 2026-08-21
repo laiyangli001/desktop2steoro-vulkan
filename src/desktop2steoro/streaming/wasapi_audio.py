@@ -8,6 +8,38 @@ from typing import Any
 import numpy as np
 
 
+def query_soundcard_loopback_devices() -> list[str] | None:
+    """Return loopback speakers with the Windows default speaker first."""
+    try:
+        import soundcard as sc
+        default_speaker = sc.default_speaker()
+        all_speakers = list(sc.all_speakers())
+        ordered_speakers = []
+        if default_speaker is not None:
+            ordered_speakers.append(default_speaker)
+        ordered_speakers.extend(all_speakers)
+
+        speakers = []
+        seen_ids = set()
+        for speaker in ordered_speakers:
+            speaker_id = str(getattr(speaker, "id", "") or "")
+            if speaker_id and speaker_id in seen_ids:
+                continue
+            if speaker_id:
+                seen_ids.add(speaker_id)
+            loopback = sc.get_microphone(
+                id=speaker.id,
+                include_loopback=True,
+            )
+            if loopback is not None and bool(getattr(loopback, "isloopback", False)):
+                name = str(getattr(speaker, "name", "") or "").strip()
+                if name and name not in speakers:
+                    speakers.append(name)
+        return speakers or None
+    except Exception:
+        return None
+
+
 class SoundcardLoopbackSender:
     """Capture the Windows default speaker loopback and send PCM over localhost."""
 

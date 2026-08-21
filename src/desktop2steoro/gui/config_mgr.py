@@ -1,12 +1,12 @@
 """GUI Config Mixin — config read/write, stereo preset data, hot-param save."""
 import os
 import asyncio
-from utils import OS_NAME, ALL_MODELS, DEFAULT_PORT, read_yaml
+from utils import OS_NAME, DEFAULT_PORT, read_yaml
 from utils.run_mode import normalize_run_mode
 from utils.xr_headset_presets import display_to_xr_headset, xr_headset_to_display
 from .config import (
     DEFAULTS, DEFAULT_FAMILIES, DEFAULT_MODEL_LIST, FAMILY_TO_SIZES,
-    environment_display_label, parse_model_name, save_yaml,
+    environment_display_label, parse_model_name, save_yaml, GUI_MODEL_CATALOG,
 )
 from .paths import BASE_DIR, DIAG_LOG
 from .localization import UI_MESSAGES
@@ -164,11 +164,8 @@ class GUIConfigMixin:
             parallel_workers = int(parallel_workers)
         except (TypeError, ValueError):
             parallel_workers = 1
-        self.parallel_inference_dd.value = {
-            1: "单路推理",
-            2: "两路推理",
-            3: "三路推理",
-        }.get(parallel_workers, "单路推理")
+        self.parallel_inference_dd.options = self._parallel_inference_options()
+        self.parallel_inference_dd.value = self._parallel_inference_to_display(parallel_workers)
         self.recompile_trt_cb.value = cfg.get("Recompile TensorRT", DEFAULTS["Recompile TensorRT"])
         mgx_val = cfg.get("MIGraphX")
         if mgx_val is not None:
@@ -204,7 +201,9 @@ class GUIConfigMixin:
             else UI_MESSAGES[self.locale].get("Manual", "Manual")
         )
         self.stream_key_tf.value = cfg.get("Stream Key", DEFAULTS["Stream Key"])
-        self.audio_dd.value = cfg.get("Stereo Mix", "")
+        # Audio output is selected at runtime from the current system default;
+        # never restore a previously saved device choice.
+        self.audio_dd.value = ""
         self.video_backend_dd.value = {
             "auto": "Auto",
             "pynv": "PyNvVideoCodec",
@@ -263,6 +262,9 @@ class GUIConfigMixin:
         stereo_quality = self._stereo_quality_for_preset(stereo_preset)
         parallax_budget = self._display_to_parallax_budget(self.parallax_budget_dd.value)
         render_fixed_width, render_fixed_height = self._parse_fixed_size(self.render_fixed_dd.value)
+        parallel_workers = self._display_to_parallel_inference_workers(
+            self.parallel_inference_dd.value
+        )
         self._config.pop("Debug Mode", None)
 
         self._config.update({
@@ -278,7 +280,7 @@ class GUIConfigMixin:
             "Dynamic Convergence": dynamic_convergence_strength > 0.0,
             "Dynamic Convergence Strength": dynamic_convergence_strength,
             "Display Mode": self.display_mode_dd.value,
-            "Model List": ALL_MODELS,
+            "Model List": GUI_MODEL_CATALOG,
             "Depth Model": self.current_model_name,
             "Depth Strength": self._clamp_depth_strength(self.depth_strength_dd.value),
             "Depth Quick": self._display_to_depth_quick(self.depth_quick_dd.value),
@@ -347,19 +349,14 @@ class GUIConfigMixin:
             ),
             "torch.compile": self.torch_compile_cb.value,
             **accelerator_values,
-            "Parallel Inference": self.parallel_inference_dd.value != "单路推理",
-            "Parallel Inference Workers": {
-                "单路推理": 1,
-                "两路推理": 2,
-                "三路推理": 3,
-            }.get(self.parallel_inference_dd.value, 1),
+            "Parallel Inference": parallel_workers > 1,
+            "Parallel Inference Workers": parallel_workers,
             **recompile_values,
             "Capture Tool": self.capture_tool_dd.value,
             "Fill 16:9": self.fill_16_9_cb.value,
             "Fix Viewer Aspect": self.fix_aspect_cb.value,
             "Lossless Scaling Support": self.lossless_cb.value,
             "Stream Key": self.stream_key_tf.value,
-            "Stereo Mix": self.audio_dd.value,
             "Video Encoder Backend": {
                 "Auto": "auto",
                 "PyNvVideoCodec": "pynv",
@@ -371,6 +368,9 @@ class GUIConfigMixin:
             "Controller Model": self.ctrl_model_dd.value,
             "Environment Model": self.env_key,
         })
+        # Remove legacy persisted audio selections. The runtime resolves the
+        # current default output through SoundCard/WASAPI on every start.
+        self._config.pop("Stereo Mix", None)
         self.recompile_trt_cb.value = False
         self.recompile_migraphx_cb.value = False
         self.recompile_coreml_cb.value = False
@@ -621,6 +621,19 @@ class GUIConfigMixin:
     def _depth_separation_to_display(self, value):
         from .localization import depth_separation_to_display
         return depth_separation_to_display(value, self.locale)
+
+    def _parallel_inference_options(self):
+        from .localization import parallel_inference_options
+        return parallel_inference_options(self.locale)
+
+    def _parallel_inference_to_display(self, workers):
+        from .localization import parallel_inference_to_display
+        return parallel_inference_to_display(workers, self.locale)
+
+    @staticmethod
+    def _display_to_parallel_inference_workers(value):
+        from .localization import display_to_parallel_inference_workers
+        return display_to_parallel_inference_workers(value)
 
     @staticmethod
     def _display_to_depth_separation(value):

@@ -191,18 +191,32 @@ MESSAGE_CATALOGS = {
         "Calibration expired": "Calibration expired",
         "Automatic Network and Performance Calibration": "Automatic Network and Performance Calibration",
         "Cancel Calibration": "Cancel Calibration",
+        "Detect Firewall Rules": "Detect Firewall Rules",
         "Close": "Close",
         "calibration_open_headset_url": "Open this address in the headset browser and keep the page visible:",
         "calibration_waiting": "Waiting for the headset to open the test page...",
+        "calibration_settling": "Stabilizing the new bitrate...",
         "calibration_testing": "Testing {fps} FPS end-to-end...",
         "calibration_reconnecting": "Switching profile; the headset page is reconnecting...",
         "calibration_complete": "Calibration complete",
         "calibration_requires_advanced": "Automatic calibration requires Advanced Network Streaming.",
         "calibration_requires_webrtc": "Automatic calibration requires WebRTC.",
         "calibration_port_unavailable": "Automatic calibration needs the port immediately after the WebRTC port.",
+        "calibration_required_before_run": "Automatic calibration is required before starting because no current calibration profile is available.",
+        "calibration_profile_stale": "Settings changed, please recalibrate",
+        "calibration_bandwidth_insufficient": "Bandwidth is insufficient for the current resolution; lower the resolution and recalibrate.",
+        "calibration_receiver_metrics": "decode {decoded:.1f} FPS · bitrate {bitrate:.1f} Mbps · dropped {dropped} · freeze {freeze} · lost {lost} · jitter {jitter:.1f} ms",
+        "calibration_firewall_remove_failed": "Windows Firewall is blocking the bundled Python inbound connection ({protocol}), and the rule could not be removed. Run Desktop2Stereo as administrator and try again.",
+        "calibration_firewall_probe_failed": "Windows Firewall detection failed, so automatic calibration cannot safely continue: {error}",
+        "calibration_firewall_manual_hint": "If the headset does not respond when opening port {port}, click Detect Firewall Rules.",
+        "calibration_firewall_checking": "Checking Windows Firewall rules...",
+        "calibration_firewall_no_blocks": "No inbound block rules were found for the bundled Python.",
+        "calibration_firewall_removed": "Matching Windows Firewall block rules were removed. Open the headset page again.",
         "calibration_profile_summary": "{fps} FPS · {target} Mbps",
+        "calibration_result_stable": "Stable network limit: {network_max} Mbps, safe bitrate: {safe_target} Mbps (peak {safe_peak} Mbps), {fps} FPS.",
+        "calibration_result_limited": "Network calibration failed at {network_max} Mbps; lower the resolution and recalibrate.",
         "calibration_applied": "Calibration applied: {fps} FPS, {target} Mbps",
-        "calibration_result": "Recommended profile: {fps} FPS · {target} Mbps · peak {peak} Mbps",
+        "calibration_result": "Stable network limit: {network_max} Mbps · safe bitrate: {target} Mbps · peak {peak} Mbps · {fps} FPS",
         "Host": "Host:",
         "Invalid port number (1-65535)": "Invalid port number (must be between 1-65535)",
         "Invalid port number": "Port must be a number",
@@ -225,6 +239,9 @@ MESSAGE_CATALOGS = {
         "torch.compile": "torch.compile",
         "TensorRT": "TensorRT",
         "Parallel Inference": "Parallel Inference",
+        "Single Inference": "Single Inference",
+        "Dual Inference": "Dual Inference",
+        "Triple Inference": "Triple Inference",
         "CoreML": "CoreML",
         "OpenVINO": "OpenVINO",
         "tooltip_window": "Select a window to capture",
@@ -512,18 +529,32 @@ MESSAGE_CATALOGS = {
         "Calibration expired": "配置已过期",
         "Automatic Network and Performance Calibration": "自动网络与性能校准",
         "Cancel Calibration": "取消校准",
+        "Detect Firewall Rules": "检测防火墙规则",
         "Close": "关闭",
         "calibration_open_headset_url": "请在头显浏览器中打开以下地址，并保持页面位于前台：",
         "calibration_waiting": "正在等待头显打开测试页面……",
+        "calibration_settling": "正在等待新码率稳定……",
         "calibration_testing": "正在进行 {fps} FPS 端到端测试……",
         "calibration_reconnecting": "正在切换发送档位，头显页面将自动重连……",
         "calibration_complete": "校准完成",
         "calibration_requires_advanced": "自动校准仅支持高级网络推流模式。",
         "calibration_requires_webrtc": "自动校准需要选择 WebRTC 协议。",
         "calibration_port_unavailable": "自动校准需要使用 WebRTC 端口之后的一个端口，请降低推流端口。",
+        "calibration_required_before_run": "当前没有有效的自动校准结果，或设置已经变化，启动前必须先完成自动校准。",
+        "calibration_profile_stale": "设置变化，请重新校准",
+        "calibration_bandwidth_insufficient": "当前网络带宽不足以支持当前分辨率，请降低分辨率后重新校准。",
+        "calibration_receiver_metrics": "解码 {decoded:.1f} FPS · 码率 {bitrate:.1f} Mbps · 丢帧 {dropped} · 冻结 {freeze} · 丢包 {lost} · 抖动 {jitter:.1f} ms",
+        "calibration_firewall_remove_failed": "Windows 防火墙正在阻止项目内置 Python 的入站连接（{protocol}），但阻止规则删除失败。请以管理员身份运行 Desktop2Stereo 后重试。",
+        "calibration_firewall_probe_failed": "Windows 防火墙检测失败，自动校准无法安全继续：{error}",
+        "calibration_firewall_manual_hint": "如果头显访问 {port} 端口页面无响应，请点击“检测防火墙规则”。",
+        "calibration_firewall_checking": "正在检测 Windows 防火墙规则……",
+        "calibration_firewall_no_blocks": "未发现针对项目内置 Python 的入站阻止规则。",
+        "calibration_firewall_removed": "已删除匹配的 Windows 防火墙阻止规则，请重新打开头显页面。",
         "calibration_profile_summary": "{fps} FPS · {target} Mbps",
+        "calibration_result_stable": "网络稳定上限：{network_max} Mbps，安全码率：{safe_target} Mbps（峰值 {safe_peak} Mbps），帧率 {fps} FPS。",
+        "calibration_result_limited": "网络校准在 {network_max} Mbps 未通过，请降低分辨率后重新校准。",
         "calibration_applied": "已应用校准结果：{fps} FPS，{target} Mbps",
-        "calibration_result": "推荐配置：{fps} FPS · {target} Mbps · 峰值 {peak} Mbps",
+        "calibration_result": "网络稳定上限：{network_max} Mbps · 安全码率：{target} Mbps · 峰值 {peak} Mbps · {fps} FPS",
         "Host": "主机:",
         "Invalid port number (1-65535)": "端口号无效 (必须介于1-65535之间)",
         "Invalid port number": "端口必须是数字",
@@ -546,6 +577,9 @@ MESSAGE_CATALOGS = {
         "torch.compile": "torch.compile",
         "TensorRT": "TensorRT",
         "Parallel Inference": "并行推理",
+        "Single Inference": "单路推理",
+        "Dual Inference": "两路推理",
+        "Triple Inference": "三路推理",
         "CoreML": "CoreML",
         "OpenVINO": "OpenVINO",
         "tooltip_window": "选择要捕获的窗口",
@@ -712,6 +746,36 @@ DEPTH_SEPARATION_LABELS = {
     "strong": "separation_strong",
     "weak": "separation_weak",
 }
+PARALLEL_INFERENCE_LABELS = {
+    1: "Single Inference",
+    2: "Dual Inference",
+    3: "Triple Inference",
+}
+
+
+def parallel_inference_options(locale=DEFAULT_LOCALE):
+    messages = get_messages(locale)
+    return [messages[label] for label in PARALLEL_INFERENCE_LABELS.values()]
+
+
+def parallel_inference_to_display(workers, locale=DEFAULT_LOCALE):
+    try:
+        workers = int(workers)
+    except (TypeError, ValueError):
+        workers = 1
+    label = PARALLEL_INFERENCE_LABELS.get(workers, PARALLEL_INFERENCE_LABELS[1])
+    return get_messages(locale).get(label, label)
+
+
+def display_to_parallel_inference_workers(value):
+    text = str(value or "")
+    for workers, label in PARALLEL_INFERENCE_LABELS.items():
+        if text == label:
+            return workers
+        for locale in SUPPORTED_LOCALES:
+            if text == get_messages(locale).get(label):
+                return workers
+    return 1
 
 
 def stereo_quality_options(locale=DEFAULT_LOCALE):

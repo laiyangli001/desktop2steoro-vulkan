@@ -3,7 +3,8 @@
 ## 2026-08-21
 
 - 统一高级网络推流的跨平台 FFmpeg 运行时来源：Windows AMD64、Linux AMD64/ARM64、macOS Intel/Apple Silicon 压缩包均改用 `desktop2stereo-ffmpeg-builds` GitHub Actions 的 FFmpeg 9.0.1 `d2s.1` 构建产物，五个平台使用同一版本与功能配置，并保留构建端及本地 SHA-256 校验结果；运行时安装同步改为复制完整 FFmpeg 目录，确保共享 FFmpeg、SRT、Opus、oneVPL 等动态库随可执行文件一起部署。
-- 新增“高级网络推流”的自动网络与性能校准：GUI 提供独立校准入口和实时进度弹窗，头显测试页通过 WHEP 自动重连并回传 WebRTC 解码帧率、丢帧、冻结、丢包、码率与抖动；运行时从安全档逐级测试实际捕获、CUDA→CPU 转换、FFmpeg 提交、局域网传输和头显解码，自动回退到最高稳定 FPS/码率并保存带设备、模型、头显和编码配置指纹的结果，相关配置变化后会提示重新校准。
+- 新增“高级网络推流”的自动网络校准：GUI 提供独立入口和实时进度弹窗，头显测试页通过 WHEP 自动重连并回传 WebRTC 解码帧率、丢帧、冻结、丢包、实际接收码率与抖动；校准使用按输入分辨率确定起点的独立 30 FPS CBR 压力流，每档测试 15 秒，先按 5 Mbps 向上粗测，再在稳定/不稳定区间二分到 1 Mbps，并对最终候选执行 30 秒确认。只有实际发送码率达到目标档位 85% 的测试才有效，结果按稳定网络上限的 80%/90% 保存安全目标/峰值码率及配置指纹。
+- 记录并处理 Windows 11 入站防火墙经验：高级网络推流的 MediaMTX `1122` 端口可正常访问时，自动校准专用 Python HTTP 服务 `1123` 仍可能因项目内置 `python.exe` 被 Windows 防火墙的 `Python` 入站 Block 规则拦截，表现为头显浏览器无响应且校准服务没有 `TCP accepted` 日志；校准弹窗现在提供手动“检测防火墙规则”入口，按内置 Python 的精确路径查找并仅删除匹配的 TCP/UDP 入站阻止规则，必要时通过 UAC 提权，并在检测或删除失败时给出明确提示。
 - 修复 NumPy 2.5 环境下 SoundCard 0.4.4 的 Windows WASAPI 回环采集在收到真实音频后触发 `The binary mode of fromstring is removed` 并降级静音的问题；安装依赖升级并锁定到 SoundCard 0.4.6，改用兼容 NumPy 2.x 的二进制缓冲区读取实现。
 - 修复“高级网络推流”使用 SoundCard/WASAPI 回环音频时，采集线程在启动后异常会令 FFmpeg 等待音频、继而使本机 RTSP 发布约 10 秒后 `i/o timeout` 的问题；音频异常现在会明确告警并按实时节奏降级为静音，视频和 WebRTC 会话保持在线。
 - 修复“高级网络串流”探测 FFmpeg NVENC 时误加载并输出 PyNvVideoCodec 可用状态的问题；该模式现在只报告实际选中的 `h264_nvenc`/`hevc_nvenc`，PyNvVideoCodec 状态仅由“GPU 推流”路径处理。
@@ -1065,6 +1066,8 @@
 - 增加 CUDA/Vulkan/Filament external semaphore 路径：每个输出槽位创建可导出的 Vulkan binary semaphore，CUDA copy 完成后异步 signal，Filament Bridge 在目标 swapchain acquire 时等待对应 semaphore；平台或运行库不支持时自动退回 CUDA stream 同步。
 ## Unreleased
 
+- Automatic stream calibration now uses an inference-independent 30 FPS CBR pressure stream sized from the selected input resolution. Each coarse tier runs for 15 seconds, the stable/unstable interval is narrowed by binary search to 1 Mbps, and the final candidate is confirmed for 30 seconds.
+- A tier is valid only when its measured sender rate reaches at least 85% of the requested load. Results record the measured network limit and apply 80%/90% safety margins for the target/peak bitrates instead of presenting a formula-derived target as measured capacity.
 - Repacked the MSDF atlas into fixed 64x64 cells in the charset order, with
   deterministic left-to-right and top-to-bottom pages.
 - Improved native MSDF coverage calculation for small VR OSD glyphs and forced

@@ -28,6 +28,15 @@ from .localization import UI_MESSAGES
 logger = logging.getLogger(__name__)
 
 
+def _write_gui_ready_flag():
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        with open(GUI_READY_FILE, "w", encoding="utf-8") as ready_file:
+            ready_file.write("ready\n")
+    except Exception:
+        logger.exception("Failed to write GUI ready flag")
+
+
 class Desktop2StereoGUI(
     GUIBuilderMixin,
     GUIHandlerMixin,
@@ -70,6 +79,11 @@ class Desktop2StereoGUI(
         self._calibration_dialog = None
         self._calibration_active = False
         self._calibration_previous_target_value = None
+        self.audio_devices = []
+        self._startup_defer_audio = True
+        self._audio_startup_task = None
+        self._startup_defer_devices = True
+        self._device_startup_task = None
 
     async def setup(self):
         self.gui_log_handler = _setup_console_logging()
@@ -99,12 +113,12 @@ class Desktop2StereoGUI(
         self._auto_align_labels()
         self.page.on_close = self._on_page_close
         self.page.on_resize = self._on_page_resize
-        self._startup_fit_pending = False
-        self._startup_fit_width = 0
+        self._startup_fit_armed = True
+        self._startup_fit_task = None
 
-        # Populate monitors & devices
+        # Populate monitors. Torch-backed compute-device discovery is deferred
+        # until after the first complete GUI frame.
         self.monitor_label_to_index = self.populate_monitors()
-        self.device_label_to_index = self.populate_devices()
 
         # Load config
         self._config = DEFAULTS.copy()
@@ -139,25 +153,24 @@ class Desktop2StereoGUI(
         self._fit_window_to_content(update=False, resize_window=True)
         self.page.window.visible = True
         self.page.update()
+        self._device_startup_task = asyncio.create_task(
+            self.populate_devices_after_startup()
+        )
+        self._startup_defer_audio = False
+        if self.run_mode_key in {"RTMP Streamer", "GPU Streamer"}:
+            self._audio_startup_task = asyncio.create_task(
+                self.populate_audio_devices_after_startup()
+            )
+        self._schedule_startup_fit()
         await asyncio.sleep(0)
         self._fit_window_to_content(update=True, resize_window=True)
         self._signal_gui_ready()
         asyncio.create_task(self._prepare_startup_after_window_visible())
 
     def _signal_gui_ready(self):
-        try:
-            os.makedirs(LOG_DIR, exist_ok=True)
-            with open(GUI_READY_FILE, "w", encoding="utf-8") as ready_file:
-                ready_file.write("ready\n")
-        except Exception:
-            logger.exception("Failed to write GUI ready flag")
+        _write_gui_ready_flag()
 
     async def _prepare_startup_after_window_visible(self):
-        # Mimic the log visibility link's resize action so the first-render
-        # window matches the width that clicking show/hide log produces for the
-        # saved Show Log Panel setting (the client drops early resizes).
-        if not getattr(self, "_closed", False):
-            asyncio.create_task(self._apply_startup_fit())
         self.set_status(
             UI_MESSAGES[self.locale].get(
                 "Preparing Flet package...",
@@ -193,6 +206,32 @@ def main():
 
 
 async def _async_main(page: ft.Page):
+    # Keep the native window visible to avoid hide/show ordering races. Replace
+    # Flet's large blank default frame with a compact startup surface while
+    # synchronous configuration and hardware discovery are still running.
+    page.window.width = S(520)
+    page.window.height = S(300)
+    page.padding = S(24)
+    page.add(
+        ft.Container(
+            content=ft.Column(
+                [
+                    ft.ProgressRing(width=S(28), height=S(28)),
+                    ft.Text("Desktop2Stereo is starting...", size=S(14)),
+                ],
+                alignment=ft.MainAxisAlignment.CENTER,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=S(12),
+            ),
+            expand=True,
+            alignment=ft.Alignment.CENTER,
+        )
+    )
+    page.update()
+    await asyncio.sleep(0.1)
+    # The launcher only needs confirmation that a visible GUI surface exists;
+    # compute/audio discovery and full menu construction continue afterward.
+    _write_gui_ready_flag()
     app = Desktop2StereoGUI(page)
     await app.setup()
 

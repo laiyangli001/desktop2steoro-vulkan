@@ -24,7 +24,9 @@ def resolve_streaming_config(settings: dict) -> StreamingConfig:
         stream_quality=settings["Stream Quality"],
         stream_port=settings["Streamer Port"],
         local_ip=get_local_ip(),
-        stereo_mix_device=settings["Stereo Mix"],
+        # Audio output is selected dynamically by SoundCard/WASAPI. Keep an
+        # empty value when legacy settings do not contain a saved device.
+        stereo_mix_device=settings.get("Stereo Mix", ""),
         stream_key=settings["Stream Key"],
         audio_delay=settings["Audio Delay"],
         crf=settings["CRF"],

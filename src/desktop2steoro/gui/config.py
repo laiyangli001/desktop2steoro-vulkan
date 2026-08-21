@@ -3,9 +3,10 @@ import os
 
 import yaml
 
-from utils import ALL_MODELS, DEFAULT_PORT
+from utils import DEFAULT_PORT
 from utils.xr_headset_presets import DEFAULT_XR_HEADSET_MODEL
 
+from .model_catalog import GUI_MODEL_CATALOG
 from .paths import BASE_DIR
 
 
@@ -69,7 +70,7 @@ def build_family_size_map(model_list):
     return families, family_to_sizes
 
 
-DEFAULT_MODEL_LIST = list(ALL_MODELS.keys())
+DEFAULT_MODEL_LIST = list(GUI_MODEL_CATALOG.keys())
 DEFAULT_FAMILIES, FAMILY_TO_SIZES = build_family_size_map(DEFAULT_MODEL_LIST)
 FAMILY_SIZE_TO_MODEL = {}
 for name in DEFAULT_MODEL_LIST:

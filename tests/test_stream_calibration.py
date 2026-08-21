@@ -17,7 +17,7 @@ def _receiver_report(fps=30.0, **overrides):
         "dropped_frames": 0,
         "freeze_count": 0,
         "packets_lost": 0,
-        "bitrate_mbps": 20.0,
+        "bitrate_mbps": 40.0,
         "jitter_buffer_ms": 20.0,
     }
     report.update(overrides)
@@ -27,8 +27,23 @@ def _receiver_report(fps=30.0, **overrides):
 def test_calibration_tiers_are_ascending_and_bounded():
     tiers = calibration_tiers(50)
 
-    assert [tier.fps for tier in tiers] == [30, 40, 48, 50]
+    assert [tier.fps for tier in tiers] == [30]
+    assert [tier.target_mbps for tier in tiers] == [30]
     assert all(tier.target_mbps <= tier.peak_mbps for tier in tiers)
+
+
+def test_default_probe_window_allows_headset_to_stabilize(tmp_path):
+    controller = StreamCalibrationController(
+        bind_port=12000,
+        stream_port=1122,
+        stream_key="live",
+        maximum_fps=30,
+        state_path=tmp_path / "state.json",
+        profile_path=tmp_path / "profile.json",
+    )
+
+    assert controller.stage_seconds == 15.0
+    assert controller.stability_seconds == 30.0
 
 
 def test_calibration_window_requires_sender_and_receiver_stability():
@@ -59,31 +74,61 @@ def test_controller_advances_then_rolls_back_to_highest_stable_tier(tmp_path):
         state_path=tmp_path / "state.json",
         profile_path=tmp_path / "profile.json",
         stage_seconds=2.0,
+        stability_seconds=2.0,
+        settle_seconds=0.0,
         clock=lambda: now[0],
     )
 
-    assert controller.take_pending_tier().fps == 30
+    assert controller.take_pending_tier().target_mbps == 30
     controller.observe_sender({"submitted_fps": 29.8})
     for _ in range(5):
         controller.add_receiver_report(_receiver_report(29.5))
+    assert controller.state()["receiver_latest"]["decoded_fps"] == 29.5
     now[0] = 2.1
     controller.add_receiver_report(_receiver_report(29.5))
 
-    assert controller.take_pending_tier().fps == 40
-    controller.observe_sender({"submitted_fps": 32.0})
+    assert controller.take_pending_tier().target_mbps == 35
+    controller.observe_sender({"submitted_fps": 29.8})
     for _ in range(5):
-        controller.add_receiver_report(_receiver_report(31.0))
+        controller.add_receiver_report(_receiver_report(29.5))
     now[0] = 4.2
-    controller.add_receiver_report(_receiver_report(31.0))
+    controller.add_receiver_report(_receiver_report(29.5))
 
-    rollback = controller.take_pending_tier()
-    assert rollback is not None and rollback.fps == 30
+    assert controller.take_pending_tier().target_mbps == 40
+    controller.observe_sender({"submitted_fps": 29.8})
+    for _ in range(5):
+        controller.add_receiver_report(_receiver_report(29.5, packets_lost=1))
+    now[0] = 6.3
+    controller.add_receiver_report(_receiver_report(29.5, packets_lost=1))
+
+    for expected_target in (37, 38, 39):
+        assert controller.take_pending_tier().target_mbps == expected_target
+        controller.observe_sender({"submitted_fps": 29.8})
+        for _ in range(5):
+            controller.add_receiver_report(_receiver_report(29.5))
+        now[0] += 2.1
+        controller.add_receiver_report(_receiver_report(29.5))
+
+    # The binary search converged at 39 Mbps; confirm it once more using the
+    # long-window state (shortened to two seconds in this unit test).
+    assert controller.take_pending_tier() is None
+    controller.observe_sender({"submitted_fps": 29.8})
+    for _ in range(5):
+        controller.add_receiver_report(_receiver_report(29.5))
+    now[0] += 2.1
+    controller.add_receiver_report(_receiver_report(29.5))
+
+    assert controller.take_pending_tier() is None
     profile = json.loads((tmp_path / "profile.json").read_text(encoding="utf-8"))
     assert profile["fps"] == 30
+    assert profile["network_max_mbps"] == 39
+    assert profile["target_mbps"] == 31
+    assert profile["peak_mbps"] == 35
+    assert profile["measured_bitrate_mbps"] == 40.0
     assert controller.state()["status"] == "complete"
 
 
-def test_controller_retries_stable_sender_with_lower_bitrate(tmp_path):
+def test_controller_stops_at_first_unstable_bitrate_probe(tmp_path):
     now = [0.0]
     controller = StreamCalibrationController(
         bind_port=12000,
@@ -93,20 +138,61 @@ def test_controller_retries_stable_sender_with_lower_bitrate(tmp_path):
         state_path=tmp_path / "state.json",
         profile_path=tmp_path / "profile.json",
         stage_seconds=2.0,
+        stability_seconds=2.0,
+        settle_seconds=0.0,
         clock=lambda: now[0],
     )
     original = controller.take_pending_tier()
     controller.observe_sender({"submitted_fps": 29.8})
     for _ in range(5):
-        controller.add_receiver_report(_receiver_report(20.0, dropped_frames=2))
+        controller.add_receiver_report(_receiver_report(20.0, dropped_frames=2, packets_lost=1))
     now[0] = 2.1
-    controller.add_receiver_report(_receiver_report(20.0, dropped_frames=2))
+    controller.add_receiver_report(_receiver_report(20.0, dropped_frames=2, packets_lost=1))
 
-    retry = controller.take_pending_tier()
-    assert retry is not None
-    assert retry.fps == original.fps
-    assert retry.target_mbps < original.target_mbps
-    assert controller.state()["status"] == "reconnecting"
+    for expected_target in (18, 24, 27, 28, 29):
+        assert controller.take_pending_tier().target_mbps == expected_target
+        controller.observe_sender({"submitted_fps": 29.8})
+        for _ in range(5):
+            controller.add_receiver_report(_receiver_report(29.5))
+        now[0] += 2.1
+        controller.add_receiver_report(_receiver_report(29.5))
+
+    assert controller.take_pending_tier() is None
+    controller.observe_sender({"submitted_fps": 29.8})
+    for _ in range(5):
+        controller.add_receiver_report(_receiver_report(29.5))
+    now[0] += 2.1
+    controller.add_receiver_report(_receiver_report(29.5))
+    assert controller.state()["status"] == "complete"
+    profile = json.loads((tmp_path / "profile.json").read_text(encoding="utf-8"))
+    assert profile["network_max_mbps"] == original.target_mbps - 1
+    assert profile["target_mbps"] == 23
+    assert profile["peak_mbps"] == 26
+
+
+def test_calibration_tier_uses_selected_input_resolution():
+    tier = calibration_tiers(
+        60,
+        input_width=2560,
+        input_height=1440,
+    )[0]
+
+    assert tier.fps == 30
+    assert tier.target_mbps == 13
+
+
+def test_calibration_window_rejects_a_probe_that_did_not_reach_target_rate():
+    tier = CalibrationTier(fps=30, target_mbps=30, peak_mbps=34)
+    reports = [_receiver_report(29.5, bitrate_mbps=8.0) for _ in range(8)]
+
+    passed, metrics = evaluate_calibration_window(
+        tier,
+        reports,
+        {"submitted_fps": 30.0},
+    )
+
+    assert passed is False
+    assert "insufficient_probe_bitrate" in metrics["failure_reasons"]
 
 
 def test_headset_page_uses_whep_and_reports_browser_stats(tmp_path):
@@ -124,6 +210,9 @@ def test_headset_page_uses_whep_and_reports_browser_stats(tmp_path):
     assert "getStats()" in page
     assert "framesDecoded" in page
     assert "jitterBufferDelay" in page
+    assert "addTransceiver('audio'" not in page
+    assert "WHEP ${response.status} ${await response.text()}" in page
+    assert "new MediaStream([e.track])" in page
 
 
 def test_calibration_fingerprint_tracks_runtime_and_receiver_choices():
@@ -142,7 +231,47 @@ def test_calibration_fingerprint_tracks_runtime_and_receiver_choices():
     assert fingerprint["Stream Protocol"] == "WebRTC"
 
 
-def test_feedback_http_server_serves_page_and_accepts_stats(tmp_path):
+def test_calibration_fingerprint_excludes_result_fields_but_tracks_other_changes():
+    base = {
+        "Target FPS": 30,
+        "Use Stream Calibration": True,
+        "Stream Target Bitrate Mbps": 30,
+        "Stream Peak Bitrate Mbps": 34,
+        "Show Log Panel": True,
+        "Streamer Port": 1122,
+        "CRF": 23,
+    }
+    changed = dict(base, **{"Streamer Port": 1123})
+
+    first = build_calibration_fingerprint(base)
+    second = build_calibration_fingerprint(changed)
+
+    assert "Target FPS" not in first
+    assert "Stream Target Bitrate Mbps" not in first
+    assert first["Streamer Port"] == "1122"
+    assert first != second
+
+
+def test_calibration_fingerprint_ignores_stream_key_and_audio_settings():
+    base = {
+        "Streamer Port": 1122,
+        "Stream Key": "live",
+        "Stereo Mix": "soundcard:Headphones",
+        "Audio Delay": -0.1,
+    }
+    changed = dict(
+        base,
+        **{
+            "Stream Key": "other",
+            "Stereo Mix": "soundcard:Speakers",
+            "Audio Delay": 0.2,
+        },
+    )
+
+    assert build_calibration_fingerprint(base) == build_calibration_fingerprint(changed)
+
+
+def test_feedback_http_server_serves_page_and_accepts_stats(tmp_path, capsys):
     reservation = socket.socket()
     reservation.bind(("127.0.0.1", 0))
     port = reservation.getsockname()[1]
@@ -168,5 +297,8 @@ def test_feedback_http_server_serves_page_and_accepts_stats(tmp_path):
         with urllib.request.urlopen(request, timeout=2) as response:
             assert json.loads(response.read())["ok"] is True
         assert controller.state()["receiver_connected"] is True
+        output = capsys.readouterr().out
+        assert "HTTP GET client=127.0.0.1 path=/ status=200" in output
+        assert "HTTP POST client=127.0.0.1 path=/stats status=200" in output
     finally:
         controller.close()

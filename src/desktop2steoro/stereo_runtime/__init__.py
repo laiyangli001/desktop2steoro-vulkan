@@ -1,34 +1,29 @@
-"""4K stereo synthesis research prototypes."""
-
-from .adapter import (
-    DepthRuntimeConfig,
-    StereoLabDepthRuntimeConfig,
-    StereoLabRuntimeConfig,
-    StereoRuntimeConfig,
-    depth_provider_config_from_runtime,
-    preset_for_runtime_mode,
-    runtime_frame_contract,
-    runtime_config_from_d2s_settings,
-    stereo_config_from_runtime,
-)
-from .model_registry import DepthModelSpec, ModelRegistry, resolve_model_dir
-from .model_artifacts import (
-    ModelArtifactPaths,
-    PreparedModelArtifacts,
-    artifact_paths_for_model,
-    ensure_model_downloaded,
-    ensure_onnx_exported,
-    ensure_tensorrt_engine,
-    prepare_model_artifacts,
-)
-from .onnx_export import (
-    OnnxExportResult,
-    choose_export_dtype,
-    export_depth_model_onnx,
-    probe_model_dtype,
-)
+"""4K stereo synthesis research prototypes with lazy public exports."""
 
 _LAZY_EXPORTS = {
+    "DepthRuntimeConfig": ("adapter", "DepthRuntimeConfig"),
+    "StereoLabDepthRuntimeConfig": ("adapter", "StereoLabDepthRuntimeConfig"),
+    "StereoLabRuntimeConfig": ("adapter", "StereoLabRuntimeConfig"),
+    "StereoRuntimeConfig": ("adapter", "StereoRuntimeConfig"),
+    "depth_provider_config_from_runtime": ("adapter", "depth_provider_config_from_runtime"),
+    "preset_for_runtime_mode": ("adapter", "preset_for_runtime_mode"),
+    "runtime_frame_contract": ("adapter", "runtime_frame_contract"),
+    "runtime_config_from_d2s_settings": ("adapter", "runtime_config_from_d2s_settings"),
+    "stereo_config_from_runtime": ("adapter", "stereo_config_from_runtime"),
+    "DepthModelSpec": ("model_registry", "DepthModelSpec"),
+    "ModelRegistry": ("model_registry", "ModelRegistry"),
+    "resolve_model_dir": ("model_registry", "resolve_model_dir"),
+    "ModelArtifactPaths": ("model_artifacts", "ModelArtifactPaths"),
+    "PreparedModelArtifacts": ("model_artifacts", "PreparedModelArtifacts"),
+    "artifact_paths_for_model": ("model_artifacts", "artifact_paths_for_model"),
+    "ensure_model_downloaded": ("model_artifacts", "ensure_model_downloaded"),
+    "ensure_onnx_exported": ("model_artifacts", "ensure_onnx_exported"),
+    "ensure_tensorrt_engine": ("model_artifacts", "ensure_tensorrt_engine"),
+    "prepare_model_artifacts": ("model_artifacts", "prepare_model_artifacts"),
+    "OnnxExportResult": ("onnx_export", "OnnxExportResult"),
+    "choose_export_dtype": ("onnx_export", "choose_export_dtype"),
+    "export_depth_model_onnx": ("onnx_export", "export_depth_model_onnx"),
+    "probe_model_dtype": ("onnx_export", "probe_model_dtype"),
     "DepthRuntime": ("runtime", "DepthRuntime"),
     "DepthRuntimeResult": ("runtime", "DepthRuntimeResult"),
     "StereoLabDepthRuntime": ("runtime", "StereoLabDepthRuntime"),
