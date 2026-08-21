@@ -1660,6 +1660,14 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
         self._native_active = False
         self._native_pts = 0
         try:
+            validation_layers = os.environ.get("VK_INSTANCE_LAYERS", "")
+            if "VK_LAYER_KHRONOS_validation" in validation_layers:
+                print(
+                    "[VulkanStream] native bridge disabled under "
+                    "VK_LAYER_KHRONOS_validation; using stable host-upload path",
+                    flush=True,
+                )
+                return
             if self.os_name == "Windows" and hasattr(os, "add_dll_directory"):
                 self._native_vulkan_dll_dir = os.add_dll_directory(
                     str(Path(self.ffmpeg_path).parent)
@@ -1919,10 +1927,13 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
     def _stop_native(self) -> None:
         self._native_active = False
         if self._native_vulkan_encoder is not None:
-            try:
-                self._native_vulkan_encoder.flush()
-            except Exception:
-                pass
+            # Every encoded packet is drained immediately after submit. Do not
+            # call avcodec_send_frame(NULL) during normal shutdown: FFmpeg's
+            # Vulkan Video flush can block under the Khronos validation layer
+            # while its internal multi-plane frame pool is being torn down.
+            # The muxer is stopped next, so a discarded final drain packet
+            # cannot reach the client anyway; close() still releases all native
+            # Vulkan resources through the bridge.
             try:
                 self._native_vulkan_encoder.close()
             except Exception:

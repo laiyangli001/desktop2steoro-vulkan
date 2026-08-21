@@ -15,6 +15,7 @@ from streaming.direct_sbs import (
     FfmpegDirectSbsOutput,
     PyNvDirectSbsOutput,
     RuntimeSbsRgbConverter,
+    VulkanDirectSbsOutput,
     runtime_sbs_to_rgb,
 )
 from streaming.nvidia_encoder import PyNvSrtVideoOutput
@@ -183,6 +184,23 @@ def test_cuda_converter_reuses_pinned_host_buffer():
     assert np.all(second == 255)
     assert converter._host_rgb.data_ptr() == host_pointer
     assert converter._host_rgb.is_pinned()
+
+
+def test_vulkan_output_disables_native_bridge_under_validation(monkeypatch, capsys):
+    monkeypatch.setenv("VK_INSTANCE_LAYERS", "VK_LAYER_KHRONOS_validation")
+    output = VulkanDirectSbsOutput(
+        base_dir=str(APP_ROOT),
+        protocol="WEBRTC",
+        port=1122,
+        stream_key="live",
+        fps=30,
+        crf=23,
+        os_name="Windows",
+        stereo_mix_device="",
+    )
+
+    assert output._native_vulkan_bridge is None
+    assert "disabled under VK_LAYER_KHRONOS_validation" in capsys.readouterr().out
 
 
 def test_packet_loss_detector_matches_transport_loss_messages():

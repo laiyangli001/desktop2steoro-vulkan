@@ -4,7 +4,7 @@
 
 目标是消除当前 4K SBS 推流中的 CUDA/ROCm → CPU RGB24 → FFmpeg stdin 路径，让图像在 GPU 内完成 SBS 整理、颜色转换和硬件编码。编码后的 H.264/H.265 小数据包仍通过 FFmpeg/MediaMTX 发布，并由局域网头显浏览器通过 WebRTC 播放。
 
-> 本文同时记录实施设计和当前验收状态。native Vulkan 编码桥已完成独立 4K 编码烟测并接入高级网络推流；本机已完成连续 600 帧 3840×2160@30 发布和 ffprobe 媒体参数验证。头显端持续 4K/30 FPS 实机验收、音频闭环和 validation 层 flush 问题仍需继续完成。
+> 本文同时记录实施设计和当前验收状态。native Vulkan 编码桥已完成独立 4K 编码烟测并接入高级网络推流；本机已完成连续 600 帧 3840×2160@30 发布和 ffprobe 媒体参数验证。头显端持续 4K/30 FPS 实机验收和音频闭环仍需继续完成；Khronos validation 层会触发 FFmpeg 内部 NV12 frame-pool 的已知 VUID 与 flush/idle 阻塞，程序检测到该层后主动回退稳定 host-upload 路径。
 
 ## 目录
 
@@ -700,6 +700,10 @@ SBS 生成 → GPU 转换 → 编码提交 → packet 输出 → RTSP 发布 →
 禁止只输出“Vulkan failed”或吞掉 FFmpeg/Vulkan 错误码。
 
 ## 常见故障
+
+### validation 层下 native 路径被回退
+
+当前 FFmpeg Vulkan frame-pool 在 NVIDIA RTX 3090 validation 层下会报告 `VUID-VkImageCreateInfo-pNext-06811`，关闭时的 `avcodec_send_frame(NULL)`/`vkDeviceWaitIdle` 还可能阻塞。该问题来自 FFmpeg 内部 multi-plane image 创建参数，不是正常运行路径的 queue ownership 错误；应用检测 `VK_LAYER_KHRONOS_validation` 后不加载 native bridge，直接使用稳定 host-upload 路径，避免诊断环境卡死。正常未启用 validation 层时仍使用 Vulkan GPU 图像路径。
 
 ### `ffmpeg -encoders` 有 `h264_vulkan`，程序仍探测失败
 
