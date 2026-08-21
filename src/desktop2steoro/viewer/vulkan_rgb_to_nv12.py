@@ -102,3 +102,106 @@ class VulkanRgbToNv12Intermediate:
     def close(self) -> None:
         self.uv.close()
         self.y.close()
+
+    def record_copy_to_video_nv12(self, command_buffer: Any, destination_image: Any) -> None:
+        """Record GPU-only Y/UV copies into one multi-plane NV12 image.
+
+        ``destination_image`` is the image from FFmpeg's profile-compatible
+        `AV_PIX_FMT_VULKAN` frame. The caller owns its synchronization timeline.
+        No host-visible mapping or CPU pixel copy is performed here.
+        """
+        vk = self.vk
+        barriers = [
+            vk.VkImageMemoryBarrier2(
+                sType=vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                srcStageMask=vk.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                srcAccessMask=vk.VK_ACCESS_2_SHADER_WRITE_BIT,
+                dstStageMask=vk.VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                dstAccessMask=vk.VK_ACCESS_2_TRANSFER_READ_BIT,
+                oldLayout=vk.VK_IMAGE_LAYOUT_GENERAL,
+                newLayout=vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                srcQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+                dstQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+                image=resource.image,
+                subresourceRange=vk.VkImageSubresourceRange(
+                    aspectMask=vk.VK_IMAGE_ASPECT_COLOR_BIT,
+                    baseMipLevel=0, levelCount=1, baseArrayLayer=0, layerCount=1,
+                ),
+            )
+            for resource in (self.y.resource, self.uv.resource)
+        ]
+        barriers.extend(
+            vk.VkImageMemoryBarrier2(
+                sType=vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                srcStageMask=vk.VK_PIPELINE_STAGE_2_NONE,
+                srcAccessMask=vk.VK_ACCESS_2_NONE,
+                dstStageMask=vk.VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                dstAccessMask=vk.VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                oldLayout=vk.VK_IMAGE_LAYOUT_UNDEFINED,
+                newLayout=vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                srcQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+                dstQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+                image=destination_image,
+                subresourceRange=vk.VkImageSubresourceRange(
+                    aspectMask=aspect,
+                    baseMipLevel=0, levelCount=1, baseArrayLayer=0, layerCount=1,
+                ),
+            )
+            for aspect in (vk.VK_IMAGE_ASPECT_PLANE_0_BIT, vk.VK_IMAGE_ASPECT_PLANE_1_BIT)
+        )
+        vk.vkCmdPipelineBarrier2(
+            command_buffer,
+            vk.VkDependencyInfo(
+                sType=vk.VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                imageMemoryBarrierCount=len(barriers),
+                pImageMemoryBarriers=barriers,
+            ),
+        )
+        copies = [
+            vk.VkImageCopy(
+                srcSubresource=vk.VkImageSubresourceLayers(
+                    aspectMask=vk.VK_IMAGE_ASPECT_COLOR_BIT,
+                    mipLevel=0, baseArrayLayer=0, layerCount=1,
+                ),
+                dstSubresource=vk.VkImageSubresourceLayers(
+                    aspectMask=aspect,
+                    mipLevel=0, baseArrayLayer=0, layerCount=1,
+                ),
+                extent=vk.VkExtent3D(width=width, height=height, depth=1),
+            )
+            for resource, aspect, width, height in (
+                (self.y, vk.VK_IMAGE_ASPECT_PLANE_0_BIT, self.y.width, self.y.height),
+                (self.uv, vk.VK_IMAGE_ASPECT_PLANE_1_BIT, self.uv.width, self.uv.height),
+            )
+        ]
+        for resource, copy in zip((self.y, self.uv), copies):
+            vk.vkCmdCopyImage(
+                command_buffer,
+                resource.image, vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                destination_image, vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                1, [copy],
+            )
+        final_barrier = vk.VkImageMemoryBarrier2(
+            sType=vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+            srcStageMask=vk.VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+            srcAccessMask=vk.VK_ACCESS_2_TRANSFER_WRITE_BIT,
+            dstStageMask=vk.VK_PIPELINE_STAGE_2_VIDEO_ENCODE_BIT_KHR,
+            dstAccessMask=vk.VK_ACCESS_2_VIDEO_ENCODE_READ_BIT_KHR,
+            oldLayout=vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            newLayout=vk.VK_IMAGE_LAYOUT_VIDEO_ENCODE_SRC_KHR,
+            srcQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+            dstQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+            image=destination_image,
+            subresourceRange=vk.VkImageSubresourceRange(
+                aspectMask=vk.VK_IMAGE_ASPECT_PLANE_0_BIT | vk.VK_IMAGE_ASPECT_PLANE_1_BIT,
+                baseMipLevel=0, levelCount=1, baseArrayLayer=0, layerCount=1,
+            ),
+        )
+        vk.vkCmdPipelineBarrier2(
+            command_buffer,
+            vk.VkDependencyInfo(
+                sType=vk.VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                imageMemoryBarrierCount=1,
+                pImageMemoryBarriers=[final_barrier],
+            ),
+        )
