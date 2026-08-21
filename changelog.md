@@ -2,6 +2,8 @@
 
 ## 2026-08-22
 
+- 将 native Vulkan RGB→NV12 Compute 中间资源改为按 FFmpeg NV12 输出 image 建立固定槽环；每个槽独立 Y/UV storage image、descriptor set、command buffer 和 fence，避免所有帧共享一套转换资源并逐帧串行等待；新增 bridge 合约断言，待远程构建产物完成 4K 长时回归。
+
 - 补充 native Vulkan 编码诊断日志：输出实际 Vulkan 设备、H.264/HEVC 编码器、RGBA8→NV12 格式、prepare/compute queue family、目标/峰值码率和 `bf=0`，便于区分 GPU 图像路径、编码器和 MediaMTX 传输层问题；新增 bridge 合约测试。
 
 - 完成 native Vulkan 高级推流连续运行验证：RTX 3090 Windows 主机连续提交 600 帧 3840×2160@30，耗时 20.10 秒；MediaMTX 持续发布 H.264，ffprobe 读取到 `3840x2160`、`30/1 FPS`、`yuv420p`、`1/90000` 时间基，未出现 native 编码回退或原始 RGB24 pipe。

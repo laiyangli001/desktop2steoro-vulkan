@@ -469,7 +469,7 @@ CUDA Device 0 不一定对应 Vulkan 枚举中的 Physical Device 0。必须通�
 
 当前原生桥 ABI v5 已固定在 `native/vulkan_ffmpeg_bridge/`：默认由 FFmpeg 创建带 Vulkan Video 扩展的逻辑 device、单 plane RGBA 输入池和单一 NV12 multi-plane 编码池。`VulkanDirectSbsOutput` 已通过 `CudaVulkanImageImporter` 将 CUDA RGBA 写入 FFmpeg-owned image，在 native Vulkan Compute 中完成 RGBA→R8/RG8→NV12，再将 H.264/H.265 压缩包交给 FFmpeg mux-only 管线发布；正常路径不下载到 CPU，也不通过 stdin 传输 4K 原始帧。GPU 内仍存在 R8/RG8 到 NV12 multi-plane 的一次 device-local copy，因此日志明确标记 `gpu_to_cpu=False`、`gpu_copy=True`、`zero_copy=False`。native bridge、CUDA 导入、编码或 packet mux 任一环节失败时，输出对象只记录一次原因并自动回退现有稳定 host-upload 高级推流。
 
-已完成的本机证据：RTX 3090 + FFmpeg 9.0.1 `d2s.2` 下，独立 native smoke 已通过 640×360 和 3840×2160 H.264 编码并读取压缩包；`VulkanDirectSbsOutput` 已真实启动 MediaMTX，连续提交 30 帧 3840×2160@30，MediaMTX 日志确认 `1 track (H264)` 在线并 publishing，提交吞吐约 41 FPS；native DLL 缺失时已实测自动回退 NVENC host-upload。Python 契约/互操作/推流测试通过，PTS 已改为单调帧序号。Vulkan validation 层在当前 queue-family handoff 的 flush 等待阶段仍会挂起，并保留 FFmpeg frame-pool 的 `VUID-VkImageCreateInfo-pNext-06811` 告警；这不影响当前普通驱动路径烟测，但头显端持续 4K/30 FPS 解码和 validation 清零仍是未完成验收项。
+已完成的本机证据：RTX 3090 + FFmpeg 9.0.1 `d2s.2` 下，独立 native smoke 已通过 640×360 和 3840×2160 H.264 编码并读取压缩包；2026-08-22 将 RGB→NV12 Compute 中间资源改为按 FFmpeg NV12 输出 image 建立的固定槽环（每槽独立 Y/UV storage image、descriptor set、command buffer 和 fence），不再所有帧共享一套转换资源；`VulkanDirectSbsOutput` 已真实启动 MediaMTX，连续提交 30 帧 3840×2160@30，MediaMTX 日志确认 `1 track (H264)` 在线并 publishing，提交吞吐约 41 FPS；native DLL 缺失时已实测自动回退 NVENC host-upload。Python 契约/互操作/推流测试通过，PTS 已改为单调帧序号。Vulkan validation 层在当前 queue-family handoff 的 flush 等待阶段仍会挂起，并保留 FFmpeg frame-pool 的 `VUID-VkImageCreateInfo-pNext-06811` 告警；这不影响当前普通驱动路径烟测，但头显端持续 4K/30 FPS 解码和 validation 清零仍是未完成验收项。
 
 原生桥通过 `.github/workflows/vulkan-ffmpeg-bridge.yml` 在 GitHub Actions Windows Runner 远程构建；本地不要求安装 C++ 工具链、Vulkan SDK 或 FFmpeg 开发包。
 
@@ -751,17 +751,17 @@ GPU 零拷贝只解决电脑端原始帧搬运。继续检查：
 
 - [x] FFmpeg Release 包含 `h264_vulkan` 和 `hevc_vulkan`（当前 Windows d2s.2 本机验证）。
 - [x] 包含原生桥需要的 FFmpeg shared libraries、headers 和 pkg-config 文件（远程构建产物已用于本机桥接）。
-- [ ] 未启用 `--enable-nonfree`。
+- [x] 未启用 `--enable-nonfree`；公开构建配置已移除该选项。
 - [ ] Windows/Linux 构建均完成静态能力验证。
 
 ### GPU 通路
 
 - [ ] CUDA/ROCm 和 Vulkan 设备按 UUID/LUID/PCI 地址匹配。
-- [ ] 编码输入格式来自 Vulkan Video format query。
+- [x] 编码输入格式来自 Vulkan Video/FFmpeg frame-pool 的格式与 profile query；native bridge 只接受 profile-compatible NV12 multi-plane frame。
 - [x] RGB/RGBA→NV12 在 GPU 上完成。
 - [x] 正常路径没有 CPU 原始帧下载（运行日志 `gpu_to_cpu=False`）。
 - [x] 使用 ready/release semaphore 管理槽位。
-- [ ] 没有逐帧 device-wide synchronize。
+- [x] 没有逐帧 device-wide synchronize；RGB→NV12 转换使用按 NV12 输出槽分配的 command/fence 环，只有同一槽再次复用时等待该槽 fence。
 
 ### 编码与发布
 
@@ -770,7 +770,7 @@ GPU 零拷贝只解决电脑端原始帧搬运。继续检查：
 - [x] 编码包交给 muxer 时保持正确 PTS/DTS（PTS 使用 0..N-1 编码帧序号；ffprobe time base 为 1/90000）。
 - [x] RTSP 本机发布使用稳定传输设置（TCP、`pkt_size=1452`）。
 - [x] MediaMTX 输出 WebRTC H.264 + Opus（本机 MediaMTX 日志确认 `2 tracks (H264, Opus)`）。
-- [ ] 音频短暂异常不会终止视频。
+- [x] 音频短暂异常不会终止视频；SoundCard/WASAPI 捕获线程异常后持续发送静音 PCM，视频 mux/编码链路继续运行。
 
 ### 回退与闭环
 
