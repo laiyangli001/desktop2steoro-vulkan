@@ -101,8 +101,7 @@ extern "C" void* d2s_vulkan_ffmpeg_encoder_create(
     int target_bitrate,
     int peak_bitrate,
     int hevc) {
-    if (!vk_instance || !vk_physical_device || !vk_device || !vk_queue ||
-        width < 1 || height < 1 || fps < 1)
+    if (width < 1 || height < 1 || fps < 1)
         return nullptr;
 
     const char* encoder_name = hevc ? "hevc_vulkan" : "h264_vulkan";
@@ -113,22 +112,40 @@ extern "C" void* d2s_vulkan_ffmpeg_encoder_create(
     result->width = width;
     result->height = height;
     result->fps = fps;
-    result->device = av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_VULKAN);
-    if (!result->device) {
-        destroy_encoder(result);
-        return nullptr;
-    }
-    auto* device_context = reinterpret_cast<AVHWDeviceContext*>(result->device->data);
-    auto* vulkan = reinterpret_cast<AVVulkanDeviceContext*>(device_context->hwctx);
-    vulkan->inst = reinterpret_cast<VkInstance>(vk_instance);
-    vulkan->phys_dev = reinterpret_cast<VkPhysicalDevice>(vk_physical_device);
-    vulkan->act_dev = reinterpret_cast<VkDevice>(vk_device);
-    vulkan->qf[0].idx = queue_family;
-    vulkan->qf[0].num = 1;
-    vulkan->qf[0].flags = static_cast<VkQueueFlagBits>(
-        VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT);
-    vulkan->nb_qf = 1;
-    if (av_hwdevice_ctx_init(result->device) < 0) {
+    const bool use_external_device = vk_instance && vk_physical_device &&
+        vk_device && vk_queue;
+    if (use_external_device) {
+        // The caller must have created this VkDevice with the required Vulkan
+        // Video extensions. Most viewer contexts do not, so normal streaming
+        // uses the FFmpeg-owned branch below and shares frame memory explicitly.
+        result->device = av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_VULKAN);
+        if (!result->device) {
+            destroy_encoder(result);
+            return nullptr;
+        }
+        auto* device_context = reinterpret_cast<AVHWDeviceContext*>(result->device->data);
+        auto* vulkan = reinterpret_cast<AVVulkanDeviceContext*>(device_context->hwctx);
+        vulkan->get_proc_addr = vkGetInstanceProcAddr;
+        vulkan->inst = reinterpret_cast<VkInstance>(vk_instance);
+        vulkan->phys_dev = reinterpret_cast<VkPhysicalDevice>(vk_physical_device);
+        vulkan->act_dev = reinterpret_cast<VkDevice>(vk_device);
+        vulkan->device_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        vulkan->qf[0].idx = queue_family;
+        vulkan->qf[0].num = 1;
+        vulkan->qf[0].flags = static_cast<VkQueueFlagBits>(
+            VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT | VK_QUEUE_VIDEO_ENCODE_BIT_KHR);
+        vulkan->qf[0].video_caps = hevc
+            ? VK_VIDEO_CODEC_OPERATION_ENCODE_H265_BIT_KHR
+            : VK_VIDEO_CODEC_OPERATION_ENCODE_H264_BIT_KHR;
+        vulkan->nb_qf = 1;
+        if (av_hwdevice_ctx_init(result->device) < 0) {
+            destroy_encoder(result);
+            return nullptr;
+        }
+    } else if (av_hwdevice_ctx_create(
+                   &result->device, AV_HWDEVICE_TYPE_VULKAN, nullptr, nullptr, 0) < 0) {
+        // FFmpeg creates a device with the extensions its Vulkan backend needs.
+        // This is the safe default for a standalone encoder bridge.
         destroy_encoder(result);
         return nullptr;
     }

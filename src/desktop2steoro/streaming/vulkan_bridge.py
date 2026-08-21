@@ -183,11 +183,11 @@ class VulkanNativeBridge:
     def create_encoder(
         self,
         *,
-        instance: int,
-        physical_device: int,
-        device: int,
-        queue: int,
-        queue_family: int,
+        instance: int = 0,
+        physical_device: int = 0,
+        device: int = 0,
+        queue: int = 0,
+        queue_family: int = -1,
         width: int,
         height: int,
         fps: int,
@@ -195,6 +195,12 @@ class VulkanNativeBridge:
         peak_bitrate: int,
         hevc: bool = False,
     ) -> VulkanNativeEncoder:
+        supplied = (int(instance), int(physical_device), int(device), int(queue))
+        if any(supplied) and not all(supplied):
+            raise ValueError(
+                "Vulkan bridge external-device mode requires instance, physical_device, "
+                "device and queue together"
+            )
         handle = self._create(
             ctypes.c_void_p(int(instance)),
             ctypes.c_void_p(int(physical_device)),
