@@ -1,8 +1,10 @@
 #include "vulkan_ffmpeg_bridge.h"
 
+extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavutil/error.h>
 #include <libavutil/hwcontext.h>
+}
 
 #include <cstdio>
 #include <cstring>
