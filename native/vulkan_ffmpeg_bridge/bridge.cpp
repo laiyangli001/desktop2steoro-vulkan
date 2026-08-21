@@ -960,7 +960,8 @@ bool submit_rgba_conversion(Encoder* encoder, AVVkFrame* rgba, AVVkFrame* nv12,
     const unsigned long long nv12_ready = nv12->sem_value[0];
     if (!submit_ownership_release(encoder, nv12, false, nv12_ready, &nv12_compute_wait))
         return false;
-    nv12->layout[0] = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    // Keep the frame's pre-transfer layout until the matching acquire barrier is recorded.
+    // Queue-family release/acquire pairs must carry identical old/new layouts.
     const VkImage rgba_image = rgba->img[0];
     const VkImage command_key = encoder->convert_y_image;
     auto view_it = encoder->rgba_views.find(rgba_image);
