@@ -2,7 +2,7 @@
 
 ## 2026-08-22
 
-- 增加 native Vulkan/CUDA 物理设备 UUID 校验：编码器启动时读取 Vulkan `VkPhysicalDeviceIDProperties`，与当前 CUDA tensor 设备匹配；多 GPU 不匹配时触发稳定高级推流回退，并记录设备名称和 UUID。
+- 增加并实测 native Vulkan/CUDA 物理设备 UUID 校验：编码器启动时读取 Vulkan `VkPhysicalDeviceIDProperties`，与当前 CUDA tensor 设备匹配；多 GPU 不匹配时触发稳定高级推流回退，并记录设备名称和 UUID；设备日志改用 ASCII，兼容 Windows GBK 输出。
 
 - 将 native Vulkan RGB→NV12 Compute 中间资源改为按 FFmpeg NV12 输出 image 建立固定槽环；每个槽独立 Y/UV storage image、descriptor set、command buffer 和 fence，避免所有帧共享一套转换资源并逐帧串行等待；远程 DLL 构建成功，4K 60 帧运行探针以 68.4 FPS 完成并正常关闭。
 
