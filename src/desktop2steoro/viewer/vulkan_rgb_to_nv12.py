@@ -7,6 +7,7 @@ from typing import Any
 
 from .vulkan_compute_pipeline import VulkanComputePipeline
 from .vulkan_descriptors import DescriptorBinding
+from .vulkan_resources import VulkanTransientImage
 
 
 class VulkanRgbToNv12Pipeline:
@@ -62,3 +63,42 @@ class VulkanRgbToNv12Pipeline:
 
     def close(self) -> None:
         self.pipeline.close()
+
+
+class VulkanRgbToNv12Intermediate:
+    """Reusable GPU images produced before the NV12 Video image copy."""
+
+    @staticmethod
+    def dimensions(width: int, height: int) -> tuple[tuple[int, int], tuple[int, int]]:
+        VulkanRgbToNv12Pipeline.dispatch_size(width, height)
+        return (int(width), int(height)), (int(width) // 2, int(height) // 2)
+
+    def __init__(self, context: Any, width: int, height: int) -> None:
+        self.context = context
+        self.vk = context.vk
+        (y_width, y_height), (uv_width, uv_height) = self.dimensions(width, height)
+        usage = (
+            self.vk.VK_IMAGE_USAGE_STORAGE_BIT
+            | self.vk.VK_IMAGE_USAGE_TRANSFER_SRC_BIT
+            | self.vk.VK_IMAGE_USAGE_TRANSFER_DST_BIT
+        )
+        self.y = VulkanTransientImage(
+            context, y_width, y_height,
+            format=self.vk.VK_FORMAT_R8_UNORM,
+            label="stream-nv12-y-intermediate",
+            usage=usage,
+        )
+        try:
+            self.uv = VulkanTransientImage(
+                context, uv_width, uv_height,
+                format=self.vk.VK_FORMAT_R8G8_UNORM,
+                label="stream-nv12-uv-intermediate",
+                usage=usage,
+            )
+        except Exception:
+            self.y.close()
+            raise
+
+    def close(self) -> None:
+        self.uv.close()
+        self.y.close()
