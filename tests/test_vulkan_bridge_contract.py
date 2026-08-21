@@ -58,3 +58,10 @@ def test_native_bridge_declares_low_latency_gpu_path_and_diagnostic_log():
     assert "slot.descriptor_set" in source
     assert "d2s_vulkan_ffmpeg_encoder_device_identity" in source
     assert "vkGetPhysicalDeviceProperties2" in source
+    header = (
+        APP_ROOT.parents[1]
+        / "native"
+        / "vulkan_ffmpeg_bridge"
+        / "vulkan_ffmpeg_bridge.h"
+    ).read_text(encoding="utf-8")
+    assert "d2s_vulkan_ffmpeg_encoder_device_identity" in header

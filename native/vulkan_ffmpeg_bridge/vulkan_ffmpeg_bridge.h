@@ -37,6 +37,13 @@ typedef struct D2SVulkanVideoFrame {
     unsigned int external_handle_type;
 } D2SVulkanVideoFrame;
 
+D2S_VULKAN_FFMPEG_API int d2s_vulkan_ffmpeg_encoder_device_identity(
+    void* encoder,
+    unsigned char* uuid,
+    int uuid_capacity,
+    char* name,
+    int name_capacity);
+
 D2S_VULKAN_FFMPEG_API void* d2s_vulkan_ffmpeg_encoder_create(
     void* vk_instance,
     void* vk_physical_device,
