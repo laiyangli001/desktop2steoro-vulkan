@@ -162,6 +162,41 @@ def test_windows_detection_prefers_soundcard_loopback(
     assert not caplog.messages
 
 
+def test_existing_audio_devices_are_reselected_after_gui_reset() -> None:
+    target = _target()
+    target.audio_devices = [
+        "soundcard:Default speakers",
+        "virtual-audio-capturer",
+    ]
+    target.audio_dd = types.SimpleNamespace(
+        options=list(target.audio_devices),
+        value="",
+        update=lambda: None,
+    )
+
+    target._ensure_audio_device_selected()
+
+    assert target.audio_dd.value == "soundcard:Default speakers"
+
+
+def test_existing_valid_audio_selection_survives_stream_mode_change() -> None:
+    target = _target()
+    target.audio_devices = [
+        "soundcard:Default speakers",
+        "virtual-audio-capturer",
+    ]
+    target.audio_dd = types.SimpleNamespace(
+        options=[],
+        value="virtual-audio-capturer",
+        update=lambda: None,
+    )
+
+    target._ensure_audio_device_selected()
+
+    assert target.audio_dd.options == target.audio_devices
+    assert target.audio_dd.value == "virtual-audio-capturer"
+
+
 def test_windows_detection_silently_falls_back_when_dshow_has_no_loopback(
     monkeypatch, caplog
 ) -> None:

@@ -2,6 +2,13 @@
 
 ## 2026-08-21
 
+- Vulkan Video 推流增加真实设备能力探测，并针对 NVIDIA 驱动未自动选择 H.264 profile 的情况显式使用 High profile；探测失败时继续回退稳定的 FFmpeg/NVENC 路径。
+- 高级网络推流新增显式“Vulkan Video”编码后端；4K H.264 使用 High/Level 5.1，初始化或运行失败时自动回到原 FFmpeg 硬件/软件路径，Auto 默认行为保持不变。
+- 修正 Vulkan Video FFmpeg 命令中 `format=nv12,hwupload` 的选项位置，确保滤镜参数位于 RTSP 输出 URL 之前并真正作用于 Vulkan 编码输入。
+- 固定进程内 FFmpeg/Vulkan 原生桥接 ABI，明确要求 `AV_PIX_FMT_VULKAN`、已同步编码源图像和版本校验；桥接库未安装或不匹配时继续使用已验证的 host-upload/硬件回退路径。
+- 原生桥接探针现在实际验证 FFmpeg Vulkan 编码器和 Vulkan HW device；图像提交 ABI 在完成前明确报告未启用，不会误把占位库当作零复制编码器。
+- 新增 Windows GitHub Actions 原生桥构建流程：远程下载固定 FFmpeg 开发包、安装 MinGW/Vulkan 依赖、构建并检查 Vulkan FFmpeg ABI 导出；构建产物在完成实际 image submit 和头显验收前只作为测试 Artifact。
+- 修复点击“重置”后再切换到高级网络推流或 GPU 推流时，混音设备列表已有声卡但当前选项为空的问题；切换推流模式时如果已有有效选择则保持不变，如果当前值为空或设备已失效，则直接从现有扫描结果自动选择合适的 SoundCard/WASAPI/虚拟声卡，无需重复扫描。
 - 修复“显示高级立体参数”和设备“高级选项”展开/折叠时只更新控件却不应用窗口高度的问题；两个开关现在都会按可见控件重新计算并写入原生窗口高度，同时保留既有最大高度与滚动策略。
 - 补全推流参数 tooltip：逐项说明推流网址与预览、端口、防火墙及校准端口关系、MJPEG 质量范围、各协议适用场景、推流路径规则、混音设备、音频正负延迟、编码后端、自动/手动传输配置和闭环校准按钮的实际用途；明确“推流质量”仅控制低级 MJPEG，高级与 GPU 推流由 CRF 和码率控制。
 - 完善“恒定质量”提示：tooltip 按 4K SBS、H.264、30 FPS 的自动校准目标带宽给出明确建议，`≥30 Mbps` 使用 CRF 20、`25-29 Mbps` 使用 23、`21-24 Mbps` 使用 26、`19-20 Mbps` 使用 28；低于 `19 Mbps` 时提示降低分辨率或帧率，而不是继续牺牲画质。

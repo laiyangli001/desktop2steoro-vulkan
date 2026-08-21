@@ -1,0 +1,65 @@
+name: Build Vulkan FFmpeg Bridge
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'native/vulkan_ffmpeg_bridge/**'
+      - 'src/desktop2steoro/streaming/vulkan_bridge.py'
+      - '.github/workflows/vulkan-ffmpeg-bridge.yml'
+  pull_request:
+    paths:
+      - 'native/vulkan_ffmpeg_bridge/**'
+      - 'src/desktop2steoro/streaming/vulkan_bridge.py'
+      - '.github/workflows/vulkan-ffmpeg-bridge.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MinGW and Vulkan development packages
+        shell: pwsh
+        run: |
+          C:\msys64\usr\bin\bash.exe -lc 'pacman --noconfirm -Syuu'
+          C:\msys64\usr\bin\bash.exe -lc 'pacman --noconfirm -S --needed mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake mingw-w64-x86_64-ninja mingw-w64-x86_64-vulkan-headers mingw-w64-x86_64-vulkan-loader unzip'
+
+      - name: Download pinned FFmpeg development package
+        shell: pwsh
+        env:
+          FFMPEG_RELEASE_URL: https://github.com/laiyangli001/desktop2stereo-ffmpeg-builds/releases/download/ffmpeg-v9.0.1-d2s.1/d2s-ffmpeg-9.0.1-d2s.1-windows-amd64.zip
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'd2s-ffmpeg.zip'
+          Invoke-WebRequest -Uri $env:FFMPEG_RELEASE_URL -OutFile $archive
+          Expand-Archive -LiteralPath $archive -DestinationPath $env:RUNNER_TEMP\ffmpeg -Force
+          $root = Join-Path $env:RUNNER_TEMP 'ffmpeg\ffmpeg'
+          if (-not (Test-Path -LiteralPath (Join-Path $root 'include\libavcodec\avcodec.h'))) { throw 'FFmpeg development headers are missing' }
+          "D2S_FFMPEG_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Configure and build native bridge
+        shell: pwsh
+        run: |
+          $bash = 'C:\msys64\usr\bin\bash.exe'
+          & $bash -lc "cmake -S native/vulkan_ffmpeg_bridge -B native/vulkan_ffmpeg_bridge/build/ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DD2S_FFMPEG_ROOT=\"$env:D2S_FFMPEG_ROOT\""
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $bash -lc 'cmake --build native/vulkan_ffmpeg_bridge/build/ci --parallel 2'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify ABI exports
+        shell: pwsh
+        run: |
+          $dll = Get-ChildItem -LiteralPath native\vulkan_ffmpeg_bridge\build\ci -Filter 'd2s_vulkan_ffmpeg_bridge.dll' -Recurse | Select-Object -First 1
+          if (-not $dll) { throw 'Vulkan FFmpeg bridge DLL was not produced' }
+          & 'C:\msys64\mingw64\bin\nm.exe' -g $dll.FullName | Select-String 'd2s_vulkan_ffmpeg_bridge_abi_version|d2s_vulkan_ffmpeg_encoder_submit_image'
+          if ($LASTEXITCODE -ne 0) { throw 'Required Vulkan bridge ABI exports are missing' }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: d2s-vulkan-ffmpeg-bridge-windows-amd64
+          path: native/vulkan_ffmpeg_bridge/build/ci/**/d2s_vulkan_ffmpeg_bridge.dll
+          if-no-files-found: error
+

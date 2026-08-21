@@ -585,6 +585,8 @@ class GUIHandlerMixin:
             elif not self.audio_devices:
                 self.populate_audio_devices()
                 self.auto_select_stereo_mix()
+            else:
+                self._ensure_audio_device_selected()
         self.update_stream_url()
         self._fit_window_to_content()
         self.page.update()
@@ -1108,6 +1110,14 @@ class GUIHandlerMixin:
                 return
         self.audio_dd.value = "No Stereo Mix device found"
         self.audio_dd.update()
+
+    def _ensure_audio_device_selected(self):
+        if not self.audio_devices:
+            return
+        self.audio_dd.options = [device for device in self.audio_devices]
+        if self.audio_dd.value in self.audio_devices:
+            return
+        self.auto_select_stereo_mix()
 
     # ── refresh ──
 

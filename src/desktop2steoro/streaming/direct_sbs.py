@@ -25,6 +25,8 @@ from streaming.runtime_manager import ensure_runtime
 from streaming.nvidia_encoder import PyNvSrtVideoOutput, PyNvVideoCodecEncoder
 from streaming.stream_calibration import StreamCalibrationController
 from streaming.wasapi_audio import SoundcardLoopbackSender
+from streaming.vulkan_capabilities import probe_vulkan_video
+from streaming.vulkan_bridge import VulkanNativeBridge
 
 
 _PYNVVIDEO_CODEC = None
@@ -1641,6 +1643,131 @@ class FfmpegDirectSbsOutput:
         self._server_log_thread = None
         self._ffmpeg_log_thread = None
         self._ffmpeg_stderr_tail = []
+
+
+class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
+    """FFmpeg Vulkan Video validation path with an explicit host-upload boundary.
+
+    This is intentionally not advertised as zero-copy: runtime CUDA frames
+    still cross to CPU RGB24 before entering FFmpeg.  It validates the
+    platform's real ``format=nv12,hwupload -> h264_vulkan`` chain while the
+    native CUDA/Vulkan frame bridge is being developed.  The caller must
+    probe this path before replacing the stable Advanced Streaming output.
+    """
+
+    def _select_video_encoder(self, width: int, height: int) -> str:
+        report = probe_vulkan_video(
+            self.ffmpeg_path,
+            width=width,
+            height=height,
+            hevc=self.use_hevc,
+            timeout=float(os.environ.get("D2S_VULKAN_PROBE_TIMEOUT", "8")),
+            os_name=self.os_name,
+        )
+        if not report.available:
+            print(
+                f"[VulkanStream] unavailable: {report.detail}; "
+                "falling back to stable FFmpeg hardware/software path",
+                flush=True,
+            )
+            raise RuntimeError(report.detail)
+        print(
+            f"[VulkanStream] device/profile probe passed: encoder={report.encoder} "
+            f"input={report.input_format} {width}x{height}",
+            flush=True,
+        )
+        return report.encoder
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._native_vulkan_bridge = None
+        try:
+            self._native_vulkan_bridge = VulkanNativeBridge.load()
+        except Exception as exc:
+            print(
+                f"[VulkanStream] native AV_PIX_FMT_VULKAN bridge unavailable: {exc}; "
+                "using host-upload validation path",
+                flush=True,
+            )
+
+    def _ffmpeg_command(self, width: int, height: int) -> list[str]:
+        command = super()._ffmpeg_command(width, height)
+        encoder = self.video_encoder
+        command[1:1] = [
+            "-init_hw_device",
+            "vulkan=d2s_vk:0",
+            "-filter_hw_device",
+            "d2s_vk",
+        ]
+        encoder_index = command.index("-c:v")
+        command[encoder_index + 1] = encoder
+        for option in ("-crf", "-x264-params", "-x265-params"):
+            while option in command:
+                index = command.index(option)
+                del command[index:index + 2]
+        pix_fmt_index = command.index("-pix_fmt")
+        command[pix_fmt_index + 1] = "vulkan"
+        output_url = command.pop()
+        command.extend(
+            [
+                "-vf",
+                "format=nv12,hwupload",
+                "-profile:v",
+                "main" if self.use_hevc else "high",
+                *(["-level:v", "5.1"] if not self.use_hevc and int(width) >= 2560 else []),
+                "-rc_mode",
+                "vbr",
+                "-qp",
+                str(self.crf),
+                "-tune",
+                "ull",
+                "-usage",
+                "stream",
+                "-bf",
+                "0",
+            ]
+        )
+        command.append(output_url)
+        return command
+
+    def _start_ffmpeg(self, width: int, height: int) -> None:
+        super()._start_ffmpeg(width, height)
+        print(
+            "[VulkanStream] FFmpeg Vulkan Video active; "
+            "GPU conversion/encode enabled, GPU->CPU RGB24 download remains; "
+            "zero_copy=False",
+            flush=True,
+        )
+
+    def submit_cuda_frame(self, frame: Any) -> None:
+        print_once = getattr(self, "_vulkan_host_boundary_logged", False)
+        if not print_once:
+            print(
+                "[VulkanStream] input path: CUDA -> CPU RGB24 -> "
+                "FFmpeg hwupload NV12 -> Vulkan Video; zero_copy=False",
+                flush=True,
+            )
+            self._vulkan_host_boundary_logged = True
+        self.submit_frame(runtime_sbs_to_rgb(frame))
+
+    def submit_frame(self, frame: np.ndarray) -> None:
+        try:
+            super().submit_frame(frame)
+        except Exception as exc:
+            if getattr(self, "_vulkan_fallback_active", False):
+                raise
+            print(
+                f"[VulkanStream] initialization/runtime failed: {type(exc).__name__}: {exc}; "
+                "fallback=stable FFmpeg hardware/software path",
+                flush=True,
+            )
+            self._vulkan_fallback_active = True
+            self._stop_process(self.ffmpeg_process)
+            self.ffmpeg_process = None
+            self._frame_size = None
+            self._encoder_selected = False
+            self.video_encoder = "libx265" if self.use_hevc else "libx264"
+            super().submit_frame(frame)
 
 
 class PyNvDirectSbsOutput(_PyNvDirectSbsOutputMixin, FfmpegDirectSbsOutput):

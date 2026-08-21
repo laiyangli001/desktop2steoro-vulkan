@@ -540,6 +540,7 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
                 FfmpegDirectSbsOutput,
                 MjpegDirectSbsOutput,
                 PyNvDirectSbsOutput,
+                VulkanDirectSbsOutput,
             )
             from streaming.stream_calibration import build_calibration_fingerprint
 
@@ -603,7 +604,10 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
                 elif configured_run_mode == "GPU Streamer" and has_amd_gpu:
                     video_backend = "amd"
                 network_output = FfmpegDirectSbsOutput(**output_kwargs)
-                if video_backend == "pynv" and has_nvidia_gpu:
+                if video_backend == "vulkan" and configured_run_mode == "RTMP Streamer":
+                    network_output.close()
+                    network_output = VulkanDirectSbsOutput(**output_kwargs)
+                elif video_backend == "pynv" and has_nvidia_gpu:
                     try:
                         network_output.close()
                         network_output = PyNvDirectSbsOutput(**output_kwargs)

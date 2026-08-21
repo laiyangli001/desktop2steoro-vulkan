@@ -434,6 +434,14 @@ SRT 适合服务间或原生客户端传输，但浏览器不能直接播放 SRT
 
 只运行 `ffmpeg -encoders` 不够，它只能证明编译能力，不能证明当前驱动和设备能运行。
 
+部分 NVIDIA 驱动虽然已经暴露 Vulkan H.264 Encode profile，但 FFmpeg 在未指定 profile 时仍可能报告：
+
+```text
+No supported profiles for given format
+```
+
+此时应按构建指南的 `format=nv12,hwupload` 真机命令执行探针，并显式指定 `-profile:v high`；3840×2160 H.264 同时使用 `-level:v 5.1`，HEVC 使用 `-profile:v main`。本项目的探针和 Vulkan 编码命令都显式设置 profile，只有探针成功才启用该路径。当前 NVIDIA profile 的宽高上限为 4096；3840×2160 Half-SBS 可以验证，7680×2160 Full-SBS 不能直接使用该 H.264 Vulkan profile。
+
 ### 设备必须匹配
 
 CUDA Device 0 不一定对应 Vulkan 枚举中的 Physical Device 0。必须通过以下标识匹配同一张显卡：
@@ -444,6 +452,10 @@ CUDA Device 0 不一定对应 Vulkan 枚举中的 Physical Device 0。必须通�
 如果计算和 Vulkan 选择了不同 GPU，external memory 导入会失败，或被迫经过主机复制。
 
 ### 回退规则
+
+当前原生桥 ABI 已固定在 `native/vulkan_ffmpeg_bridge/`，原生探针已经实际检查 FFmpeg Vulkan 编码器和 Vulkan HW device；编码提交接口要求 FFmpeg 通过 `AV_PIX_FMT_VULKAN` 接收已同步的编码源图像。未安装、ABI 不匹配或 image submit 尚未实现时不得宣称零复制，继续使用 host-upload 阶段并保留自动回退。该桥接库的实际编码提交仍需在 Windows/NVIDIA 目标机完成原生编译和端到端验证。
+
+原生桥通过 `.github/workflows/vulkan-ffmpeg-bridge.yml` 在 GitHub Actions Windows Runner 远程构建；本地不要求安装 C++ 工具链、Vulkan SDK 或 FFmpeg 开发包。
 
 任何 Vulkan 初始化、导入、编码或连续提交失败都应：
 

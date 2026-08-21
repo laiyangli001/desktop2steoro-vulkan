@@ -208,6 +208,7 @@ class GUIConfigMixin:
             "auto": "Auto",
             "pynv": "PyNvVideoCodec",
             "ffmpeg": "FFmpeg",
+            "vulkan": "Vulkan Video",
         }.get(str(cfg.get("Video Encoder Backend", "auto")).casefold(), "Auto")
         self.crf_tf.value = str(cfg.get("CRF", DEFAULTS["CRF"]))
         self.audio_delay_tf.value = str(cfg.get("Audio Delay", DEFAULTS["Audio Delay"]))
@@ -361,6 +362,7 @@ class GUIConfigMixin:
                 "Auto": "auto",
                 "PyNvVideoCodec": "pynv",
                 "FFmpeg": "ffmpeg",
+                "Vulkan Video": "vulkan",
             }.get(self.video_backend_dd.value, "ffmpeg"),
             "CRF": self._parse_int(self.crf_tf.value, DEFAULTS["CRF"]),
             "Audio Delay": self._parse_float(self.audio_delay_tf.value, DEFAULTS["Audio Delay"]),

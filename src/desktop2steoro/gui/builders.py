@@ -958,7 +958,7 @@ class GUIBuilderMixin:
         self.audio_row = ft.Row([self.audio_label, self.audio_dd], spacing=1)
         self.video_backend_label = ft.Text("Video Encoder:", size=FONT_SIZE, width=S(150))
         self.video_backend_dd = CompactDropdown(
-            options=["Auto", "FFmpeg", "PyNvVideoCodec"],
+            options=["Auto", "FFmpeg", "Vulkan Video", "PyNvVideoCodec"],
             value="Auto",
             min_width=S(130),
         )
