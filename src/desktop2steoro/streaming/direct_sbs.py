@@ -1887,7 +1887,7 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
                 f"CUDA={cuda_uuid!s} Vulkan={native_name or 'unknown'}:{native_uuid.hex()}"
             )
         print(
-            f"[VulkanStream] device matched: CUDA {cuda_device} ↔ Vulkan "
+            f"[VulkanStream] device matched: CUDA {cuda_device} <-> Vulkan "
             f"{native_name or 'unknown'} uuid={native_uuid.hex()}",
             flush=True,
         )
