@@ -70,3 +70,4 @@ def test_native_bridge_declares_low_latency_gpu_path_and_diagnostic_log():
         / "vulkan_ffmpeg_bridge.h"
     ).read_text(encoding="utf-8")
     assert "d2s_vulkan_ffmpeg_encoder_device_identity" in header
+    assert "result == AVERROR(EAGAIN) || result == AVERROR_EOF" in source

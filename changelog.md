@@ -2,6 +2,8 @@
 
 ## 2026-08-22
 
+- 修复 native Vulkan bridge drain ABI：FFmpeg `avcodec_receive_packet()` 的 `EAGAIN/EOF` 统一表示当前没有更多压缩包，不再把正常 flush 结束误报为编码失败；新增长时间 RGBA→NV12→Vulkan Video soak 参数，支持按帧数或时长验证槽位复用。
+
 - 扩展 Vulkan FFmpeg bridge GitHub Actions：新增 Ubuntu 24.04 Linux amd64 构建、下载同版本 FFmpeg 开发包、CMake 编译和 ABI 导出校验；run `32533937908` 的 Windows/Linux 两个 job 均通过，完成跨平台原生桥静态能力验证。
 
 - 根据 FFmpeg 9.0.1 `hwcontext_vulkan.h` 记录 CUDA/Vulkan 零复制边界：CUDA 导入所需的 `AV_VK_FRAME_FLAG_DISABLE_MULTIPLANE` 会产生 R8/R8G8 拆分图像，而 Vulkan Video 需要单一 NV12 multi-plane image；当前版本因此保留已验证的 Vulkan Compute + device-local copy，不伪装不兼容的 plane 资源。

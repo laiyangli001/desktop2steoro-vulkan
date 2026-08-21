@@ -1489,7 +1489,11 @@ extern "C" int d2s_vulkan_ffmpeg_encoder_read_packet(
     trace("avcodec_receive_packet begin");
     const int result = avcodec_receive_packet(encoder->codec, encoder->packet);
     trace("avcodec_receive_packet result=%d", result);
-    if (result < 0) return result == AVERROR(EAGAIN) ? 0 : -1;
+    if (result < 0) {
+        // EAGAIN and EOF both mean that no packet is available to drain.
+        // Preserve other libavcodec failures as a hard bridge error.
+        return (result == AVERROR(EAGAIN) || result == AVERROR_EOF) ? 0 : -1;
+    }
     if (encoder->packet->size > capacity) return -2;
     std::memcpy(output, encoder->packet->data, static_cast<std::size_t>(encoder->packet->size));
     if (timestamp) *timestamp = encoder->packet->pts;
