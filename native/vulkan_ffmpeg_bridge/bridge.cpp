@@ -17,6 +17,7 @@ extern "C" {
 #include <cstdio>
 #include <cstring>
 #include <memory>
+#include <unordered_map>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -34,6 +35,10 @@ struct Encoder {
     int width = 0;
     int height = 0;
     int fps = 0;
+    VkQueue prepare_queue = VK_NULL_HANDLE;
+    uint32_t prepare_queue_family = VK_QUEUE_FAMILY_IGNORED;
+    VkCommandPool prepare_pool = VK_NULL_HANDLE;
+    std::unordered_map<AVVkFrame*, VkCommandBuffer> prepare_buffers;
 };
 
 constexpr unsigned int D2S_EXTERNAL_HANDLE_WIN32 = 1;
@@ -50,8 +55,96 @@ void destroy_encoder(Encoder* encoder) {
     av_packet_free(&encoder->packet);
     avcodec_free_context(&encoder->codec);
     av_buffer_unref(&encoder->frames);
+    if (encoder->prepare_pool != VK_NULL_HANDLE && encoder->device) {
+        auto* device_context = reinterpret_cast<AVHWDeviceContext*>(encoder->device->data);
+        auto* vulkan = reinterpret_cast<AVVulkanDeviceContext*>(device_context->hwctx);
+        vkDeviceWaitIdle(vulkan->act_dev);
+        vkDestroyCommandPool(vulkan->act_dev, encoder->prepare_pool, vulkan->alloc);
+    }
     av_buffer_unref(&encoder->device);
     delete encoder;
+}
+
+bool prepare_frame_for_cuda(Encoder* encoder, AVVkFrame* source) {
+    if (!encoder || !source || encoder->prepare_queue == VK_NULL_HANDLE)
+        return false;
+    auto* device_context = reinterpret_cast<AVHWDeviceContext*>(encoder->device->data);
+    auto* vulkan = reinterpret_cast<AVVulkanDeviceContext*>(device_context->hwctx);
+    const VkDevice device = vulkan->act_dev;
+    auto submit2 = reinterpret_cast<PFN_vkQueueSubmit2>(vkGetDeviceProcAddr(device, "vkQueueSubmit2"));
+    if (!submit2) return false;
+    VkCommandBuffer command = VK_NULL_HANDLE;
+    const auto found = encoder->prepare_buffers.find(source);
+    if (found == encoder->prepare_buffers.end()) {
+        VkCommandBufferAllocateInfo allocate{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+        allocate.commandPool = encoder->prepare_pool;
+        allocate.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        allocate.commandBufferCount = 1;
+        if (vkAllocateCommandBuffers(device, &allocate, &command) != VK_SUCCESS)
+            return false;
+        encoder->prepare_buffers.emplace(source, command);
+    } else {
+        command = found->second;
+        if (vkResetCommandBuffer(command, 0) != VK_SUCCESS)
+            return false;
+    }
+    VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    if (vkBeginCommandBuffer(command, &begin) != VK_SUCCESS)
+        return false;
+    VkImageMemoryBarrier2 barriers[2]{};
+    unsigned int count = 0;
+    for (unsigned int index = 0; index < 2 && source->img[index]; ++index) {
+        barriers[count] = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+        barriers[count].srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        barriers[count].srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+        barriers[count].dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        barriers[count].dstAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
+        barriers[count].oldLayout = source->layout[index];
+        barriers[count].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        barriers[count].srcQueueFamilyIndex = source->queue_family[index];
+        barriers[count].dstQueueFamilyIndex = source->queue_family[index] == VK_QUEUE_FAMILY_IGNORED
+            ? VK_QUEUE_FAMILY_IGNORED : encoder->prepare_queue_family;
+        barriers[count].image = source->img[index];
+        barriers[count].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        barriers[count].subresourceRange.levelCount = 1;
+        barriers[count].subresourceRange.layerCount = 1;
+        ++count;
+    }
+    VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    dependency.imageMemoryBarrierCount = count;
+    dependency.pImageMemoryBarriers = barriers;
+    vkCmdPipelineBarrier2(command, &dependency);
+    if (vkEndCommandBuffer(command) != VK_SUCCESS)
+        return false;
+    VkSemaphoreSubmitInfo waits[2]{};
+    VkSemaphoreSubmitInfo signals[2]{};
+    unsigned int waits_count = 0;
+    for (unsigned int index = 0; index < count; ++index) {
+        if (source->sem_value[index]) {
+            waits[waits_count] = {VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+            waits[waits_count].semaphore = source->sem[index];
+            waits[waits_count].value = source->sem_value[index];
+            waits[waits_count].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            ++waits_count;
+        }
+        signals[index] = {VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+        signals[index].semaphore = source->sem[index];
+        signals[index].value = ++source->sem_value[index];
+        signals[index].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        source->layout[index] = VK_IMAGE_LAYOUT_GENERAL;
+        source->access[index] = VK_ACCESS_2_MEMORY_WRITE_BIT;
+        source->queue_family[index] = encoder->prepare_queue_family;
+    }
+    VkCommandBufferSubmitInfo command_info{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
+    command_info.commandBuffer = command;
+    VkSubmitInfo2 submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+    submit.waitSemaphoreInfoCount = waits_count;
+    submit.pWaitSemaphoreInfos = waits;
+    submit.commandBufferInfoCount = 1;
+    submit.pCommandBufferInfos = &command_info;
+    submit.signalSemaphoreInfoCount = count;
+    submit.pSignalSemaphoreInfos = signals;
+    return submit2(encoder->prepare_queue, 1, &submit, VK_NULL_HANDLE) == VK_SUCCESS;
 }
 
 bool export_vk_frame_handles(Encoder* encoder, const AVVkFrame* source,
@@ -259,6 +352,31 @@ extern "C" void* d2s_vulkan_ffmpeg_encoder_create(
         destroy_encoder(result);
         return nullptr;
     }
+    {
+        auto* device_context = reinterpret_cast<AVHWDeviceContext*>(result->device->data);
+        auto* vulkan = reinterpret_cast<AVVulkanDeviceContext*>(device_context->hwctx);
+        for (int index = 0; index < vulkan->nb_qf; ++index) {
+            if (vulkan->qf[index].flags & VK_QUEUE_VIDEO_ENCODE_BIT_KHR) {
+                result->prepare_queue_family = vulkan->qf[index].idx;
+                break;
+            }
+        }
+        if (result->prepare_queue_family == VK_QUEUE_FAMILY_IGNORED && vulkan->nb_qf)
+            result->prepare_queue_family = vulkan->qf[0].idx;
+        if (result->prepare_queue_family == VK_QUEUE_FAMILY_IGNORED) {
+            destroy_encoder(result);
+            return nullptr;
+        }
+        vkGetDeviceQueue(vulkan->act_dev, result->prepare_queue_family, 0, &result->prepare_queue);
+        VkCommandPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+        pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+        pool_info.queueFamilyIndex = result->prepare_queue_family;
+        if (result->prepare_queue == VK_NULL_HANDLE ||
+            vkCreateCommandPool(vulkan->act_dev, &pool_info, vulkan->alloc, &result->prepare_pool) != VK_SUCCESS) {
+            destroy_encoder(result);
+            return nullptr;
+        }
+    }
 
     result->frames = av_hwframe_ctx_alloc(result->device);
     if (!result->frames) {
@@ -314,7 +432,12 @@ extern "C" int d2s_vulkan_ffmpeg_encoder_acquire_frame(
         return -1;
     }
     encoder->acquired = acquired;
-    copy_vk_frame(encoder, reinterpret_cast<AVVkFrame*>(acquired->data[0]), frame,
+    auto* source = reinterpret_cast<AVVkFrame*>(acquired->data[0]);
+    if (!prepare_frame_for_cuda(encoder, source)) {
+        av_frame_free(&encoder->acquired);
+        return -1;
+    }
+    copy_vk_frame(encoder, source, frame,
                   encoder->width, encoder->height);
     if (frame->plane_count > 0 && frame->external_handle_type)
         return 0;

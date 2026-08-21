@@ -151,6 +151,94 @@ class CudaVulkanImageImporter:
         self._slots: dict[int, _CudaSlot] = {}
         self._buffer_slots: dict[int, _CudaBufferSlot] = {}
         self._semaphores: dict[int, _CudaSemaphore] = {}
+        self._nv12_slots: dict[int, tuple[list[_CudaSlot], list[ctypes.c_void_p]]] = {}
+
+    def write_ffmpeg_nv12_frame(self, y: Any, uv: Any, frame: Any, *, stream: int | None = None) -> int:
+        """Write CUDA NV12 planes into one FFmpeg-exported Vulkan frame.
+
+        ``frame`` is ``streaming.vulkan_bridge.VulkanVideoFrame``.  The
+        producer waits on FFmpeg's current timeline value, copies only on GPU,
+        then signals the next value returned to native ``submit_frame``.
+        """
+        self._validate_ffmpeg_nv12_planes(y, uv, frame)
+        if stream is None:
+            import torch
+            stream = int(torch.cuda.current_stream(device=y.device).cuda_stream)
+        key = int(frame.slot_id)
+        if key not in self._nv12_slots:
+            slots, semaphores = [], []
+            try:
+                for index, (_tensor, channels, width, height) in enumerate(((y, 1, frame.width, frame.height), (uv, 2, frame.width // 2, frame.height // 2))):
+                    desc = _ExternalMemoryHandleDesc(type=self._CUDA_OPAQUE_WIN32 if os.name == "nt" else self._CUDA_OPAQUE_FD, size=int(frame.memory_size[index]), flags=0)
+                    if os.name == "nt": desc.handle.win32.handle = ctypes.c_void_p(int(frame.external_memory_handle[index]))
+                    else: desc.handle.fd = int(frame.external_memory_handle[index])
+                    memory = ctypes.c_void_p(); self._check(self._cudart.cudaImportExternalMemory(ctypes.byref(memory), ctypes.byref(desc)), "cudaImportExternalMemory(FFmpeg NV12)")
+                    mapped = _ExternalMipmappedArrayDesc(offset=int(frame.memory_offset[index]), format_desc=_ChannelFormatDesc(8, 8 if channels == 2 else 0, 0, 0, 0), extent=_Extent(width, height, 0), flags=self._CUDA_ARRAY_COLOR_ATTACHMENT, num_levels=1)
+                    mip = ctypes.c_void_p(); self._check(self._cudart.cudaExternalMemoryGetMappedMipmappedArray(ctypes.byref(mip), memory, ctypes.byref(mapped)), "cudaExternalMemoryGetMappedMipmappedArray(FFmpeg NV12)")
+                    array = ctypes.c_void_p(); self._check(self._cudart.cudaGetMipmappedArrayLevel(ctypes.byref(array), mip, 0), "cudaGetMipmappedArrayLevel(FFmpeg NV12)")
+                    slots.append(_CudaSlot(None, memory, array))
+                    sem_desc = _ExternalSemaphoreHandleDesc(type=self._CUDA_TIMELINE_SEMAPHORE_WIN32 if os.name == "nt" else self._CUDA_TIMELINE_SEMAPHORE_FD, flags=0)
+                    if os.name == "nt": sem_desc.handle.win32.handle = ctypes.c_void_p(int(frame.external_semaphore_handle[index]))
+                    else: sem_desc.handle.fd = int(frame.external_semaphore_handle[index])
+                    sem = ctypes.c_void_p(); self._check(self._cudart.cudaImportExternalSemaphore(ctypes.byref(sem), ctypes.byref(sem_desc)), "cudaImportExternalSemaphore(FFmpeg NV12)"); semaphores.append(sem)
+            except Exception:
+                for semaphore in semaphores:
+                    self._cudart.cudaDestroyExternalSemaphore(semaphore)
+                for slot in slots:
+                    self._cudart.cudaDestroyExternalMemory(slot.external_memory)
+                raise
+            finally:
+                # FFmpeg duplicates these OS handles on every acquire. CUDA keeps
+                # the imported object; the raw exported handles are no longer used.
+                self._close_ffmpeg_frame_handles(frame)
+            self._nv12_slots[key] = (slots, semaphores)
+        else:
+            self._close_ffmpeg_frame_handles(frame)
+        slots, semaphores = self._nv12_slots[key]
+        ready_value = max(int(value) for value in frame.semaphore_value) + 1
+        for index, sem in enumerate(semaphores):
+            wait = _ExternalSemaphoreWaitParams(params=_SemaphoreSignalParams(fence_value=int(frame.semaphore_value[index]), keyed_mutex_key=0), flags=0)
+            self._check(self._cudart.cudaWaitExternalSemaphoresAsync((ctypes.c_void_p * 1)(sem), ctypes.byref(wait), 1, ctypes.c_void_p(int(stream))), "cudaWaitExternalSemaphoresAsync(FFmpeg NV12)")
+            tensor = y if index == 0 else uv; row = int(frame.width)
+            self._check(self._cudart.cudaMemcpy2DToArrayAsync(slots[index].array, 0, 0, ctypes.c_void_p(int(tensor.data_ptr())), row, row, int(frame.height if index == 0 else frame.height // 2), self._CUDA_MEMCPY_DEVICE_TO_DEVICE, ctypes.c_void_p(int(stream))), "cudaMemcpy2DToArrayAsync(FFmpeg NV12)")
+            signal = _ExternalSemaphoreSignalParams(params=_SemaphoreSignalParams(fence_value=ready_value, keyed_mutex_key=0), flags=0)
+            self._check(self._cudart.cudaSignalExternalSemaphoresAsync((ctypes.c_void_p * 1)(sem), ctypes.byref(signal), 1, ctypes.c_void_p(int(stream))), "cudaSignalExternalSemaphoresAsync(FFmpeg NV12)")
+        return ready_value
+
+    @staticmethod
+    def _close_external_handle(handle: int) -> None:
+        if not int(handle):
+            return
+        if os.name == "nt":
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+            kernel32.CloseHandle.restype = ctypes.c_int
+            kernel32.CloseHandle(ctypes.c_void_p(int(handle)))
+        else:
+            os.close(int(handle))
+
+    @classmethod
+    def _close_ffmpeg_frame_handles(cls, frame: Any) -> None:
+        for index in range(int(getattr(frame, "plane_count", 0))):
+            cls._close_external_handle(int(frame.external_memory_handle[index]))
+            cls._close_external_handle(int(frame.external_semaphore_handle[index]))
+
+    @staticmethod
+    def _validate_ffmpeg_nv12_planes(y: Any, uv: Any, frame: Any) -> None:
+        if int(getattr(frame, "plane_count", 0)) != 2:
+            raise CudaVulkanInteropError("FFmpeg Vulkan frame must contain two NV12 planes")
+        for name, tensor, shape in (
+            ("Y", y, (int(frame.height), int(frame.width), 1)),
+            ("UV", uv, (int(frame.height) // 2, int(frame.width) // 2, 2)),
+        ):
+            if getattr(tensor, "device", None) is None or str(tensor.device.type) != "cuda":
+                raise CudaVulkanInteropError(f"FFmpeg NV12 {name} plane must be a CUDA tensor")
+            if str(getattr(tensor, "dtype", "")) != "torch.uint8":
+                raise CudaVulkanInteropError(f"FFmpeg NV12 {name} plane must be torch.uint8")
+            if tuple(getattr(tensor, "shape", ())) != shape or not bool(tensor.is_contiguous()):
+                raise CudaVulkanInteropError(f"FFmpeg NV12 {name} plane must be contiguous {shape!r}")
+        if not all(int(frame.memory_size[index]) > 0 for index in range(2)):
+            raise CudaVulkanInteropError("FFmpeg Vulkan frame has invalid external memory sizes")
 
     @property
     def capabilities(self) -> VulkanInteropCapabilities:
@@ -548,6 +636,18 @@ class CudaVulkanImageImporter:
             self._check(self._cudart.cudaDestroyExternalMemory(slot.external_memory), "cudaDestroyExternalMemory")
 
     def close(self) -> None:
+        for slots, semaphores in tuple(self._nv12_slots.values()):
+            for semaphore in semaphores:
+                self._check(
+                    self._cudart.cudaDestroyExternalSemaphore(semaphore),
+                    "cudaDestroyExternalSemaphore(FFmpeg NV12)",
+                )
+            for slot in slots:
+                self._check(
+                    self._cudart.cudaDestroyExternalMemory(slot.external_memory),
+                    "cudaDestroyExternalMemory(FFmpeg NV12)",
+                )
+        self._nv12_slots.clear()
         for semaphore in tuple(self._semaphores.values()):
             self._check(
                 self._cudart.cudaDestroyExternalSemaphore(semaphore.external),
