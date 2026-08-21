@@ -15,6 +15,7 @@ extern "C" {
 #include <libavutil/hwcontext_vulkan.h>
 }
 
+#include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -79,6 +80,17 @@ constexpr unsigned int D2S_EXTERNAL_HANDLE_FD = 2;
 void write_message(char* output, int capacity, const char* message) {
     if (!output || capacity <= 0) return;
     std::snprintf(output, static_cast<std::size_t>(capacity), "%s", message);
+}
+
+void trace(const char* format, ...) {
+    if (!std::getenv("D2S_VULKAN_TRACE")) return;
+    std::fputs("[d2s-vulkan] ", stderr);
+    va_list args;
+    va_start(args, format);
+    std::vfprintf(stderr, format, args);
+    va_end(args);
+    std::fputc('\\n', stderr);
+    std::fflush(stderr);
 }
 
 bool find_memory_type(Encoder* encoder, uint32_t bits, VkMemoryPropertyFlags properties,
@@ -788,6 +800,10 @@ bool submit_ownership_release(Encoder* encoder, AVVkFrame* frame,
     auto* vulkan = reinterpret_cast<AVVulkanDeviceContext*>(device_context->hwctx);
     const VkDevice device = vulkan->act_dev;
     const VkImage image = frame->img[0];
+    trace("ownership release rgba=%d image=%p wait=%llu frame_sem=%llu layout=%d q=%u->%u",
+          rgba_frame ? 1 : 0, reinterpret_cast<void*>(image), wait_value,
+          frame->sem_value[0], static_cast<int>(frame->layout[0]),
+          encoder->prepare_queue_family, encoder->compute_queue_family);
     auto command_it = encoder->ownership_release_buffers.find(image);
     auto fence_it = encoder->ownership_release_fences.find(image);
     VkCommandBuffer command = VK_NULL_HANDLE;
@@ -859,8 +875,11 @@ bool submit_ownership_release(Encoder* encoder, AVVkFrame* frame,
     submit.pSignalSemaphoreInfos = &signal;
     auto submit2 = reinterpret_cast<PFN_vkQueueSubmit2>(
         vkGetDeviceProcAddr(device, "vkQueueSubmit2"));
-    if (!submit2 || submit2(encoder->prepare_queue, 1, &submit,
-                            fence_it->second) != VK_SUCCESS) return false;
+    const VkResult release_result = !submit2
+        ? VK_ERROR_INITIALIZATION_FAILED
+        : submit2(encoder->prepare_queue, 1, &submit, fence_it->second);
+    trace("ownership release submitted result=%d signal=%llu", static_cast<int>(release_result), next_value);
+    if (release_result != VK_SUCCESS) return false;
     *signal_value = next_value;
     return true;
 }
@@ -921,6 +940,7 @@ bool submit_encode_acquire(Encoder* encoder, AVVkFrame* nv12,
     vkCmdPipelineBarrier2(command, &dependency);
     if (vkEndCommandBuffer(command) != VK_SUCCESS) return false;
     const unsigned long long next_value = wait_value + 1;
+    trace("encode acquire image=%p wait=%llu signal=%llu", reinterpret_cast<void*>(image), wait_value, next_value);
     VkSemaphoreSubmitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
     wait.semaphore = nv12->sem[0];
     wait.value = wait_value;
@@ -1114,6 +1134,8 @@ bool submit_rgba_conversion(Encoder* encoder, AVVkFrame* rgba, AVVkFrame* nv12,
     if (vkEndCommandBuffer(command) != VK_SUCCESS) return false;
     const unsigned long long signal_value = nv12_compute_wait + 1;
     const unsigned long long rgba_signal_value = rgba_compute_wait + 1;
+    trace("compute submit rgba_wait=%llu nv12_wait=%llu signals=%llu/%llu",
+          rgba_compute_wait, nv12_compute_wait, signal_value, rgba_signal_value);
     VkSemaphoreSubmitInfo waits[2]{};
     waits[0].sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
     waits[0].semaphore = rgba->sem[0];
@@ -1143,8 +1165,11 @@ bool submit_rgba_conversion(Encoder* encoder, AVVkFrame* rgba, AVVkFrame* nv12,
     submit.pSignalSemaphoreInfos = signals;
     auto submit2 = reinterpret_cast<PFN_vkQueueSubmit2>(
         vkGetDeviceProcAddr(device, "vkQueueSubmit2"));
-    if (!submit2 || submit2(encoder->compute_queue, 1, &submit, fence_it->second) != VK_SUCCESS)
-        return false;
+    const VkResult compute_result = !submit2
+        ? VK_ERROR_INITIALIZATION_FAILED
+        : submit2(encoder->compute_queue, 1, &submit, fence_it->second);
+    trace("compute submitted result=%d", static_cast<int>(compute_result));
+    if (compute_result != VK_SUCCESS) return false;
     unsigned long long encode_value = 0;
     if (!submit_encode_acquire(encoder, nv12, signal_value, &encode_value)) return false;
     nv12->sem_value[0] = encode_value;
