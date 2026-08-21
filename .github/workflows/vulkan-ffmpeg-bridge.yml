@@ -75,3 +75,49 @@ jobs:
           name: d2s-vulkan-ffmpeg-bridge-windows-amd64
           path: native/vulkan_ffmpeg_bridge/build/ci/**/d2s_vulkan_ffmpeg_bridge.dll
           if-no-files-found: error
+
+  build-linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Vulkan and native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes cmake ninja-build g++ libvulkan-dev vulkan-tools pkg-config curl xz-utils binutils
+
+      - name: Download pinned FFmpeg development package
+        env:
+          FFMPEG_RELEASE_URL: https://github.com/laiyangli001/desktop2stereo-ffmpeg-builds/releases/download/ffmpeg-v9.0.1-d2s.2/d2s-ffmpeg-9.0.1-d2s.2-linux-amd64.tar.xz
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/d2s-ffmpeg.tar.xz"
+          curl --fail --location --retry 3 "$FFMPEG_RELEASE_URL" --output "$archive"
+          mkdir -p "$RUNNER_TEMP/ffmpeg"
+          tar -xJf "$archive" -C "$RUNNER_TEMP/ffmpeg"
+          root="$RUNNER_TEMP/ffmpeg/ffmpeg"
+          test -f "$root/include/libavcodec/avcodec.h"
+          test -f "$root/lib/libavcodec.so"
+          echo "D2S_FFMPEG_ROOT=$root" >> "$GITHUB_ENV"
+
+      - name: Configure and build native bridge
+        run: |
+          set -euo pipefail
+          cmake -S native/vulkan_ffmpeg_bridge -B native/vulkan_ffmpeg_bridge/build/ci \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DD2S_FFMPEG_ROOT="$D2S_FFMPEG_ROOT"
+          cmake --build native/vulkan_ffmpeg_bridge/build/ci --parallel 2
+
+      - name: Verify ABI exports
+        run: |
+          set -euo pipefail
+          bridge=$(find native/vulkan_ffmpeg_bridge/build/ci -type f -name 'd2s_vulkan_ffmpeg_bridge.so' -print -quit)
+          test -n "$bridge"
+          nm -D --defined-only "$bridge" | grep -E 'd2s_vulkan_ffmpeg_bridge_abi_version|d2s_vulkan_ffmpeg_encoder_acquire_frame|d2s_vulkan_ffmpeg_encoder_submit_frame|d2s_vulkan_ffmpeg_encoder_read_packet|d2s_vulkan_ffmpeg_encoder_flush'
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: d2s-vulkan-ffmpeg-bridge-linux-amd64
+          path: native/vulkan_ffmpeg_bridge/build/ci/**/d2s_vulkan_ffmpeg_bridge.so
+          if-no-files-found: error
