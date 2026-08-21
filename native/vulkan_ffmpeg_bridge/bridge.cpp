@@ -752,7 +752,7 @@ extern "C" void* d2s_vulkan_ffmpeg_encoder_create(
             "encoder=%s input=RGBA8 encode=NV12 profile=%s "
             "queue_prepare=%u queue_compute=%u bf=0 "
             "gpu_to_cpu=False gpu_copy=True zero_copy=False "
-            "resolution=%dx%d fps=%d target=%d peak=%d\\n",
+            "resolution=%dx%d fps=%d target=%d peak=%d\n",
             properties.deviceName,
             encoder_name,
             hevc ? "main" : "high",
