@@ -133,6 +133,12 @@ class VulkanRgbToNv12Intermediate:
         No host-visible mapping or CPU pixel copy is performed here.
         """
         vk = self.vk
+        destination_context = getattr(destination_image, "context", None)
+        if destination_context is not None and destination_context is not self.context:
+            raise RuntimeError(
+                "NV12 Video image belongs to a different Vulkan context; "
+                "record conversion inside the native FFmpeg device bridge"
+            )
         barriers = [
             vk.VkImageMemoryBarrier2(
                 sType=vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
