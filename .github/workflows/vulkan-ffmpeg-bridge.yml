@@ -43,10 +43,20 @@ jobs:
       - name: Configure and build native bridge
         shell: pwsh
         run: |
-          $bash = 'C:\msys64\usr\bin\bash.exe'
-          & $bash -lc "cmake -S native/vulkan_ffmpeg_bridge -B native/vulkan_ffmpeg_bridge/build/ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DD2S_FFMPEG_ROOT=\"$env:D2S_FFMPEG_ROOT\""
+          $cmake = 'C:\msys64\mingw64\bin\cmake.exe'
+          $ninja = 'C:\msys64\mingw64\bin\ninja.exe'
+          $gcc = 'C:\msys64\mingw64\bin\gcc.exe'
+          $gxx = 'C:\msys64\mingw64\bin\g++.exe'
+          & $cmake -S native/vulkan_ffmpeg_bridge -B native/vulkan_ffmpeg_bridge/build/ci `
+            -G Ninja `
+            -DCMAKE_MAKE_PROGRAM="$ninja" `
+            -DCMAKE_C_COMPILER="$gcc" `
+            -DCMAKE_CXX_COMPILER="$gxx" `
+            -DCMAKE_PREFIX_PATH='C:\msys64\mingw64' `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DD2S_FFMPEG_ROOT="$env:D2S_FFMPEG_ROOT"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & $bash -lc 'cmake --build native/vulkan_ffmpeg_bridge/build/ci --parallel 2'
+          & $cmake --build native/vulkan_ffmpeg_bridge/build/ci --parallel 2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify ABI exports
@@ -62,4 +72,3 @@ jobs:
           name: d2s-vulkan-ffmpeg-bridge-windows-amd64
           path: native/vulkan_ffmpeg_bridge/build/ci/**/d2s_vulkan_ffmpeg_bridge.dll
           if-no-files-found: error
-
