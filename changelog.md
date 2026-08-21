@@ -2,6 +2,8 @@
 
 ## 2026-08-22
 
+- 根据 FFmpeg 9.0.1 `hwcontext_vulkan.h` 记录 CUDA/Vulkan 零复制边界：CUDA 导入所需的 `AV_VK_FRAME_FLAG_DISABLE_MULTIPLANE` 会产生 R8/R8G8 拆分图像，而 Vulkan Video 需要单一 NV12 multi-plane image；当前版本因此保留已验证的 Vulkan Compute + device-local copy，不伪装不兼容的 plane 资源。
+
 - 升级 Requirements Compliance workflow 的 `actions/setup-python` 到 `v6`，与 `checkout@v5`、`upload-artifact@v6` 一起使用 Node.js 24，消除远程检查中的 Node.js 20 弃用提示。
 
 - Vulkan native bridge 增加 NV12 `STORAGE_IMAGE` 能力探测：驱动支持时 Compute 直接写入 FFmpeg 编码图像的 plane view，消除 R8/RG8→NV12 device-local copy 并记录 `zero_copy=True`；不支持时自动保留固定槽位 copy 路径。RTX 3090 当前驱动实测返回 `VK_ERROR_FORMAT_NOT_SUPPORTED (-11)`，3 次 3840×2160 H.264 烟测均通过，保持原有稳定回退和 4K 编码链路。

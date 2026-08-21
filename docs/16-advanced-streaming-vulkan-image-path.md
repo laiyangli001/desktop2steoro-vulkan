@@ -139,9 +139,12 @@ frame pool 设置 `AV_VK_FRAME_FLAG_DISABLE_MULTIPLANE` 后会得到 `R8_UNORM` 
 `VK_FORMAT_FEATURE_VIDEO_ENCODE_INPUT_BIT_KHR`，不能作为 Vulkan Video Encode 源。
 
 因此“CUDA 分别写 Y、UV 两个 FFmpeg image，再提交 Vulkan Video”在该驱动上不可用，
-必须保持自动回退。可行的下一实现应改为：创建/共享一个真正的 NV12 multi-plane Vulkan
-image，并在同一 Vulkan device 上执行 RGB→NV12 compute 或通过支持 multi-plane external
-memory 的 CUDA 导入方式写入；不得把两个单 plane image 伪装成 NV12 编码输入。
+必须保持自动回退。FFmpeg 9.0.1 的 `hwcontext_vulkan.h` 进一步明确：
+`AV_VK_FRAME_FLAG_DISABLE_MULTIPLANE` 是导出/导入 CUDA image 所需的标志，启用后正是
+R8/R8G8 拆分表示；不启用它才能保留单一 NV12 image，但当前 CUDA importer 没有合法的
+multi-plane optimal-tiled image 映射接口。因此当前版本选择 Vulkan Compute + device-local
+copy，并禁止把两个单 plane image 伪装成 NV12 编码输入。未来若 FFmpeg 提供真正的
+multi-plane external-memory CUDA 映射，再切换到 CUDA 直接写入路径。
 
 ## 高级推流与 GPU 推流的区别
 
