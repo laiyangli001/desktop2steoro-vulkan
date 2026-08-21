@@ -129,6 +129,20 @@ Python RGB24 pipe → FFmpeg hwupload → h264_vulkan
 
 首期应选择进程内编码桥，压缩后的码流再交给现有 FFmpeg muxer。
 
+### 2026-08-22 验证结论：不要把 NV12 拆成两个编码输入 image
+
+Windows RTX 3090、NVIDIA Vulkan 驱动 610.88 和项目 FFmpeg 9.0.1 `d2s.2` 的
+Validation Layer 实测表明，`h264_vulkan` / `hevc_vulkan` 的 Video Session 要求
+输入为单一 `VK_FORMAT_G8_B8R8_2PLANE_420_UNORM` image。为了让 CUDA 导入，FFmpeg
+frame pool 设置 `AV_VK_FRAME_FLAG_DISABLE_MULTIPLANE` 后会得到 `R8_UNORM` 与
+`R8G8_UNORM` 两个 image；它们可导出 external-memory handle，却不具备
+`VK_FORMAT_FEATURE_VIDEO_ENCODE_INPUT_BIT_KHR`，不能作为 Vulkan Video Encode 源。
+
+因此“CUDA 分别写 Y、UV 两个 FFmpeg image，再提交 Vulkan Video”在该驱动上不可用，
+必须保持自动回退。可行的下一实现应改为：创建/共享一个真正的 NV12 multi-plane Vulkan
+image，并在同一 Vulkan device 上执行 RGB→NV12 compute 或通过支持 multi-plane external
+memory 的 CUDA 导入方式写入；不得把两个单 plane image 伪装成 NV12 编码输入。
+
 ## 高级推流与 GPU 推流的区别
 
 加入 Vulkan 后，两种模式仍应保持不同定位。

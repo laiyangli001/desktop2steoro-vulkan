@@ -17,6 +17,15 @@ The local application deliberately falls back to the validated host-upload
 path until the Python frame-pool consumer, GPU RGB-to-NV12 conversion,
 semaphore wait, and Windows GPU artifact have passed a real 4K headset test.
 
+## Current CUDA limitation
+
+The CUDA-friendly `AV_VK_FRAME_FLAG_DISABLE_MULTIPLANE` pool exports two
+single-plane images. Validation on NVIDIA RTX 3090 shows these images are not
+legal `h264_vulkan` / `hevc_vulkan` input resources: Vulkan Video requires one
+NV12 multi-plane image. The bridge is therefore a synchronization and external
+handle diagnostic only, not an enabled zero-copy encoder path. Production must
+fall back until a multi-plane CUDA/Vulkan sharing design replaces this pool.
+
 Build remotely with:
 
 ```text
