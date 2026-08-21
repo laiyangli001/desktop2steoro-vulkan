@@ -2,7 +2,7 @@
   "schema_version": 1,
   "runtimes": {
     "Windows-amd64": {
-      "ffmpeg_archive": "ffmpeg-9.0.1-windows.zip",
+      "ffmpeg_archive": "d2s-ffmpeg-9.0.1-d2s.1-windows-amd64.zip",
       "mediamtx_archive": "mediamtx_v1.20.1_windows_amd64.zip",
       "ffmpeg_executable": "ffmpeg/bin/ffmpeg.exe",
       "mediamtx_executable": "mediamtx/mediamtx.exe",
@@ -10,7 +10,7 @@
       "mediamtx_template": "mediamtx/mediamtx.yml"
     },
     "Linux-amd64": {
-      "ffmpeg_archive": "ffmpeg-release-amd64-static.tar.xz",
+      "ffmpeg_archive": "d2s-ffmpeg-9.0.1-d2s.1-linux-amd64.tar.xz",
       "mediamtx_archive": "mediamtx_v1.20.1_linux_amd64.tar.gz",
       "ffmpeg_executable": "ffmpeg/bin/ffmpeg",
       "mediamtx_executable": "mediamtx/mediamtx",
@@ -18,7 +18,7 @@
       "mediamtx_template": "mediamtx/mediamtx.yml"
     },
     "Linux-arm64": {
-      "ffmpeg_archive": "ffmpeg-release-arm64-static.tar.xz",
+      "ffmpeg_archive": "d2s-ffmpeg-9.0.1-d2s.1-linux-arm64.tar.xz",
       "mediamtx_archive": "mediamtx_v1.20.1_linux_arm64.tar.gz",
       "ffmpeg_executable": "ffmpeg/bin/ffmpeg",
       "mediamtx_executable": "mediamtx/mediamtx",
@@ -26,7 +26,7 @@
       "mediamtx_template": "mediamtx/mediamtx.yml"
     },
     "Darwin-amd64": {
-      "ffmpeg_archive": "ffmpeg-126221-macos.zip",
+      "ffmpeg_archive": "d2s-ffmpeg-9.0.1-d2s.1-darwin-amd64.zip",
       "mediamtx_archive": "mediamtx_v1.20.1_darwin_amd64.tar.gz",
       "ffmpeg_executable": "ffmpeg/bin/ffmpeg",
       "mediamtx_executable": "mediamtx/mediamtx",
@@ -34,7 +34,7 @@
       "mediamtx_template": "mediamtx/mediamtx.yml"
     },
     "Darwin-arm64": {
-      "ffmpeg_archive": "ffmpeg-126221-macos.zip",
+      "ffmpeg_archive": "d2s-ffmpeg-9.0.1-d2s.1-darwin-arm64.zip",
       "mediamtx_archive": "mediamtx_v1.20.1_darwin_arm64.tar.gz",
       "ffmpeg_executable": "ffmpeg/bin/ffmpeg",
       "mediamtx_executable": "mediamtx/mediamtx",

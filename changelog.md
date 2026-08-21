@@ -2,6 +2,7 @@
 
 ## 2026-08-21
 
+- 统一高级网络推流的跨平台 FFmpeg 运行时来源：Windows AMD64、Linux AMD64/ARM64、macOS Intel/Apple Silicon 压缩包均改用 `desktop2stereo-ffmpeg-builds` GitHub Actions 的 FFmpeg 9.0.1 `d2s.1` 构建产物，五个平台使用同一版本与功能配置，并保留构建端及本地 SHA-256 校验结果；运行时安装同步改为复制完整 FFmpeg 目录，确保共享 FFmpeg、SRT、Opus、oneVPL 等动态库随可执行文件一起部署。
 - 新增“高级网络推流”的自动网络与性能校准：GUI 提供独立校准入口和实时进度弹窗，头显测试页通过 WHEP 自动重连并回传 WebRTC 解码帧率、丢帧、冻结、丢包、码率与抖动；运行时从安全档逐级测试实际捕获、CUDA→CPU 转换、FFmpeg 提交、局域网传输和头显解码，自动回退到最高稳定 FPS/码率并保存带设备、模型、头显和编码配置指纹的结果，相关配置变化后会提示重新校准。
 - 修复 NumPy 2.5 环境下 SoundCard 0.4.4 的 Windows WASAPI 回环采集在收到真实音频后触发 `The binary mode of fromstring is removed` 并降级静音的问题；安装依赖升级并锁定到 SoundCard 0.4.6，改用兼容 NumPy 2.x 的二进制缓冲区读取实现。
 - 修复“高级网络推流”使用 SoundCard/WASAPI 回环音频时，采集线程在启动后异常会令 FFmpeg 等待音频、继而使本机 RTSP 发布约 10 秒后 `i/o timeout` 的问题；音频异常现在会明确告警并按实时节奏降级为静音，视频和 WebRTC 会话保持在线。

@@ -71,9 +71,12 @@ def ensure_runtime(runtime_root: Path) -> tuple[Path, Path, Path]:
         ffmpeg_source = next(ffmpeg_extract.rglob(Path(entry["ffmpeg_executable"]).name))
         mediamtx_source = next(mediamtx_extract.rglob(Path(entry["mediamtx_executable"]).name))
         template_source = next(mediamtx_extract.rglob("mediamtx.yml"), None)
-        ffmpeg.parent.mkdir(parents=True, exist_ok=True)
+        ffmpeg_package_source = ffmpeg_source.parent.parent
+        ffmpeg_package_destination = runtime_root / Path(entry["ffmpeg_executable"]).parts[0]
+        if ffmpeg_package_destination.exists():
+            shutil.rmtree(ffmpeg_package_destination)
+        shutil.copytree(ffmpeg_package_source, ffmpeg_package_destination)
         mediamtx.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ffmpeg_source, ffmpeg)
         shutil.copy2(mediamtx_source, mediamtx)
         if not template.is_file() and template_source is not None:
             template.parent.mkdir(parents=True, exist_ok=True)
