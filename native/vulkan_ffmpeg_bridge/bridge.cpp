@@ -327,10 +327,10 @@ extern "C" int d2s_vulkan_ffmpeg_encoder_submit_frame(
     unsigned long long ready_value, long long timestamp) {
     auto* encoder = static_cast<Encoder*>(opaque);
     if (!encoder || !encoder->acquired || !frame) return -1;
-    // The frame-pool ABI must not silently accept a producer that has not
-    // published a completion point.  Queue submission for this point is
-    // intentionally kept in the native bridge; until it is implemented the
-    // call fails closed and the caller must use the stable host-upload path.
+    // CUDA/HIP signals FFmpeg's exported per-plane timeline semaphore after
+    // writing NV12. FFmpeg owns the VkSemaphore and waits on AVVkFrame's
+    // sem_value during the Vulkan Video encode submission, so record the
+    // producer's new value before handing the frame to avcodec.
     if (!ready_semaphore || ready_value == 0) {
         av_frame_free(&encoder->acquired);
         return -3;
@@ -339,11 +339,22 @@ extern "C" int d2s_vulkan_ffmpeg_encoder_submit_frame(
         av_frame_free(&encoder->acquired);
         return -4;
     }
-    // TODO: import/wait the external semaphore on the shared Vulkan queue and
-    // transition the FFmpeg-owned images to VIDEO_ENCODE_SRC before calling
-    // avcodec_send_frame.  Do not remove this guard until that wait is real.
+    auto* source = reinterpret_cast<AVVkFrame*>(encoder->acquired->data[0]);
+    if (!source || !source->sem[0] || ready_value <= source->sem_value[0]) {
+        av_frame_free(&encoder->acquired);
+        return -5;
+    }
+    for (unsigned int index = 0; index < frame->plane_count; ++index) {
+        if (!source->sem[index]) {
+            av_frame_free(&encoder->acquired);
+            return -5;
+        }
+        source->sem_value[index] = ready_value;
+    }
+    encoder->acquired->pts = timestamp;
+    const int result = avcodec_send_frame(encoder->codec, encoder->acquired);
     av_frame_free(&encoder->acquired);
-    return -3;
+    return result < 0 ? -1 : 0;
 }
 
 extern "C" int d2s_vulkan_ffmpeg_encoder_submit_image(

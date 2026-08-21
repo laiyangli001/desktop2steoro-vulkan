@@ -53,8 +53,9 @@ D2S_VULKAN_FFMPEG_API void* d2s_vulkan_ffmpeg_encoder_create(
 // Acquire one FFmpeg-owned NV12 Vulkan frame from the bounded pool. The
 // caller writes the returned GPU images with Vulkan/CUDA interop and then
 // submits the same descriptor. The producer-ready semaphore/value are
-// mandatory; an unsynchronized frame is rejected. Return 0 on success, -1 on
-// failure, -2 when the previous frame has not been submitted yet.
+// mandatory; the bridge records that timeline value on FFmpeg's AVVkFrame so
+// Vulkan Video waits for GPU writes before encoding. Return 0 on success, -1
+// on failure, -2 when the previous frame has not been submitted yet.
 D2S_VULKAN_FFMPEG_API int d2s_vulkan_ffmpeg_encoder_acquire_frame(
     void* encoder,
     D2SVulkanVideoFrame* frame);
