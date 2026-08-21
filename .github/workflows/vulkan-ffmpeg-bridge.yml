@@ -31,7 +31,7 @@ jobs:
       - name: Download pinned FFmpeg development package
         shell: pwsh
         env:
-          FFMPEG_RELEASE_URL: https://github.com/laiyangli001/desktop2stereo-ffmpeg-builds/releases/download/ffmpeg-v9.0.1-d2s.1/d2s-ffmpeg-9.0.1-d2s.1-windows-amd64.zip
+          FFMPEG_RELEASE_URL: https://github.com/laiyangli001/desktop2stereo-ffmpeg-builds/releases/download/ffmpeg-v9.0.1-d2s.2/d2s-ffmpeg-9.0.1-d2s.2-windows-amd64.zip
         run: |
           $archive = Join-Path $env:RUNNER_TEMP 'd2s-ffmpeg.zip'
           Invoke-WebRequest -Uri $env:FFMPEG_RELEASE_URL -OutFile $archive
@@ -67,7 +67,7 @@ jobs:
             Where-Object { $_.Name -in @('d2s_vulkan_ffmpeg_bridge.dll', 'libd2s_vulkan_ffmpeg_bridge.dll') } |
             Select-Object -First 1
           if (-not $dll) { throw 'Vulkan FFmpeg bridge DLL was not produced' }
-          & 'C:\msys64\mingw64\bin\nm.exe' -g $dll.FullName | Select-String 'd2s_vulkan_ffmpeg_bridge_abi_version|d2s_vulkan_ffmpeg_encoder_submit_image'
+          & 'C:\msys64\mingw64\bin\nm.exe' -g $dll.FullName | Select-String 'd2s_vulkan_ffmpeg_bridge_abi_version|d2s_vulkan_ffmpeg_encoder_acquire_frame|d2s_vulkan_ffmpeg_encoder_submit_frame|d2s_vulkan_ffmpeg_encoder_read_packet|d2s_vulkan_ffmpeg_encoder_flush'
           if ($LASTEXITCODE -ne 0) { throw 'Required Vulkan bridge ABI exports are missing' }
 
       - uses: actions/upload-artifact@v4

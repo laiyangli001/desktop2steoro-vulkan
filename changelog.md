@@ -2,6 +2,7 @@
 
 ## 2026-08-21
 
+- Vulkan 原生编码桥的 GPU 帧提交现在强制要求 producer-ready 外部信号量和值；未实现真实 Vulkan wait/layout transition 前主动拒绝提交并保持高级网络推流回退，避免把未同步的 FFmpeg `VkImage` 接入造成花屏或 GPU 竞态；Python ABI 同步暴露信号量参数，桥接 CI 同时改用当前 `d2s.2` FFmpeg 开发包。
 - Vulkan Video 推流增加真实设备能力探测，并针对 NVIDIA 驱动未自动选择 H.264 profile 的情况显式使用 High profile；探测失败时继续回退稳定的 FFmpeg/NVENC 路径。
 - 高级网络推流新增显式“Vulkan Video”编码后端；4K H.264 使用 High/Level 5.1，初始化或运行失败时自动回到原 FFmpeg 硬件/软件路径，Auto 默认行为保持不变。
 - 修正 Vulkan Video FFmpeg 命令中 `format=nv12,hwupload` 的选项位置，确保滤镜参数位于 RTSP 输出 URL 之前并真正作用于 Vulkan 编码输入。
@@ -1080,6 +1081,9 @@
 - 按旧工程的异步提交边界优化 Projection Layer：左右眼 `end_frame` 只提交 Filament 工作，整帧两眼完成后统一等待一次，避免每眼一次 `flushAndWait` 串行阻塞；旧 Bridge 二进制仍保留兼容路径，需 CI 重编译后生效。
 - 增加 CUDA/Vulkan/Filament external semaphore 路径：每个输出槽位创建可导出的 Vulkan binary semaphore，CUDA copy 完成后异步 signal，Filament Bridge 在目标 swapchain acquire 时等待对应 semaphore；平台或运行库不支持时自动退回 CUDA stream 同步。
 ## Unreleased
+
+- Vulkan FFmpeg bridge ABI 升级到 v2：原生桥现在创建真实的 FFmpeg Vulkan NV12 frame pool，提供 GPU `VkImage`/memory 描述、提交、取包和 flush 接口；应用仍保持稳定高级网络推流回退，待 Python frame-pool 消费、GPU RGB→NV12 和同步信号接入后再启用。
+- 远程 Vulkan bridge CI 的 ABI 校验扩展到 frame acquire、submit、packet read 和 flush 符号，避免新接口未导出却被误判为构建成功。
 
 - Automatic stream calibration now uses an inference-independent 30 FPS CBR pressure stream sized from the selected input resolution. Each coarse tier runs for 15 seconds, the stable/unstable interval is narrowed by binary search to 1 Mbps, and the final candidate is confirmed for 30 seconds.
 - A tier is valid only when its measured sender rate reaches at least 85% of the requested load. Results record the measured network limit and apply 80%/90% safety margins for the target/peak bitrates instead of presenting a formula-derived target as measured capacity.
