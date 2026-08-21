@@ -1,0 +1,32 @@
+#version 450
+
+// GPU-only BT.601 limited-range conversion. The two outputs are intermediate
+// R8/RG8 images; the native bridge copies them into the Vulkan Video NV12
+// multi-plane image after this dispatch.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(set = 0, binding = 0, rgba8) uniform readonly image2D rgb_image;
+layout(set = 0, binding = 1, r8) uniform writeonly image2D y_image;
+layout(set = 0, binding = 2, rg8) uniform writeonly image2D uv_image;
+
+vec3 read_rgb(ivec2 p) {
+    return imageLoad(rgb_image, p).rgb * 255.0;
+}
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(rgb_image);
+    if (p.x >= size.x || p.y >= size.y) return;
+
+    vec3 rgb = read_rgb(p);
+    float y = clamp(0.257 * rgb.r + 0.504 * rgb.g + 0.098 * rgb.b + 16.0, 0.0, 255.0);
+    imageStore(y_image, p, vec4(y / 255.0, 0.0, 0.0, 1.0));
+
+    if ((p.x & 1) == 0 && (p.y & 1) == 0) {
+        vec3 rgb01 = (read_rgb(p) + read_rgb(min(p + ivec2(1, 0), size - 1))
+                    + read_rgb(min(p + ivec2(0, 1), size - 1))
+                    + read_rgb(min(p + ivec2(1, 1), size - 1))) * 0.25;
+        float u = clamp((-0.148 * rgb01.r - 0.291 * rgb01.g + 0.439 * rgb01.b + 128.0) / 255.0, 0.0, 1.0);
+        float v = clamp(( 0.439 * rgb01.r - 0.368 * rgb01.g - 0.071 * rgb01.b + 128.0) / 255.0, 0.0, 1.0);
+        imageStore(uv_image, p / 2, vec4(u, v, 0.0, 1.0));
+    }
+}
