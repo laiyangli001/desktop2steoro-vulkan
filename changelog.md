@@ -2,6 +2,8 @@
 
 ## 2026-08-22
 
+- 新增 MediaMTX 端到端 Vulkan RTSP soak 工具：启动 MediaMTX 和 FFmpeg mux-only TCP 发布，验证压缩 H.264 包进入 `live` 路径；本机 3840×2160@30 连续 300 帧发布通过，未经过 4K rawvideo stdin。
+
 - 新增 native RGBA→NV12→Vulkan Video 多帧 soak 参数；修复 FFmpeg drain 的 EOF 误报后，使用远程构建 run `32534594122` 的 Windows DLL 完成 3840×2160 连续 900 帧验证，900 个压缩包全部读取成功并正常 flush。
 
 - 修复 native Vulkan bridge drain ABI：FFmpeg `avcodec_receive_packet()` 的 `EAGAIN/EOF` 统一表示当前没有更多压缩包，不再把正常 flush 结束误报为编码失败；新增长时间 RGBA→NV12→Vulkan Video soak 参数，支持按帧数或时长验证槽位复用。
