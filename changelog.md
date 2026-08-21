@@ -2,6 +2,7 @@
 
 ## 2026-08-21
 
+- 新增 `VulkanRgbToNv12Pipeline` 运行时封装：固定三张 storage image（RGBA 输入、R8 Y、RG8 UV）、8×8 dispatch 和偶数分辨率校验，明确中间 R8/RG8 结果必须由原生桥复制到 profile-compatible 的 NV12 multi-plane 编码 image。
 - 新增 Vulkan Compute `d2s_rgb_to_nv12`：在 GPU 上从 RGBA storage image 计算 BT.601 limited-range Y 与 2x2 平均 UV，输出 R8/RG8 中间 image，供后续复制到合法的 Vulkan Video NV12 multi-plane image；shader 已编译并通过 manifest 校验，未引入 CPU RGB24 或 stdin 原始帧。
 - Vulkan bridge 运行时新增输入格式闸门：检测到 FFmpeg 导出的 `R8`/`R8G8` 拆分 NV12 plane 时，在提交前关闭外部句柄并明确触发稳定推流回退，避免进入 Vulkan Video 驱动后才产生 `VK_ERROR_INITIALIZATION_FAILED`；后续路径必须提供单一 multi-plane NV12 image。
 - Vulkan CUDA/FFmpeg frame-pool 诊断确认 NVIDIA Vulkan Video 的硬约束：CUDA 友好的拆分 `R8`/`R8G8` plane 虽可 external-memory 导入，却不是合法 H.264/HEVC Vulkan Video 输入；当前高级网络推流继续稳定回退，后续零拷贝实现必须共享单一 multi-plane NV12 image 并在 Vulkan 内完成颜色转换。
