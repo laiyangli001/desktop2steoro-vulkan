@@ -2,6 +2,8 @@
 
 ## 2026-08-22
 
+- 新增 native RGBA→NV12→Vulkan Video 多帧 soak 参数；修复 FFmpeg drain 的 EOF 误报后，使用远程构建 run `32534594122` 的 Windows DLL 完成 3840×2160 连续 900 帧验证，900 个压缩包全部读取成功并正常 flush。
+
 - 修复 native Vulkan bridge drain ABI：FFmpeg `avcodec_receive_packet()` 的 `EAGAIN/EOF` 统一表示当前没有更多压缩包，不再把正常 flush 结束误报为编码失败；新增长时间 RGBA→NV12→Vulkan Video soak 参数，支持按帧数或时长验证槽位复用。
 
 - 扩展 Vulkan FFmpeg bridge GitHub Actions：新增 Ubuntu 24.04 Linux amd64 构建、下载同版本 FFmpeg 开发包、CMake 编译和 ABI 导出校验；run `32533937908` 的 Windows/Linux 两个 job 均通过，完成跨平台原生桥静态能力验证。
