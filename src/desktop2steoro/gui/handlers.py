@@ -498,7 +498,7 @@ class GUIHandlerMixin:
 
     def on_advanced_device_change(self, e):
         self._sync_visibility()
-        self._fit_window_to_content()
+        self._fit_window_to_content(update=True, resize_window=True)
         self._safe_update(self.page)
 
     def on_render_policy_change(self, e):
@@ -1216,7 +1216,7 @@ class GUIHandlerMixin:
 
     def on_advanced_stereo_change(self, e):
         self._sync_advanced_stereo_visibility()
-        self._fit_window_to_content()
+        self._fit_window_to_content(update=True, resize_window=True)
         self._safe_update(self.page)
 
     def _sync_advanced_stereo_visibility(self):

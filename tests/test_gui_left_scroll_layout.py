@@ -327,6 +327,18 @@ def test_run_mode_change_refits_native_window_height() -> None:
     assert "self._fit_window_to_content(update=True, resize_window=True)" in handler
 
 
+def test_advanced_sections_refit_native_window_height() -> None:
+    source = HANDLERS_SOURCE.read_text(encoding="utf-8")
+    device_start = source.index("def on_advanced_device_change")
+    device_end = source.index("def on_render_policy_change", device_start)
+    stereo_start = source.index("def on_advanced_stereo_change")
+    stereo_end = source.index("def _sync_advanced_stereo_visibility", stereo_start)
+
+    expected = "self._fit_window_to_content(update=True, resize_window=True)"
+    assert expected in source[device_start:device_end]
+    assert expected in source[stereo_start:stereo_end]
+
+
 def test_stream_settings_checkbox_controls_stream_parameter_panel() -> None:
     builders = BUILDERS_SOURCE.read_text(encoding="utf-8")
     handlers = HANDLERS_SOURCE.read_text(encoding="utf-8")
