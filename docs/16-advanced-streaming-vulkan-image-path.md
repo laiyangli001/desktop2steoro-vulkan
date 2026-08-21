@@ -146,6 +146,8 @@ multi-plane optimal-tiled image 映射接口。因此当前版本选择 Vulkan C
 copy，并禁止把两个单 plane image 伪装成 NV12 编码输入。未来若 FFmpeg 提供真正的
 multi-plane external-memory CUDA 映射，再切换到 CUDA 直接写入路径。
 
+该结论与官方资料一致：[FFmpeg `hwcontext_vulkan.h`](https://ffmpeg.org/doxygen/7.1/hwcontext__vulkan_8h_source.html) 将 `AV_VK_FRAME_FLAG_DISABLE_MULTIPLANE` 标为 CUDA 导入所需；FFmpeg 的 CUDA 映射代码明确报告当前不能把 multi-plane Vulkan image 映射到 CUDA，并要求 `disable_multiplane=1`；[NVIDIA CUDA Vulkan interoperability](https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/graphics-interop.html) 说明 external memory/semaphore 可共享，但不提供该 multi-plane 视频图像限制的绕过方式。
+
 ## 高级推流与 GPU 推流的区别
 
 加入 Vulkan 后，两种模式仍应保持不同定位。
