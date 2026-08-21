@@ -1096,3 +1096,6 @@
 ### Filament v1.75.0 bridge compatibility
 
 - Narrowed the downloaded BlueVK depth-clamp declaration guard for older Vulkan headers.
+## Unreleased
+
+- 修复 Vulkan FFmpeg bridge 的 MinGW DLL 前缀与 GitHub Actions 产物校验不一致问题。

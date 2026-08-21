@@ -63,7 +63,9 @@ jobs:
       - name: Verify ABI exports
         shell: pwsh
         run: |
-          $dll = Get-ChildItem -LiteralPath native\vulkan_ffmpeg_bridge\build\ci -Filter 'd2s_vulkan_ffmpeg_bridge.dll' -Recurse | Select-Object -First 1
+          $dll = Get-ChildItem -LiteralPath native\vulkan_ffmpeg_bridge\build\ci -Recurse -File |
+            Where-Object { $_.Name -in @('d2s_vulkan_ffmpeg_bridge.dll', 'libd2s_vulkan_ffmpeg_bridge.dll') } |
+            Select-Object -First 1
           if (-not $dll) { throw 'Vulkan FFmpeg bridge DLL was not produced' }
           & 'C:\msys64\mingw64\bin\nm.exe' -g $dll.FullName | Select-String 'd2s_vulkan_ffmpeg_bridge_abi_version|d2s_vulkan_ffmpeg_encoder_submit_image'
           if ($LASTEXITCODE -ne 0) { throw 'Required Vulkan bridge ABI exports are missing' }

@@ -29,4 +29,5 @@ target_link_libraries(d2s_vulkan_ffmpeg_bridge PRIVATE
     "${D2S_AVUTIL_LIBRARY}")
 
 set_target_properties(d2s_vulkan_ffmpeg_bridge PROPERTIES
-    OUTPUT_NAME d2s_vulkan_ffmpeg_bridge)
+    OUTPUT_NAME d2s_vulkan_ffmpeg_bridge
+    PREFIX "")
