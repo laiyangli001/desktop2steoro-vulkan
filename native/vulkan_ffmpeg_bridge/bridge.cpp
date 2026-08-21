@@ -89,7 +89,7 @@ void trace(const char* format, ...) {
     va_start(args, format);
     std::vfprintf(stderr, format, args);
     va_end(args);
-    std::fputc('\\n', stderr);
+    std::fputc('\n', stderr);
     std::fflush(stderr);
 }
 
@@ -924,7 +924,9 @@ bool submit_encode_acquire(Encoder* encoder, AVVkFrame* nv12,
         barriers[index].srcAccessMask = VK_ACCESS_2_NONE;
         barriers[index].dstStageMask = VK_PIPELINE_STAGE_2_VIDEO_ENCODE_BIT_KHR;
         barriers[index].dstAccessMask = VK_ACCESS_2_VIDEO_ENCODE_READ_BIT_KHR;
-        barriers[index].oldLayout = VK_IMAGE_LAYOUT_VIDEO_ENCODE_SRC_KHR;
+        // Match the compute-queue release barrier exactly. The acquire performs
+        // the TRANSFER_DST_OPTIMAL -> VIDEO_ENCODE_SRC_KHR layout transition.
+        barriers[index].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         barriers[index].newLayout = VK_IMAGE_LAYOUT_VIDEO_ENCODE_SRC_KHR;
         barriers[index].srcQueueFamilyIndex = encoder->compute_queue_family;
         barriers[index].dstQueueFamilyIndex = encoder->prepare_queue_family;
