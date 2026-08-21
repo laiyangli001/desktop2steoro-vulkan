@@ -193,7 +193,7 @@ RGBA texture/FBO + 3 槽 PBO/fence
 压缩 H.264/H.265 → FFmpeg mux-only → MediaMTX/WebRTC
 ```
 
-OpenGL 路径的能力探测必须验证实际 context、纹理格式、PBO/fence、厂商编码器和目标分辨率，不能仅凭 `OpenGL` 字符串或显卡名称选择。NVIDIA 的 CUDA–OpenGL interop 可避免 CPU 回读，但它依赖同一 GPU、驱动和 CUDA graphics interop；跨厂商 OpenGL 路径不承诺零复制。没有互操作能力时，必须明确记录 `gpu_to_cpu=True`，再回退 host-upload。OpenGL 备用路径发生运行时错误后应熔断本次会话，避免 Vulkan/OpenGL 之间来回抖动。
+OpenGL 路径的能力探测必须验证实际 context、纹理格式、PBO/fence、厂商编码器和目标分辨率，不能仅凭 `OpenGL` 字符串或显卡名称选择。NVIDIA 的 CUDA–OpenGL interop 可避免 CPU 回读，但它依赖同一 GPU、驱动和 CUDA graphics interop；跨厂商 OpenGL 路径不承诺零复制。没有互操作能力时，必须明确记录 `gpu_to_cpu=True`，再回退 host-upload。当前代码已实现第一阶段 OpenGL fallback：创建 WGL/EGL/GLX 隐藏上下文、RGBA8 texture、3 槽 PBO 和 fence，并将有效 RGB8 帧通过该边界提交后交给现有 host-upload FFmpeg 编码器。该阶段明确记录 `gpu_to_cpu=True`、`zero_copy=False`，尚未实现 CUDA–OpenGL interop/NVENC、AMF 或 QSV 的零复制编码。OpenGL 路径发生运行时错误后熔断本次会话并回退 host-upload，避免 Vulkan/OpenGL 之间来回抖动。
 
 ## 平台支持范围
 
@@ -730,7 +730,7 @@ SBS 生成 → GPU 转换 → 编码提交 → packet 输出 → RTSP 发布 →
 ```text
 [VulkanStream] unavailable: no H.264 encode profile for 3840x2160 NV12
 [OpenGLStream] fallback candidate: context=WGL texture=RGBA8 pbo=3 fence=3
-[OpenGLStream] active: encoder=h264_nvenc gpu_to_cpu=False zero_copy=False
+[OpenGLStream] active: encoder=host-upload gpu_to_cpu=True zero_copy=False
 [DirectSbsStream] fallback: Vulkan Video → OpenGL → NVIDIA NVENC
 ```
 
@@ -793,9 +793,10 @@ GPU 零拷贝只解决电脑端原始帧搬运。继续检查：
 
 ### GPU 通路
 
-- [x] OpenGL 备用路径的架构、能力探测、回退顺序和日志规范已定义；当前代码实现仍待单独开发和实机验证。
-- [ ] OpenGL headless context、PBO/fence 和厂商编码器 fallback 实现。
-- [ ] CUDA–OpenGL interop 或 PBO 回读路径完成跨平台验证。
+- [x] OpenGL 备用路径的架构、能力探测、回退顺序和日志规范已定义。
+- [x] OpenGL 第一阶段 headless context、RGBA8 texture、3 槽 PBO/fence 和 host-upload fallback 已实现并完成本机小帧提交验证。
+- [ ] OpenGL CUDA–OpenGL interop、NVENC/AMF/QSV 零复制编码实现。
+- [ ] CUDA–OpenGL interop 或厂商 PBO/硬件编码路径完成跨平台验证。
 - [x] CUDA/ROCm 和 Vulkan 设备按 UUID 匹配；native bridge 暴露 `VkPhysicalDeviceIDProperties` UUID，当前 CUDA/Vulkan 不匹配时自动回退。
 - [x] 编码输入格式来自 Vulkan Video/FFmpeg frame-pool 的格式与 profile query；native bridge 只接受 profile-compatible NV12 multi-plane frame。
 - [x] RGB/RGBA→NV12 在 GPU 上完成。

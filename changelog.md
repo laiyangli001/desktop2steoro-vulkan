@@ -2,7 +2,7 @@
 
 ## 2026-08-22
 
-- 在 Vulkan 高级推流指南中加入 OpenGL 备用图像路径设计：定义 WGL/EGL/GLX headless context、RGBA texture/FBO、PBO/fence、CUDA–OpenGL interop、NVENC/AMF/QSV 编码回退、能力探测和单次熔断规则；明确当前仅完成文档设计，OpenGL 后端代码仍待实现。
+- 实现高级网络推流的第一阶段 OpenGL 备用路径：新增隐藏 WGL/EGL/GLX context、RGBA8 texture、3 槽 PBO/fence 和 Vulkan 失败后的单次熔断回退；当前通过 host-upload FFmpeg 编码，明确记录 `gpu_to_cpu=True`、`zero_copy=False`。已完成本机 OpenGL 3.3/NVIDIA 小帧提交与资源释放验证；CUDA–OpenGL interop 及 NVENC/AMF/QSV 零复制仍待后续实现。
 
 - 新增 MediaMTX 端到端 Vulkan RTSP soak 工具：启动 MediaMTX 和 FFmpeg mux-only TCP 发布，验证压缩 H.264 包进入 `live` 路径；本机 3840×2160@30 连续 300 帧发布通过，未经过 4K rawvideo stdin。
 
