@@ -62,8 +62,8 @@ def main() -> int:
         )
         return 0
     finally:
-        if frame is not None:
-            raise RuntimeError("encode smoke exited before native conversion")
+        # Preserve the native conversion/driver error; encoder.close() performs
+        # the bounded teardown when a submission has already failed.
         importer.close()
         encoder.close()
 
