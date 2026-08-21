@@ -1935,6 +1935,7 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
             f"fps={self.fps} target={target_mbps}M peak={peak_mbps}M",
             flush=True,
         )
+        print("[D2S_STATUS] Vulkan native GPU image path active", flush=True)
 
     @staticmethod
     def _rgba_tensor(frame: Any):
@@ -1992,6 +1993,7 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
             "fallback=stable advanced FFmpeg path",
             flush=True,
         )
+        print("[D2S_STATUS] Vulkan unavailable; using stable advanced FFmpeg path", flush=True)
         self._stop_native()
         fallback = FfmpegDirectSbsOutput(
             base_dir=self.base_dir,

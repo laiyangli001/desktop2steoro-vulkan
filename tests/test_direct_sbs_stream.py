@@ -437,6 +437,17 @@ def test_encoder_candidates_cover_platform_hardware_fallbacks(monkeypatch):
     ]
 
 
+def test_hardware_encoder_failure_falls_back_to_software(monkeypatch):
+    output = object.__new__(FfmpegDirectSbsOutput)
+    output.os_name = "Windows"
+    output.use_hevc = False
+    output.prefer_nvenc = True
+    monkeypatch.setattr(output, "_probe_encoder", lambda *_args, **_kwargs: False)
+
+    assert output._select_video_encoder(3840, 2160) == "libx264"
+    assert output._encoder_selection_reason == "software fallback"
+
+
 def test_macos_audio_uses_avfoundation_device_index():
     output = object.__new__(FfmpegDirectSbsOutput)
     output.os_name = "Darwin"
