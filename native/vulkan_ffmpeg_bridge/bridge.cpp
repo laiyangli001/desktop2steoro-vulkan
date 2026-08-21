@@ -4,6 +4,7 @@
 #define VK_USE_PLATFORM_WIN32_KHR
 #endif
 #include <vulkan/vulkan.h>
+#include <vulkan/vulkan_beta.h>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -378,6 +379,26 @@ extern "C" void* d2s_vulkan_ffmpeg_encoder_create(
         }
     }
 
+    VkVideoEncodeH264ProfileInfoKHR h264_profile{VK_STRUCTURE_TYPE_VIDEO_ENCODE_H264_PROFILE_INFO_KHR};
+    VkVideoEncodeH265ProfileInfoKHR hevc_profile{VK_STRUCTURE_TYPE_VIDEO_ENCODE_H265_PROFILE_INFO_KHR};
+    VkVideoProfileInfoKHR video_profile{VK_STRUCTURE_TYPE_VIDEO_PROFILE_INFO_KHR};
+    VkVideoProfileListInfoKHR video_profiles{VK_STRUCTURE_TYPE_VIDEO_PROFILE_LIST_INFO_KHR};
+    video_profile.videoCodecOperation = hevc
+        ? VK_VIDEO_CODEC_OPERATION_ENCODE_H265_BIT_KHR
+        : VK_VIDEO_CODEC_OPERATION_ENCODE_H264_BIT_KHR;
+    video_profile.chromaSubsampling = VK_VIDEO_CHROMA_SUBSAMPLING_420_BIT_KHR;
+    video_profile.lumaBitDepth = VK_VIDEO_COMPONENT_BIT_DEPTH_8_BIT_KHR;
+    video_profile.chromaBitDepth = VK_VIDEO_COMPONENT_BIT_DEPTH_8_BIT_KHR;
+    if (hevc) {
+        hevc_profile.stdProfileIdc = STD_VIDEO_H265_PROFILE_IDC_MAIN;
+        video_profile.pNext = &hevc_profile;
+    } else {
+        h264_profile.stdProfileIdc = STD_VIDEO_H264_PROFILE_IDC_HIGH;
+        video_profile.pNext = &h264_profile;
+    }
+    video_profiles.profileCount = 1;
+    video_profiles.pProfiles = &video_profile;
+
     result->frames = av_hwframe_ctx_alloc(result->device);
     if (!result->frames) {
         destroy_encoder(result);
@@ -393,6 +414,7 @@ extern "C" void* d2s_vulkan_ffmpeg_encoder_create(
     vulkan_frames->usage = static_cast<VkImageUsageFlagBits>(
         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_VIDEO_ENCODE_SRC_BIT_KHR);
     vulkan_frames->flags = AV_VK_FRAME_FLAG_DISABLE_MULTIPLANE;
+    vulkan_frames->create_pnext = &video_profiles;
     if (av_hwframe_ctx_init(result->frames) < 0) {
         destroy_encoder(result);
         return nullptr;
