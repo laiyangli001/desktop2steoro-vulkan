@@ -604,15 +604,22 @@ extern "C" int d2s_vulkan_ffmpeg_bridge_probe(char* output, int capacity) {
 extern "C" int d2s_vulkan_ffmpeg_encoder_device_identity(
     void* opaque, unsigned char* uuid, int uuid_capacity, char* name, int name_capacity) {
     auto* encoder = reinterpret_cast<Encoder*>(opaque);
-    if (!encoder || !encoder->device || !uuid || uuid_capacity < VK_UUID_SIZE)
+    if (!encoder || !encoder->device || !uuid || uuid_capacity < VK_UUID_SIZE) {
+        trace("device identity invalid encoder/device/output handles");
         return 0;
+    }
     auto* device_context = reinterpret_cast<AVHWDeviceContext*>(encoder->device->data);
     auto* vulkan = reinterpret_cast<AVVulkanDeviceContext*>(device_context->hwctx);
-    if (!vulkan || !vulkan->phys_dev)
+    if (!vulkan || !vulkan->phys_dev) {
+        trace("device identity missing Vulkan physical device");
         return 0;
+    }
     auto get_properties2 = &vkGetPhysicalDeviceProperties2;
-    if (!get_properties2)
+    if (!get_properties2) {
+        trace("device identity vkGetPhysicalDeviceProperties2 unavailable");
         return 0;
+    }
+    trace("device identity handles phys=%p inst=%p", vulkan->phys_dev, vulkan->inst);
     VkPhysicalDeviceIDProperties id_properties{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
     VkPhysicalDeviceProperties2 properties{
