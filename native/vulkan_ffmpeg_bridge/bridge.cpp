@@ -1271,7 +1271,9 @@ extern "C" int d2s_vulkan_ffmpeg_encoder_read_packet(
     void* opaque, void* output, int capacity, long long* timestamp, int* keyframe) {
     auto* encoder = static_cast<Encoder*>(opaque);
     if (!encoder || !encoder->packet || !output || capacity < 1) return -1;
+    trace("avcodec_receive_packet begin");
     const int result = avcodec_receive_packet(encoder->codec, encoder->packet);
+    trace("avcodec_receive_packet result=%d", result);
     if (result < 0) return result == AVERROR(EAGAIN) ? 0 : -1;
     if (encoder->packet->size > capacity) return -2;
     std::memcpy(output, encoder->packet->data, static_cast<std::size_t>(encoder->packet->size));
@@ -1285,7 +1287,10 @@ extern "C" int d2s_vulkan_ffmpeg_encoder_read_packet(
 extern "C" int d2s_vulkan_ffmpeg_encoder_flush(void* opaque) {
     auto* encoder = static_cast<Encoder*>(opaque);
     if (!encoder || !encoder->codec) return -1;
-    return avcodec_send_frame(encoder->codec, nullptr) < 0 ? -1 : 0;
+    trace("avcodec flush begin");
+    const int result = avcodec_send_frame(encoder->codec, nullptr);
+    trace("avcodec flush result=%d", result);
+    return result < 0 ? -1 : 0;
 }
 
 extern "C" void d2s_vulkan_ffmpeg_encoder_destroy(void* opaque) {
