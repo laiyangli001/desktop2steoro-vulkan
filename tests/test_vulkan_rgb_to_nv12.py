@@ -15,6 +15,7 @@ def test_rgb_to_nv12_intermediate_dimensions_match_nv12() -> None:
 
 def test_rgb_to_nv12_copy_api_is_present() -> None:
     assert callable(VulkanRgbToNv12Intermediate.record_copy_to_video_nv12)
+    assert callable(VulkanRgbToNv12Intermediate.record_prepare_for_compute)
 
 
 @pytest.mark.parametrize("width,height", [(1, 2), (3, 2), (2, 3), (0, 0)])

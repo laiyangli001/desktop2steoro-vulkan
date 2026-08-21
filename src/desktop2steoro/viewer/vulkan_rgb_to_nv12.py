@@ -98,6 +98,8 @@ class VulkanRgbToNv12Intermediate:
         except Exception:
             self.y.close()
             raise
+        self._y_layout = self.vk.VK_IMAGE_LAYOUT_UNDEFINED
+        self._uv_layout = self.vk.VK_IMAGE_LAYOUT_UNDEFINED
 
     def close(self) -> None:
         self.uv.close()
@@ -118,7 +120,7 @@ class VulkanRgbToNv12Intermediate:
                 srcAccessMask=vk.VK_ACCESS_2_SHADER_WRITE_BIT,
                 dstStageMask=vk.VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                 dstAccessMask=vk.VK_ACCESS_2_TRANSFER_READ_BIT,
-                oldLayout=vk.VK_IMAGE_LAYOUT_GENERAL,
+                oldLayout=self._y_layout if resource is self.y.resource else self._uv_layout,
                 newLayout=vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                 srcQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
                 dstQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
@@ -137,7 +139,7 @@ class VulkanRgbToNv12Intermediate:
                 srcAccessMask=vk.VK_ACCESS_2_NONE,
                 dstStageMask=vk.VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                 dstAccessMask=vk.VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                oldLayout=vk.VK_IMAGE_LAYOUT_UNDEFINED,
+                oldLayout=vk.VK_IMAGE_LAYOUT_VIDEO_ENCODE_SRC_KHR,
                 newLayout=vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 srcQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
                 dstQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
@@ -205,3 +207,37 @@ class VulkanRgbToNv12Intermediate:
                 pImageMemoryBarriers=[final_barrier],
             ),
         )
+        self._y_layout = vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
+        self._uv_layout = vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
+
+    def record_prepare_for_compute(self, command_buffer: Any) -> None:
+        """Transition reusable Y/UV images back to compute-write layout."""
+        vk = self.vk
+        barriers = []
+        for resource, old_layout in ((self.y, self._y_layout), (self.uv, self._uv_layout)):
+            barriers.append(vk.VkImageMemoryBarrier2(
+                sType=vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                srcStageMask=vk.VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                srcAccessMask=vk.VK_ACCESS_2_TRANSFER_READ_BIT,
+                dstStageMask=vk.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                dstAccessMask=vk.VK_ACCESS_2_SHADER_WRITE_BIT,
+                oldLayout=old_layout,
+                newLayout=vk.VK_IMAGE_LAYOUT_GENERAL,
+                srcQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+                dstQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+                image=resource.image,
+                subresourceRange=vk.VkImageSubresourceRange(
+                    aspectMask=vk.VK_IMAGE_ASPECT_COLOR_BIT,
+                    baseMipLevel=0, levelCount=1, baseArrayLayer=0, layerCount=1,
+                ),
+            ))
+        vk.vkCmdPipelineBarrier2(
+            command_buffer,
+            vk.VkDependencyInfo(
+                sType=vk.VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                imageMemoryBarrierCount=len(barriers),
+                pImageMemoryBarriers=barriers,
+            ),
+        )
+        self._y_layout = vk.VK_IMAGE_LAYOUT_GENERAL
+        self._uv_layout = vk.VK_IMAGE_LAYOUT_GENERAL
