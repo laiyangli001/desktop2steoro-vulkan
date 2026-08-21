@@ -152,6 +152,147 @@ class CudaVulkanImageImporter:
         self._buffer_slots: dict[int, _CudaBufferSlot] = {}
         self._semaphores: dict[int, _CudaSemaphore] = {}
         self._nv12_slots: dict[int, tuple[list[_CudaSlot], list[ctypes.c_void_p]]] = {}
+        self._rgba_slots: dict[int, tuple[_CudaSlot, ctypes.c_void_p]] = {}
+
+    def write_ffmpeg_rgba_frame(
+        self, tensor: Any, frame: Any, *, stream: int | None = None
+    ) -> int:
+        """Write one CUDA RGBA tensor into an FFmpeg-owned Vulkan image.
+
+        The native bridge exports a single ``R8G8B8A8`` image and a timeline
+        semaphore for each reusable slot.  CUDA imports both objects once,
+        waits for FFmpeg's previous value, performs a device-to-device copy,
+        and signals the next value.  No RGB24 staging buffer or CPU readback
+        is involved.
+        """
+        self._validate_ffmpeg_rgba_frame(tensor, frame)
+        if stream is None:
+            import torch
+
+            stream = int(torch.cuda.current_stream(device=tensor.device).cuda_stream)
+        key = int(frame.slot_id)
+        if key not in self._rgba_slots:
+            memory = ctypes.c_void_p()
+            semaphore = ctypes.c_void_p()
+            try:
+                memory_desc = _ExternalMemoryHandleDesc(
+                    type=self._CUDA_OPAQUE_WIN32 if os.name == "nt" else self._CUDA_OPAQUE_FD,
+                    size=int(frame.memory_size[0]),
+                    flags=0,
+                )
+                if os.name == "nt":
+                    memory_desc.handle.win32.handle = ctypes.c_void_p(
+                        int(frame.external_memory_handle[0])
+                    )
+                else:
+                    memory_desc.handle.fd = int(frame.external_memory_handle[0])
+                self._check(
+                    self._cudart.cudaImportExternalMemory(
+                        ctypes.byref(memory), ctypes.byref(memory_desc)
+                    ),
+                    "cudaImportExternalMemory(FFmpeg RGBA)",
+                )
+                mapped_desc = _ExternalMipmappedArrayDesc(
+                    offset=int(frame.memory_offset[0]),
+                    format_desc=_ChannelFormatDesc(8, 8, 8, 8, 0),
+                    extent=_Extent(int(frame.width), int(frame.height), 0),
+                    flags=self._CUDA_ARRAY_COLOR_ATTACHMENT,
+                    num_levels=1,
+                )
+                mipmap = ctypes.c_void_p()
+                self._check(
+                    self._cudart.cudaExternalMemoryGetMappedMipmappedArray(
+                        ctypes.byref(mipmap), memory, ctypes.byref(mapped_desc)
+                    ),
+                    "cudaExternalMemoryGetMappedMipmappedArray(FFmpeg RGBA)",
+                )
+                array = ctypes.c_void_p()
+                self._check(
+                    self._cudart.cudaGetMipmappedArrayLevel(
+                        ctypes.byref(array), mipmap, 0
+                    ),
+                    "cudaGetMipmappedArrayLevel(FFmpeg RGBA)",
+                )
+                semaphore_desc = _ExternalSemaphoreHandleDesc(
+                    type=self._CUDA_TIMELINE_SEMAPHORE_WIN32
+                    if os.name == "nt"
+                    else self._CUDA_TIMELINE_SEMAPHORE_FD,
+                    flags=0,
+                )
+                if os.name == "nt":
+                    semaphore_desc.handle.win32.handle = ctypes.c_void_p(
+                        int(frame.external_semaphore_handle[0])
+                    )
+                else:
+                    semaphore_desc.handle.fd = int(frame.external_semaphore_handle[0])
+                self._check(
+                    self._cudart.cudaImportExternalSemaphore(
+                        ctypes.byref(semaphore), ctypes.byref(semaphore_desc)
+                    ),
+                    "cudaImportExternalSemaphore(FFmpeg RGBA)",
+                )
+                self._rgba_slots[key] = (
+                    _CudaSlot(None, memory, array),
+                    semaphore,
+                )
+            except Exception:
+                if semaphore:
+                    self._cudart.cudaDestroyExternalSemaphore(semaphore)
+                if memory:
+                    self._cudart.cudaDestroyExternalMemory(memory)
+                raise
+            finally:
+                self._close_ffmpeg_frame_handles(frame)
+        else:
+            self._close_ffmpeg_frame_handles(frame)
+
+        slot, semaphore = self._rgba_slots[key]
+        wait_value = int(frame.semaphore_value[0])
+        ready_value = wait_value + 1
+        wait = _ExternalSemaphoreWaitParams(
+            params=_SemaphoreSignalParams(fence_value=wait_value, keyed_mutex_key=0),
+            flags=0,
+        )
+        self._check(
+            self._cudart.cudaWaitExternalSemaphoresAsync(
+                (ctypes.c_void_p * 1)(semaphore),
+                ctypes.byref(wait),
+                1,
+                ctypes.c_void_p(int(stream)),
+            ),
+            "cudaWaitExternalSemaphoresAsync(FFmpeg RGBA)",
+        )
+        row_bytes = int(frame.width) * 4
+        self._check(
+            self._cudart.cudaMemcpy2DToArrayAsync(
+                slot.array,
+                0,
+                0,
+                ctypes.c_void_p(int(tensor.data_ptr())),
+                row_bytes,
+                row_bytes,
+                int(frame.height),
+                self._CUDA_MEMCPY_DEVICE_TO_DEVICE,
+                ctypes.c_void_p(int(stream)),
+            ),
+            "cudaMemcpy2DToArrayAsync(FFmpeg RGBA)",
+        )
+        signal = _ExternalSemaphoreSignalParams(
+            params=_SemaphoreSignalParams(
+                fence_value=ready_value, keyed_mutex_key=0
+            ),
+            flags=0,
+        )
+        self._check(
+            self._cudart.cudaSignalExternalSemaphoresAsync(
+                (ctypes.c_void_p * 1)(semaphore),
+                ctypes.byref(signal),
+                1,
+                ctypes.c_void_p(int(stream)),
+            ),
+            "cudaSignalExternalSemaphoresAsync(FFmpeg RGBA)",
+        )
+        return ready_value
 
     def write_ffmpeg_nv12_frame(self, y: Any, uv: Any, frame: Any, *, stream: int | None = None) -> int:
         """Write CUDA NV12 planes into one FFmpeg-exported Vulkan frame.
@@ -222,6 +363,28 @@ class CudaVulkanImageImporter:
         for index in range(int(getattr(frame, "plane_count", 0))):
             cls._close_external_handle(int(frame.external_memory_handle[index]))
             cls._close_external_handle(int(frame.external_semaphore_handle[index]))
+
+    @staticmethod
+    def _validate_ffmpeg_rgba_frame(tensor: Any, frame: Any) -> None:
+        if int(getattr(frame, "plane_count", 0)) != 1:
+            raise CudaVulkanInteropError(
+                "FFmpeg Vulkan RGBA frame must contain one plane"
+            )
+        if int(getattr(frame, "format", [0])[0]) not in (37, 43):
+            raise CudaVulkanInteropError(
+                "FFmpeg Vulkan RGBA frame must use R8G8B8A8_UNORM or SRGB"
+            )
+        if getattr(tensor, "device", None) is None or str(tensor.device.type) != "cuda":
+            raise CudaVulkanInteropError("FFmpeg RGBA frame requires a CUDA tensor")
+        if str(getattr(tensor, "dtype", "")) != "torch.uint8":
+            raise CudaVulkanInteropError("FFmpeg RGBA frame requires torch.uint8")
+        shape = (int(frame.height), int(frame.width), 4)
+        if tuple(getattr(tensor, "shape", ())) != shape or not bool(tensor.is_contiguous()):
+            raise CudaVulkanInteropError(
+                f"FFmpeg RGBA frame requires contiguous tensor {shape!r}"
+            )
+        if int(frame.memory_size[0]) <= 0:
+            raise CudaVulkanInteropError("FFmpeg Vulkan RGBA frame has invalid memory size")
 
     @staticmethod
     def _validate_ffmpeg_nv12_planes(y: Any, uv: Any, frame: Any) -> None:
@@ -636,6 +799,16 @@ class CudaVulkanImageImporter:
             self._check(self._cudart.cudaDestroyExternalMemory(slot.external_memory), "cudaDestroyExternalMemory")
 
     def close(self) -> None:
+        for slot, semaphore in tuple(self._rgba_slots.values()):
+            self._check(
+                self._cudart.cudaDestroyExternalSemaphore(semaphore),
+                "cudaDestroyExternalSemaphore(FFmpeg RGBA)",
+            )
+            self._check(
+                self._cudart.cudaDestroyExternalMemory(slot.external_memory),
+                "cudaDestroyExternalMemory(FFmpeg RGBA)",
+            )
+        self._rgba_slots.clear()
         for slots, semaphores in tuple(self._nv12_slots.values()):
             for semaphore in semaphores:
                 self._check(

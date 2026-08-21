@@ -273,7 +273,7 @@ void copy_vk_frame(Encoder* encoder, const AVVkFrame* source, D2SVulkanVideoFram
 }
 }
 
-extern "C" int d2s_vulkan_ffmpeg_bridge_abi_version() { return 4; }
+extern "C" int d2s_vulkan_ffmpeg_bridge_abi_version() { return 5; }
 
 extern "C" int d2s_vulkan_ffmpeg_bridge_probe(char* output, int capacity) {
     const AVCodec* h264 = avcodec_find_encoder_by_name("h264_vulkan");
@@ -438,12 +438,13 @@ extern "C" void* d2s_vulkan_ffmpeg_encoder_create(
     frames_context->height = height;
     frames_context->initial_pool_size = 3;
     auto* vulkan_frames = reinterpret_cast<AVVulkanFramesContext*>(frames_context->hwctx);
-    // CUDA external-memory arrays do not require STORAGE usage.  Request only
-    // the Video Encode source usage guaranteed by the selected profile; FFmpeg
-    // still adds optional transfer/storage usages when the driver supports them.
+    // Keep one profile-compatible multi-plane NV12 image.  The native
+    // Vulkan Compute stage writes intermediate Y/UV images and copies into
+    // this image before Video Encode; split R8/R8G8 images are not legal
+    // Vulkan Video input on the target NVIDIA driver.
     vulkan_frames->usage = static_cast<VkImageUsageFlagBits>(
-        VK_IMAGE_USAGE_VIDEO_ENCODE_SRC_BIT_KHR);
-    vulkan_frames->flags = AV_VK_FRAME_FLAG_DISABLE_MULTIPLANE;
+        VK_IMAGE_USAGE_VIDEO_ENCODE_SRC_BIT_KHR | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+    vulkan_frames->flags = 0;
     vulkan_frames->create_pnext = &video_profiles;
     if (av_hwframe_ctx_init(result->frames) < 0) {
         destroy_encoder(result);
@@ -522,9 +523,16 @@ extern "C" int d2s_vulkan_ffmpeg_encoder_acquire_rgba_frame(
     return 0;
 }
 
-extern "C" int d2s_vulkan_ffmpeg_encoder_release_rgba_frame(void* opaque) {
+extern "C" int d2s_vulkan_ffmpeg_encoder_release_rgba_frame(
+    void* opaque, unsigned long long ready_value) {
     auto* encoder = static_cast<Encoder*>(opaque);
     if (!encoder || !encoder->rgba_acquired) return -1;
+    auto* source = reinterpret_cast<AVVkFrame*>(encoder->rgba_acquired->data[0]);
+    if (!source || !ready_value) return -2;
+    for (unsigned int index = 0; index < 1 && source->sem[index]; ++index) {
+        if (ready_value <= source->sem_value[index]) return -3;
+        source->sem_value[index] = ready_value;
+    }
     av_frame_free(&encoder->rgba_acquired);
     return 0;
 }

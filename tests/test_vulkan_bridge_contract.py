@@ -7,7 +7,7 @@ from streaming.vulkan_bridge import VulkanNativeBridge
 
 class _FakeLibrary:
     def d2s_vulkan_ffmpeg_bridge_abi_version(self):
-        return 4
+        return 5
 
     class _Probe:
         argtypes = None

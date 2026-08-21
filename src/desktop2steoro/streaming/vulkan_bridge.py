@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 
 
-EXPECTED_ABI_VERSION = 4
+EXPECTED_ABI_VERSION = 5
 REQUIRED_SYMBOLS = (
     "d2s_vulkan_ffmpeg_bridge_abi_version",
     "d2s_vulkan_ffmpeg_bridge_probe",
@@ -107,8 +107,12 @@ class VulkanNativeEncoder:
         self._acquired = frame
         return frame
 
-    def release_rgba_frame(self) -> None:
-        result = int(self.bridge._release_rgba_frame(self.handle))
+    def release_rgba_frame(self, ready_value: int) -> None:
+        if int(ready_value) <= 0:
+            raise ValueError("RGBA frame release requires a positive ready timeline value")
+        result = int(
+            self.bridge._release_rgba_frame(self.handle, int(ready_value))
+        )
         if result != 0:
             raise RuntimeError(f"native Vulkan RGBA frame release failed: {result}")
         self._acquired = None
@@ -221,7 +225,7 @@ class VulkanNativeBridge:
         self._acquire_rgba_frame.argtypes = [ctypes.c_void_p, ctypes.POINTER(VulkanVideoFrame)]
         self._acquire_rgba_frame.restype = ctypes.c_int
         self._release_rgba_frame = library.d2s_vulkan_ffmpeg_encoder_release_rgba_frame
-        self._release_rgba_frame.argtypes = [ctypes.c_void_p]
+        self._release_rgba_frame.argtypes = [ctypes.c_void_p, ctypes.c_uint64]
         self._release_rgba_frame.restype = ctypes.c_int
         self._submit_frame = library.d2s_vulkan_ffmpeg_encoder_submit_frame
         self._submit_frame.argtypes = [

@@ -68,7 +68,8 @@ D2S_VULKAN_FFMPEG_API int d2s_vulkan_ffmpeg_encoder_acquire_rgba_frame(
     void* encoder,
     D2SVulkanVideoFrame* frame);
 D2S_VULKAN_FFMPEG_API int d2s_vulkan_ffmpeg_encoder_release_rgba_frame(
-    void* encoder);
+    void* encoder,
+    unsigned long long ready_value);
 
 D2S_VULKAN_FFMPEG_API int d2s_vulkan_ffmpeg_encoder_submit_frame(
     void* encoder,
