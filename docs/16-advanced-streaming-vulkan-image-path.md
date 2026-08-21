@@ -175,16 +175,36 @@ GPU 推流 Auto
 └─ 回退到高级推流 Auto
 ```
 
+### OpenGL 备用图像路径
+
+OpenGL 只作为 Vulkan 图像路径的备用后端，不是网络协议，也不是通用视频编码器。浏览器端仍然接收 `H.264/Opus → MediaMTX → WebRTC`。OpenGL 负责提供 RGBA texture/FBO，最终必须交给厂商编码器或现有 host-upload FFmpeg 路径：
+
+```text
+Vulkan 失败
+    ↓
+OpenGL headless context（WGL/EGL/GLX）
+    ↓
+RGBA texture/FBO + 3 槽 PBO/fence
+    ├─ NVIDIA：CUDA–OpenGL interop → NVENC/PyNvVideoCodec
+    ├─ AMD：OpenGL/PBO → AMF
+    ├─ Intel：OpenGL/PBO → QSV
+    └─ 无 GPU interop：PBO glReadPixels → 现有 host-upload FFmpeg
+    ↓
+压缩 H.264/H.265 → FFmpeg mux-only → MediaMTX/WebRTC
+```
+
+OpenGL 路径的能力探测必须验证实际 context、纹理格式、PBO/fence、厂商编码器和目标分辨率，不能仅凭 `OpenGL` 字符串或显卡名称选择。NVIDIA 的 CUDA–OpenGL interop 可避免 CPU 回读，但它依赖同一 GPU、驱动和 CUDA graphics interop；跨厂商 OpenGL 路径不承诺零复制。没有互操作能力时，必须明确记录 `gpu_to_cpu=True`，再回退 host-upload。OpenGL 备用路径发生运行时错误后应熔断本次会话，避免 Vulkan/OpenGL 之间来回抖动。
+
 ## 平台支持范围
 
-| 平台 | Vulkan 图像路径 | Vulkan Video 编码 | 默认策略 |
-| --- | --- | --- | --- |
-| Windows + NVIDIA | CUDA external memory/semaphore | 支持时启用 | 首个实施与验收目标 |
-| Linux + NVIDIA | CUDA external memory/semaphore FD | 支持时启用 | 第二阶段 |
-| Windows + AMD | HIP/Vulkan 或 Vulkan Compute | 驱动支持时启用 | 保留 AMF 回退 |
-| Linux + AMD | ROCm/Vulkan 或 Vulkan Compute | 驱动支持时启用 | 保留 VAAPI 回退 |
-| Windows/Linux + Intel | Vulkan Compute/Vulkan image | 驱动支持时启用 | 保留 QSV/VAAPI 回退 |
-| macOS | 不作为通用 Vulkan Video 目标 | 不强制 | 使用 VideoToolbox |
+| 平台 | Vulkan 图像路径 | Vulkan Video 编码 | OpenGL 备用路径 | 默认策略 |
+| --- | --- | --- | --- | --- |
+| Windows + NVIDIA | CUDA external memory/semaphore | 支持时启用 | CUDA–OpenGL interop → NVENC | 首个实施与验收目标 |
+| Linux + NVIDIA | CUDA external memory/semaphore FD | 支持时启用 | EGL/GLX + CUDA interop → NVENC | 第二阶段 |
+| Windows + AMD | HIP/Vulkan 或 Vulkan Compute | 驱动支持时启用 | WGL/PBO → AMF | 保留 AMF 回退 |
+| Linux + AMD | ROCm/Vulkan 或 Vulkan Compute | 驱动支持时启用 | EGL/PBO → VAAPI/AMF | 保留 VAAPI 回退 |
+| Windows/Linux + Intel | Vulkan Compute/Vulkan image | 驱动支持时启用 | EGL/WGL/PBO → QSV/VAAPI | 保留 QSV/VAAPI 回退 |
+| macOS | 不作为通用 Vulkan Video 目标 | 不强制 | OpenGL/Metal → VideoToolbox | 使用 VideoToolbox |
 
 不能只检查显卡名称。运行时必须查询 Vulkan 扩展、视频队列、编码 Profile 和输入格式。
 
@@ -208,6 +228,8 @@ CUDA/ROCm 共享路径还需要对应的 external memory 和 external semaphore 
 src/desktop2steoro/streaming/
 ├─ vulkan_encoder.py
 ├─ vulkan_capabilities.py
+├─ opengl_capabilities.py
+├─ opengl_stream_backend.py
 ├─ encoded_packet_muxer.py
 └─ native/
    └─ vulkan_ffmpeg_bridge/
@@ -450,6 +472,8 @@ SRT 适合服务间或原生客户端传输，但浏览器不能直接播放 SRT
 6. 查询目标 Profile、Level、分辨率和 NV12/P010 格式。
 7. 创建 1 秒合成图编码探针。
 8. 探针成功后才选择 Vulkan 路径。
+9. Vulkan 初始化或探针失败时，探测 OpenGL headless context、RGBA8 texture、PBO/fence 和厂商编码器。
+10. 只有 OpenGL 图像提交与编码探针都成功，才选择 OpenGL fallback；否则进入现有 host-upload 路径。
 
 只运行 `ffmpeg -encoders` 不够，它只能证明编译能力，不能证明当前驱动和设备能运行。
 
@@ -604,8 +628,10 @@ tests/test_vulkan_stream_fallback.py
 
 必须覆盖：
 
-- Auto 后端选择顺序。
+- Auto 后端选择顺序：Vulkan → OpenGL GPU fallback → 厂商硬件/host-upload → 软件编码。
 - Vulkan 编译存在但设备不支持时回退。
+- OpenGL context、纹理、PBO/fence 或 interop 不支持时回退。
+- OpenGL 运行中断后只回退一次，不在 Vulkan/OpenGL 之间循环重启。
 - CUDA/Vulkan 设备不匹配时拒绝零拷贝。
 - 槽位未释放时不能复用。
 - 最新帧覆盖不会破坏正在编码的帧。
@@ -703,7 +729,9 @@ SBS 生成 → GPU 转换 → 编码提交 → packet 输出 → RTSP 发布 →
 
 ```text
 [VulkanStream] unavailable: no H.264 encode profile for 3840x2160 NV12
-[DirectSbsStream] fallback: Vulkan Video → NVIDIA NVENC
+[OpenGLStream] fallback candidate: context=WGL texture=RGBA8 pbo=3 fence=3
+[OpenGLStream] active: encoder=h264_nvenc gpu_to_cpu=False zero_copy=False
+[DirectSbsStream] fallback: Vulkan Video → OpenGL → NVIDIA NVENC
 ```
 
 禁止只输出“Vulkan failed”或吞掉 FFmpeg/Vulkan 错误码。
@@ -765,6 +793,9 @@ GPU 零拷贝只解决电脑端原始帧搬运。继续检查：
 
 ### GPU 通路
 
+- [x] OpenGL 备用路径的架构、能力探测、回退顺序和日志规范已定义；当前代码实现仍待单独开发和实机验证。
+- [ ] OpenGL headless context、PBO/fence 和厂商编码器 fallback 实现。
+- [ ] CUDA–OpenGL interop 或 PBO 回读路径完成跨平台验证。
 - [x] CUDA/ROCm 和 Vulkan 设备按 UUID 匹配；native bridge 暴露 `VkPhysicalDeviceIDProperties` UUID，当前 CUDA/Vulkan 不匹配时自动回退。
 - [x] 编码输入格式来自 Vulkan Video/FFmpeg frame-pool 的格式与 profile query；native bridge 只接受 profile-compatible NV12 multi-plane frame。
 - [x] RGB/RGBA→NV12 在 GPU 上完成。

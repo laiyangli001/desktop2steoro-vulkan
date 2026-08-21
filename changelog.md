@@ -2,6 +2,8 @@
 
 ## 2026-08-22
 
+- 在 Vulkan 高级推流指南中加入 OpenGL 备用图像路径设计：定义 WGL/EGL/GLX headless context、RGBA texture/FBO、PBO/fence、CUDA–OpenGL interop、NVENC/AMF/QSV 编码回退、能力探测和单次熔断规则；明确当前仅完成文档设计，OpenGL 后端代码仍待实现。
+
 - 新增 MediaMTX 端到端 Vulkan RTSP soak 工具：启动 MediaMTX 和 FFmpeg mux-only TCP 发布，验证压缩 H.264 包进入 `live` 路径；本机 3840×2160@30 连续 300 帧发布通过，未经过 4K rawvideo stdin。
 
 - 新增 native RGBA→NV12→Vulkan Video 多帧 soak 参数；修复 FFmpeg drain 的 EOF 误报后，使用远程构建 run `32534594122` 的 Windows DLL 完成 3840×2160 连续 900 帧验证，900 个压缩包全部读取成功并正常 flush。
