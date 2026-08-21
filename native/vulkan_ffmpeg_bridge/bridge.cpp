@@ -71,7 +71,14 @@ struct Encoder {
         VkFence fence = VK_NULL_HANDLE;
     };
 
+    struct DirectNv12Views {
+        VkImageView y_view = VK_NULL_HANDLE;
+        VkImageView uv_view = VK_NULL_HANDLE;
+    };
+
+    bool direct_nv12_storage = false;
     std::unordered_map<VkImage, VkImageView> rgba_views;
+    std::unordered_map<VkImage, DirectNv12Views> direct_nv12_views;
     std::unordered_map<VkImage, ConvertSlot> convert_slots;
     std::unordered_map<VkImage, VkCommandBuffer> encode_acquire_buffers;
     std::unordered_map<VkImage, VkFence> encode_acquire_fences;
@@ -159,6 +166,36 @@ VkImageView create_color_view(Encoder* encoder, VkImage image, VkFormat format) 
         ? view : VK_NULL_HANDLE;
 }
 
+VkImageView create_plane_storage_view(Encoder* encoder, VkImage image,
+                                      VkFormat format, VkImageAspectFlags aspect) {
+    auto* device_context = reinterpret_cast<AVHWDeviceContext*>(encoder->device->data);
+    auto* vulkan = reinterpret_cast<AVVulkanDeviceContext*>(device_context->hwctx);
+    VkImageViewCreateInfo view_info{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    view_info.image = image;
+    view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    view_info.format = format;
+    view_info.subresourceRange.aspectMask = aspect;
+    view_info.subresourceRange.levelCount = 1;
+    view_info.subresourceRange.layerCount = 1;
+    VkImageView view = VK_NULL_HANDLE;
+    return vkCreateImageView(vulkan->act_dev, &view_info, vulkan->alloc, &view) == VK_SUCCESS
+        ? view : VK_NULL_HANDLE;
+}
+
+bool supports_direct_nv12_storage(Encoder* encoder) {
+    if (!encoder || !encoder->device) return false;
+    auto* device_context = reinterpret_cast<AVHWDeviceContext*>(encoder->device->data);
+    auto* vulkan = reinterpret_cast<AVVulkanDeviceContext*>(device_context->hwctx);
+    VkImageFormatProperties properties{};
+    const VkImageUsageFlags usage = VK_IMAGE_USAGE_STORAGE_BIT |
+        VK_IMAGE_USAGE_VIDEO_ENCODE_SRC_BIT_KHR | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    const VkResult result = vkGetPhysicalDeviceImageFormatProperties(
+        vulkan->phys_dev, VK_FORMAT_G8_B8R8_2PLANE_420_UNORM,
+        VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_OPTIMAL, usage, 0, &properties);
+    trace("direct NV12 storage format query result=%d", static_cast<int>(result));
+    return result == VK_SUCCESS;
+}
+
 bool load_convert_shader(std::vector<uint32_t>* code) {
     std::vector<std::filesystem::path> candidates;
     if (const char* configured = std::getenv("D2S_RGB_TO_NV12_SPV"))
@@ -188,6 +225,13 @@ void destroy_convert_resources(Encoder* encoder) {
     for (auto& item : encoder->rgba_views)
         vkDestroyImageView(device, item.second, vulkan->alloc);
     encoder->rgba_views.clear();
+    for (auto& item : encoder->direct_nv12_views) {
+        if (item.second.y_view)
+            vkDestroyImageView(device, item.second.y_view, vulkan->alloc);
+        if (item.second.uv_view)
+            vkDestroyImageView(device, item.second.uv_view, vulkan->alloc);
+    }
+    encoder->direct_nv12_views.clear();
     for (auto& item : encoder->convert_slots) {
         auto& slot = item.second;
         if (slot.fence)
@@ -801,12 +845,14 @@ extern "C" void* d2s_vulkan_ffmpeg_encoder_create(
     frames_context->height = height;
     frames_context->initial_pool_size = 3;
     auto* vulkan_frames = reinterpret_cast<AVVulkanFramesContext*>(frames_context->hwctx);
-    // Keep one profile-compatible multi-plane NV12 image.  The native
-    // Vulkan Compute stage writes intermediate Y/UV images and copies into
-    // this image before Video Encode; split R8/R8G8 images are not legal
-    // Vulkan Video input on the target NVIDIA driver.
+    // Keep one profile-compatible multi-plane NV12 image. When the driver
+    // exposes STORAGE_IMAGE for this exact encode format, Compute writes its
+    // plane views directly; otherwise the bounded R8/R8G8 staging copy remains
+    // the safe fallback. Split R8/R8G8 images are never used as Video input.
+    result->direct_nv12_storage = supports_direct_nv12_storage(result);
     vulkan_frames->usage = static_cast<VkImageUsageFlagBits>(
-        VK_IMAGE_USAGE_VIDEO_ENCODE_SRC_BIT_KHR | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+        VK_IMAGE_USAGE_VIDEO_ENCODE_SRC_BIT_KHR | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+        (result->direct_nv12_storage ? VK_IMAGE_USAGE_STORAGE_BIT : 0));
     vulkan_frames->flags = static_cast<AVVkFrameFlags>(0);
     vulkan_frames->create_pnext = &video_profiles;
     if (av_hwframe_ctx_init(result->frames) < 0 ||
@@ -845,13 +891,15 @@ extern "C" void* d2s_vulkan_ffmpeg_encoder_create(
             "[VulkanStream] native Vulkan encoder active: device=%s "
             "encoder=%s input=RGBA8 encode=NV12 profile=%s "
             "queue_prepare=%u queue_compute=%u bf=0 "
-            "gpu_to_cpu=False gpu_copy=True zero_copy=False "
+            "gpu_to_cpu=False gpu_copy=%s zero_copy=%s "
             "resolution=%dx%d fps=%d target=%d peak=%d\n",
             properties.deviceName,
             encoder_name,
             hevc ? "main" : "high",
             result->prepare_queue_family,
             result->compute_queue_family,
+            result->direct_nv12_storage ? "False" : "True",
+            result->direct_nv12_storage ? "True" : "False",
             width,
             height,
             fps,
@@ -958,7 +1006,9 @@ bool submit_ownership_release(Encoder* encoder, AVVkFrame* frame,
         barriers[index].dstAccessMask = VK_ACCESS_2_NONE;
         barriers[index].oldLayout = frame->layout[0];
         barriers[index].newLayout = rgba_frame
-            ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            ? VK_IMAGE_LAYOUT_GENERAL
+            : (encoder->direct_nv12_storage
+                ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         barriers[index].srcQueueFamilyIndex = encoder->prepare_queue_family;
         barriers[index].dstQueueFamilyIndex = encoder->compute_queue_family;
         barriers[index].image = image;
@@ -1042,9 +1092,10 @@ bool submit_encode_acquire(Encoder* encoder, AVVkFrame* nv12,
         barriers[index].srcAccessMask = VK_ACCESS_2_NONE;
         barriers[index].dstStageMask = VK_PIPELINE_STAGE_2_VIDEO_ENCODE_BIT_KHR;
         barriers[index].dstAccessMask = VK_ACCESS_2_VIDEO_ENCODE_READ_BIT_KHR;
-        // Match the compute-queue release barrier exactly. The acquire performs
-        // the TRANSFER_DST_OPTIMAL -> VIDEO_ENCODE_SRC_KHR layout transition.
-        barriers[index].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        // Match the compute-queue release barrier exactly. Direct storage
+        // uses GENERAL; the fallback copy path uses TRANSFER_DST_OPTIMAL.
+        barriers[index].oldLayout = encoder->direct_nv12_storage
+            ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         barriers[index].newLayout = VK_IMAGE_LAYOUT_VIDEO_ENCODE_SRC_KHR;
         barriers[index].srcQueueFamilyIndex = encoder->compute_queue_family;
         barriers[index].dstQueueFamilyIndex = encoder->prepare_queue_family;
@@ -1130,10 +1181,31 @@ bool submit_rgba_conversion(Encoder* encoder, AVVkFrame* rgba, AVVkFrame* nv12,
         }
     }
     VkCommandBuffer command = slot.command;
+    const bool direct_storage = encoder->direct_nv12_storage;
+    auto direct_view_it = encoder->direct_nv12_views.find(command_key);
+    if (direct_storage && direct_view_it == encoder->direct_nv12_views.end()) {
+        Encoder::DirectNv12Views views{};
+        views.y_view = create_plane_storage_view(
+            encoder, command_key, VK_FORMAT_R8_UNORM, VK_IMAGE_ASPECT_PLANE_0_BIT);
+        views.uv_view = create_plane_storage_view(
+            encoder, command_key, VK_FORMAT_R8G8_UNORM, VK_IMAGE_ASPECT_PLANE_1_BIT);
+        if (!views.y_view || !views.uv_view) {
+            if (views.y_view)
+                vkDestroyImageView(device, views.y_view, vulkan->alloc);
+            if (views.uv_view)
+                vkDestroyImageView(device, views.uv_view, vulkan->alloc);
+            return false;
+        }
+        direct_view_it = encoder->direct_nv12_views.emplace(command_key, views).first;
+    }
     VkDescriptorImageInfo descriptor_infos[3]{};
     descriptor_infos[0] = {VK_NULL_HANDLE, view_it->second, VK_IMAGE_LAYOUT_GENERAL};
-    descriptor_infos[1] = {VK_NULL_HANDLE, slot.y_view, VK_IMAGE_LAYOUT_GENERAL};
-    descriptor_infos[2] = {VK_NULL_HANDLE, slot.uv_view, VK_IMAGE_LAYOUT_GENERAL};
+    descriptor_infos[1] = {VK_NULL_HANDLE,
+                           direct_storage ? direct_view_it->second.y_view : slot.y_view,
+                           VK_IMAGE_LAYOUT_GENERAL};
+    descriptor_infos[2] = {VK_NULL_HANDLE,
+                           direct_storage ? direct_view_it->second.uv_view : slot.uv_view,
+                           VK_IMAGE_LAYOUT_GENERAL};
     VkWriteDescriptorSet writes[3]{};
     for (uint32_t index = 0; index < 3; ++index) {
         writes[index] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
@@ -1173,26 +1245,47 @@ bool submit_rgba_conversion(Encoder* encoder, AVVkFrame* rgba, AVVkFrame* nv12,
                 VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
     barriers[0].srcQueueFamilyIndex = encoder->prepare_queue_family;
     barriers[0].dstQueueFamilyIndex = encoder->compute_queue_family;
-    add_barrier(slot.y_image, VK_IMAGE_ASPECT_COLOR_BIT,
-                slot.y_layout, VK_IMAGE_LAYOUT_GENERAL,
-                VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-    add_barrier(slot.uv_image, VK_IMAGE_ASPECT_COLOR_BIT,
-                slot.uv_layout, VK_IMAGE_LAYOUT_GENERAL,
-                VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-    add_barrier(nv12->img[0], VK_IMAGE_ASPECT_PLANE_0_BIT,
-                nv12->layout[0], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-    barriers[3].srcQueueFamilyIndex = encoder->prepare_queue_family;
-    barriers[3].dstQueueFamilyIndex = encoder->compute_queue_family;
-    add_barrier(nv12->img[0], VK_IMAGE_ASPECT_PLANE_1_BIT,
-                nv12->layout[0], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-    barriers[4].srcQueueFamilyIndex = encoder->prepare_queue_family;
-    barriers[4].dstQueueFamilyIndex = encoder->compute_queue_family;
+    if (direct_storage) {
+        add_barrier(nv12->img[0], VK_IMAGE_ASPECT_PLANE_0_BIT,
+                    nv12->layout[0], VK_IMAGE_LAYOUT_GENERAL,
+                    VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                    VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+        barriers[1].srcQueueFamilyIndex = encoder->prepare_queue_family;
+        barriers[1].dstQueueFamilyIndex = encoder->compute_queue_family;
+        add_barrier(nv12->img[0], VK_IMAGE_ASPECT_PLANE_1_BIT,
+                    nv12->layout[0], VK_IMAGE_LAYOUT_GENERAL,
+                    VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                    VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+        barriers[2].srcQueueFamilyIndex = encoder->prepare_queue_family;
+        barriers[2].dstQueueFamilyIndex = encoder->compute_queue_family;
+    } else {
+        add_barrier(slot.y_image, VK_IMAGE_ASPECT_COLOR_BIT,
+                    slot.y_layout, VK_IMAGE_LAYOUT_GENERAL,
+                    VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+        add_barrier(slot.uv_image, VK_IMAGE_ASPECT_COLOR_BIT,
+                    slot.uv_layout, VK_IMAGE_LAYOUT_GENERAL,
+                    VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+        add_barrier(nv12->img[0], VK_IMAGE_ASPECT_PLANE_0_BIT,
+                    nv12->layout[0], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                    VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+        barriers[3].srcQueueFamilyIndex = encoder->prepare_queue_family;
+        barriers[3].dstQueueFamilyIndex = encoder->compute_queue_family;
+        add_barrier(nv12->img[0], VK_IMAGE_ASPECT_PLANE_1_BIT,
+                    nv12->layout[0], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                    VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+        barriers[4].srcQueueFamilyIndex = encoder->prepare_queue_family;
+        barriers[4].dstQueueFamilyIndex = encoder->compute_queue_family;
+    }
     VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
     dependency.imageMemoryBarrierCount = barrier_count;
     dependency.pImageMemoryBarriers = barriers;
@@ -1203,38 +1296,46 @@ bool submit_rgba_conversion(Encoder* encoder, AVVkFrame* rgba, AVVkFrame* nv12,
                             &slot.descriptor_set, 0, nullptr);
     vkCmdDispatch(command, (encoder->width + 7) / 8, (encoder->height + 7) / 8, 1);
     barrier_count = 0;
-    add_barrier(slot.y_image, VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-    add_barrier(slot.uv_image, VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-    dependency.imageMemoryBarrierCount = barrier_count;
-    dependency.pImageMemoryBarriers = barriers;
-    vkCmdPipelineBarrier2(command, &dependency);
-    VkImageCopy copies[2]{};
-    copies[0].srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    copies[0].dstSubresource = {VK_IMAGE_ASPECT_PLANE_0_BIT, 0, 0, 1};
-    copies[0].extent = {encoder->width, encoder->height, 1};
-    copies[1].srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    copies[1].dstSubresource = {VK_IMAGE_ASPECT_PLANE_1_BIT, 0, 0, 1};
-    copies[1].extent = {encoder->width / 2, encoder->height / 2, 1};
-    vkCmdCopyImage(command, slot.y_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                   nv12->img[0], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copies[0]);
-    vkCmdCopyImage(command, slot.uv_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                   nv12->img[0], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copies[1]);
+    if (!direct_storage) {
+        add_barrier(slot.y_image, VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+        add_barrier(slot.uv_image, VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+        dependency.imageMemoryBarrierCount = barrier_count;
+        dependency.pImageMemoryBarriers = barriers;
+        vkCmdPipelineBarrier2(command, &dependency);
+        VkImageCopy copies[2]{};
+        copies[0].srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        copies[0].dstSubresource = {VK_IMAGE_ASPECT_PLANE_0_BIT, 0, 0, 1};
+        copies[0].extent = {encoder->width, encoder->height, 1};
+        copies[1].srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        copies[1].dstSubresource = {VK_IMAGE_ASPECT_PLANE_1_BIT, 0, 0, 1};
+        copies[1].extent = {encoder->width / 2, encoder->height / 2, 1};
+        vkCmdCopyImage(command, slot.y_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                       nv12->img[0], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copies[0]);
+        vkCmdCopyImage(command, slot.uv_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                       nv12->img[0], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copies[1]);
+    }
     barrier_count = 0;
+    const VkImageLayout output_layout = direct_storage
+        ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    const VkPipelineStageFlags2 output_stage = direct_storage
+        ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    const VkAccessFlags2 output_access = direct_storage
+        ? VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT : VK_ACCESS_2_TRANSFER_WRITE_BIT;
     add_barrier(nv12->img[0], VK_IMAGE_ASPECT_PLANE_0_BIT,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_VIDEO_ENCODE_SRC_KHR,
-                VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                output_layout, VK_IMAGE_LAYOUT_VIDEO_ENCODE_SRC_KHR,
+                output_stage, output_access,
                 VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE);
     barriers[0].srcQueueFamilyIndex = encoder->compute_queue_family;
     barriers[0].dstQueueFamilyIndex = encoder->prepare_queue_family;
     add_barrier(nv12->img[0], VK_IMAGE_ASPECT_PLANE_1_BIT,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_VIDEO_ENCODE_SRC_KHR,
-                VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                output_layout, VK_IMAGE_LAYOUT_VIDEO_ENCODE_SRC_KHR,
+                output_stage, output_access,
                 VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE);
     barriers[1].srcQueueFamilyIndex = encoder->compute_queue_family;
     barriers[1].dstQueueFamilyIndex = encoder->prepare_queue_family;
@@ -1260,7 +1361,8 @@ bool submit_rgba_conversion(Encoder* encoder, AVVkFrame* rgba, AVVkFrame* nv12,
     waits[1].sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
     waits[1].semaphore = nv12->sem[0];
     waits[1].value = nv12_compute_wait;
-    waits[1].stageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    waits[1].stageMask = direct_storage
+        ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_2_TRANSFER_BIT;
     VkSemaphoreSubmitInfo signals[2]{};
     signals[0].sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
     signals[0].semaphore = nv12->sem[0];
@@ -1289,8 +1391,10 @@ bool submit_rgba_conversion(Encoder* encoder, AVVkFrame* rgba, AVVkFrame* nv12,
     unsigned long long encode_value = 0;
     if (!submit_encode_acquire(encoder, nv12, signal_value, &encode_value)) return false;
     nv12->sem_value[0] = encode_value;
-    slot.y_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    slot.uv_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    if (!direct_storage) {
+        slot.y_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        slot.uv_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    }
     nv12->layout[0] = VK_IMAGE_LAYOUT_VIDEO_ENCODE_SRC_KHR;
     nv12->access[0] = VK_ACCESS_2_VIDEO_ENCODE_READ_BIT_KHR;
     nv12->queue_family[0] = encoder->prepare_queue_family;

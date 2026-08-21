@@ -26,12 +26,13 @@ single-plane images. Validation on NVIDIA RTX 3090 shows these images are not
 legal `h264_vulkan` / `hevc_vulkan` input resources: Vulkan Video requires one
 NV12 multi-plane image. The bridge is therefore a synchronization and external
 handle diagnostic only. The split representation is rejected by the Python
-frame gate and never submitted as a Vulkan Video source. The enabled application
-path writes an FFmpeg-owned single-plane RGBA image with CUDA, performs the
-color conversion and copy to the legal NV12 multi-plane encode image on the
-same Vulkan device, and submits `AV_PIX_FMT_VULKAN`. This removes the CPU
-download and raw RGB24 pipe; it is not yet strict zero-copy because the
-device-local RGBA/R8/RG8-to-NV12 copy remains.
+frame gate and never submitted as a Vulkan Video source. The enabled application path writes an FFmpeg-owned single-plane RGBA
+image with CUDA, performs the color conversion on the same Vulkan device and
+submits `AV_PIX_FMT_VULKAN`. At startup it queries whether the exact NV12
+encode image supports `STORAGE_IMAGE`; supported drivers write the two plane
+views directly and log `zero_copy=True`. Drivers without that capability use
+the bounded device-local RGBA/R8/RG8-to-NV12 copy and log
+`zero_copy=False`. Both variants remove the CPU download and raw RGB24 pipe.
 
 Build remotely with:
 

@@ -2,6 +2,8 @@
 
 ## 2026-08-22
 
+- Vulkan native bridge 增加 NV12 `STORAGE_IMAGE` 能力探测：驱动支持时 Compute 直接写入 FFmpeg 编码图像的 plane view，消除 R8/RG8→NV12 device-local copy 并记录 `zero_copy=True`；不支持时自动保留固定槽位 copy 路径，保持原有稳定回退和 4K 编码链路。
+
 - 校准闭环文档与实际实现对齐：确认头显页面通过 WebRTC `getStats()` 回传 decoded FPS、丢帧、冻结、RTP 丢包、接收码率、抖动缓冲、RTT 和媒体尺寸；指南改为准确记录当前固定 30 FPS、码率搜索策略，并保留尚未完成的 PICO/Quest/Wolvic 30 分钟实机验收项。
 
 - 补齐回退可观测性：硬件编码器全部不可用时覆盖 `libx264`/`libx265` 软件回退；Vulkan native/稳定 FFmpeg 回退通过 `[D2S_STATUS]` 更新 GUI 状态栏，并新增对应回归测试。

@@ -52,7 +52,12 @@ def test_native_bridge_declares_low_latency_gpu_path_and_diagnostic_log():
     assert "result->codec->max_b_frames = 0" in source
     assert "input=RGBA8 encode=NV12" in source
     assert "queue_prepare=%u queue_compute=%u bf=0" in source
-    assert "gpu_to_cpu=False gpu_copy=True zero_copy=False" in source
+    assert "gpu_to_cpu=False gpu_copy=%s zero_copy=%s" in source
+    assert "supports_direct_nv12_storage" in source
+    assert "create_plane_storage_view" in source
+    assert "VK_IMAGE_USAGE_STORAGE_BIT" in source
+    assert "const VkPipelineStageFlags2 output_stage = direct_storage" in source
+    assert "waits[1].stageMask = direct_storage" in source
     assert "std::unordered_map<VkImage, ConvertSlot> convert_slots" in source
     assert "encoder->convert_slots.try_emplace(command_key)" in source
     assert "slot.descriptor_set" in source
