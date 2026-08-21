@@ -1,5 +1,5 @@
 Capture Mode: Monitor
-Monitor Index: 3
+Monitor Index: 1
 Window Title: ''
 Show FPS: false
 Model List:
@@ -524,7 +524,7 @@ XR Headset Model: Pico 4 / 4 Ultra
 XR Preview Window: false
 VSync: false
 Window Preview: false
-Target FPS: 0
+Target FPS: 30
 Processing Resolution: Auto
 Render Size Policy: scaled
 Render Scale: 4K / 100%
@@ -538,8 +538,11 @@ Upscaler Sharpness: 0.0
 Stream Protocol: WebRTC
 Streamer Port: 1122
 Stream Quality: 100
+Use Stream Calibration: true
+Stream Target Bitrate Mbps: 29
+Stream Peak Bitrate Mbps: 33
+Stream Calibration Port: 1123
 Stream Key: live
-Stereo Mix: virtual-audio-capturer
 Audio Capture Backend: auto
 Video Encoder Backend: auto
 CRF: 23

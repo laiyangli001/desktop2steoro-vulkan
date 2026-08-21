@@ -1,6 +1,8 @@
 import asyncio
 from pathlib import Path
 
+import flet as ft
+
 from path_config import APP_ROOT
 
 from gui.config import DEFAULTS
@@ -90,7 +92,7 @@ def test_stop_and_run_buttons_are_inset_from_the_right_edge() -> None:
     row_end = source.index("self._btn_bar =", row_start)
 
     row_source = source[row_start:row_end]
-    assert "padding=ft.Padding(0, 0, S(20), 0)" in row_source
+    assert "padding=ft.Padding(0, 0, S(40), 0)" in row_source
     assert "spacing=S(20)" in row_source
 
 
@@ -178,11 +180,19 @@ def test_stream_calibration_uses_the_shared_label_and_control_widths() -> None:
         row_controls.index("self.stream_calibration_btn")
     ]
     assert "ft.Container(width=S(10))" in between
-    status_gap = row_controls[
-        row_controls.index("self.stream_calibration_btn"):
-        row_controls.index("self.stream_calibration_status")
-    ]
-    assert "ft.Container(width=S(10))" in status_gap
+    assert "self.stream_calibration_status" not in row_controls
+
+    warning_row_start = source.index("self.stream_calibration_warning_row = ft.Row(")
+    warning_row_end = source.index("self.stream_calibration_result = ft.Text(", warning_row_start)
+    warning_row = source[warning_row_start:warning_row_end]
+    assert "[self.stream_calibration_warning]" in warning_row
+    assert "ft.Container" not in warning_row
+
+    result_row_start = source.index("self.stream_calibration_result_row = ft.Row(")
+    result_row_end = source.index("self.stream_calibration_row = ft.Row(", result_row_start)
+    result_row = source[result_row_start:result_row_end]
+    assert "[self.stream_calibration_result]" in result_row
+    assert "ft.Container" not in result_row
 
 
 def test_stream_url_field_has_a_bounded_width() -> None:
@@ -193,6 +203,17 @@ def test_stream_url_field_has_a_bounded_width() -> None:
 
     assert "min_width=S(130)" in field_source
     assert "max_width=S(230)" in field_source
+
+
+def test_stream_url_updates_while_stream_settings_are_collapsed() -> None:
+    source = HANDLERS_SOURCE.read_text(encoding="utf-8")
+    start = source.index("def update_stream_url")
+    end = source.index("def _on_stream_protocol_change", start)
+    handler = source[start:end]
+
+    assert "if not self.stream_container.visible" not in handler
+    assert 'self.run_mode_key not in {"MJPEG Streamer", "RTMP Streamer", "GPU Streamer"}' in handler
+    assert "self.stream_url_tf.value = self._format_stream_url" in handler
 
 
 def test_compact_display_field_adapts_between_minimum_and_maximum_widths() -> None:
@@ -212,6 +233,30 @@ def test_window_height_reserves_the_complete_action_footer() -> None:
     estimator_source = source[estimator_start:estimator_end]
 
     assert "footer_height = S(84)" in estimator_source
+    assert "safety_margin = S(0)" in estimator_source
+    assert "max_height = S(1040)" in estimator_source
+
+
+def test_group_height_counts_dynamic_calibration_result_row() -> None:
+    estimator = object.__new__(GUIBuilderMixin)
+    primary_row = ft.Row([ft.Text("Transmission Profile")])
+    result_row = ft.Row([ft.Text("Calibration result")], visible=False)
+    group = ft.Container(ft.Column([primary_row, result_row], spacing=S(8)), visible=True)
+
+    height_without_result = estimator._estimate_group_height(group, include_margin=False)
+    result_row.visible = True
+    height_with_result = estimator._estimate_group_height(group, include_margin=False)
+
+    assert height_with_result - height_without_result == S(34) + S(8)
+
+
+def test_calibration_messages_are_kept_on_one_line() -> None:
+    source = BUILDERS_SOURCE.read_text(encoding="utf-8")
+    warning_start = source.index("self.stream_calibration_warning = ft.Text(")
+    result_end = source.index("self.stream_calibration_result_row = ft.Row(", warning_start)
+    message_controls = source[warning_start:result_end]
+
+    assert message_controls.count("no_wrap=True") == 2
 
 
 def test_window_preview_is_an_independent_advanced_checkbox_after_vsync() -> None:
@@ -235,6 +280,44 @@ def test_reset_defaults_disable_depth_antialiasing() -> None:
     assert 'options=[v for v in aa_options], value="0"' in source
 
 
+def test_crf_tooltip_includes_the_recommended_range() -> None:
+    source = (APP_ROOT / "gui" / "localization.py").read_text(encoding="utf-8")
+
+    assert '30 Mbps or higher -> CRF 20' in source
+    assert '25-29 Mbps -> CRF 23' in source
+    assert '30 Mbps 及以上建议 CRF 20' in source
+    assert '25-29 Mbps 建议 CRF 23' in source
+    assert '低于 19 Mbps 不建议继续提高 CRF' in source
+
+
+def test_every_stream_parameter_control_has_an_explanatory_tooltip() -> None:
+    localization = (APP_ROOT / "gui" / "localization.py").read_text(encoding="utf-8")
+    handlers = HANDLERS_SOURCE.read_text(encoding="utf-8")
+    tooltip_bindings = {
+        "stream_settings_cb": "tooltip_stream_settings",
+        "stream_url_tf": "tooltip_stream_url",
+        "preview_btn": "tooltip_stream_preview",
+        "stream_port_tf": "tooltip_stream_port",
+        "stream_quality_dd": "tooltip_stream_quality",
+        "stream_proto_dd": "tooltip_stream_proto",
+        "stream_key_tf": "tooltip_stream_key",
+        "crf_tf": "tooltip_crf",
+        "audio_delay_tf": "tooltip_audio_delay",
+        "audio_dd": "tooltip_audio",
+        "video_backend_dd": "tooltip_video_backend",
+        "stream_calibration_mode_dd": "tooltip_stream_calibration_mode",
+        "stream_calibration_btn": "tooltip_stream_calibration_start",
+    }
+
+    for control, tooltip_key in tooltip_bindings.items():
+        assert f'(self.{control}, "{tooltip_key}")' in handlers
+        assert localization.count(f'"{tooltip_key}":') == 2
+
+    assert "高级网络推流和 GPU 推流改由 CRF 与码率控制" in localization
+    assert "WebRTC 适合头显浏览器，延迟最低" in localization
+    assert "正数延后音频，负数提前音频" in localization
+
+
 def test_run_mode_change_refits_native_window_height() -> None:
     source = HANDLERS_SOURCE.read_text(encoding="utf-8")
     start = source.index("def on_run_mode_change")
@@ -242,6 +325,31 @@ def test_run_mode_change_refits_native_window_height() -> None:
     handler = source[start:end]
 
     assert "self._fit_window_to_content(update=True, resize_window=True)" in handler
+
+
+def test_stream_settings_checkbox_controls_stream_parameter_panel() -> None:
+    builders = BUILDERS_SOURCE.read_text(encoding="utf-8")
+    handlers = HANDLERS_SOURCE.read_text(encoding="utf-8")
+    run_row_start = builders.index("self.row7a = ft.Row(")
+    run_row_end = builders.index("self.xr_headset_row = ft.Row(", run_row_start)
+    run_row = builders[run_row_start:run_row_end]
+    mode_change_start = handlers.index("def on_run_mode_change")
+    toggle_start = handlers.index("def on_stream_settings_change", mode_change_start)
+    advanced_start = handlers.index("def on_advanced_device_change", toggle_start)
+    mode_change = handlers[mode_change_start:toggle_start]
+    toggle = handlers[toggle_start:advanced_start]
+    visibility_start = handlers.index("def _sync_visibility(self):")
+    visibility_end = handlers.index("def ", visibility_start + 4)
+    visibility = handlers[visibility_start:visibility_end]
+
+    assert run_row.index("self.run_mode_dd") < run_row.index("self.stream_settings_cb")
+    assert 'label="Stream Settings"' in builders
+    assert 'value=False' in builders
+    assert "self.stream_settings_cb.value = False" in mode_change
+    assert "self.stream_settings_cb.visible = is_streamer" in visibility
+    assert "self.stream_settings_cb.value" in visibility
+    assert "self._show_streamer_rows(*row_indices)" in toggle
+    assert "resize_window=True" in toggle
 
 
 def test_reset_defaults_refits_window_to_left_gui_content() -> None:
@@ -253,15 +361,20 @@ def test_reset_defaults_refits_window_to_left_gui_content() -> None:
     assert "self._fit_window_to_content(update=True, resize_window=True)" in reset_source
 
 
-def test_headset_model_uses_a_dedicated_row_below_run_mode() -> None:
+def test_display_mode_is_to_the_right_of_headset_model() -> None:
     source = BUILDERS_SOURCE.read_text(encoding="utf-8")
     run_row_start = source.index("self.row7a = ft.Row(")
     headset_row_start = source.index("self.xr_headset_row = ft.Row(")
+    headset_row_end = source.index("self.row7b = ft.Row(", headset_row_start)
     assembly_start = source.index("device_group = ft.Container(")
     assembly_end = source.index("lang_group = ft.Container(", assembly_start)
     assembly = source[assembly_start:assembly_end]
 
-    assert "self.xr_headset_label" not in source[run_row_start:headset_row_start]
+    run_row = source[run_row_start:headset_row_start]
+    headset_row = source[headset_row_start:headset_row_end]
+    assert "self.display_mode_label" not in run_row
+    assert headset_row.index("self.xr_headset_label") < headset_row.index("self.display_mode_label")
+    assert headset_row.index("self.xr_headset_dd") < headset_row.index("self.display_mode_dd")
     assert assembly.index("self.row7a") < assembly.index("self.xr_headset_row")
     assert assembly.index("self.xr_headset_row") < assembly.index("self.row7b")
 

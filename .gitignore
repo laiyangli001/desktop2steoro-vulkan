@@ -19,6 +19,7 @@ src/desktop2steoro/models/
 src/desktop2steoro/logs/
 src/desktop2steoro/gui/flet_clients/
 src/desktop2steoro/gui/flet_packages/*.partial
+src/desktop2steoro/streaming/rtmp/ffmpeg/
 src/env_install/python3.installing/
 native/filament/sdk/
 native/filament/build/

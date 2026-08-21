@@ -215,6 +215,40 @@ def test_calibration_profile_status_distinguishes_stale_from_missing(monkeypatch
     assert gui._stream_calibration_profile_status() == "missing"
 
 
+def test_stale_calibration_profile_hides_expired_status_text(monkeypatch, tmp_path):
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_text(
+        json.dumps({
+            "fps": 30,
+            "target_mbps": 25,
+            "peak_mbps": 29,
+            "fingerprint": {"old": "settings"},
+        }),
+        encoding="utf-8",
+    )
+
+    class Harness(gui_process.GUIProcessMixin):
+        def _safe_update(self, *controls):
+            pass
+
+    gui = Harness()
+    gui.locale = "CN"
+    gui._config = {"Streamer Port": 1122}
+    gui.stream_calibration_status = SimpleNamespace(value="", color=None)
+    gui.stream_calibration_warning = SimpleNamespace(value="", visible=False)
+    gui.stream_calibration_warning_row = SimpleNamespace(visible=False)
+    gui.stream_calibration_result = SimpleNamespace(value="", color=None, visible=False)
+    gui.stream_calibration_result_row = SimpleNamespace(visible=False)
+    monkeypatch.setattr(gui_process, "STREAM_CALIBRATION_PROFILE_FILE", str(profile_path))
+
+    gui._refresh_stream_calibration_status()
+
+    assert gui.stream_calibration_status.value == ""
+    assert gui.stream_calibration_warning.value == "设置变化，请重新校准"
+    assert gui.stream_calibration_warning.visible is True
+    assert gui.stream_calibration_warning_row.visible is True
+
+
 def test_limited_calibration_profile_is_not_treated_as_current(monkeypatch, tmp_path):
     profile_path = tmp_path / "profile.json"
     profile_path.write_text(
@@ -280,6 +314,7 @@ def test_limited_calibration_result_is_visible_below_transport_profile(monkeypat
 def test_stable_calibration_result_shows_network_limit_and_safe_rates(
     monkeypatch, tmp_path
 ):
+    fit_calls = []
     profile_path = tmp_path / "profile.json"
     settings = {"Streamer Port": 1122}
     profile_path.write_text(
@@ -298,6 +333,9 @@ def test_stable_calibration_result_shows_network_limit_and_safe_rates(
         def _safe_update(self, *controls):
             pass
 
+        def _fit_window_to_content(self, update=True, resize_window=False):
+            fit_calls.append((update, resize_window))
+
     gui = Harness()
     gui.locale = "CN"
     gui._config = settings
@@ -311,5 +349,7 @@ def test_stable_calibration_result_shows_network_limit_and_safe_rates(
     gui._refresh_stream_calibration_status()
 
     assert "网络稳定上限：40 Mbps" in gui.stream_calibration_result.value
-    assert "安全码率：32 Mbps（峰值 36 Mbps）" in gui.stream_calibration_result.value
+    assert "安全码率：32 Mbps" in gui.stream_calibration_result.value
+    assert "峰值" not in gui.stream_calibration_result.value
     assert "帧率 30 FPS" in gui.stream_calibration_result.value
+    assert fit_calls == [(False, True)]

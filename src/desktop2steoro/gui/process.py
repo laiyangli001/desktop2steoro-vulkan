@@ -555,12 +555,11 @@ class GUIProcessMixin:
                 result.value = UI_MESSAGES[self.locale].get(
                     "calibration_result_stable" if stable else "calibration_result_limited",
                     "Stable network limit: {network_max} Mbps, safe bitrate: "
-                    "{safe_target} Mbps (peak {safe_peak} Mbps), {fps} FPS.",
+                    "{safe_target} Mbps, {fps} FPS.",
                 ).format(
                     fps=fps,
                     network_max=network_bitrate,
                     safe_target=target,
-                    safe_peak=peak,
                 )
                 result.color = ft.Colors.GREEN if stable else ft.Colors.ORANGE
                 result.visible = True
@@ -574,6 +573,11 @@ class GUIProcessMixin:
             if warning_row is not None:
                 warning_row.visible = True
 
+        def refit_visible_rows():
+            fit_window = getattr(self, "_fit_window_to_content", None)
+            if callable(fit_window):
+                fit_window(update=False, resize_window=True)
+
         try:
             with open(STREAM_CALIBRATION_PROFILE_FILE, "r", encoding="utf-8") as file:
                 profile = json.load(file)
@@ -585,9 +589,10 @@ class GUIProcessMixin:
                 )
                 control.color = ft.Colors.ORANGE
                 show_warning(control.value)
-                control.value = UI_MESSAGES[self.locale].get("Calibration expired", "Calibration expired")
+                control.value = ""
                 self._safe_update(control)
                 self._safe_update(warning, warning_row, result, result_row)
+                refit_visible_rows()
                 return
             if profile.get("stability", "stable") != "stable":
                 control.value = UI_MESSAGES[self.locale].get("Not calibrated", "Not calibrated")
@@ -603,6 +608,7 @@ class GUIProcessMixin:
                 )
                 self._safe_update(control)
                 self._safe_update(warning, warning_row, result, result_row)
+                refit_visible_rows()
                 return
             clear_warning()
             show_result(
@@ -642,6 +648,7 @@ class GUIProcessMixin:
                 )
                 self._safe_update(control)
                 self._safe_update(result, result_row)
+                refit_visible_rows()
                 return
             clear_warning()
             clear_result()
@@ -651,6 +658,7 @@ class GUIProcessMixin:
             control.color = ft.Colors.GREY
         self._safe_update(control)
         self._safe_update(warning, warning_row, result, result_row)
+        refit_visible_rows()
 
     def start_stream_calibration(self, _event=None) -> None:
         if self._starting or (self.process and self.process.returncode is None):

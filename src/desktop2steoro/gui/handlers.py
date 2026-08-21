@@ -483,7 +483,17 @@ class GUIHandlerMixin:
         }
         self.run_mode_key = mode_map.get(label, "Local Viewer")
         self._config["Run Mode"] = self.run_mode_key
+        if self.run_mode_key in {"MJPEG Streamer", "RTMP Streamer", "GPU Streamer"}:
+            self.stream_settings_cb.value = False
         self._sync_visibility()
+        self._fit_window_to_content(update=True, resize_window=True)
+
+    def on_stream_settings_change(self, e):
+        mode = self.run_mode_key
+        streamer_modes = {"MJPEG Streamer", "RTMP Streamer", "GPU Streamer"}
+        row_map = self._get_streamer_row_map()
+        row_indices = row_map.get(mode, []) if mode in streamer_modes and self.stream_settings_cb.value else []
+        self._show_streamer_rows(*row_indices)
         self._fit_window_to_content(update=True, resize_window=True)
 
     def on_advanced_device_change(self, e):
@@ -526,6 +536,9 @@ class GUIHandlerMixin:
             "3D Monitor": texts["3D Monitor"],
         }
         self.run_mode_dd.value = mode_reverse.get(mode, texts["Local Viewer"])
+        streamer_modes = {"MJPEG Streamer", "RTMP Streamer", "GPU Streamer"}
+        is_streamer = mode in streamer_modes
+        self.stream_settings_cb.visible = is_streamer
         is_openxr = mode == "OpenXR Link"
         self.display_mode_label.visible = not is_openxr
         self.display_mode_dd.visible = not is_openxr
@@ -557,7 +570,8 @@ class GUIHandlerMixin:
             self._stereo_spacer.visible = stereo_full
         self.row9.visible = (not is_openxr) and (stereo_full or self.fill_16_9_cb.visible or self.fix_aspect_cb.visible or self.lossless_cb.visible)
         row_map = self._get_streamer_row_map()
-        self._show_streamer_rows(*row_map.get(mode, []))
+        row_indices = row_map.get(mode, []) if is_streamer and self.stream_settings_cb.value else []
+        self._show_streamer_rows(*row_indices)
         self.lossless_cb.visible = (OS_NAME == "Windows" and mode in {"RTMP Streamer", "GPU Streamer"})
         self.update_stereo_monitor_menu()
         self._fit_window_to_content()
@@ -710,6 +724,7 @@ class GUIHandlerMixin:
         self.showfps_cb.label = t["Show FPS"]
         self.capture_tool_label.value = t["Capture Tool:"]
         self.run_mode_label.value = t["Run Mode:"]
+        self.stream_settings_cb.label = t.get("Stream Settings", "Stream Settings")
         self.display_mode_label.value = t["Display Mode:"]
         self.xr_headset_label.value = t.get("Headset Model:", "Headset Model:")
         headset_key = display_to_xr_headset(self.xr_headset_dd.value)
@@ -865,6 +880,9 @@ class GUIHandlerMixin:
             (self.stereo_monitor_dd, "tooltip_stereo_monitor"),
             (self.lang_dd, "tooltip_lang"),
             (self.theme_dd, "tooltip_theme"),
+            (self.stream_settings_cb, "tooltip_stream_settings"),
+            (self.stream_url_tf, "tooltip_stream_url"),
+            (self.preview_btn, "tooltip_stream_preview"),
             (self.stream_quality_dd, "tooltip_stream_quality"),
             (self.stream_proto_dd, "tooltip_stream_proto"),
             (self.audio_dd, "tooltip_audio"),
@@ -872,6 +890,9 @@ class GUIHandlerMixin:
             (self.stream_key_tf, "tooltip_stream_key"),
             (self.crf_tf, "tooltip_crf"),
             (self.audio_delay_tf, "tooltip_audio_delay"),
+            (self.video_backend_dd, "tooltip_video_backend"),
+            (self.stream_calibration_mode_dd, "tooltip_stream_calibration_mode"),
+            (self.stream_calibration_btn, "tooltip_stream_calibration_start"),
         ]:
             _set_tooltip(ctrl, t.get(key, UI_MESSAGES["EN"].get(key, key)))
         self._refresh_stream_calibration_status()
@@ -922,7 +943,7 @@ class GUIHandlerMixin:
             self._local_ip_cache = get_local_ip()
 
     def update_stream_url(self, e=None, resolve_ip=True):
-        if not self.stream_container.visible:
+        if self.run_mode_key not in {"MJPEG Streamer", "RTMP Streamer", "GPU Streamer"}:
             return
         protocol = self.stream_proto_dd.value
         port = self.stream_port_tf.value or str(DEFAULT_PORT)

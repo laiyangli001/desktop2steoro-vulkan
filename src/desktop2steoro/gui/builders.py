@@ -685,6 +685,14 @@ class GUIBuilderMixin:
         # Row 8: Run mode + Display mode / Controller
         self.run_mode_label = ft.Text("Run Mode:", size=FONT_SIZE, width=S(130))
         self.run_mode_dd = CompactDropdown(on_select=self.on_run_mode_change, width=S(130))
+        self.stream_settings_cb = ft.Checkbox(
+            scale=SCALE,
+            visual_density=ft.VisualDensity.COMPACT,
+            label="Stream Settings",
+            value=False,
+            visible=False,
+            on_change=self.on_stream_settings_change,
+        )
         self.xr_headset_label = ft.Text("Headset Model:", size=FONT_SIZE, width=S(130))
         self.xr_headset_dd = CompactDropdown(
             options=xr_headset_options(self.locale),
@@ -720,10 +728,13 @@ class GUIBuilderMixin:
             value=environment_display_label(self.env_key, self.locale, self.env_model_display_names),
             on_select=self.on_env_change,
             width=S(130))
-        self.row7a = ft.Row([self.run_mode_label, self.run_mode_dd, ft.Container(width=S(40)),
-            self.display_mode_label, self.display_mode_dd], spacing=1)
+        self.row7a = ft.Row([
+            self.run_mode_label, self.run_mode_dd, ft.Container(width=S(40)),
+            self.stream_settings_cb,
+        ], spacing=1)
         self.xr_headset_row = ft.Row(
-            [self.xr_headset_label, self.xr_headset_dd], spacing=1)
+            [self.xr_headset_label, self.xr_headset_dd, ft.Container(width=S(40)),
+             self.display_mode_label, self.display_mode_dd], spacing=1)
         self.row7b = ft.Row([self.controller_label, self.ctrl_model_dd, ft.Container(width=S(40)),
             self.environment_label, self.env_model_dd], spacing=1)
 
@@ -886,7 +897,7 @@ class GUIBuilderMixin:
 
         btn_row = ft.Row([self.reset_btn, ft.Container(expand=True),
             ft.Container(content=ft.Row([self.stop_btn, self.run_btn], spacing=S(20)),
-                         padding=ft.Padding(0, 0, S(20), 0))])
+                         padding=ft.Padding(0, 0, S(40), 0))])
         self._btn_bar = ft.Container(content=btn_row)
         self._status_bar = ft.Row([
             ft.Container(content=self.status_text, bgcolor=ft.Colors.SURFACE_CONTAINER,
@@ -968,21 +979,21 @@ class GUIBuilderMixin:
             on_click=self.start_stream_calibration,
         )
         self.stream_calibration_status = ft.Text(
-            "Not calibrated", size=FONT_SIZE, color=ft.Colors.GREY
+            "", size=FONT_SIZE, color=ft.Colors.GREY, visible=False
         )
         self.stream_calibration_warning = ft.Text(
-            "", size=FONT_SIZE, color=ft.Colors.ORANGE, visible=False
+            "", size=FONT_SIZE, color=ft.Colors.ORANGE, visible=False, no_wrap=True
         )
         self.stream_calibration_warning_row = ft.Row(
-            [ft.Container(width=S(150)), self.stream_calibration_warning],
+            [self.stream_calibration_warning],
             spacing=1,
             visible=False,
         )
         self.stream_calibration_result = ft.Text(
-            "", size=FONT_SIZE, color=ft.Colors.GREEN, visible=False
+            "", size=FONT_SIZE, color=ft.Colors.GREEN, visible=False, no_wrap=True
         )
         self.stream_calibration_result_row = ft.Row(
-            [ft.Container(width=S(150)), self.stream_calibration_result],
+            [self.stream_calibration_result],
             spacing=1,
             visible=False,
         )
@@ -992,8 +1003,6 @@ class GUIBuilderMixin:
                 self.stream_calibration_mode_dd,
                 ft.Container(width=S(10)),
                 self.stream_calibration_btn,
-                ft.Container(width=S(10)),
-                self.stream_calibration_status,
             ],
             spacing=1,
         )

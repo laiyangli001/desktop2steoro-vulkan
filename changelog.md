@@ -2,12 +2,16 @@
 
 ## 2026-08-21
 
+- 补全推流参数 tooltip：逐项说明推流网址与预览、端口、防火墙及校准端口关系、MJPEG 质量范围、各协议适用场景、推流路径规则、混音设备、音频正负延迟、编码后端、自动/手动传输配置和闭环校准按钮的实际用途；明确“推流质量”仅控制低级 MJPEG，高级与 GPU 推流由 CRF 和码率控制。
+- 完善“恒定质量”提示：tooltip 按 4K SBS、H.264、30 FPS 的自动校准目标带宽给出明确建议，`≥30 Mbps` 使用 CRF 20、`25-29 Mbps` 使用 23、`21-24 Mbps` 使用 26、`19-20 Mbps` 使用 28；低于 `19 Mbps` 时提示降低分辨率或帧率，而不是继续牺牲画质。
+- 调整设备区域布局：将“显示模式”从“运行模式”右侧移到“头显型号”右侧，使目标头显与对应的立体显示格式在同一行配置；在运行模式右侧新增“推流设置”复选框，进入任意推流模式时显示该入口但默认不勾选，使推流参数保持折叠，用户手动勾选后才展开推流网址、端口、质量、协议和音频等设置且不清除已有值，非推流模式自动隐藏该入口；折叠状态不再阻止推流网址初始化，展开后始终显示按当前协议、端口和密钥生成的地址；OpenXR 模式隐藏显示模式时，头显型号仍保持可见。
+- 精简自动校准区域：删除“开始校准”按钮右侧的帧率与码率状态，只在下一行靠左显示校准结果或“设置变化，请重新校准”提示；结果文字不再展示峰值码率，仅保留网络稳定上限、安全码率和帧率；校准结果行动态显示或隐藏时纳入原有控件高度计算并重新适配窗口，提示文字固定为单行，不增加影响其他模式的全局高度余量；配置失效判断、自动重新校准及内部峰值码率参数保持不变；底部“停止/运行”按钮组整体向左移动 20px，缩短与左侧内容的距离。
 - 统一高级网络推流的跨平台 FFmpeg 运行时来源：Windows AMD64、Linux AMD64/ARM64、macOS Intel/Apple Silicon 压缩包均改用 `desktop2stereo-ffmpeg-builds` GitHub Actions 的 FFmpeg 9.0.1 `d2s.1` 构建产物，五个平台使用同一版本与功能配置，并保留构建端及本地 SHA-256 校验结果；运行时安装同步改为复制完整 FFmpeg 目录，确保共享 FFmpeg、SRT、Opus、oneVPL 等动态库随可执行文件一起部署。
 - 新增“高级网络推流”的自动网络校准：GUI 提供独立入口和实时进度弹窗，头显测试页通过 WHEP 自动重连并回传 WebRTC 解码帧率、丢帧、冻结、丢包、实际接收码率与抖动；校准使用按输入分辨率确定起点的独立 30 FPS CBR 压力流，每档测试 15 秒，先按 5 Mbps 向上粗测，再在稳定/不稳定区间二分到 1 Mbps，并对最终候选执行 30 秒确认。只有实际发送码率达到目标档位 85% 的测试才有效，结果按稳定网络上限的 80%/90% 保存安全目标/峰值码率及配置指纹。
 - 记录并处理 Windows 11 入站防火墙经验：高级网络推流的 MediaMTX `1122` 端口可正常访问时，自动校准专用 Python HTTP 服务 `1123` 仍可能因项目内置 `python.exe` 被 Windows 防火墙的 `Python` 入站 Block 规则拦截，表现为头显浏览器无响应且校准服务没有 `TCP accepted` 日志；校准弹窗现在提供手动“检测防火墙规则”入口，按内置 Python 的精确路径查找并仅删除匹配的 TCP/UDP 入站阻止规则，必要时通过 UAC 提权，并在检测或删除失败时给出明确提示。
 - 修复 NumPy 2.5 环境下 SoundCard 0.4.4 的 Windows WASAPI 回环采集在收到真实音频后触发 `The binary mode of fromstring is removed` 并降级静音的问题；安装依赖升级并锁定到 SoundCard 0.4.6，改用兼容 NumPy 2.x 的二进制缓冲区读取实现。
 - 修复“高级网络推流”使用 SoundCard/WASAPI 回环音频时，采集线程在启动后异常会令 FFmpeg 等待音频、继而使本机 RTSP 发布约 10 秒后 `i/o timeout` 的问题；音频异常现在会明确告警并按实时节奏降级为静音，视频和 WebRTC 会话保持在线。
-- 修复“高级网络串流”探测 FFmpeg NVENC 时误加载并输出 PyNvVideoCodec 可用状态的问题；该模式现在只报告实际选中的 `h264_nvenc`/`hevc_nvenc`，PyNvVideoCodec 状态仅由“GPU 推流”路径处理。
+- 修复“高级网络推流”探测 FFmpeg NVENC 时误加载并输出 PyNvVideoCodec 可用状态的问题；该模式现在只报告实际选中的 `h264_nvenc`/`hevc_nvenc`，PyNvVideoCodec 状态仅由“GPU 推流”路径处理。
 - 修复 4K GPU WebRTC 推流在浏览器中花屏并持续出现 `reader is too slow`：MediaMTX 恢复 UDP 优先、保留 TCP 回退并扩大短时出口突发队列；PyNvVideoCodec 超低延迟编码改为无 B 帧的 IPPP GOP，避免 TCP 队头阻塞和参考帧重排导致浏览器连续丢包；内部 RTSP 发布包长固定为 IPv6 MTU 安全值 `1452`，无需 MediaMTX 再将 1460 字节 RTP 载荷重封装为 1440 字节。
 - 修复 Windows BAT/CMD/REG 文件被仓库全局 `eol=lf` 规则转换为 Linux 换行的问题；这些文件现在以 CRLF 原始字节提交并排除 Git 文本归一化，确保 Git 克隆、GitHub ZIP 和 raw 下载均可由 Windows 原生命令解释器直接运行。
 
@@ -28,7 +32,7 @@
 - 补充跨平台推流参数：macOS 音频使用 FFmpeg `avfoundation` 设备索引；QSV 使用 `global_quality` 并关闭 look-ahead，AMF 使用低延迟 `vbr_peak`，避免套用 NVENC 专属参数。
 - 完善跨平台串流运行时打包：新增平台/架构压缩包清单，启动时只解压当前系统所需的 FFmpeg 与 MediaMTX；MediaMTX 官方模板保存在 `mediamtx/mediamtx.yml`，项目最终配置固定使用根目录 `mediamtx.yml`，后续升级不会覆盖用户自定义配置；打包文档补充 MediaMTX、FFmpeg 官方下载地址。
 
-- 合并旧网络推流与低级网络推流：GUI 不再显示 `Legacy Streamer`，旧配置读取时自动归一化为 `MJPEG Streamer`；高级网络串流的内部配置键保持 `RTMP Streamer` 以兼容已有设置。
+- 合并旧网络推流与低级网络推流：GUI 不再显示 `Legacy Streamer`，旧配置读取时自动归一化为 `MJPEG Streamer`；高级网络推流的内部配置键保持 `RTMP Streamer` 以兼容已有设置。
 
 - GUI 执行重置后，运行模式默认恢复为“本地查看”（`Local Viewer`）。
 - 修复重置后运行模式下拉框未切换的问题：配置应用现在会在保留可选配置关闭时也同步 `run_mode_key` 和界面控件。
