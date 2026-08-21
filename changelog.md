@@ -2,6 +2,7 @@
 
 ## 2026-08-21
 
+- Vulkan bridge 运行时新增输入格式闸门：检测到 FFmpeg 导出的 `R8`/`R8G8` 拆分 NV12 plane 时，在提交前关闭外部句柄并明确触发稳定推流回退，避免进入 Vulkan Video 驱动后才产生 `VK_ERROR_INITIALIZATION_FAILED`；后续路径必须提供单一 multi-plane NV12 image。
 - Vulkan CUDA/FFmpeg frame-pool 诊断确认 NVIDIA Vulkan Video 的硬约束：CUDA 友好的拆分 `R8`/`R8G8` plane 虽可 external-memory 导入，却不是合法 H.264/HEVC Vulkan Video 输入；当前高级网络推流继续稳定回退，后续零拷贝实现必须共享单一 multi-plane NV12 image 并在 Vulkan 内完成颜色转换。
 - GitHub Actions 全部升级为 `actions/checkout@v5` 与 `actions/upload-artifact@v6`，统一使用 Node.js 24 runtime，消除 GitHub Hosted Runner 对旧 Node.js 20 action runtime 的弃用提示。
 - Vulkan FFmpeg bridge ABI 升级到 v3：NV12 frame descriptor 现在导出每 plane 的 OS external-memory handle、FFmpeg timeline semaphore handle/value 与稳定 slot ID，供 CUDA/HIP 一次导入后直接写入；句柄只用于 GPU 外部互操作，不暴露 CPU 像素。

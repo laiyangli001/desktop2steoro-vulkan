@@ -46,6 +46,20 @@ class VulkanVideoFrame(ctypes.Structure):
         ("external_handle_type", ctypes.c_uint32),
     ]
 
+    @property
+    def is_split_nv12(self) -> bool:
+        """Whether FFmpeg exposed NV12 as two single-plane Vulkan images.
+
+        NVIDIA Vulkan Video requires one multi-plane NV12 image for the encode
+        source.  The split representation is useful for diagnostics/CUDA
+        import, but must never be submitted to h264_vulkan/hevc_vulkan.
+        """
+        return int(self.plane_count) == 2 and int(self.format[0]) == 9 and int(self.format[1]) == 16
+
+    @property
+    def video_encode_compatible(self) -> bool:
+        return int(self.plane_count) == 1 or not self.is_split_nv12
+
 
 class VulkanNativeEncoder:
     """Typed owner for the native encoder handle and frame-pool ABI."""
@@ -68,8 +82,26 @@ class VulkanNativeEncoder:
             raise RuntimeError("native Vulkan frame has no CUDA-importable external memory handles")
         if not all(frame.external_semaphore_handle[: frame.plane_count]):
             raise RuntimeError("native Vulkan frame has no CUDA-importable semaphore handles")
+        if frame.is_split_nv12:
+            self._close_exported_handles(frame)
+            self._acquired = None
+            raise RuntimeError(
+                "Vulkan Video frame is split into R8/R8G8 planes; "
+                "requires a single multi-plane NV12 image, fallback required"
+            )
         self._acquired = frame
         return frame
+
+    @staticmethod
+    def _close_exported_handles(frame: VulkanVideoFrame) -> None:
+        for index in range(int(frame.plane_count)):
+            for handle in (int(frame.external_memory_handle[index]), int(frame.external_semaphore_handle[index])):
+                if not handle:
+                    continue
+                if os.name == "nt":
+                    ctypes.windll.kernel32.CloseHandle(ctypes.c_void_p(handle))
+                else:
+                    os.close(handle)
 
     def submit_frame(
         self,
