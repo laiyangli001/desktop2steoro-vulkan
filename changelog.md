@@ -9,6 +9,7 @@
 - 增加单帧 Vulkan GPU command sequence 封装：一次调用按顺序记录 Compute 前置 barrier、RGB→NV12 dispatch、Y/UV multi-plane copy 和 Video Encode barrier，供 native bridge 接入 timeline wait/signal。
 - 明确 Vulkan device 所有权边界：Python Compute helper 拒绝跨 `VkDevice` 操作 FFmpeg-owned Video image；最终 shader、descriptor、command pool 和 timeline submit 必须在 native bridge 同一 device 内完成。
 - 原生桥 ABI 升级到 v4，新增 FFmpeg-owned 单 plane RGBA external frame pool 的 acquire/release 接口；CUDA 可在同一 FFmpeg Vulkan device 上写入 RGBA，后续由 native Compute 转换到 Video NV12，避免再把拆分 plane 当编码源。
+- 新增 `vulkan_ffmpeg_rgba_pool_smoke.py`，验证 ABI v4 的 4K 单 plane RGBA frame、external memory handle 和 timeline semaphore 导出。
 - 新增 Vulkan Compute `d2s_rgb_to_nv12`：在 GPU 上从 RGBA storage image 计算 BT.601 limited-range Y 与 2x2 平均 UV，输出 R8/RG8 中间 image，供后续复制到合法的 Vulkan Video NV12 multi-plane image；shader 已编译并通过 manifest 校验，未引入 CPU RGB24 或 stdin 原始帧。
 - Vulkan bridge 运行时新增输入格式闸门：检测到 FFmpeg 导出的 `R8`/`R8G8` 拆分 NV12 plane 时，在提交前关闭外部句柄并明确触发稳定推流回退，避免进入 Vulkan Video 驱动后才产生 `VK_ERROR_INITIALIZATION_FAILED`；后续路径必须提供单一 multi-plane NV12 image。
 - Vulkan CUDA/FFmpeg frame-pool 诊断确认 NVIDIA Vulkan Video 的硬约束：CUDA 友好的拆分 `R8`/`R8G8` plane 虽可 external-memory 导入，却不是合法 H.264/HEVC Vulkan Video 输入；当前高级网络推流继续稳定回退，后续零拷贝实现必须共享单一 multi-plane NV12 image 并在 Vulkan 内完成颜色转换。
