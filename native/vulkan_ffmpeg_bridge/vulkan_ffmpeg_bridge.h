@@ -60,6 +60,16 @@ D2S_VULKAN_FFMPEG_API int d2s_vulkan_ffmpeg_encoder_acquire_frame(
     void* encoder,
     D2SVulkanVideoFrame* frame);
 
+// Acquire one single-plane RGBA image on the same FFmpeg-owned Vulkan device.
+// CUDA writes this image through the exported external handles; it is never
+// submitted directly to Vulkan Video. release_rgba_frame returns the slot to
+// the RGBA pool after the producer has finished its GPU work.
+D2S_VULKAN_FFMPEG_API int d2s_vulkan_ffmpeg_encoder_acquire_rgba_frame(
+    void* encoder,
+    D2SVulkanVideoFrame* frame);
+D2S_VULKAN_FFMPEG_API int d2s_vulkan_ffmpeg_encoder_release_rgba_frame(
+    void* encoder);
+
 D2S_VULKAN_FFMPEG_API int d2s_vulkan_ffmpeg_encoder_submit_frame(
     void* encoder,
     const D2SVulkanVideoFrame* frame,

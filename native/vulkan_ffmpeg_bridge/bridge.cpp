@@ -30,9 +30,11 @@ namespace {
 struct Encoder {
     AVBufferRef* device = nullptr;
     AVBufferRef* frames = nullptr;
+    AVBufferRef* rgba_frames = nullptr;
     AVCodecContext* codec = nullptr;
     AVPacket* packet = nullptr;
     AVFrame* acquired = nullptr;
+    AVFrame* rgba_acquired = nullptr;
     int width = 0;
     int height = 0;
     int fps = 0;
@@ -53,9 +55,11 @@ void write_message(char* output, int capacity, const char* message) {
 void destroy_encoder(Encoder* encoder) {
     if (!encoder) return;
     av_frame_free(&encoder->acquired);
+    av_frame_free(&encoder->rgba_acquired);
     av_packet_free(&encoder->packet);
     avcodec_free_context(&encoder->codec);
     av_buffer_unref(&encoder->frames);
+    av_buffer_unref(&encoder->rgba_frames);
     if (encoder->prepare_pool != VK_NULL_HANDLE && encoder->device) {
         auto* device_context = reinterpret_cast<AVHWDeviceContext*>(encoder->device->data);
         auto* vulkan = reinterpret_cast<AVVulkanDeviceContext*>(device_context->hwctx);
@@ -244,7 +248,7 @@ void close_exported_handles(D2SVulkanVideoFrame* frame) {
 }
 
 void copy_vk_frame(Encoder* encoder, const AVVkFrame* source, D2SVulkanVideoFrame* destination,
-                   int width, int height) {
+                   int width, int height, AVPixelFormat pixel_format = AV_PIX_FMT_NV12) {
     std::memset(destination, 0, sizeof(*destination));
     destination->width = static_cast<unsigned int>(width);
     destination->height = static_cast<unsigned int>(height);
@@ -259,7 +263,7 @@ void copy_vk_frame(Encoder* encoder, const AVVkFrame* source, D2SVulkanVideoFram
         destination->layout[index] = static_cast<unsigned int>(source->layout[index]);
         destination->plane_count = index + 1;
     }
-    const VkFormat* formats = av_vkfmt_from_pixfmt(AV_PIX_FMT_NV12);
+    const VkFormat* formats = av_vkfmt_from_pixfmt(pixel_format);
     if (formats) {
         for (unsigned int index = 0; index < destination->plane_count; ++index)
             destination->format[index] = static_cast<unsigned int>(formats[index]);
@@ -269,7 +273,7 @@ void copy_vk_frame(Encoder* encoder, const AVVkFrame* source, D2SVulkanVideoFram
 }
 }
 
-extern "C" int d2s_vulkan_ffmpeg_bridge_abi_version() { return 3; }
+extern "C" int d2s_vulkan_ffmpeg_bridge_abi_version() { return 4; }
 
 extern "C" int d2s_vulkan_ffmpeg_bridge_probe(char* output, int capacity) {
     const AVCodec* h264 = avcodec_find_encoder_by_name("h264_vulkan");
@@ -379,6 +383,29 @@ extern "C" void* d2s_vulkan_ffmpeg_encoder_create(
         }
     }
 
+    // Separate single-plane RGBA producer pool. CUDA can import this image
+    // format; the native bridge will later convert it to the NV12 Video image
+    // on this same Vulkan device.
+    result->rgba_frames = av_hwframe_ctx_alloc(result->device);
+    if (!result->rgba_frames) {
+        destroy_encoder(result);
+        return nullptr;
+    }
+    auto* rgba_context = reinterpret_cast<AVHWFramesContext*>(result->rgba_frames->data);
+    rgba_context->format = AV_PIX_FMT_VULKAN;
+    rgba_context->sw_format = AV_PIX_FMT_RGBA;
+    rgba_context->width = width;
+    rgba_context->height = height;
+    rgba_context->initial_pool_size = 3;
+    auto* rgba_vulkan = reinterpret_cast<AVVulkanFramesContext*>(rgba_context->hwctx);
+    rgba_vulkan->usage = static_cast<VkImageUsageFlagBits>(
+        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+        VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+    if (av_hwframe_ctx_init(result->rgba_frames) < 0) {
+        destroy_encoder(result);
+        return nullptr;
+    }
+
     VkVideoEncodeH264ProfileInfoKHR h264_profile{VK_STRUCTURE_TYPE_VIDEO_ENCODE_H264_PROFILE_INFO_KHR};
     VkVideoEncodeH265ProfileInfoKHR hevc_profile{VK_STRUCTURE_TYPE_VIDEO_ENCODE_H265_PROFILE_INFO_KHR};
     VkVideoProfileInfoKHR video_profile{VK_STRUCTURE_TYPE_VIDEO_PROFILE_INFO_KHR};
@@ -468,6 +495,38 @@ extern "C" int d2s_vulkan_ffmpeg_encoder_acquire_frame(
         return 0;
     av_frame_free(&encoder->acquired);
     return -1;
+}
+
+extern "C" int d2s_vulkan_ffmpeg_encoder_acquire_rgba_frame(
+    void* opaque, D2SVulkanVideoFrame* frame) {
+    auto* encoder = static_cast<Encoder*>(opaque);
+    if (!encoder || !frame) return -1;
+    if (encoder->acquired || encoder->rgba_acquired) return -2;
+    AVFrame* acquired = av_frame_alloc();
+    if (!acquired || av_hwframe_get_buffer(encoder->rgba_frames, acquired, 0) < 0) {
+        av_frame_free(&acquired);
+        return -1;
+    }
+    auto* source = reinterpret_cast<AVVkFrame*>(acquired->data[0]);
+    if (!prepare_frame_for_cuda(encoder, source)) {
+        av_frame_free(&acquired);
+        return -1;
+    }
+    encoder->rgba_acquired = acquired;
+    copy_vk_frame(encoder, source, frame, encoder->width, encoder->height, AV_PIX_FMT_RGBA);
+    if (frame->plane_count != 1 || !frame->external_handle_type) {
+        close_exported_handles(frame);
+        av_frame_free(&encoder->rgba_acquired);
+        return -1;
+    }
+    return 0;
+}
+
+extern "C" int d2s_vulkan_ffmpeg_encoder_release_rgba_frame(void* opaque) {
+    auto* encoder = static_cast<Encoder*>(opaque);
+    if (!encoder || !encoder->rgba_acquired) return -1;
+    av_frame_free(&encoder->rgba_acquired);
+    return 0;
 }
 
 extern "C" int d2s_vulkan_ffmpeg_encoder_submit_frame(

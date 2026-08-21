@@ -12,12 +12,14 @@ import os
 from pathlib import Path
 
 
-EXPECTED_ABI_VERSION = 3
+EXPECTED_ABI_VERSION = 4
 REQUIRED_SYMBOLS = (
     "d2s_vulkan_ffmpeg_bridge_abi_version",
     "d2s_vulkan_ffmpeg_bridge_probe",
     "d2s_vulkan_ffmpeg_encoder_create",
     "d2s_vulkan_ffmpeg_encoder_acquire_frame",
+    "d2s_vulkan_ffmpeg_encoder_acquire_rgba_frame",
+    "d2s_vulkan_ffmpeg_encoder_release_rgba_frame",
     "d2s_vulkan_ffmpeg_encoder_submit_frame",
     "d2s_vulkan_ffmpeg_encoder_submit_image",
     "d2s_vulkan_ffmpeg_encoder_read_packet",
@@ -91,6 +93,25 @@ class VulkanNativeEncoder:
             )
         self._acquired = frame
         return frame
+
+    def acquire_rgba_frame(self) -> VulkanVideoFrame:
+        if self._acquired is not None:
+            raise RuntimeError("a Vulkan encoder frame is already acquired")
+        frame = VulkanVideoFrame()
+        result = int(self.bridge._acquire_rgba_frame(self.handle, ctypes.byref(frame)))
+        if result != 0:
+            raise RuntimeError(f"native Vulkan RGBA frame acquire failed: {result}")
+        if frame.plane_count != 1 or not frame.external_handle_type or not frame.external_memory_handle[0] or not frame.external_semaphore_handle[0]:
+            self._close_exported_handles(frame)
+            raise RuntimeError("native Vulkan RGBA frame is not a single external image")
+        self._acquired = frame
+        return frame
+
+    def release_rgba_frame(self) -> None:
+        result = int(self.bridge._release_rgba_frame(self.handle))
+        if result != 0:
+            raise RuntimeError(f"native Vulkan RGBA frame release failed: {result}")
+        self._acquired = None
 
     @staticmethod
     def _close_exported_handles(frame: VulkanVideoFrame) -> None:
@@ -196,6 +217,12 @@ class VulkanNativeBridge:
         self._acquire_frame = library.d2s_vulkan_ffmpeg_encoder_acquire_frame
         self._acquire_frame.argtypes = [ctypes.c_void_p, ctypes.POINTER(VulkanVideoFrame)]
         self._acquire_frame.restype = ctypes.c_int
+        self._acquire_rgba_frame = library.d2s_vulkan_ffmpeg_encoder_acquire_rgba_frame
+        self._acquire_rgba_frame.argtypes = [ctypes.c_void_p, ctypes.POINTER(VulkanVideoFrame)]
+        self._acquire_rgba_frame.restype = ctypes.c_int
+        self._release_rgba_frame = library.d2s_vulkan_ffmpeg_encoder_release_rgba_frame
+        self._release_rgba_frame.argtypes = [ctypes.c_void_p]
+        self._release_rgba_frame.restype = ctypes.c_int
         self._submit_frame = library.d2s_vulkan_ffmpeg_encoder_submit_frame
         self._submit_frame.argtypes = [
             ctypes.c_void_p,
