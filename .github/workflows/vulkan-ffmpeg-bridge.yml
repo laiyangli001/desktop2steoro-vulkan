@@ -20,7 +20,7 @@ jobs:
   build-windows:
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install MinGW and Vulkan development packages
         shell: pwsh
@@ -70,7 +70,7 @@ jobs:
           & 'C:\msys64\mingw64\bin\nm.exe' -g $dll.FullName | Select-String 'd2s_vulkan_ffmpeg_bridge_abi_version|d2s_vulkan_ffmpeg_encoder_acquire_frame|d2s_vulkan_ffmpeg_encoder_submit_frame|d2s_vulkan_ffmpeg_encoder_read_packet|d2s_vulkan_ffmpeg_encoder_flush'
           if ($LASTEXITCODE -ne 0) { throw 'Required Vulkan bridge ABI exports are missing' }
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: d2s-vulkan-ffmpeg-bridge-windows-amd64
           path: native/vulkan_ffmpeg_bridge/build/ci/**/d2s_vulkan_ffmpeg_bridge.dll

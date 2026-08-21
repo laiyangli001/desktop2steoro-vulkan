@@ -16,7 +16,7 @@ jobs:
     name: Windows x64 AMF bridge
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Download AMD AMF SDK headers
         shell: pwsh
@@ -41,7 +41,7 @@ jobs:
           }
 
       - name: Upload AMD bridge artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: d2s-amd-encoder-windows-x64
           path: native/amd_encoder/build/Release/d2s_amd_encoder.dll

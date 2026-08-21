@@ -24,7 +24,7 @@ jobs:
     # The bridge uses the Visual Studio 2022 CMake generator explicitly.
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Cache patched Filament build
         uses: actions/cache@v4
@@ -75,7 +75,7 @@ jobs:
             throw 'Windows Filament bridge was not produced'
           }
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: filament-bridge-windows-latest
           path: src/desktop2steoro/xr_viewer/native/windows/filament_bridge.dll
@@ -100,7 +100,7 @@ jobs:
             needs_vulkan_dev: false
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Cache patched Filament build
         uses: actions/cache@v4
@@ -159,7 +159,7 @@ jobs:
           cmake --build native/filament/build/ci --config Release --parallel 2
           test -f "src/desktop2steoro/xr_viewer/native/${{ matrix.platform }}/${{ matrix.output }}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: filament-bridge-${{ matrix.runner }}
           path: src/desktop2steoro/xr_viewer/native/${{ matrix.platform }}/${{ matrix.output }}
@@ -172,7 +172,7 @@ jobs:
       - build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ github.sha }}
 
