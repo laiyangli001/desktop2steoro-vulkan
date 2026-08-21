@@ -766,7 +766,7 @@ GPU 零拷贝只解决电脑端原始帧搬运。继续检查：
 ### 编码与发布
 
 - [x] libavcodec 收到 `AV_PIX_FMT_VULKAN`。
-- [ ] H.264 低延迟路径 `bf=0`。
+- [x] H.264 低延迟路径 `bf=0`（native bridge 设置 `max_b_frames=0`，启动日志输出 `bf=0`）。
 - [x] 编码包交给 muxer 时保持正确 PTS/DTS（PTS 使用 0..N-1 编码帧序号；ffprobe time base 为 1/90000）。
 - [x] RTSP 本机发布使用稳定传输设置（TCP、`pkt_size=1452`）。
 - [x] MediaMTX 输出 WebRTC H.264 + Opus（本机 MediaMTX 日志确认 `2 tracks (H264, Opus)`）。

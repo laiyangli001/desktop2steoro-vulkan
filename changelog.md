@@ -2,6 +2,8 @@
 
 ## 2026-08-22
 
+- 补充 native Vulkan 编码诊断日志：输出实际 Vulkan 设备、H.264/HEVC 编码器、RGBA8→NV12 格式、prepare/compute queue family、目标/峰值码率和 `bf=0`，便于区分 GPU 图像路径、编码器和 MediaMTX 传输层问题；新增 bridge 合约测试。
+
 - 完成 native Vulkan 高级推流连续运行验证：RTX 3090 Windows 主机连续提交 600 帧 3840×2160@30，耗时 20.10 秒；MediaMTX 持续发布 H.264，ffprobe 读取到 `3840x2160`、`30/1 FPS`、`yuv420p`、`1/90000` 时间基，未出现 native 编码回退或原始 RGB24 pipe。
 - 更新 Vulkan bridge README 与实现指南：ABI、RGBA 输入池、NV12 multi-plane 编码池和当前 device-local copy 状态与实际代码一致；明确头显 30 分钟闭环和音频闭环仍属于未完成验收项，并记录 NVIDIA validation 层下 FFmpeg frame-pool VUID/flush 阻塞的复现条件。
 - 增强 Vulkan 推流关闭与诊断回退：正常关闭不再调用不会再发布结果的阻塞式 `avcodec_send_frame(NULL)` flush；检测到 `VK_LAYER_KHRONOS_validation` 时不加载 native bridge，明确回退到稳定 host-upload 路径，避免 validation 诊断环境卡死；新增对应单元测试。

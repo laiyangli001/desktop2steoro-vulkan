@@ -741,6 +741,30 @@ extern "C" void* d2s_vulkan_ffmpeg_encoder_create(
         destroy_encoder(result);
         return nullptr;
     }
+    {
+        auto* device_context = reinterpret_cast<AVHWDeviceContext*>(result->device->data);
+        auto* vulkan = reinterpret_cast<AVVulkanDeviceContext*>(device_context->hwctx);
+        VkPhysicalDeviceProperties properties{};
+        vkGetPhysicalDeviceProperties(vulkan->phys_dev, &properties);
+        std::fprintf(
+            stderr,
+            "[VulkanStream] native Vulkan encoder active: device=%s "
+            "encoder=%s input=RGBA8 encode=NV12 profile=%s "
+            "queue_prepare=%u queue_compute=%u bf=0 "
+            "gpu_to_cpu=False gpu_copy=True zero_copy=False "
+            "resolution=%dx%d fps=%d target=%d peak=%d\\n",
+            properties.deviceName,
+            encoder_name,
+            hevc ? "main" : "high",
+            result->prepare_queue_family,
+            result->compute_queue_family,
+            width,
+            height,
+            fps,
+            result->codec->bit_rate,
+            result->codec->rc_max_rate);
+        std::fflush(stderr);
+    }
     return result;
 }
 

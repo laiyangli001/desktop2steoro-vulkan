@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from path_config import APP_ROOT
 from streaming.vulkan_bridge import VulkanNativeBridge
 
 
@@ -38,3 +39,17 @@ def test_native_bridge_accepts_only_versioned_contract() -> None:
 def test_native_bridge_missing_library_is_explicit(tmp_path) -> None:
     with pytest.raises(FileNotFoundError):
         VulkanNativeBridge.load(tmp_path / "missing.dll")
+
+
+def test_native_bridge_declares_low_latency_gpu_path_and_diagnostic_log():
+    source = (
+        APP_ROOT.parents[1]
+        / "native"
+        / "vulkan_ffmpeg_bridge"
+        / "bridge.cpp"
+    ).read_text(encoding="utf-8")
+
+    assert "result->codec->max_b_frames = 0" in source
+    assert "input=RGBA8 encode=NV12" in source
+    assert "queue_prepare=%u queue_compute=%u bf=0" in source
+    assert "gpu_to_cpu=False gpu_copy=True zero_copy=False" in source
