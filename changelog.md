@@ -9,6 +9,7 @@
 - 原生桥接探针现在实际验证 FFmpeg Vulkan 编码器和 Vulkan HW device；图像提交 ABI 在完成前明确报告未启用，不会误把占位库当作零复制编码器。
 - 新增 Windows GitHub Actions 原生桥构建流程：远程下载固定 FFmpeg 开发包、安装 MinGW/Vulkan 依赖、构建并检查 Vulkan FFmpeg ABI 导出；构建产物在完成实际 image submit 和头显验收前只作为测试 Artifact。
 - 修正 Vulkan 原生桥 Workflow 的 Windows CMake 调用：不再通过 MSYS2 shell 解析 Windows 路径，改为直接调用 MinGW CMake/Ninja/GCC，避免远程构建出现 `cmake: command not found`。
+- 修正远程 MinGW 编译器启动环境：将 MSYS2 MinGW/运行时目录加入 PATH，避免 `g++.exe` 能定位但 CMake 编译器自检失败。
 - 修复点击“重置”后再切换到高级网络推流或 GPU 推流时，混音设备列表已有声卡但当前选项为空的问题；切换推流模式时如果已有有效选择则保持不变，如果当前值为空或设备已失效，则直接从现有扫描结果自动选择合适的 SoundCard/WASAPI/虚拟声卡，无需重复扫描。
 - 修复“显示高级立体参数”和设备“高级选项”展开/折叠时只更新控件却不应用窗口高度的问题；两个开关现在都会按可见控件重新计算并写入原生窗口高度，同时保留既有最大高度与滚动策略。
 - 补全推流参数 tooltip：逐项说明推流网址与预览、端口、防火墙及校准端口关系、MJPEG 质量范围、各协议适用场景、推流路径规则、混音设备、音频正负延迟、编码后端、自动/手动传输配置和闭环校准按钮的实际用途；明确“推流质量”仅控制低级 MJPEG，高级与 GPU 推流由 CRF 和码率控制。

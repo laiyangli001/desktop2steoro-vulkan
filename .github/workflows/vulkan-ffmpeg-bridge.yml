@@ -43,6 +43,7 @@ jobs:
       - name: Configure and build native bridge
         shell: pwsh
         run: |
+          $env:Path = "C:\msys64\mingw64\bin;C:\msys64\usr\bin;$env:Path"
           $cmake = 'C:\msys64\mingw64\bin\cmake.exe'
           $ninja = 'C:\msys64\mingw64\bin\ninja.exe'
           $gcc = 'C:\msys64\mingw64\bin\gcc.exe'
