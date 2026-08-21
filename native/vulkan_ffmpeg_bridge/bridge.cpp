@@ -17,8 +17,12 @@ extern "C" {
 
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <unordered_map>
+#include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -42,6 +46,22 @@ struct Encoder {
     uint32_t prepare_queue_family = VK_QUEUE_FAMILY_IGNORED;
     VkCommandPool prepare_pool = VK_NULL_HANDLE;
     std::unordered_map<AVVkFrame*, VkCommandBuffer> prepare_buffers;
+
+    VkPipeline convert_pipeline = VK_NULL_HANDLE;
+    VkPipelineLayout convert_pipeline_layout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout convert_descriptor_layout = VK_NULL_HANDLE;
+    VkDescriptorPool convert_descriptor_pool = VK_NULL_HANDLE;
+    VkDescriptorSet convert_descriptor_set = VK_NULL_HANDLE;
+    VkShaderModule convert_shader = VK_NULL_HANDLE;
+    VkImage convert_y_image = VK_NULL_HANDLE;
+    VkDeviceMemory convert_y_memory = VK_NULL_HANDLE;
+    VkImageView convert_y_view = VK_NULL_HANDLE;
+    VkImage convert_uv_image = VK_NULL_HANDLE;
+    VkDeviceMemory convert_uv_memory = VK_NULL_HANDLE;
+    VkImageView convert_uv_view = VK_NULL_HANDLE;
+    std::unordered_map<VkImage, VkImageView> rgba_views;
+    std::unordered_map<VkImage, VkCommandBuffer> convert_buffers;
+    std::unordered_map<VkImage, VkFence> convert_fences;
 };
 
 constexpr unsigned int D2S_EXTERNAL_HANDLE_WIN32 = 1;
@@ -52,20 +72,211 @@ void write_message(char* output, int capacity, const char* message) {
     std::snprintf(output, static_cast<std::size_t>(capacity), "%s", message);
 }
 
+bool find_memory_type(Encoder* encoder, uint32_t bits, VkMemoryPropertyFlags properties,
+                       uint32_t* result) {
+    auto* device_context = reinterpret_cast<AVHWDeviceContext*>(encoder->device->data);
+    auto* vulkan = reinterpret_cast<AVVulkanDeviceContext*>(device_context->hwctx);
+    VkPhysicalDeviceMemoryProperties memory_properties{};
+    vkGetPhysicalDeviceMemoryProperties(vulkan->phys_dev, &memory_properties);
+    for (uint32_t index = 0; index < memory_properties.memoryTypeCount; ++index) {
+        if ((bits & (1u << index)) &&
+            (memory_properties.memoryTypes[index].propertyFlags & properties) == properties) {
+            *result = index;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool create_storage_image(Encoder* encoder, VkFormat format, uint32_t width,
+                          uint32_t height, VkImage* image, VkDeviceMemory* memory) {
+    auto* device_context = reinterpret_cast<AVHWDeviceContext*>(encoder->device->data);
+    auto* vulkan = reinterpret_cast<AVVulkanDeviceContext*>(device_context->hwctx);
+    VkImageCreateInfo image_info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    image_info.imageType = VK_IMAGE_TYPE_2D;
+    image_info.format = format;
+    image_info.extent = {width, height, 1};
+    image_info.mipLevels = 1;
+    image_info.arrayLayers = 1;
+    image_info.samples = VK_SAMPLE_COUNT_1_BIT;
+    image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+    image_info.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                       VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    if (vkCreateImage(vulkan->act_dev, &image_info, vulkan->alloc, image) != VK_SUCCESS)
+        return false;
+    VkMemoryRequirements requirements{};
+    vkGetImageMemoryRequirements(vulkan->act_dev, *image, &requirements);
+    uint32_t memory_type = 0;
+    if (!find_memory_type(encoder, requirements.memoryTypeBits,
+                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &memory_type))
+        return false;
+    VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    allocate.allocationSize = requirements.size;
+    allocate.memoryTypeIndex = memory_type;
+    if (vkAllocateMemory(vulkan->act_dev, &allocate, vulkan->alloc, memory) != VK_SUCCESS)
+        return false;
+    return vkBindImageMemory(vulkan->act_dev, *image, *memory, 0) == VK_SUCCESS;
+}
+
+VkImageView create_color_view(Encoder* encoder, VkImage image, VkFormat format) {
+    auto* device_context = reinterpret_cast<AVHWDeviceContext*>(encoder->device->data);
+    auto* vulkan = reinterpret_cast<AVVulkanDeviceContext*>(device_context->hwctx);
+    VkImageViewCreateInfo view_info{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    view_info.image = image;
+    view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    view_info.format = format;
+    view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    view_info.subresourceRange.levelCount = 1;
+    view_info.subresourceRange.layerCount = 1;
+    VkImageView view = VK_NULL_HANDLE;
+    return vkCreateImageView(vulkan->act_dev, &view_info, vulkan->alloc, &view) == VK_SUCCESS
+        ? view : VK_NULL_HANDLE;
+}
+
+bool load_convert_shader(std::vector<uint32_t>* code) {
+    std::vector<std::filesystem::path> candidates;
+    if (const char* configured = std::getenv("D2S_RGB_TO_NV12_SPV"))
+        candidates.emplace_back(configured);
+    const auto cwd = std::filesystem::current_path();
+    candidates.emplace_back(cwd / "src/desktop2steoro/shaders/d2s_rgb_to_nv12.spv");
+    candidates.emplace_back(cwd / "desktop2steoro-vulkan/src/desktop2steoro/shaders/d2s_rgb_to_nv12.spv");
+    for (const auto& path : candidates) {
+        std::ifstream file(path, std::ios::binary | std::ios::ate);
+        if (!file) continue;
+        const auto size = file.tellg();
+        if (size <= 0 || (size % static_cast<std::streamoff>(sizeof(uint32_t))) != 0)
+            continue;
+        code->resize(static_cast<size_t>(size) / sizeof(uint32_t));
+        file.seekg(0);
+        file.read(reinterpret_cast<char*>(code->data()), size);
+        if (file) return true;
+    }
+    return false;
+}
+
+void destroy_convert_resources(Encoder* encoder) {
+    if (!encoder || !encoder->device) return;
+    auto* device_context = reinterpret_cast<AVHWDeviceContext*>(encoder->device->data);
+    auto* vulkan = reinterpret_cast<AVVulkanDeviceContext*>(device_context->hwctx);
+    const VkDevice device = vulkan->act_dev;
+    for (auto& item : encoder->rgba_views)
+        vkDestroyImageView(device, item.second, vulkan->alloc);
+    encoder->rgba_views.clear();
+    for (auto& item : encoder->convert_fences)
+        vkDestroyFence(device, item.second, vulkan->alloc);
+    encoder->convert_fences.clear();
+    encoder->convert_buffers.clear();
+    if (encoder->convert_descriptor_pool)
+        vkDestroyDescriptorPool(device, encoder->convert_descriptor_pool, vulkan->alloc);
+    if (encoder->convert_pipeline)
+        vkDestroyPipeline(device, encoder->convert_pipeline, vulkan->alloc);
+    if (encoder->convert_pipeline_layout)
+        vkDestroyPipelineLayout(device, encoder->convert_pipeline_layout, vulkan->alloc);
+    if (encoder->convert_descriptor_layout)
+        vkDestroyDescriptorSetLayout(device, encoder->convert_descriptor_layout, vulkan->alloc);
+    if (encoder->convert_shader)
+        vkDestroyShaderModule(device, encoder->convert_shader, vulkan->alloc);
+    if (encoder->convert_y_view)
+        vkDestroyImageView(device, encoder->convert_y_view, vulkan->alloc);
+    if (encoder->convert_uv_view)
+        vkDestroyImageView(device, encoder->convert_uv_view, vulkan->alloc);
+    if (encoder->convert_y_image)
+        vkDestroyImage(device, encoder->convert_y_image, vulkan->alloc);
+    if (encoder->convert_uv_image)
+        vkDestroyImage(device, encoder->convert_uv_image, vulkan->alloc);
+    if (encoder->convert_y_memory)
+        vkFreeMemory(device, encoder->convert_y_memory, vulkan->alloc);
+    if (encoder->convert_uv_memory)
+        vkFreeMemory(device, encoder->convert_uv_memory, vulkan->alloc);
+    encoder->convert_descriptor_pool = VK_NULL_HANDLE;
+    encoder->convert_pipeline = VK_NULL_HANDLE;
+    encoder->convert_pipeline_layout = VK_NULL_HANDLE;
+    encoder->convert_descriptor_layout = VK_NULL_HANDLE;
+    encoder->convert_shader = VK_NULL_HANDLE;
+    encoder->convert_y_view = VK_NULL_HANDLE;
+    encoder->convert_uv_view = VK_NULL_HANDLE;
+    encoder->convert_y_image = VK_NULL_HANDLE;
+    encoder->convert_uv_image = VK_NULL_HANDLE;
+    encoder->convert_y_memory = VK_NULL_HANDLE;
+    encoder->convert_uv_memory = VK_NULL_HANDLE;
+}
+
+bool initialize_convert_pipeline(Encoder* encoder) {
+    auto* device_context = reinterpret_cast<AVHWDeviceContext*>(encoder->device->data);
+    auto* vulkan = reinterpret_cast<AVVulkanDeviceContext*>(device_context->hwctx);
+    const VkDevice device = vulkan->act_dev;
+    if (!create_storage_image(encoder, VK_FORMAT_R8_UNORM, encoder->width,
+                              encoder->height, &encoder->convert_y_image,
+                              &encoder->convert_y_memory)) return false;
+    if (!create_storage_image(encoder, VK_FORMAT_R8G8_UNORM, encoder->width / 2,
+                              encoder->height / 2, &encoder->convert_uv_image,
+                              &encoder->convert_uv_memory)) return false;
+    encoder->convert_y_view = create_color_view(encoder, encoder->convert_y_image, VK_FORMAT_R8_UNORM);
+    encoder->convert_uv_view = create_color_view(encoder, encoder->convert_uv_image, VK_FORMAT_R8G8_UNORM);
+    if (!encoder->convert_y_view || !encoder->convert_uv_view) return false;
+    std::vector<uint32_t> shader_code;
+    if (!load_convert_shader(&shader_code)) return false;
+    VkShaderModuleCreateInfo shader_info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+    shader_info.codeSize = shader_code.size() * sizeof(uint32_t);
+    shader_info.pCode = shader_code.data();
+    if (vkCreateShaderModule(device, &shader_info, vulkan->alloc, &encoder->convert_shader) != VK_SUCCESS)
+        return false;
+    VkDescriptorSetLayoutBinding bindings[3]{};
+    for (uint32_t index = 0; index < 3; ++index) {
+        bindings[index].binding = index;
+        bindings[index].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        bindings[index].descriptorCount = 1;
+        bindings[index].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
+    VkDescriptorSetLayoutCreateInfo layout_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    layout_info.bindingCount = 3;
+    layout_info.pBindings = bindings;
+    if (vkCreateDescriptorSetLayout(device, &layout_info, vulkan->alloc,
+                                    &encoder->convert_descriptor_layout) != VK_SUCCESS) return false;
+    VkPipelineLayoutCreateInfo pipeline_layout_info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    pipeline_layout_info.setLayoutCount = 1;
+    pipeline_layout_info.pSetLayouts = &encoder->convert_descriptor_layout;
+    if (vkCreatePipelineLayout(device, &pipeline_layout_info, vulkan->alloc,
+                               &encoder->convert_pipeline_layout) != VK_SUCCESS) return false;
+    VkPipelineShaderStageCreateInfo stage{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    stage.module = encoder->convert_shader;
+    stage.pName = "main";
+    VkComputePipelineCreateInfo pipeline_info{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+    pipeline_info.stage = stage;
+    pipeline_info.layout = encoder->convert_pipeline_layout;
+    if (vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipeline_info,
+                                 vulkan->alloc, &encoder->convert_pipeline) != VK_SUCCESS) return false;
+    VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 3};
+    VkDescriptorPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    pool_info.maxSets = 1;
+    pool_info.poolSizeCount = 1;
+    pool_info.pPoolSizes = &pool_size;
+    if (vkCreateDescriptorPool(device, &pool_info, vulkan->alloc,
+                                &encoder->convert_descriptor_pool) != VK_SUCCESS) return false;
+    VkDescriptorSetAllocateInfo allocate{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    allocate.descriptorPool = encoder->convert_descriptor_pool;
+    allocate.descriptorSetCount = 1;
+    allocate.pSetLayouts = &encoder->convert_descriptor_layout;
+    return vkAllocateDescriptorSets(device, &allocate, &encoder->convert_descriptor_set) == VK_SUCCESS;
+}
+
 void destroy_encoder(Encoder* encoder) {
     if (!encoder) return;
+    if (encoder->device) {
+        auto* device_context = reinterpret_cast<AVHWDeviceContext*>(encoder->device->data);
+        auto* vulkan = reinterpret_cast<AVVulkanDeviceContext*>(device_context->hwctx);
+        vkDeviceWaitIdle(vulkan->act_dev);
+        destroy_convert_resources(encoder);
+        if (encoder->prepare_pool != VK_NULL_HANDLE)
+            vkDestroyCommandPool(vulkan->act_dev, encoder->prepare_pool, vulkan->alloc);
+    }
     av_frame_free(&encoder->acquired);
     av_frame_free(&encoder->rgba_acquired);
     av_packet_free(&encoder->packet);
     avcodec_free_context(&encoder->codec);
     av_buffer_unref(&encoder->frames);
     av_buffer_unref(&encoder->rgba_frames);
-    if (encoder->prepare_pool != VK_NULL_HANDLE && encoder->device) {
-        auto* device_context = reinterpret_cast<AVHWDeviceContext*>(encoder->device->data);
-        auto* vulkan = reinterpret_cast<AVVulkanDeviceContext*>(device_context->hwctx);
-        vkDeviceWaitIdle(vulkan->act_dev);
-        vkDestroyCommandPool(vulkan->act_dev, encoder->prepare_pool, vulkan->alloc);
-    }
     av_buffer_unref(&encoder->device);
     delete encoder;
 }
@@ -361,9 +572,19 @@ extern "C" void* d2s_vulkan_ffmpeg_encoder_create(
         auto* device_context = reinterpret_cast<AVHWDeviceContext*>(result->device->data);
         auto* vulkan = reinterpret_cast<AVVulkanDeviceContext*>(device_context->hwctx);
         for (int index = 0; index < vulkan->nb_qf; ++index) {
-            if (vulkan->qf[index].flags & VK_QUEUE_VIDEO_ENCODE_BIT_KHR) {
+            const auto flags = vulkan->qf[index].flags;
+            if ((flags & VK_QUEUE_VIDEO_ENCODE_BIT_KHR) &&
+                (flags & VK_QUEUE_COMPUTE_BIT)) {
                 result->prepare_queue_family = vulkan->qf[index].idx;
                 break;
+            }
+        }
+        if (result->prepare_queue_family == VK_QUEUE_FAMILY_IGNORED) {
+            for (int index = 0; index < vulkan->nb_qf; ++index) {
+                if (vulkan->qf[index].flags & VK_QUEUE_VIDEO_ENCODE_BIT_KHR) {
+                    result->prepare_queue_family = vulkan->qf[index].idx;
+                    break;
+                }
             }
         }
         if (result->prepare_queue_family == VK_QUEUE_FAMILY_IGNORED && vulkan->nb_qf)
@@ -446,7 +667,8 @@ extern "C" void* d2s_vulkan_ffmpeg_encoder_create(
         VK_IMAGE_USAGE_VIDEO_ENCODE_SRC_BIT_KHR | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
     vulkan_frames->flags = static_cast<AVVkFrameFlags>(0);
     vulkan_frames->create_pnext = &video_profiles;
-    if (av_hwframe_ctx_init(result->frames) < 0) {
+    if (av_hwframe_ctx_init(result->frames) < 0 ||
+        !initialize_convert_pipeline(result)) {
         destroy_encoder(result);
         return nullptr;
     }
@@ -523,6 +745,176 @@ extern "C" int d2s_vulkan_ffmpeg_encoder_acquire_rgba_frame(
     return 0;
 }
 
+bool submit_rgba_conversion(Encoder* encoder, AVVkFrame* rgba, AVVkFrame* nv12,
+                             unsigned long long ready_value) {
+    if (!encoder || !rgba || !nv12 || !ready_value || !rgba->sem[0] || !nv12->sem[0])
+        return false;
+    auto* device_context = reinterpret_cast<AVHWDeviceContext*>(encoder->device->data);
+    auto* vulkan = reinterpret_cast<AVVulkanDeviceContext*>(device_context->hwctx);
+    const VkDevice device = vulkan->act_dev;
+    const VkImage rgba_image = rgba->img[0];
+    auto view_it = encoder->rgba_views.find(rgba_image);
+    if (view_it == encoder->rgba_views.end()) {
+        const VkImageView view = create_color_view(encoder, rgba_image, VK_FORMAT_R8G8B8A8_UNORM);
+        if (!view) return false;
+        view_it = encoder->rgba_views.emplace(rgba_image, view).first;
+    }
+    VkCommandBuffer command = VK_NULL_HANDLE;
+    auto command_it = encoder->convert_buffers.find(rgba_image);
+    auto fence_it = encoder->convert_fences.find(rgba_image);
+    if (command_it == encoder->convert_buffers.end()) {
+        VkCommandBufferAllocateInfo allocate{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+        allocate.commandPool = encoder->prepare_pool;
+        allocate.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        allocate.commandBufferCount = 1;
+        if (vkAllocateCommandBuffers(device, &allocate, &command) != VK_SUCCESS) return false;
+        VkFenceCreateInfo fence_info{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+        fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+        VkFence fence = VK_NULL_HANDLE;
+        if (vkCreateFence(device, &fence_info, vulkan->alloc, &fence) != VK_SUCCESS) return false;
+        encoder->convert_buffers.emplace(rgba_image, command);
+        encoder->convert_fences.emplace(rgba_image, fence);
+    } else {
+        command = command_it->second;
+        fence_it = encoder->convert_fences.find(rgba_image);
+        if (fence_it == encoder->convert_fences.end() ||
+            vkWaitForFences(device, 1, &fence_it->second, VK_TRUE, UINT64_MAX) != VK_SUCCESS ||
+            vkResetFences(device, 1, &fence_it->second) != VK_SUCCESS ||
+            vkResetCommandBuffer(command, 0) != VK_SUCCESS) return false;
+    }
+    fence_it = encoder->convert_fences.find(rgba_image);
+    VkDescriptorImageInfo descriptor_infos[3]{};
+    descriptor_infos[0] = {VK_NULL_HANDLE, view_it->second, VK_IMAGE_LAYOUT_GENERAL};
+    descriptor_infos[1] = {VK_NULL_HANDLE, encoder->convert_y_view, VK_IMAGE_LAYOUT_GENERAL};
+    descriptor_infos[2] = {VK_NULL_HANDLE, encoder->convert_uv_view, VK_IMAGE_LAYOUT_GENERAL};
+    VkWriteDescriptorSet writes[3]{};
+    for (uint32_t index = 0; index < 3; ++index) {
+        writes[index] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        writes[index].dstSet = encoder->convert_descriptor_set;
+        writes[index].dstBinding = index;
+        writes[index].descriptorCount = 1;
+        writes[index].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        writes[index].pImageInfo = &descriptor_infos[index];
+    }
+    vkUpdateDescriptorSets(device, 3, writes, 0, nullptr);
+    VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    if (vkBeginCommandBuffer(command, &begin) != VK_SUCCESS) return false;
+    VkImageMemoryBarrier2 barriers[5]{};
+    uint32_t barrier_count = 0;
+    auto add_barrier = [&](VkImage image, VkImageAspectFlags aspect, VkImageLayout old_layout,
+                           VkImageLayout new_layout, VkPipelineStageFlags2 src_stage,
+                           VkAccessFlags2 src_access, VkPipelineStageFlags2 dst_stage,
+                           VkAccessFlags2 dst_access) {
+        auto& barrier = barriers[barrier_count++];
+        barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+        barrier.srcStageMask = src_stage;
+        barrier.srcAccessMask = src_access;
+        barrier.dstStageMask = dst_stage;
+        barrier.dstAccessMask = dst_access;
+        barrier.oldLayout = old_layout;
+        barrier.newLayout = new_layout;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = image;
+        barrier.subresourceRange.aspectMask = aspect;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.layerCount = 1;
+    };
+    add_barrier(rgba->img[0], VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL,
+                VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                VK_ACCESS_2_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
+    add_barrier(encoder->convert_y_image, VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+                VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+    add_barrier(encoder->convert_uv_image, VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+                VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+    add_barrier(nv12->img[0], VK_IMAGE_ASPECT_PLANE_0_BIT,
+                nv12->layout[0], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+    add_barrier(nv12->img[0], VK_IMAGE_ASPECT_PLANE_1_BIT,
+                nv12->layout[0], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+    VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    dependency.imageMemoryBarrierCount = barrier_count;
+    dependency.pImageMemoryBarriers = barriers;
+    vkCmdPipelineBarrier2(command, &dependency);
+    vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, encoder->convert_pipeline);
+    vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            encoder->convert_pipeline_layout, 0, 1,
+                            &encoder->convert_descriptor_set, 0, nullptr);
+    vkCmdDispatch(command, (encoder->width + 7) / 8, (encoder->height + 7) / 8, 1);
+    barrier_count = 0;
+    add_barrier(encoder->convert_y_image, VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+    add_barrier(encoder->convert_uv_image, VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+    dependency.imageMemoryBarrierCount = barrier_count;
+    dependency.pImageMemoryBarriers = barriers;
+    vkCmdPipelineBarrier2(command, &dependency);
+    VkImageCopy copies[2]{};
+    copies[0].srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    copies[0].dstSubresource = {VK_IMAGE_ASPECT_PLANE_0_BIT, 0, 0, 1};
+    copies[0].extent = {encoder->width, encoder->height, 1};
+    copies[1].srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    copies[1].dstSubresource = {VK_IMAGE_ASPECT_PLANE_1_BIT, 0, 0, 1};
+    copies[1].extent = {encoder->width / 2, encoder->height / 2, 1};
+    vkCmdCopyImage(command, encoder->convert_y_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                   nv12->img[0], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copies[0]);
+    vkCmdCopyImage(command, encoder->convert_uv_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                   nv12->img[0], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copies[1]);
+    barrier_count = 0;
+    add_barrier(nv12->img[0], VK_IMAGE_ASPECT_PLANE_0_BIT,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_VIDEO_ENCODE_SRC_KHR,
+                VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_VIDEO_ENCODE_BIT_KHR, VK_ACCESS_2_VIDEO_ENCODE_READ_BIT_KHR);
+    add_barrier(nv12->img[0], VK_IMAGE_ASPECT_PLANE_1_BIT,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_VIDEO_ENCODE_SRC_KHR,
+                VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_VIDEO_ENCODE_BIT_KHR, VK_ACCESS_2_VIDEO_ENCODE_READ_BIT_KHR);
+    dependency.imageMemoryBarrierCount = barrier_count;
+    dependency.pImageMemoryBarriers = barriers;
+    vkCmdPipelineBarrier2(command, &dependency);
+    if (vkEndCommandBuffer(command) != VK_SUCCESS) return false;
+    const unsigned long long signal_value = nv12->sem_value[0] + 1;
+    VkSemaphoreSubmitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+    wait.semaphore = rgba->sem[0];
+    wait.value = ready_value;
+    wait.stageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    VkSemaphoreSubmitInfo signal{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+    signal.semaphore = nv12->sem[0];
+    signal.value = signal_value;
+    signal.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    VkCommandBufferSubmitInfo command_info{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
+    command_info.commandBuffer = command;
+    VkSubmitInfo2 submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+    submit.waitSemaphoreInfoCount = 1;
+    submit.pWaitSemaphoreInfos = &wait;
+    submit.commandBufferInfoCount = 1;
+    submit.pCommandBufferInfos = &command_info;
+    submit.signalSemaphoreInfoCount = 1;
+    submit.pSignalSemaphoreInfos = &signal;
+    if (reinterpret_cast<PFN_vkQueueSubmit2>(vkGetDeviceProcAddr(device, "vkQueueSubmit2"))(
+            encoder->prepare_queue, 1, &submit, fence_it->second) != VK_SUCCESS) return false;
+    nv12->sem_value[0] = signal_value;
+    nv12->layout[0] = VK_IMAGE_LAYOUT_VIDEO_ENCODE_SRC_KHR;
+    nv12->access[0] = VK_ACCESS_2_VIDEO_ENCODE_READ_BIT_KHR;
+    nv12->queue_family[0] = encoder->prepare_queue_family;
+    rgba->sem_value[0] = ready_value;
+    rgba->layout[0] = VK_IMAGE_LAYOUT_GENERAL;
+    rgba->access[0] = VK_ACCESS_2_MEMORY_READ_BIT;
+    return true;
+}
+
 extern "C" int d2s_vulkan_ffmpeg_encoder_release_rgba_frame(
     void* opaque, unsigned long long ready_value) {
     auto* encoder = static_cast<Encoder*>(opaque);
@@ -535,6 +927,30 @@ extern "C" int d2s_vulkan_ffmpeg_encoder_release_rgba_frame(
     }
     av_frame_free(&encoder->rgba_acquired);
     return 0;
+}
+
+extern "C" int d2s_vulkan_ffmpeg_encoder_encode_rgba_frame(
+    void* opaque, unsigned long long ready_value, long long timestamp) {
+    auto* encoder = static_cast<Encoder*>(opaque);
+    if (!encoder || !encoder->rgba_acquired || encoder->acquired || !ready_value)
+        return -1;
+    AVFrame* nv12 = av_frame_alloc();
+    if (!nv12 || av_hwframe_get_buffer(encoder->frames, nv12, 0) < 0) {
+        av_frame_free(&nv12);
+        return -2;
+    }
+    auto* rgba = reinterpret_cast<AVVkFrame*>(encoder->rgba_acquired->data[0]);
+    auto* destination = reinterpret_cast<AVVkFrame*>(nv12->data[0]);
+    if (!submit_rgba_conversion(encoder, rgba, destination, ready_value)) {
+        av_frame_free(&nv12);
+        av_frame_free(&encoder->rgba_acquired);
+        return -3;
+    }
+    nv12->pts = timestamp;
+    const int result = avcodec_send_frame(encoder->codec, nv12);
+    av_frame_free(&nv12);
+    av_frame_free(&encoder->rgba_acquired);
+    return result < 0 ? -4 : 0;
 }
 
 extern "C" int d2s_vulkan_ffmpeg_encoder_submit_frame(

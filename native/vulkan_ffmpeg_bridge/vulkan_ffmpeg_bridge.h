@@ -71,6 +71,15 @@ D2S_VULKAN_FFMPEG_API int d2s_vulkan_ffmpeg_encoder_release_rgba_frame(
     void* encoder,
     unsigned long long ready_value);
 
+// Convert the currently acquired CUDA-filled RGBA image into the native
+// multi-plane NV12 frame and send it to h264_vulkan/hevc_vulkan. The native
+// bridge waits on ready_value and returns 0 only after avcodec accepted the
+// GPU frame; compressed packets remain available through read_packet().
+D2S_VULKAN_FFMPEG_API int d2s_vulkan_ffmpeg_encoder_encode_rgba_frame(
+    void* encoder,
+    unsigned long long ready_value,
+    long long timestamp);
+
 D2S_VULKAN_FFMPEG_API int d2s_vulkan_ffmpeg_encoder_submit_frame(
     void* encoder,
     const D2SVulkanVideoFrame* frame,

@@ -22,6 +22,7 @@ class _FakeLibrary:
     d2s_vulkan_ffmpeg_encoder_acquire_frame = staticmethod(lambda *args: 0)
     d2s_vulkan_ffmpeg_encoder_acquire_rgba_frame = staticmethod(lambda *args: 0)
     d2s_vulkan_ffmpeg_encoder_release_rgba_frame = staticmethod(lambda *args: 0)
+    d2s_vulkan_ffmpeg_encoder_encode_rgba_frame = staticmethod(lambda *args: 0)
     d2s_vulkan_ffmpeg_encoder_submit_frame = staticmethod(lambda *args: 0)
     d2s_vulkan_ffmpeg_encoder_submit_image = staticmethod(lambda *args: None)
     d2s_vulkan_ffmpeg_encoder_read_packet = staticmethod(lambda *args: 0)

@@ -1,7 +1,8 @@
 """Validate native FFmpeg Vulkan device creation and NV12 frame-pool allocation.
 
-This deliberately does not submit a frame.  Native frame submission remains
-fail-closed until the external-memory and semaphore hand-off is implemented.
+This deliberately does not submit a frame.  It verifies that FFmpeg exposes
+one profile-compatible multi-plane Vulkan image rather than split R8/R8G8
+images, which are not valid Vulkan Video input on the target driver.
 """
 
 from __future__ import annotations
@@ -74,15 +75,18 @@ def main() -> int:
     frame = None
     try:
         frame = encoder.acquire_frame()
-        if frame.plane_count != 2 or not frame.image[0] or not frame.image[1]:
+        if frame.plane_count != 1 or not frame.image[0]:
             raise RuntimeError(
-                f"expected two NV12 image planes, received {frame.plane_count}"
+                "expected one multi-plane NV12 image, "
+                f"received planes={frame.plane_count} formats={frame.format[0]},{frame.format[1]}"
             )
+        if frame.is_split_nv12:
+            raise RuntimeError("FFmpeg returned split R8/R8G8 images")
         print(
             "vulkan_ffmpeg_bridge_smoke: PASS "
             f"codec={'hevc' if args.hevc else 'h264'} "
             f"size={frame.width}x{frame.height} planes={frame.plane_count} "
-            f"formats={frame.format[0]},{frame.format[1]}"
+            f"format={frame.format[0]}"
         )
     finally:
         if frame is not None:

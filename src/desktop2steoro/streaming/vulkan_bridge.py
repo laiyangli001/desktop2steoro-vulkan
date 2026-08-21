@@ -20,6 +20,7 @@ REQUIRED_SYMBOLS = (
     "d2s_vulkan_ffmpeg_encoder_acquire_frame",
     "d2s_vulkan_ffmpeg_encoder_acquire_rgba_frame",
     "d2s_vulkan_ffmpeg_encoder_release_rgba_frame",
+    "d2s_vulkan_ffmpeg_encoder_encode_rgba_frame",
     "d2s_vulkan_ffmpeg_encoder_submit_frame",
     "d2s_vulkan_ffmpeg_encoder_submit_image",
     "d2s_vulkan_ffmpeg_encoder_read_packet",
@@ -115,6 +116,20 @@ class VulkanNativeEncoder:
         )
         if result != 0:
             raise RuntimeError(f"native Vulkan RGBA frame release failed: {result}")
+        self._acquired = None
+
+    def encode_rgba_frame(self, *, ready_value: int, timestamp: int) -> None:
+        if self._acquired is None:
+            raise RuntimeError("no Vulkan RGBA frame is acquired")
+        if int(ready_value) <= 0:
+            raise ValueError("RGBA encode requires a positive ready timeline value")
+        result = int(
+            self.bridge._encode_rgba_frame(
+                self.handle, int(ready_value), int(timestamp)
+            )
+        )
+        if result != 0:
+            raise RuntimeError(f"native Vulkan RGBA encode failed: {result}")
         self._acquired = None
 
     @staticmethod
@@ -227,6 +242,9 @@ class VulkanNativeBridge:
         self._release_rgba_frame = library.d2s_vulkan_ffmpeg_encoder_release_rgba_frame
         self._release_rgba_frame.argtypes = [ctypes.c_void_p, ctypes.c_uint64]
         self._release_rgba_frame.restype = ctypes.c_int
+        self._encode_rgba_frame = library.d2s_vulkan_ffmpeg_encoder_encode_rgba_frame
+        self._encode_rgba_frame.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.c_int64]
+        self._encode_rgba_frame.restype = ctypes.c_int
         self._submit_frame = library.d2s_vulkan_ffmpeg_encoder_submit_frame
         self._submit_frame.argtypes = [
             ctypes.c_void_p,
