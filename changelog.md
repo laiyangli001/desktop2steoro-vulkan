@@ -1,5 +1,10 @@
 # Desktop2Stereo Vulkan 项目日志
 
+## 2026-08-22
+
+- 完成 native Vulkan 高级推流连续运行验证：RTX 3090 Windows 主机连续提交 600 帧 3840×2160@30，耗时 20.10 秒；MediaMTX 持续发布 H.264，ffprobe 读取到 `3840x2160`、`30/1 FPS`、`yuv420p`、`1/90000` 时间基，未出现 native 编码回退或原始 RGB24 pipe。
+- 更新 Vulkan bridge README 与实现指南：ABI、RGBA 输入池、NV12 multi-plane 编码池和当前 device-local copy 状态与实际代码一致；明确 validation 层 flush 卡住、头显 30 分钟闭环和音频闭环仍属于未完成验收项。
+
 ## 2026-08-21
 
 - CUDA/FFmpeg Vulkan 互操作新增单 plane RGBA 写入接口：按 FFmpeg 导出的 slot 一次导入 external image 与 timeline semaphore，使用 CUDA device-to-device 拷贝写入 4K RGBA 并回传 producer-ready timeline value；不经过 CPU 或 RGB24 中间缓冲，作为后续 native Vulkan RGB→NV12 的实际输入链路。

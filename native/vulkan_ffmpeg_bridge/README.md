@@ -1,10 +1,10 @@
 # Vulkan FFmpeg bridge
 
-This directory defines the in-process bridge required by the final Advanced
-Network Streaming Vulkan path. The bridge creates an FFmpeg-owned Vulkan
-device (with Vulkan Video extensions) and NV12 frame pool, then exposes the
-pool's GPU image handles, external memory handles and timeline semaphore
-values through ABI version 3.
+This directory defines the in-process bridge used by the Advanced Network
+Streaming Vulkan path. The bridge creates an FFmpeg-owned Vulkan device (with
+Vulkan Video extensions), an RGBA input pool and a single NV12 multi-plane
+encode pool, then exposes GPU image handles, external memory handles and
+timeline semaphore values through ABI version 5.
 Before exporting a frame, the bridge transitions it to `GENERAL` on FFmpeg's
 Vulkan queue and advances its timeline semaphore. The caller waits that value,
 writes those images with Vulkan/CUDA interop, signals the next value, and submits the same
@@ -13,9 +13,11 @@ or a CPU pointer. Passing an application-owned `VkDevice` is optional and is
 allowed only when that device was created with the required Vulkan Video
 extensions.
 
-The local application deliberately falls back to the validated host-upload
-path until the Python frame-pool consumer, GPU RGB-to-NV12 conversion,
-semaphore wait, and Windows GPU artifact have passed a real 4K headset test.
+The application now enables this bridge when the ABI, FFmpeg DLLs, Vulkan
+probe and CUDA importer are available. The normal path performs CUDA RGBA →
+Vulkan Compute RGBA-to-NV12 → `h264_vulkan`/`hevc_vulkan`; compressed packets
+only are sent to the muxer. Any initialization or runtime failure logs the
+layer and falls back to the stable host-upload advanced streaming path.
 
 ## Current CUDA limitation
 
@@ -23,8 +25,13 @@ The CUDA-friendly `AV_VK_FRAME_FLAG_DISABLE_MULTIPLANE` pool exports two
 single-plane images. Validation on NVIDIA RTX 3090 shows these images are not
 legal `h264_vulkan` / `hevc_vulkan` input resources: Vulkan Video requires one
 NV12 multi-plane image. The bridge is therefore a synchronization and external
-handle diagnostic only, not an enabled zero-copy encoder path. Production must
-fall back until a multi-plane CUDA/Vulkan sharing design replaces this pool.
+handle diagnostic only. The split representation is rejected by the Python
+frame gate and never submitted as a Vulkan Video source. The enabled application
+path writes an FFmpeg-owned single-plane RGBA image with CUDA, performs the
+color conversion and copy to the legal NV12 multi-plane encode image on the
+same Vulkan device, and submits `AV_PIX_FMT_VULKAN`. This removes the CPU
+download and raw RGB24 pipe; it is not yet strict zero-copy because the
+device-local RGBA/R8/RG8-to-NV12 copy remains.
 
 Build remotely with:
 

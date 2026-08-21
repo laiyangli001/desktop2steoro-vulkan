@@ -4,7 +4,7 @@
 
 目标是消除当前 4K SBS 推流中的 CUDA/ROCm → CPU RGB24 → FFmpeg stdin 路径，让图像在 GPU 内完成 SBS 整理、颜色转换和硬件编码。编码后的 H.264/H.265 小数据包仍通过 FFmpeg/MediaMTX 发布，并由局域网头显浏览器通过 WebRTC 播放。
 
-> 本文同时记录实施设计和当前验收状态。native Vulkan 编码桥已完成独立 4K 编码烟测并接入高级网络推流；头显端持续 4K/30 FPS 实机验收和 validation 层同步问题仍需继续完成。
+> 本文同时记录实施设计和当前验收状态。native Vulkan 编码桥已完成独立 4K 编码烟测并接入高级网络推流；本机已完成连续 600 帧 3840×2160@30 发布和 ffprobe 媒体参数验证。头显端持续 4K/30 FPS 实机验收、音频闭环和 validation 层 flush 问题仍需继续完成。
 
 ## 目录
 
@@ -745,8 +745,8 @@ GPU 零拷贝只解决电脑端原始帧搬运。继续检查：
 
 ### 构建
 
-- [ ] FFmpeg Release 包含 `h264_vulkan` 和 `hevc_vulkan`。
-- [ ] 包含原生桥需要的 FFmpeg shared libraries、headers 和 pkg-config 文件。
+- [x] FFmpeg Release 包含 `h264_vulkan` 和 `hevc_vulkan`（当前 Windows d2s.2 本机验证）。
+- [x] 包含原生桥需要的 FFmpeg shared libraries、headers 和 pkg-config 文件（远程构建产物已用于本机桥接）。
 - [ ] 未启用 `--enable-nonfree`。
 - [ ] Windows/Linux 构建均完成静态能力验证。
 
@@ -754,23 +754,23 @@ GPU 零拷贝只解决电脑端原始帧搬运。继续检查：
 
 - [ ] CUDA/ROCm 和 Vulkan 设备按 UUID/LUID/PCI 地址匹配。
 - [ ] 编码输入格式来自 Vulkan Video format query。
-- [ ] RGB/RGBA→NV12 在 GPU 上完成。
-- [ ] 正常路径没有 CPU 原始帧下载。
-- [ ] 使用 ready/release semaphore 管理槽位。
+- [x] RGB/RGBA→NV12 在 GPU 上完成。
+- [x] 正常路径没有 CPU 原始帧下载（运行日志 `gpu_to_cpu=False`）。
+- [x] 使用 ready/release semaphore 管理槽位。
 - [ ] 没有逐帧 device-wide synchronize。
 
 ### 编码与发布
 
-- [ ] libavcodec 收到 `AV_PIX_FMT_VULKAN`。
+- [x] libavcodec 收到 `AV_PIX_FMT_VULKAN`。
 - [ ] H.264 低延迟路径 `bf=0`。
-- [ ] 编码包交给 muxer 时保持正确 PTS/DTS。
-- [ ] RTSP 本机发布使用稳定传输设置。
+- [x] 编码包交给 muxer 时保持正确 PTS/DTS（PTS 使用 0..N-1 编码帧序号；ffprobe time base 为 1/90000）。
+- [x] RTSP 本机发布使用稳定传输设置（TCP、`pkt_size=1452`）。
 - [ ] MediaMTX 输出 WebRTC H.264 + Opus。
 - [ ] 音频短暂异常不会终止视频。
 
 ### 回退与闭环
 
-- [ ] Vulkan 不可用时自动回退厂商硬件编码。
+- [x] Vulkan 不可用时自动回退厂商硬件编码。
 - [ ] 厂商硬件编码不可用时回退软件编码。
 - [ ] GUI 显示真实活动后端。
 - [ ] 自动校准读取客户端 decoded FPS、丢帧、RTT 和丢包。
