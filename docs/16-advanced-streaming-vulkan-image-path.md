@@ -4,7 +4,7 @@
 
 目标是消除当前 4K SBS 推流中的 CUDA/ROCm → CPU RGB24 → FFmpeg stdin 路径，让图像在 GPU 内完成 SBS 整理、颜色转换和硬件编码。编码后的 H.264/H.265 小数据包仍通过 FFmpeg/MediaMTX 发布，并由局域网头显浏览器通过 WebRTC 播放。
 
-> 本文是实施设计，不表示当前代码已经完成 Vulkan Video 推流。应按本文的分阶段方案实现并逐级验收。
+> 本文同时记录实施设计和当前验收状态。native Vulkan 编码桥已完成独立 4K 编码烟测并接入高级网络推流；头显端持续 4K/30 FPS 实机验收和 validation 层同步问题仍需继续完成。
 
 ## 目录
 
@@ -467,7 +467,9 @@ CUDA Device 0 不一定对应 Vulkan 枚举中的 Physical Device 0。必须通�
 
 ### 回退规则
 
-当前原生桥 ABI v3 已固定在 `native/vulkan_ffmpeg_bridge/`：默认由 FFmpeg 创建带 Vulkan Video 扩展的逻辑 device 和 NV12 frame pool，并通过 `acquire_frame` 返回 GPU `VkImage`/memory 描述、每 plane 可导入的 OS memory handle、timeline semaphore handle/value 与稳定 slot ID。应用已有的 `VkDevice` 只有在创建时已启用相同 Video 扩展时才允许接管，普通 Viewer context 不可直接复用。CUDA/HIP 写入后用导出的 frame semaphore signal 新 value，`submit_frame` 将该 value 回填到 FFmpeg 的 `AVVkFrame`，由 Vulkan Video 编码提交等待；没有有效完成点的 frame 仍拒绝提交。CUDA frame-pool 消费、RGBA→NV12 GPU 转换与 4K 实机编码验证尚未完成，因此当前仍不得宣称端到端零复制；未安装、ABI 不匹配或原生链路失败时继续使用 host-upload 阶段并自动回退。
+当前原生桥 ABI v5 已固定在 `native/vulkan_ffmpeg_bridge/`：默认由 FFmpeg 创建带 Vulkan Video 扩展的逻辑 device、单 plane RGBA 输入池和单一 NV12 multi-plane 编码池。`VulkanDirectSbsOutput` 已通过 `CudaVulkanImageImporter` 将 CUDA RGBA 写入 FFmpeg-owned image，在 native Vulkan Compute 中完成 RGBA→R8/RG8→NV12，再将 H.264/H.265 压缩包交给 FFmpeg mux-only 管线发布；正常路径不下载到 CPU，也不通过 stdin 传输 4K 原始帧。GPU 内仍存在 R8/RG8 到 NV12 multi-plane 的一次 device-local copy，因此日志明确标记 `gpu_to_cpu=False`、`gpu_copy=True`、`zero_copy=False`。native bridge、CUDA 导入、编码或 packet mux 任一环节失败时，输出对象只记录一次原因并自动回退现有稳定 host-upload 高级推流。
+
+已完成的本机证据：RTX 3090 + FFmpeg 9.0.1 `d2s.2` 下，独立 native smoke 已通过 640×360 和 3840×2160 H.264 编码并读取压缩包；Python 契约/互操作/推流测试通过。Vulkan validation 层在当前 queue-family ownership handoff 首帧仍会挂起，普通驱动路径可完成，故头显端持续 4K/30 FPS 和 validation 清零仍是未完成验收项。
 
 原生桥通过 `.github/workflows/vulkan-ffmpeg-bridge.yml` 在 GitHub Actions Windows Runner 远程构建；本地不要求安装 C++ 工具链、Vulkan SDK 或 FFmpeg 开发包。
 
@@ -537,10 +539,11 @@ Vulkan Probe Timeout Seconds: 8
 ### 阶段 1：独立原生编码探针
 
 1. ~~建立 `vulkan_ffmpeg_bridge`。~~ 已完成。
-2. ~~建立 FFmpeg-owned Vulkan NV12 frame pool 和 GPU frame descriptor ABI。~~ 已完成 ABI v3，包含 external memory/timeline descriptor；仍需 Windows CI 原生编译确认。
-3. 不接 Desktop2Stereo，使用 frame pool 生成 Vulkan NV12 测试图。
-4. 编码 4K 30/48/60 FPS、持续 10 分钟。
-5. 用 ffprobe 检查时间戳、关键帧和码流，并验证创建、flush、重建和关闭不泄漏资源。
+2. ~~建立 FFmpeg-owned Vulkan RGBA/NV12 frame pool 和 GPU frame descriptor ABI。~~ 已完成 ABI v5，包含 external memory/timeline descriptor、RGBA 输入和 `encode_rgba_frame`。
+3. ~~不接 Desktop2Stereo，使用 CUDA RGBA + native Vulkan Compute 完成独立编码烟测。~~ 已通过 640×360 和 3840×2160 单帧闭环。
+4. ~~接入 `VulkanDirectSbsOutput` 的压缩包 mux-only 管线和自动 host fallback。~~ 已完成代码接入，尚需头显端实机验收。
+5. 在 RTX 3090 上持续编码 4K 30 FPS，并完成 queue-family ownership validation 修复。
+6. 用 ffprobe 检查时间戳、关键帧和码流，并验证创建、flush、重建和关闭不泄漏资源。
 
 在接入任何 CUDA 帧之前，先用以下独立测试验证远程构建 DLL 与目标驱动：
 

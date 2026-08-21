@@ -25,3 +25,11 @@ def test_vulkan_filter_options_are_before_output_url(monkeypatch, tmp_path: Path
     assert command.index("-vf") < len(command) - 1
     assert command[command.index("-vf") + 1] == "format=nv12,hwupload"
 
+
+def test_native_vulkan_publish_url_uses_local_rtsp_packet_size() -> None:
+    output = object.__new__(VulkanDirectSbsOutput)
+    output.protocol = "WEBRTC"
+    output.port = 1122
+    output.stream_key = "live"
+    assert output._native_output_url() == "rtsp://127.0.0.1:8554/live?pkt_size=1452"
+

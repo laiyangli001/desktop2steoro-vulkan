@@ -7,6 +7,7 @@
 - native bridge 新增 `encode_rgba_frame`：在 FFmpeg-owned Vulkan device 上等待 CUDA timeline，执行 RGBA→R8/RG8 Compute，将结果复制到单一 NV12 multi-plane Video image，转换到 `VIDEO_ENCODE_SRC_KHR` 后提交 `h264_vulkan`；未初始化或提交失败仍返回错误供上层回退。
 - 修正 native Compute 队列选择：不再把 Compute 命令录入仅具备 Transfer/Video Encode 能力的队列，改用独立 Compute queue、Video queue 之间的 image ownership transfer 和 timeline 接力；Validation 复现的 `VK_ERROR_DEVICE_LOST` 已进入针对性修复。
 - 修正 NV12 队列所有权交接的布局匹配：保留编码帧的原始 `VIDEO_ENCODE_SRC_KHR` 布局，确保 prepare/compute 队列的 release/acquire barrier 使用相同 old/new layout，避免 validation 下首帧同步死锁。
+- 高级网络推流接入 native Vulkan GPU 图像路径：CUDA RGBA external image 经 `CudaVulkanImageImporter` 写入 FFmpeg-owned frame，native Compute 转换到单一 NV12 multi-plane 后输出压缩包，由 FFmpeg mux-only 发布到 MediaMTX；正常路径不下载 4K RGB24、不通过原始帧 stdin，失败自动回退原高级推流。
 - 新增 `vulkan_ffmpeg_rgba_cuda_smoke.py`：在真实 CUDA 设备上向 FFmpeg Vulkan 4K RGBA frame 写入固定颜色并完成 timeline 同步，用于区分“仅能导出句柄”和“CUDA 实际可写入”的两种状态。
 - 新增 `vulkan_ffmpeg_rgba_encode_smoke.py`：不调用 CPU 同步，直接验证 CUDA RGBA → native Vulkan Compute → multi-plane NV12 → `h264_vulkan` 压缩包闭环。
 - 新增 `VulkanRgbToNv12Pipeline` 运行时封装：固定三张 storage image（RGBA 输入、R8 Y、RG8 UV）、8×8 dispatch 和偶数分辨率校验，明确中间 R8/RG8 结果必须由原生桥复制到 profile-compatible 的 NV12 multi-plane 编码 image。

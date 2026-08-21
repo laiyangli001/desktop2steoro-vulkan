@@ -1646,14 +1646,29 @@ class FfmpegDirectSbsOutput:
 
 
 class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
-    """FFmpeg Vulkan Video validation path with an explicit host-upload boundary.
+    """GPU image path: CUDA RGBA import, native Vulkan conversion/encode, RTSP/SRT mux."""
 
-    This is intentionally not advertised as zero-copy: runtime CUDA frames
-    still cross to CPU RGB24 before entering FFmpeg.  It validates the
-    platform's real ``format=nv12,hwupload -> h264_vulkan`` chain while the
-    native CUDA/Vulkan frame bridge is being developed.  The caller must
-    probe this path before replacing the stable Advanced Streaming output.
-    """
+    synchronous_submit = False
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._native_vulkan_bridge = None
+        self._native_vulkan_encoder = None
+        self._native_vulkan_importer = None
+        self._native_mux_process: subprocess.Popen | None = None
+        self._native_active = False
+        try:
+            self._native_vulkan_bridge = VulkanNativeBridge.load()
+            print(
+                "[VulkanStream] native bridge loaded; GPU->CPU download=False",
+                flush=True,
+            )
+        except Exception as exc:
+            print(
+                f"[VulkanStream] native bridge unavailable: {exc}; "
+                "using stable host-upload path",
+                flush=True,
+            )
 
     def _select_video_encoder(self, width: int, height: int) -> str:
         report = probe_vulkan_video(
@@ -1665,60 +1680,44 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
             os_name=self.os_name,
         )
         if not report.available:
-            print(
-                f"[VulkanStream] unavailable: {report.detail}; "
-                "falling back to stable FFmpeg hardware/software path",
-                flush=True,
-            )
             raise RuntimeError(report.detail)
         print(
-            f"[VulkanStream] device/profile probe passed: encoder={report.encoder} "
+            f"[VulkanStream] Vulkan capability probe: encoder={report.encoder} "
             f"input={report.input_format} {width}x{height}",
             flush=True,
         )
         return report.encoder
 
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        self._native_vulkan_bridge = None
-        try:
-            self._native_vulkan_bridge = VulkanNativeBridge.load()
-        except Exception as exc:
-            print(
-                f"[VulkanStream] native AV_PIX_FMT_VULKAN bridge unavailable: {exc}; "
-                "using host-upload validation path",
-                flush=True,
-            )
-
     def _ffmpeg_command(self, width: int, height: int) -> list[str]:
+        """Keep the validated host-upload command for explicit fallback/diagnostics."""
         command = super()._ffmpeg_command(width, height)
-        encoder = self.video_encoder
+        encoder = getattr(self, "video_encoder", "h264_vulkan")
         command[1:1] = [
             "-init_hw_device",
             "vulkan=d2s_vk:0",
             "-filter_hw_device",
             "d2s_vk",
         ]
-        encoder_index = command.index("-c:v")
-        command[encoder_index + 1] = encoder
+        if "-c:v" in command:
+            command[command.index("-c:v") + 1] = encoder
         for option in ("-crf", "-x264-params", "-x265-params"):
             while option in command:
                 index = command.index(option)
                 del command[index:index + 2]
-        pix_fmt_index = command.index("-pix_fmt")
-        command[pix_fmt_index + 1] = "vulkan"
+        if "-pix_fmt" in command:
+            command[command.index("-pix_fmt") + 1] = "vulkan"
         output_url = command.pop()
         command.extend(
             [
                 "-vf",
                 "format=nv12,hwupload",
                 "-profile:v",
-                "main" if self.use_hevc else "high",
-                *(["-level:v", "5.1"] if not self.use_hevc and int(width) >= 2560 else []),
+                "main" if getattr(self, "use_hevc", False) else "high",
+                *(["-level:v", "5.1"] if not getattr(self, "use_hevc", False) and int(width) >= 2560 else []),
                 "-rc_mode",
                 "vbr",
                 "-qp",
-                str(self.crf),
+                str(getattr(self, "crf", 23)),
                 "-tune",
                 "ull",
                 "-usage",
@@ -1730,44 +1729,267 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
         command.append(output_url)
         return command
 
-    def _start_ffmpeg(self, width: int, height: int) -> None:
-        super()._start_ffmpeg(width, height)
+    def _native_output_url(self) -> str:
+        if self.protocol == "WEBRTC":
+            return (
+                f"rtsp://127.0.0.1:{self.publish_rtsp_port}/{self.stream_key}"
+                "?pkt_size=1452"
+            )
+        return (
+            f"srt://127.0.0.1:8890?streamid=publish:{self.stream_key}"
+            "&pkt_size=1316"
+        )
+
+    def _start_native_mux(self) -> None:
+        audio_args = self._audio_input_args()
+        command = [
+            str(self.ffmpeg_path),
+            "-hide_banner",
+            "-loglevel",
+            "warning",
+            "-fflags",
+            "nobuffer",
+            "-flags",
+            "low_delay",
+            "-f",
+            "h264",
+            "-r",
+            str(self.fps),
+            "-i",
+            "pipe:0",
+            *audio_args,
+            "-map",
+            "0:v:0",
+            "-c:v",
+            "copy",
+        ]
+        if audio_args:
+            command.extend(["-map", "1:a:0"])
+            if self.protocol == "WEBRTC":
+                command.extend(
+                    [
+                        "-af",
+                        "aresample=async=1000:first_pts=0",
+                        "-c:a",
+                        "libopus",
+                        "-ar",
+                        "48000",
+                        "-ac",
+                        "2",
+                        "-b:a",
+                        "96k",
+                    ]
+                )
+            else:
+                command.extend(["-c:a", "aac", "-ar", "48000", "-b:a", "128k"])
+        command.extend(
+            [
+                "-muxdelay",
+                "0",
+                "-muxpreload",
+                "0",
+                "-flush_packets",
+                "1",
+                "-max_interleave_delta",
+                "100000",
+            ]
+        )
+        if self.protocol == "WEBRTC":
+            command.extend(
+                [
+                    "-f",
+                    "rtsp",
+                    "-rtsp_transport",
+                    "tcp",
+                    "-pkt_size",
+                    "1452",
+                ]
+            )
+        else:
+            command.extend(["-f", "mpegts", "-mpegts_flags", "+resend_headers"])
+        command.append(self._native_output_url())
+        creationflags = (
+            getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            if self.os_name == "Windows"
+            else 0
+        )
+        self._native_mux_process = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            creationflags=creationflags,
+        )
+        self._ffmpeg_stderr_tail = []
+        self._ffmpeg_log_thread = threading.Thread(
+            target=self._drain_ffmpeg_stderr,
+            args=(self._native_mux_process,),
+            name="DirectSbsVulkanMuxLog",
+            daemon=True,
+        )
+        self._ffmpeg_log_thread.start()
+        time.sleep(0.05)
+        if self._native_mux_process.poll() is not None:
+            detail = "; ".join(self._ffmpeg_stderr_tail[-3:]) or "no FFmpeg diagnostic"
+            raise RuntimeError(
+                f"Vulkan packet muxer exited with code "
+                f"{self._native_mux_process.returncode}: {detail}"
+            )
+
+    def _start_native(self, width: int, height: int) -> None:
+        if self._native_vulkan_bridge is None:
+            raise RuntimeError("native Vulkan FFmpeg bridge is unavailable")
+        if (
+            self._calibration_controller is None
+            and self.os_name == "Windows"
+            and self.stereo_mix_device.casefold().startswith("soundcard:")
+        ):
+            device_name = self.stereo_mix_device.split(":", 1)[1].strip()
+            self._soundcard_audio = SoundcardLoopbackSender(device_name or None)
+            self._soundcard_audio.start()
+        self._active_rate_budget = self._dynamic_stream_rate_budget(width, height)
+        target_mbps, peak_mbps = (
+            self._active_rate_budget[:2]
+            if self._active_rate_budget is not None
+            else (10, 12)
+        )
+        self._native_vulkan_encoder = self._native_vulkan_bridge.create_encoder(
+            width=width,
+            height=height,
+            fps=self.fps,
+            target_bitrate=int(target_mbps) * 1_000_000,
+            peak_bitrate=int(peak_mbps) * 1_000_000,
+            hevc=self.use_hevc,
+        )
+        from viewer.cuda_vulkan_interop import CudaVulkanImageImporter
+
+        self._native_vulkan_importer = CudaVulkanImageImporter()
+        self._start_native_mux()
+        self._native_active = True
+        self._frame_size = (int(width), int(height))
         print(
-            "[VulkanStream] FFmpeg Vulkan Video active; "
-            "GPU conversion/encode enabled, GPU->CPU RGB24 download remains; "
-            "zero_copy=False",
+            f"[VulkanStream] native GPU image path active: "
+            f"CUDA RGBA -> Vulkan Compute RGBA->NV12 -> "
+            f"{'hevc_vulkan' if self.use_hevc else 'h264_vulkan'} -> MediaMTX; "
+            f"input=RGBA8 encode=NV12 gpu_to_cpu=False "
+            f"gpu_copy=True zero_copy=False resolution={width}x{height} "
+            f"fps={self.fps} target={target_mbps}M peak={peak_mbps}M",
             flush=True,
         )
 
-    def submit_cuda_frame(self, frame: Any) -> None:
-        print_once = getattr(self, "_vulkan_host_boundary_logged", False)
-        if not print_once:
-            print(
-                "[VulkanStream] input path: CUDA -> CPU RGB24 -> "
-                "FFmpeg hwupload NV12 -> Vulkan Video; zero_copy=False",
-                flush=True,
-            )
-            self._vulkan_host_boundary_logged = True
-        self.submit_frame(runtime_sbs_to_rgb(frame))
+    @staticmethod
+    def _rgba_tensor(frame: Any):
+        import torch
 
-    def submit_frame(self, frame: np.ndarray) -> None:
-        try:
-            super().submit_frame(frame)
-        except Exception as exc:
-            if getattr(self, "_vulkan_fallback_active", False):
-                raise
-            print(
-                f"[VulkanStream] initialization/runtime failed: {type(exc).__name__}: {exc}; "
-                "fallback=stable FFmpeg hardware/software path",
-                flush=True,
+        image = getattr(frame, "sbs", frame)
+        if not isinstance(image, torch.Tensor) or not bool(image.is_cuda):
+            raise RuntimeError("native Vulkan path requires a CUDA tensor")
+        if image.ndim == 4:
+            if int(image.shape[0]) != 1:
+                raise RuntimeError("native Vulkan path accepts one frame")
+            image = image[0]
+        if image.ndim != 3:
+            raise RuntimeError(f"unsupported CUDA SBS shape: {tuple(image.shape)!r}")
+        if int(image.shape[0]) in (3, 4):
+            image = image.permute(1, 2, 0)
+        if int(image.shape[-1]) not in (3, 4):
+            raise RuntimeError(f"native Vulkan path requires RGB/RGBA: {tuple(image.shape)!r}")
+        if image.dtype != torch.uint8:
+            image = image.clamp(0.0, 1.0).mul(255.0).round().to(torch.uint8)
+        if int(image.shape[-1]) == 3:
+            image = torch.cat(
+                (image, torch.full((*image.shape[:2], 1), 255, dtype=torch.uint8, device=image.device)),
+                dim=-1,
             )
-            self._vulkan_fallback_active = True
-            self._stop_process(self.ffmpeg_process)
-            self.ffmpeg_process = None
-            self._frame_size = None
-            self._encoder_selected = False
-            self.video_encoder = "libx265" if self.use_hevc else "libx264"
-            super().submit_frame(frame)
+        return image.contiguous()
+
+    def _stop_native(self) -> None:
+        self._native_active = False
+        if self._native_vulkan_encoder is not None:
+            try:
+                self._native_vulkan_encoder.flush()
+            except Exception:
+                pass
+            try:
+                self._native_vulkan_encoder.close()
+            except Exception:
+                pass
+            self._native_vulkan_encoder = None
+        if self._native_vulkan_importer is not None:
+            try:
+                self._native_vulkan_importer.close()
+            except Exception:
+                pass
+            self._native_vulkan_importer = None
+        self._stop_process(self._native_mux_process)
+        self._native_mux_process = None
+
+    def _fallback_to_host(self, frame: Any, reason: Exception) -> None:
+        print(
+            f"[VulkanStream] native GPU path failed: {type(reason).__name__}: {reason}; "
+            "fallback=stable advanced FFmpeg path",
+            flush=True,
+        )
+        self._stop_native()
+        fallback = FfmpegDirectSbsOutput(
+            base_dir=self.base_dir,
+            protocol=self.protocol,
+            port=self.port,
+            stream_key=self.stream_key,
+            fps=self.fps,
+            crf=self.crf,
+            stereo_mix_device=self.stereo_mix_device,
+            audio_delay=self.audio_delay,
+            os_name=self.os_name,
+            prefer_nvenc=self.prefer_nvenc,
+            display_mode=self.display_mode,
+            target_bitrate_mbps=self.target_bitrate_mbps,
+            peak_bitrate_mbps=self.peak_bitrate_mbps,
+            auto_calibration=False,
+            calibration_port=self.calibration_port,
+            on_calibration_fps=self._on_calibration_fps,
+            calibration_fingerprint=None,
+        )
+        fallback.server_process = self.server_process
+        self._host_fallback = fallback
+        fallback.submit_frame(runtime_sbs_to_rgb(frame))
+
+    def submit_cuda_frame(self, frame: Any) -> None:
+        fallback = getattr(self, "_host_fallback", None)
+        if fallback is not None:
+            fallback.submit_frame(runtime_sbs_to_rgb(frame))
+            return
+        try:
+            image = self._rgba_tensor(frame)
+            height, width = int(image.shape[0]), int(image.shape[1])
+            if not self._native_active:
+                self._start_native(width, height)
+            if self._native_mux_process is None or self._native_mux_process.stdin is None:
+                raise RuntimeError("Vulkan packet muxer stdin is unavailable")
+            rgba_frame = self._native_vulkan_encoder.acquire_rgba_frame()
+            ready_value = self._native_vulkan_importer.write_ffmpeg_rgba_frame(image, rgba_frame)
+            self._native_vulkan_encoder.encode_rgba_frame(
+                ready_value=ready_value,
+                timestamp=int(time.monotonic_ns() // 1_000_000),
+            )
+            while True:
+                packet = self._native_vulkan_encoder.read_packet()
+                if not packet:
+                    break
+                self._native_mux_process.stdin.write(packet)
+                self._native_mux_process.stdin.flush()
+        except Exception as exc:
+            self._fallback_to_host(frame, exc)
+
+    def close(self) -> None:
+        self._stop_native()
+        fallback = getattr(self, "_host_fallback", None)
+        if fallback is not None:
+            fallback.close()
+            self._host_fallback = None
+        super().close()
+
+
 
 
 class PyNvDirectSbsOutput(_PyNvDirectSbsOutputMixin, FfmpegDirectSbsOutput):
