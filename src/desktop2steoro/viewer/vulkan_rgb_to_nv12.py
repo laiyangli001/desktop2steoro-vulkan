@@ -105,6 +105,26 @@ class VulkanRgbToNv12Intermediate:
         self.uv.close()
         self.y.close()
 
+    def record_frame(
+        self,
+        command_buffer: Any,
+        *,
+        pipeline: VulkanRgbToNv12Pipeline,
+        width: int,
+        height: int,
+        descriptor_set: Any,
+        destination_image: Any,
+    ) -> None:
+        """Record one complete GPU conversion and Video-image submission prep."""
+        self.record_prepare_for_compute(command_buffer)
+        pipeline.record(
+            command_buffer,
+            width=width,
+            height=height,
+            descriptor_set=descriptor_set,
+        )
+        self.record_copy_to_video_nv12(command_buffer, destination_image)
+
     def record_copy_to_video_nv12(self, command_buffer: Any, destination_image: Any) -> None:
         """Record GPU-only Y/UV copies into one multi-plane NV12 image.
 
