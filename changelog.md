@@ -12,6 +12,9 @@
 - 修正 Compute→Video 的 NV12 ownership acquire：与 release 端统一使用 `TRANSFER_DST_OPTIMAL → VIDEO_ENCODE_SRC_KHR`，避免 queue-family 交接布局不匹配导致 validation/驱动首帧等待死锁。
 - 扩展 Vulkan trace 到 acquire 提交和 `avcodec_send_frame` 前后，区分 queue submit 成功但 Video Encode 等待，还是 FFmpeg 编码调用本身阻塞。
 - 扩展 Vulkan trace 到 `avcodec_receive_packet` 与 flush，覆盖从 GPU 提交到压缩包读取的完整首帧路径。
+- 修复 Windows native Vulkan bridge 依赖加载：启动高级 Vulkan 推流时自动将项目 FFmpeg `bin` 目录加入 DLL 搜索路径，避免 bridge 因 `avcodec/avutil` 依赖找不到而误回退。
+- 优化 native H.264 packet mux 输入：为持续 pipe 设置 32-byte probe、零分析时长和固定 FPS 探测，避免 FFmpeg 等待 EOF 才建立 RTSP 输出。
+- 修正 native Vulkan 推流 PTS：按编码器 `time_base=1/FPS` 使用单调帧序号，不再使用高速提交时可能重复的毫秒墙钟值。
 - 新增 `vulkan_ffmpeg_rgba_cuda_smoke.py`：在真实 CUDA 设备上向 FFmpeg Vulkan 4K RGBA frame 写入固定颜色并完成 timeline 同步，用于区分“仅能导出句柄”和“CUDA 实际可写入”的两种状态。
 - 新增 `vulkan_ffmpeg_rgba_encode_smoke.py`：不调用 CPU 同步，直接验证 CUDA RGBA → native Vulkan Compute → multi-plane NV12 → `h264_vulkan` 压缩包闭环。
 - 新增 `VulkanRgbToNv12Pipeline` 运行时封装：固定三张 storage image（RGBA 输入、R8 Y、RG8 UV）、8×8 dispatch 和偶数分辨率校验，明确中间 R8/RG8 结果必须由原生桥复制到 profile-compatible 的 NV12 multi-plane 编码 image。

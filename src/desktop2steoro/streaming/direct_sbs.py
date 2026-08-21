@@ -1653,11 +1653,17 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._native_vulkan_bridge = None
+        self._native_vulkan_dll_dir = None
         self._native_vulkan_encoder = None
         self._native_vulkan_importer = None
         self._native_mux_process: subprocess.Popen | None = None
         self._native_active = False
+        self._native_pts = 0
         try:
+            if self.os_name == "Windows" and hasattr(os, "add_dll_directory"):
+                self._native_vulkan_dll_dir = os.add_dll_directory(
+                    str(Path(self.ffmpeg_path).parent)
+                )
             self._native_vulkan_bridge = VulkanNativeBridge.load()
             print(
                 "[VulkanStream] native bridge loaded; GPU->CPU download=False",
@@ -1751,6 +1757,12 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
             "nobuffer",
             "-flags",
             "low_delay",
+            "-probesize",
+            "32",
+            "-analyzeduration",
+            "0",
+            "-fpsprobesize",
+            "0",
             "-f",
             "h264",
             "-r",
@@ -1866,6 +1878,7 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
         self._native_vulkan_importer = CudaVulkanImageImporter()
         self._start_native_mux()
         self._native_active = True
+        self._native_pts = 0
         self._frame_size = (int(width), int(height))
         print(
             f"[VulkanStream] native GPU image path active: "
@@ -1968,9 +1981,11 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
                 raise RuntimeError("Vulkan packet muxer stdin is unavailable")
             rgba_frame = self._native_vulkan_encoder.acquire_rgba_frame()
             ready_value = self._native_vulkan_importer.write_ffmpeg_rgba_frame(image, rgba_frame)
+            timestamp = self._native_pts
+            self._native_pts += 1
             self._native_vulkan_encoder.encode_rgba_frame(
                 ready_value=ready_value,
-                timestamp=int(time.monotonic_ns() // 1_000_000),
+                timestamp=timestamp,
             )
             while True:
                 packet = self._native_vulkan_encoder.read_packet()
