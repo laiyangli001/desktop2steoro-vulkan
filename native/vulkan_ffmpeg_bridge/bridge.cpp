@@ -601,6 +601,32 @@ extern "C" int d2s_vulkan_ffmpeg_bridge_probe(char* output, int capacity) {
     return 1;
 }
 
+extern "C" int d2s_vulkan_ffmpeg_encoder_device_identity(
+    void* opaque, unsigned char* uuid, int uuid_capacity, char* name, int name_capacity) {
+    auto* encoder = reinterpret_cast<Encoder*>(opaque);
+    if (!encoder || !encoder->device || !uuid || uuid_capacity < VK_UUID_SIZE)
+        return 0;
+    auto* device_context = reinterpret_cast<AVHWDeviceContext*>(encoder->device->data);
+    auto* vulkan = reinterpret_cast<AVVulkanDeviceContext*>(device_context->hwctx);
+    if (!vulkan || !vulkan->phys_dev || !vulkan->inst)
+        return 0;
+    auto get_properties2 = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
+        vkGetInstanceProcAddr(vulkan->inst, "vkGetPhysicalDeviceProperties2"));
+    if (!get_properties2)
+        return 0;
+    VkPhysicalDeviceIDProperties id_properties{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
+    VkPhysicalDeviceProperties2 properties{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+    properties.pNext = &id_properties;
+    get_properties2(vulkan->phys_dev, &properties);
+    std::memcpy(uuid, id_properties.deviceUUID, VK_UUID_SIZE);
+    if (name && name_capacity > 0)
+        std::snprintf(name, static_cast<std::size_t>(name_capacity), "%s",
+                      properties.properties.deviceName);
+    return 1;
+}
+
 extern "C" void* d2s_vulkan_ffmpeg_encoder_create(
     void* vk_instance,
     void* vk_physical_device,

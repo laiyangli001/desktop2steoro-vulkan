@@ -74,6 +74,25 @@ class VulkanNativeEncoder:
         self.handle = ctypes.c_void_p(int(handle))
         self._acquired: VulkanVideoFrame | None = None
 
+    def device_identity(self) -> tuple[bytes, str] | None:
+        """Return the FFmpeg Vulkan physical-device UUID and name when supported."""
+        function = getattr(self.bridge, "_device_identity", None)
+        if function is None:
+            return None
+        uuid_buffer = (ctypes.c_ubyte * 16)()
+        name_buffer = ctypes.create_string_buffer(256)
+        if int(
+            function(
+                self.handle,
+                uuid_buffer,
+                len(uuid_buffer),
+                name_buffer,
+                len(name_buffer),
+            )
+        ) != 1:
+            return None
+        return bytes(uuid_buffer), name_buffer.value.decode("utf-8", errors="replace")
+
     def acquire_frame(self) -> VulkanVideoFrame:
         if self._acquired is not None:
             raise RuntimeError("a Vulkan encoder frame is already acquired")
@@ -269,6 +288,18 @@ class VulkanNativeBridge:
         self._destroy = library.d2s_vulkan_ffmpeg_encoder_destroy
         self._destroy.argtypes = [ctypes.c_void_p]
         self._destroy.restype = None
+        self._device_identity = getattr(
+            library, "d2s_vulkan_ffmpeg_encoder_device_identity", None
+        )
+        if self._device_identity is not None:
+            self._device_identity.argtypes = [
+                ctypes.c_void_p,
+                ctypes.POINTER(ctypes.c_ubyte),
+                ctypes.c_int,
+                ctypes.c_char_p,
+                ctypes.c_int,
+            ]
+            self._device_identity.restype = ctypes.c_int
 
     def create_encoder(
         self,

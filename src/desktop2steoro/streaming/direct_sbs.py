@@ -1856,7 +1856,43 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
                 f"{self._native_mux_process.returncode}: {detail}"
             )
 
-    def _start_native(self, width: int, height: int) -> None:
+    @staticmethod
+    def _normalize_device_uuid(value: Any) -> str:
+        if isinstance(value, bytes):
+            return value.hex().casefold()
+        return "".join(
+            character for character in str(value or "").casefold()
+            if character.isalnum()
+        )
+
+    def _verify_native_device(self, cuda_device: Any) -> None:
+        identity = self._native_vulkan_encoder.device_identity()
+        if identity is None:
+            print(
+                "[VulkanStream] Vulkan/CUDA device UUID query unavailable; "
+                "native path continues with single-device compatibility mode",
+                flush=True,
+            )
+            return
+        native_uuid, native_name = identity
+        import torch
+
+        cuda_properties = torch.cuda.get_device_properties(cuda_device)
+        cuda_uuid = getattr(cuda_properties, "uuid", None)
+        native_key = self._normalize_device_uuid(native_uuid)
+        cuda_key = self._normalize_device_uuid(cuda_uuid)
+        if not native_key or not cuda_key or native_key != cuda_key:
+            raise RuntimeError(
+                "CUDA/Vulkan physical-device UUID mismatch: "
+                f"CUDA={cuda_uuid!s} Vulkan={native_name or 'unknown'}:{native_uuid.hex()}"
+            )
+        print(
+            f"[VulkanStream] device matched: CUDA {cuda_device} ↔ Vulkan "
+            f"{native_name or 'unknown'} uuid={native_uuid.hex()}",
+            flush=True,
+        )
+
+    def _start_native(self, width: int, height: int, *, cuda_device: Any = None) -> None:
         if self._native_vulkan_bridge is None:
             raise RuntimeError("native Vulkan FFmpeg bridge is unavailable")
         if (
@@ -1881,6 +1917,8 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
             peak_bitrate=int(peak_mbps) * 1_000_000,
             hevc=self.use_hevc,
         )
+        if cuda_device is not None:
+            self._verify_native_device(cuda_device)
         from viewer.cuda_vulkan_interop import CudaVulkanImageImporter
 
         self._native_vulkan_importer = CudaVulkanImageImporter()
@@ -1987,7 +2025,7 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
             image = self._rgba_tensor(frame)
             height, width = int(image.shape[0]), int(image.shape[1])
             if not self._native_active:
-                self._start_native(width, height)
+                self._start_native(width, height, cuda_device=image.device)
             if self._native_mux_process is None or self._native_mux_process.stdin is None:
                 raise RuntimeError("Vulkan packet muxer stdin is unavailable")
             rgba_frame = self._native_vulkan_encoder.acquire_rgba_frame()

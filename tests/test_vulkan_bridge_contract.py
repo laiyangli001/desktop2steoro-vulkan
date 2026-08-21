@@ -56,3 +56,5 @@ def test_native_bridge_declares_low_latency_gpu_path_and_diagnostic_log():
     assert "std::unordered_map<VkImage, ConvertSlot> convert_slots" in source
     assert "encoder->convert_slots.try_emplace(command_key)" in source
     assert "slot.descriptor_set" in source
+    assert "d2s_vulkan_ffmpeg_encoder_device_identity" in source
+    assert "vkGetPhysicalDeviceProperties2" in source
