@@ -759,7 +759,7 @@ GPU 零拷贝只解决电脑端原始帧搬运。继续检查：
 - [x] FFmpeg Release 包含 `h264_vulkan` 和 `hevc_vulkan`（当前 Windows d2s.2 本机验证）。
 - [x] 包含原生桥需要的 FFmpeg shared libraries、headers 和 pkg-config 文件（远程构建产物已用于本机桥接）。
 - [x] 未启用 `--enable-nonfree`；公开构建配置已移除该选项。
-- [ ] Windows/Linux 构建均完成静态能力验证。
+- [x] Windows/Linux 构建均完成静态能力验证；GitHub Actions run `32533937908` 的 Windows job `96931207064` 和 Linux job `96931206970` 均完成 FFmpeg 开发包下载、CMake bridge 编译和 ABI 导出检查。
 
 ### GPU 通路
 
