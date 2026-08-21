@@ -962,8 +962,11 @@ bool submit_encode_acquire(Encoder* encoder, AVVkFrame* nv12,
     submit.pSignalSemaphoreInfos = &signal;
     auto submit2 = reinterpret_cast<PFN_vkQueueSubmit2>(
         vkGetDeviceProcAddr(device, "vkQueueSubmit2"));
-    if (!submit2 || submit2(encoder->prepare_queue, 1, &submit, fence_it->second) != VK_SUCCESS)
-        return false;
+    const VkResult acquire_result = !submit2
+        ? VK_ERROR_INITIALIZATION_FAILED
+        : submit2(encoder->prepare_queue, 1, &submit, fence_it->second);
+    trace("encode acquire submitted result=%d", static_cast<int>(acquire_result));
+    if (acquire_result != VK_SUCCESS) return false;
     *signal_value = next_value;
     return true;
 }
@@ -1218,7 +1221,9 @@ extern "C" int d2s_vulkan_ffmpeg_encoder_encode_rgba_frame(
         return -3;
     }
     nv12->pts = timestamp;
+    trace("avcodec_send_frame begin pts=%lld", timestamp);
     const int result = avcodec_send_frame(encoder->codec, nv12);
+    trace("avcodec_send_frame result=%d", result);
     av_frame_free(&nv12);
     av_frame_free(&encoder->rgba_acquired);
     return result < 0 ? -4 : 0;
