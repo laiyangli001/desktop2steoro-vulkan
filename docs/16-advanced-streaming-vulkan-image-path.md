@@ -4,7 +4,7 @@
 
 目标是消除当前 4K SBS 推流中的 CUDA/ROCm → CPU RGB24 → FFmpeg stdin 路径，让图像在 GPU 内完成 SBS 整理、颜色转换和硬件编码。编码后的 H.264/H.265 小数据包仍通过 FFmpeg/MediaMTX 发布，并由局域网头显浏览器通过 WebRTC 播放。
 
-> 本文同时记录实施设计和当前验收状态。native Vulkan 编码桥已完成独立 4K 编码烟测并接入高级网络推流；本机已完成连续 600 帧 3840×2160@30 发布和 ffprobe 媒体参数验证。头显端持续 4K/30 FPS 实机验收和音频闭环仍需继续完成；Khronos validation 层会触发 FFmpeg 内部 NV12 frame-pool 的已知 VUID 与 flush/idle 阻塞，程序检测到该层后主动回退稳定 host-upload 路径。
+> 本文同时记录实施设计和当前验收状态。native Vulkan 编码桥已完成独立 4K 编码烟测并接入高级网络推流；本机已完成连续 600 帧 3840×2160@30 发布和 ffprobe 媒体参数验证；SoundCard/WASAPI 连续运行 10.12 秒无 runtime error，MediaMTX 确认 `2 tracks (H264, Opus)`。头显端持续 4K/30 FPS 实机验收仍需继续完成；Khronos validation 层会触发 FFmpeg 内部 NV12 frame-pool 的已知 VUID 与 flush/idle 阻塞，程序检测到该层后主动回退稳定 host-upload 路径。
 
 ## 目录
 
@@ -769,7 +769,7 @@ GPU 零拷贝只解决电脑端原始帧搬运。继续检查：
 - [ ] H.264 低延迟路径 `bf=0`。
 - [x] 编码包交给 muxer 时保持正确 PTS/DTS（PTS 使用 0..N-1 编码帧序号；ffprobe time base 为 1/90000）。
 - [x] RTSP 本机发布使用稳定传输设置（TCP、`pkt_size=1452`）。
-- [ ] MediaMTX 输出 WebRTC H.264 + Opus。
+- [x] MediaMTX 输出 WebRTC H.264 + Opus（本机 MediaMTX 日志确认 `2 tracks (H264, Opus)`）。
 - [ ] 音频短暂异常不会终止视频。
 
 ### 回退与闭环
