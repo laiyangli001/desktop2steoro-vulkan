@@ -777,7 +777,7 @@ GPU 零拷贝只解决电脑端原始帧搬运。继续检查：
 - [x] Vulkan 不可用时自动回退厂商硬件编码。
 - [x] 厂商硬件编码不可用时回退软件编码；`FfmpegDirectSbsOutput` 依次探测硬件编码器，全部失败时选择 `libx264`/`libx265`。
 - [x] GUI 状态栏显示真实活动后端；native 和回退路径通过 `[D2S_STATUS]` 状态记录更新 GUI 状态文本。
-- [ ] 自动校准读取客户端 decoded FPS、丢帧、RTT 和丢包。
+- [x] 自动校准页面通过 WebRTC `getStats()` 回传客户端 `decoded_fps`、丢帧、冻结、RTP 丢包、接收码率、抖动缓冲、RTT 和媒体尺寸，并由服务端参与档位判定。
 - [ ] PICO/Quest/Wolvic 完成至少 30 分钟闭环测试。
 
 FFmpeg 的 Vulkan H.264 编码器以 `AV_PIX_FMT_VULKAN` 作为输入，Vulkan Video 编码源图像还必须使用编码用途创建、查询受支持格式并在提交时处于 `VK_IMAGE_LAYOUT_VIDEO_ENCODE_SRC_KHR`。实现时应以 [FFmpeg H.264 Vulkan encoder](https://www.ffmpeg.org/doxygen/8.0/vulkan__encode__h264_8c.html) 和 [VK_KHR_video_encode_queue](https://docs.vulkan.org/features/latest/features/proposals/VK_KHR_video_encode_queue.html) 为准。

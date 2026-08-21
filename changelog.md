@@ -2,6 +2,8 @@
 
 ## 2026-08-22
 
+- 校准闭环文档与实际实现对齐：确认头显页面通过 WebRTC `getStats()` 回传 decoded FPS、丢帧、冻结、RTP 丢包、接收码率、抖动缓冲、RTT 和媒体尺寸；指南改为准确记录当前固定 30 FPS、码率搜索策略，并保留尚未完成的 PICO/Quest/Wolvic 30 分钟实机验收项。
+
 - 补齐回退可观测性：硬件编码器全部不可用时覆盖 `libx264`/`libx265` 软件回退；Vulkan native/稳定 FFmpeg 回退通过 `[D2S_STATUS]` 更新 GUI 状态栏，并新增对应回归测试。
 
 - 增加并实测 native Vulkan/CUDA 物理设备 UUID 校验：编码器启动时读取 Vulkan `VkPhysicalDeviceIDProperties`，与当前 CUDA tensor 设备匹配；多 GPU 不匹配时触发稳定高级推流回退，并记录设备名称和 UUID；设备日志改用 ASCII，兼容 Windows GBK 输出。
