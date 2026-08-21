@@ -7,6 +7,7 @@ fail-closed until the external-memory and semaphore hand-off is implemented.
 from __future__ import annotations
 
 import argparse
+import ctypes
 import os
 import sys
 from pathlib import Path
@@ -20,6 +21,23 @@ def _configure_dll_search_path(ffmpeg_bin: str | None) -> None:
         raise ValueError(f"FFmpeg bin directory does not exist: {directory}")
     if os.name == "nt" and hasattr(os, "add_dll_directory"):
         os.add_dll_directory(str(directory))
+
+
+def _close_exported_handles(frame) -> None:
+    """Close per-acquire OS duplicates after verifying they were exported."""
+    if os.name != "nt":
+        for handles in (frame.external_memory_handle, frame.external_semaphore_handle):
+            for handle in handles[: frame.plane_count]:
+                if int(handle) > 0:
+                    os.close(int(handle))
+        return
+    close_handle = ctypes.windll.kernel32.CloseHandle
+    close_handle.argtypes = [ctypes.c_void_p]
+    close_handle.restype = ctypes.c_int
+    for handles in (frame.external_memory_handle, frame.external_semaphore_handle):
+        for handle in handles[: frame.plane_count]:
+            if handle:
+                close_handle(ctypes.c_void_p(int(handle)))
 
 
 def main() -> int:
@@ -53,6 +71,7 @@ def main() -> int:
         peak_bitrate=args.peak_bitrate,
         hevc=args.hevc,
     )
+    frame = None
     try:
         frame = encoder.acquire_frame()
         if frame.plane_count != 2 or not frame.image[0] or not frame.image[1]:
@@ -66,6 +85,8 @@ def main() -> int:
             f"formats={frame.format[0]},{frame.format[1]}"
         )
     finally:
+        if frame is not None:
+            _close_exported_handles(frame)
         encoder.close()
     return 0
 

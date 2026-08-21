@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 
 
-EXPECTED_ABI_VERSION = 2
+EXPECTED_ABI_VERSION = 3
 REQUIRED_SYMBOLS = (
     "d2s_vulkan_ffmpeg_bridge_abi_version",
     "d2s_vulkan_ffmpeg_bridge_probe",
@@ -39,6 +39,11 @@ class VulkanVideoFrame(ctypes.Structure):
         ("width", ctypes.c_uint32),
         ("height", ctypes.c_uint32),
         ("plane_count", ctypes.c_uint32),
+        ("external_memory_handle", ctypes.c_int64 * 2),
+        ("external_semaphore_handle", ctypes.c_int64 * 2),
+        ("semaphore_value", ctypes.c_uint64 * 2),
+        ("slot_id", ctypes.c_uint64),
+        ("external_handle_type", ctypes.c_uint32),
     ]
 
 
@@ -59,6 +64,10 @@ class VulkanNativeEncoder:
         result = int(self.bridge._acquire_frame(self.handle, ctypes.byref(frame)))
         if result != 0:
             raise RuntimeError(f"native Vulkan frame acquire failed: {result}")
+        if not frame.external_handle_type or not all(frame.external_memory_handle[: frame.plane_count]):
+            raise RuntimeError("native Vulkan frame has no CUDA-importable external memory handles")
+        if not all(frame.external_semaphore_handle[: frame.plane_count]):
+            raise RuntimeError("native Vulkan frame has no CUDA-importable semaphore handles")
         self._acquired = frame
         return frame
 

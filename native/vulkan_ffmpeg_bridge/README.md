@@ -3,7 +3,8 @@
 This directory defines the in-process bridge required by the final Advanced
 Network Streaming Vulkan path. The bridge creates an FFmpeg-owned Vulkan
 device (with Vulkan Video extensions) and NV12 frame pool, then exposes the
-pool's GPU image handles through ABI version 2.
+pool's GPU image handles, external memory handles and timeline semaphore
+values through ABI version 3.
 The caller writes those images with Vulkan/CUDA interop and submits the same
 GPU frame to FFmpeg through `AV_PIX_FMT_VULKAN`; it must not send RGB24 bytes
 or a CPU pointer. Passing an application-owned `VkDevice` is optional and is

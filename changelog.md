@@ -2,6 +2,7 @@
 
 ## 2026-08-21
 
+- Vulkan FFmpeg bridge ABI 升级到 v3：NV12 frame descriptor 现在导出每 plane 的 OS external-memory handle、FFmpeg timeline semaphore handle/value 与稳定 slot ID，供 CUDA/HIP 一次导入后直接写入；句柄只用于 GPU 外部互操作，不暴露 CPU 像素。
 - 修正 Vulkan 原生桥的 device 所有权模型：默认由 FFmpeg 创建启用 Vulkan Video 扩展的逻辑 device 与 frame pool，避免把未启用 Video Encode 扩展的 Viewer `VkDevice` 交给编码器导致访问冲突；应用自有 device 仅在完整提供 Vulkan Video 能力时可选接管。
 - 新增 `vulkan_ffmpeg_bridge_smoke.py`，可独立验证远程构建桥接 DLL、FFmpeg Vulkan device 与 4K NV12 frame pool 初始化；测试不提交未同步图像，适合在 CUDA/Vulkan 共享链路接入前定位驱动、profile 或 DLL 依赖问题。
 - Vulkan 原生编码桥的 GPU 帧提交现在强制要求 producer-ready 外部信号量和值；未实现真实 Vulkan wait/layout transition 前主动拒绝提交并保持高级网络推流回退，避免把未同步的 FFmpeg `VkImage` 接入造成花屏或 GPU 竞态；Python ABI 同步暴露信号量参数，桥接 CI 同时改用当前 `d2s.2` FFmpeg 开发包。

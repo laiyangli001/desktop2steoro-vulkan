@@ -453,7 +453,7 @@ CUDA Device 0 不一定对应 Vulkan 枚举中的 Physical Device 0。必须通�
 
 ### 回退规则
 
-当前原生桥 ABI v2 已固定在 `native/vulkan_ffmpeg_bridge/`：默认由 FFmpeg 创建带 Vulkan Video 扩展的逻辑 device 和 NV12 frame pool，并通过 `acquire_frame` 返回 FFmpeg 所有的 GPU `VkImage`/memory 描述。应用已有的 `VkDevice` 只有在创建时已启用相同 Video 扩展时才允许接管，普通 Viewer context 不可直接复用。`submit_frame` 现在强制要求 producer-ready 外部信号量和值；由于原生桥尚未完成外部信号量 wait、图像布局转换和跨 API 的可导出 memory handle，提交会 fail-closed，不会把未同步的 frame 送入编码器。Python frame-pool 消费、RGBA→NV12 Vulkan Compute、CUDA/Vulkan 同步和 4K 实机验证尚未完成，因此当前仍不得宣称端到端零复制；未安装、ABI 不匹配或原生链路失败时继续使用 host-upload 阶段并自动回退。
+当前原生桥 ABI v3 已固定在 `native/vulkan_ffmpeg_bridge/`：默认由 FFmpeg 创建带 Vulkan Video 扩展的逻辑 device 和 NV12 frame pool，并通过 `acquire_frame` 返回 GPU `VkImage`/memory 描述、每 plane 可导入的 OS memory handle、timeline semaphore handle/value 与稳定 slot ID。应用已有的 `VkDevice` 只有在创建时已启用相同 Video 扩展时才允许接管，普通 Viewer context 不可直接复用。`submit_frame` 现在强制要求 producer-ready 外部信号量和值；由于原生桥尚未完成外部信号量 wait、图像布局转换和 CUDA frame-pool 消费，提交会 fail-closed，不会把未同步的 frame 送入编码器。RGBA→NV12 GPU 转换、CUDA/Vulkan 同步和 4K 实机编码验证尚未完成，因此当前仍不得宣称端到端零复制；未安装、ABI 不匹配或原生链路失败时继续使用 host-upload 阶段并自动回退。
 
 原生桥通过 `.github/workflows/vulkan-ffmpeg-bridge.yml` 在 GitHub Actions Windows Runner 远程构建；本地不要求安装 C++ 工具链、Vulkan SDK 或 FFmpeg 开发包。
 
@@ -523,7 +523,7 @@ Vulkan Probe Timeout Seconds: 8
 ### 阶段 1：独立原生编码探针
 
 1. ~~建立 `vulkan_ffmpeg_bridge`。~~ 已完成。
-2. ~~建立 FFmpeg-owned Vulkan NV12 frame pool 和 GPU frame descriptor ABI。~~ 已完成 ABI v2；仍需 Windows CI 原生编译确认。
+2. ~~建立 FFmpeg-owned Vulkan NV12 frame pool 和 GPU frame descriptor ABI。~~ 已完成 ABI v3，包含 external memory/timeline descriptor；仍需 Windows CI 原生编译确认。
 3. 不接 Desktop2Stereo，使用 frame pool 生成 Vulkan NV12 测试图。
 4. 编码 4K 30/48/60 FPS、持续 10 分钟。
 5. 用 ffprobe 检查时间戳、关键帧和码流，并验证创建、flush、重建和关闭不泄漏资源。

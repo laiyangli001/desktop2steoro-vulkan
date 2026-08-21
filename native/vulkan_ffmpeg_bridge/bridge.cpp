@@ -1,5 +1,8 @@
 #include "vulkan_ffmpeg_bridge.h"
 
+#if defined(_WIN32) && !defined(VK_USE_PLATFORM_WIN32_KHR)
+#define VK_USE_PLATFORM_WIN32_KHR
+#endif
 #include <vulkan/vulkan.h>
 
 extern "C" {
@@ -15,6 +18,12 @@ extern "C" {
 #include <cstring>
 #include <memory>
 
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
+
 namespace {
 struct Encoder {
     AVBufferRef* device = nullptr;
@@ -26,6 +35,9 @@ struct Encoder {
     int height = 0;
     int fps = 0;
 };
+
+constexpr unsigned int D2S_EXTERNAL_HANDLE_WIN32 = 1;
+constexpr unsigned int D2S_EXTERNAL_HANDLE_FD = 2;
 
 void write_message(char* output, int capacity, const char* message) {
     if (!output || capacity <= 0) return;
@@ -42,12 +54,108 @@ void destroy_encoder(Encoder* encoder) {
     delete encoder;
 }
 
-void copy_vk_frame(const AVVkFrame* source, D2SVulkanVideoFrame* destination,
+bool export_vk_frame_handles(Encoder* encoder, const AVVkFrame* source,
+                             D2SVulkanVideoFrame* destination) {
+    auto* device_context = reinterpret_cast<AVHWDeviceContext*>(encoder->device->data);
+    auto* vulkan_context = reinterpret_cast<AVVulkanDeviceContext*>(device_context->hwctx);
+    const VkDevice device = vulkan_context->act_dev;
+    if (device == VK_NULL_HANDLE) return false;
+#ifdef _WIN32
+    auto get_memory = reinterpret_cast<PFN_vkGetMemoryWin32HandleKHR>(
+        vkGetDeviceProcAddr(device, "vkGetMemoryWin32HandleKHR"));
+    auto get_semaphore = reinterpret_cast<PFN_vkGetSemaphoreWin32HandleKHR>(
+        vkGetDeviceProcAddr(device, "vkGetSemaphoreWin32HandleKHR"));
+#else
+    auto get_memory = reinterpret_cast<PFN_vkGetMemoryFdKHR>(
+        vkGetDeviceProcAddr(device, "vkGetMemoryFdKHR"));
+    auto get_semaphore = reinterpret_cast<PFN_vkGetSemaphoreFdKHR>(
+        vkGetDeviceProcAddr(device, "vkGetSemaphoreFdKHR"));
+#endif
+    if (!get_memory || !get_semaphore) return false;
+    for (unsigned int index = 0; index < destination->plane_count; ++index) {
+#ifdef _WIN32
+        HANDLE memory_handle = nullptr;
+        VkMemoryGetWin32HandleInfoKHR memory_info{
+            VK_STRUCTURE_TYPE_MEMORY_GET_WIN32_HANDLE_INFO_KHR,
+            nullptr,
+            source->mem[index],
+            VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT,
+        };
+        if (get_memory(device, &memory_info, &memory_handle) != VK_SUCCESS || !memory_handle)
+            return false;
+        HANDLE semaphore_handle = nullptr;
+        VkSemaphoreGetWin32HandleInfoKHR semaphore_info{
+            VK_STRUCTURE_TYPE_SEMAPHORE_GET_WIN32_HANDLE_INFO_KHR,
+            nullptr,
+            source->sem[index],
+            VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT,
+        };
+        if (get_semaphore(device, &semaphore_info, &semaphore_handle) != VK_SUCCESS || !semaphore_handle) {
+            CloseHandle(memory_handle);
+            return false;
+        }
+        destination->external_memory_handle[index] =
+            static_cast<long long>(reinterpret_cast<intptr_t>(memory_handle));
+        destination->external_semaphore_handle[index] =
+            static_cast<long long>(reinterpret_cast<intptr_t>(semaphore_handle));
+#else
+        int memory_handle = -1;
+        VkMemoryGetFdInfoKHR memory_info{
+            VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR,
+            nullptr,
+            source->mem[index],
+            VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT,
+        };
+        if (get_memory(device, &memory_info, &memory_handle) != VK_SUCCESS || memory_handle < 0)
+            return false;
+        int semaphore_handle = -1;
+        VkSemaphoreGetFdInfoKHR semaphore_info{
+            VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR,
+            nullptr,
+            source->sem[index],
+            VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT,
+        };
+        if (get_semaphore(device, &semaphore_info, &semaphore_handle) != VK_SUCCESS || semaphore_handle < 0) {
+            close(memory_handle);
+            return false;
+        }
+        destination->external_memory_handle[index] = memory_handle;
+        destination->external_semaphore_handle[index] = semaphore_handle;
+#endif
+        destination->semaphore_value[index] = source->sem_value[index];
+    }
+#ifdef _WIN32
+    destination->external_handle_type = D2S_EXTERNAL_HANDLE_WIN32;
+#else
+    destination->external_handle_type = D2S_EXTERNAL_HANDLE_FD;
+#endif
+    return true;
+}
+
+void close_exported_handles(D2SVulkanVideoFrame* frame) {
+    if (!frame) return;
+    for (unsigned int index = 0; index < 2; ++index) {
+#ifdef _WIN32
+        if (frame->external_memory_handle[index])
+            CloseHandle(reinterpret_cast<HANDLE>(static_cast<intptr_t>(frame->external_memory_handle[index])));
+        if (frame->external_semaphore_handle[index])
+            CloseHandle(reinterpret_cast<HANDLE>(static_cast<intptr_t>(frame->external_semaphore_handle[index])));
+#else
+        if (frame->external_memory_handle[index] > 0) close(static_cast<int>(frame->external_memory_handle[index]));
+        if (frame->external_semaphore_handle[index] > 0) close(static_cast<int>(frame->external_semaphore_handle[index]));
+#endif
+        frame->external_memory_handle[index] = 0;
+        frame->external_semaphore_handle[index] = 0;
+    }
+}
+
+void copy_vk_frame(Encoder* encoder, const AVVkFrame* source, D2SVulkanVideoFrame* destination,
                    int width, int height) {
     std::memset(destination, 0, sizeof(*destination));
     destination->width = static_cast<unsigned int>(width);
     destination->height = static_cast<unsigned int>(height);
     destination->plane_count = 0;
+    destination->slot_id = static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(source));
     for (unsigned int index = 0; index < 2; ++index) {
         if (!source->img[index]) continue;
         destination->image[index] = reinterpret_cast<void*>(source->img[index]);
@@ -62,10 +170,12 @@ void copy_vk_frame(const AVVkFrame* source, D2SVulkanVideoFrame* destination,
         for (unsigned int index = 0; index < destination->plane_count; ++index)
             destination->format[index] = static_cast<unsigned int>(formats[index]);
     }
+    if (destination->plane_count > 0 && !export_vk_frame_handles(encoder, source, destination))
+        close_exported_handles(destination);
 }
 }
 
-extern "C" int d2s_vulkan_ffmpeg_bridge_abi_version() { return 2; }
+extern "C" int d2s_vulkan_ffmpeg_bridge_abi_version() { return 3; }
 
 extern "C" int d2s_vulkan_ffmpeg_bridge_probe(char* output, int capacity) {
     const AVCodec* h264 = avcodec_find_encoder_by_name("h264_vulkan");
@@ -204,9 +314,12 @@ extern "C" int d2s_vulkan_ffmpeg_encoder_acquire_frame(
         return -1;
     }
     encoder->acquired = acquired;
-    copy_vk_frame(reinterpret_cast<AVVkFrame*>(acquired->data[0]), frame,
+    copy_vk_frame(encoder, reinterpret_cast<AVVkFrame*>(acquired->data[0]), frame,
                   encoder->width, encoder->height);
-    return frame->plane_count > 0 ? 0 : -1;
+    if (frame->plane_count > 0 && frame->external_handle_type)
+        return 0;
+    av_frame_free(&encoder->acquired);
+    return -1;
 }
 
 extern "C" int d2s_vulkan_ffmpeg_encoder_submit_frame(

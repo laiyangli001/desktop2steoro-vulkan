@@ -26,6 +26,15 @@ typedef struct D2SVulkanVideoFrame {
     unsigned int width;
     unsigned int height;
     unsigned int plane_count;
+    // OS handles duplicated for this acquire. The caller imports each handle
+    // into CUDA/HIP once and closes it immediately after that import. They are
+    // never CPU pixel buffers. On Windows these are HANDLE values; on Linux
+    // they are file descriptors stored as signed 64-bit values.
+    long long external_memory_handle[2];
+    long long external_semaphore_handle[2];
+    unsigned long long semaphore_value[2];
+    unsigned long long slot_id;
+    unsigned int external_handle_type;
 } D2SVulkanVideoFrame;
 
 D2S_VULKAN_FFMPEG_API void* d2s_vulkan_ffmpeg_encoder_create(
