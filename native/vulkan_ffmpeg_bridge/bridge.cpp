@@ -608,10 +608,9 @@ extern "C" int d2s_vulkan_ffmpeg_encoder_device_identity(
         return 0;
     auto* device_context = reinterpret_cast<AVHWDeviceContext*>(encoder->device->data);
     auto* vulkan = reinterpret_cast<AVVulkanDeviceContext*>(device_context->hwctx);
-    if (!vulkan || !vulkan->phys_dev || !vulkan->inst)
+    if (!vulkan || !vulkan->phys_dev)
         return 0;
-    auto get_properties2 = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
-        vkGetInstanceProcAddr(vulkan->inst, "vkGetPhysicalDeviceProperties2"));
+    auto get_properties2 = &vkGetPhysicalDeviceProperties2;
     if (!get_properties2)
         return 0;
     VkPhysicalDeviceIDProperties id_properties{
