@@ -411,8 +411,11 @@ extern "C" void* d2s_vulkan_ffmpeg_encoder_create(
     frames_context->height = height;
     frames_context->initial_pool_size = 3;
     auto* vulkan_frames = reinterpret_cast<AVVulkanFramesContext*>(frames_context->hwctx);
+    // CUDA external-memory arrays do not require STORAGE usage.  Request only
+    // the Video Encode source usage guaranteed by the selected profile; FFmpeg
+    // still adds optional transfer/storage usages when the driver supports them.
     vulkan_frames->usage = static_cast<VkImageUsageFlagBits>(
-        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_VIDEO_ENCODE_SRC_BIT_KHR);
+        VK_IMAGE_USAGE_VIDEO_ENCODE_SRC_BIT_KHR);
     vulkan_frames->flags = AV_VK_FRAME_FLAG_DISABLE_MULTIPLANE;
     vulkan_frames->create_pnext = &video_profiles;
     if (av_hwframe_ctx_init(result->frames) < 0) {

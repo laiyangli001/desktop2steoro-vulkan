@@ -2,7 +2,7 @@
 
 ## 2026-08-21
 
-- CUDA/Vulkan interop 增加 FFmpeg NV12 双 plane writer：原生桥为 Vulkan Video frame pool 附加 H.264/HEVC profile，先把 FFmpeg frame 转入 `GENERAL` 并 signal timeline，CUDA 等待后把 GPU 生成的 Y/UV 直接复制到导出的 Vulkan image，再 signal 下一值给 FFmpeg 转入 `VIDEO_ENCODE_SRC`；无 CPU RGB24 或 stdin 原始帧传输。
+- CUDA/Vulkan interop 增加 FFmpeg NV12 双 plane writer：原生桥为 Vulkan Video frame pool 附加 H.264/HEVC profile，避免对编码源 image 强制声明非必要的 storage usage，先把 FFmpeg frame 转入 `GENERAL` 并 signal timeline，CUDA 等待后把 GPU 生成的 Y/UV 直接复制到导出的 Vulkan image，再 signal 下一值给 FFmpeg 转入 `VIDEO_ENCODE_SRC`；无 CPU RGB24 或 stdin 原始帧传输。
 - GitHub Actions 全部升级为 `actions/checkout@v5` 与 `actions/upload-artifact@v6`，统一使用 Node.js 24 runtime，消除 GitHub Hosted Runner 对旧 Node.js 20 action runtime 的弃用提示。
 - Vulkan FFmpeg bridge ABI 升级到 v3：NV12 frame descriptor 现在导出每 plane 的 OS external-memory handle、FFmpeg timeline semaphore handle/value 与稳定 slot ID，供 CUDA/HIP 一次导入后直接写入；句柄只用于 GPU 外部互操作，不暴露 CPU 像素。
 - Vulkan frame submit 现在把 CUDA/HIP 已 signal 的 timeline value 写回 FFmpeg `AVVkFrame`，使 Vulkan Video 编码提交按 GPU 完成点等待，而不是在 CPU 上同步 CUDA；未提供有效完成点仍拒绝编码。
