@@ -528,6 +528,15 @@ Vulkan Probe Timeout Seconds: 8
 4. 编码 4K 30/48/60 FPS、持续 10 分钟。
 5. 用 ffprobe 检查时间戳、关键帧和码流，并验证创建、flush、重建和关闭不泄漏资源。
 
+在接入任何 CUDA 帧之前，先用以下独立测试验证远程构建 DLL 与目标驱动：
+
+```text
+set D2S_VULKAN_FFMPEG_BRIDGE=<d2s_vulkan_ffmpeg_bridge.dll>
+src/python3/python.exe src/desktop2steoro/tools/vulkan_ffmpeg_bridge_smoke.py --ffmpeg-bin <ffmpeg/bin>
+```
+
+该测试只创建 FFmpeg-owned Vulkan Video device 和 4K NV12 frame pool、领取一个 frame descriptor 后释放；它不会提交像素，也不会把未同步帧送入编码器。
+
 ### 阶段 2：CUDA → Vulkan GPU 通路
 
 1. 复用现有 `CudaVulkanImageImporter` 的 external memory/semaphore 机制。
