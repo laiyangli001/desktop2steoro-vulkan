@@ -2,6 +2,8 @@
 
 ## 2026-08-22
 
+- 加强 OpenGL fallback 初始化异常安全：GLFW 初始化、隐藏窗口、纹理或 interop 探针中途失败时统一调用清理逻辑，确保 GLFW 状态、窗口和已创建 GPU 资源不会残留。
+
 - 增加无 interop 回退回归测试：模拟 NSGL/VideoToolbox 能力时验证 RGB 帧直接进入 host encoder，测试会在任何重新引入 CPU→OpenGL→CPU 往返时失败。
 
 - 明确跨平台 OpenGL 能力边界：没有 CUDA/HIP graphics interop 时，运行时报告 `host-upload fallback; no portable OpenGL encoder interop`，Intel 继续使用 FFmpeg QSV/VAAPI，macOS 继续使用 VideoToolbox；不再把 OpenGL texture 误报为 QSV/VAAPI surface 或 IOSurface-backed VideoToolbox frame。

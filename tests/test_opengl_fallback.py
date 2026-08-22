@@ -219,6 +219,8 @@ def test_opengl_fallback_contract_is_documented_and_wired():
     assert "self._fences" in backend_source
     assert "PBO slot fence failed" in backend_source
     assert "host-upload fallback; no portable OpenGL encoder interop" in backend_source
+    assert "self._glfw_initialized = False" in backend_source
+    assert "except Exception:\n            self.close()\n            raise" in backend_source
     assert "cudaGraphicsGLRegisterImage" in backend_source
     assert "cudaMemcpy2DFromArrayAsync" in backend_source
     assert "_HipOpenGLInterop" in backend_source

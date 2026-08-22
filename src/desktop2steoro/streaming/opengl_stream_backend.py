@@ -342,6 +342,7 @@ class OpenGLFallbackBackend:
         self.pbo_count = int(pbo_count)
         self._glfw = None
         self._gl = None
+        self._glfw_initialized = False
         self._window = None
         self._texture = None
         self._pbos: list[int] = []
@@ -351,7 +352,11 @@ class OpenGLFallbackBackend:
         self._closed = False
         self._cuda_interop: _CudaOpenGLInterop | None = None
         self._hip_interop: _HipOpenGLInterop | None = None
-        self._capabilities = self._initialize()
+        try:
+            self._capabilities = self._initialize()
+        except Exception:
+            self.close()
+            raise
 
     @property
     def capabilities(self) -> OpenGLFallbackCapabilities:
@@ -379,6 +384,7 @@ class OpenGLFallbackBackend:
         self._gl = GL
         if not glfw.init():
             raise RuntimeError("glfwInit failed for OpenGL fallback")
+        self._glfw_initialized = True
 
         glfw.window_hint(glfw.VISIBLE, glfw.FALSE)
         glfw.window_hint(glfw.CLIENT_API, glfw.OPENGL_API)
@@ -630,7 +636,12 @@ class OpenGLFallbackBackend:
         if self._closed:
             return
         self._closed = True
-        if self._glfw is None or self._window is None:
+        if self._glfw is None:
+            return
+        if self._window is None:
+            if self._glfw_initialized:
+                self._glfw.terminate()
+                self._glfw_initialized = False
             return
         previous = self._glfw.get_current_context()
         self._glfw.make_context_current(self._window)
@@ -654,3 +665,6 @@ class OpenGLFallbackBackend:
             self._glfw.destroy_window(self._window)
             self._glfw.make_context_current(self._previous_context or previous)
             self._window = None
+            if self._glfw_initialized:
+                self._glfw.terminate()
+                self._glfw_initialized = False
