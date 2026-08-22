@@ -2,6 +2,8 @@
 
 ## 2026-08-22
 
+- 完善 OpenGL 备用后端的三槽 PBO/fence 环：每个槽位保留 GPU 完成 fence，复用前只等待对应槽位，不再每帧立即等待并销毁 fence；关闭时统一释放未完成同步对象，降低 host-upload 图像提交的串行阻塞。
+
 - 修复 OpenGL 无 interop 回退分支：CUDA/ROCm 图像先转换为 CPU RGB 后直接交给稳定 FFmpeg/QSV/VAAPI/VideoToolbox 路径，不再引用未初始化的 RGB 变量，也不把已在 CPU 的帧重复上传 OpenGL 再读回；新增 `interop=cuda/hip/none` 能力日志，明确区分 GPU interop 与 host-upload。
 
 - 扩展高级网络推流 OpenGL 备用路径：NVIDIA 上新增 CUDA–OpenGL interop，将 CUDA RGBA tensor 映射到 OpenGL RGBA8 texture，再以 GPU device-to-device copy 返回 CUDA tensor，交给 PyNvVideoCodec/NVENC 压缩发布；同时接入 HIP graphics-resource 适配层和已有 AMF surface 编码器。无原生 interop 时，OpenGL 回退日志现在输出 FFmpeg 实际选择的 QSV/VAAPI/VideoToolbox/软件编码器名称，不再笼统标记为 host-upload。实测 OpenGL 3.3/NVIDIA/CUDA roundtrip、3840×2160 NVENC 压缩包和 RTSP 发布闭环通过，日志明确 `gpu_to_cpu=False zero_copy=False`。AMD 真机驱动/音频/4K 仍待验证；Intel/macOS 原生 interop 和严格 zero-copy 仍待后续实现。

@@ -37,7 +37,11 @@ def test_opengl_backend_creates_texture_pbo_fence_and_submits_frame():
         frame = np.zeros((36, 64, 3), dtype=np.uint8)
         frame[0, 0] = [7, 23, 42]
         returned = backend.submit_rgb(frame)
+        for index in range(5):
+            frame[0, 0] = [7 + index, 23, 42]
+            returned = backend.submit_rgb(frame)
 
+        assert len(backend._fences) == 3
         assert returned.shape == frame.shape
         assert returned.dtype == np.uint8
         assert returned.flags.c_contiguous
@@ -152,6 +156,8 @@ def test_opengl_fallback_contract_is_documented_and_wired():
     assert "D2S_STATUS] Vulkan unavailable; using OpenGL fallback" in source
     assert "glGenBuffers" in backend_source
     assert "glFenceSync" in backend_source
+    assert "self._fences" in backend_source
+    assert "PBO slot fence failed" in backend_source
     assert "cudaGraphicsGLRegisterImage" in backend_source
     assert "cudaMemcpy2DFromArrayAsync" in backend_source
     assert "_HipOpenGLInterop" in backend_source

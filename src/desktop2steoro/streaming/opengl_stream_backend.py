@@ -345,6 +345,7 @@ class OpenGLFallbackBackend:
         self._window = None
         self._texture = None
         self._pbos: list[int] = []
+        self._fences: list[Any] = []
         self._slot = 0
         self._previous_context = None
         self._closed = False
@@ -421,6 +422,7 @@ class OpenGLFallbackBackend:
             self._pbos = [int(value) for value in generated]
         if len(self._pbos) != self.pbo_count:
             raise RuntimeError("OpenGL returned an incomplete PBO ring")
+        self._fences = [None] * self.pbo_count
 
         for pbo in self._pbos:
             GL.glBindBuffer(GL.GL_PIXEL_UNPACK_BUFFER, pbo)
@@ -581,8 +583,25 @@ class OpenGLFallbackBackend:
         previous = glfw.get_current_context()
         glfw.make_context_current(self._window)
         try:
-            pbo = self._pbos[self._slot]
-            self._slot = (self._slot + 1) % len(self._pbos)
+            slot = self._slot
+            pbo = self._pbos[slot]
+            self._slot = (slot + 1) % len(self._pbos)
+            previous_fence = self._fences[slot]
+            if previous_fence is not None:
+                status = GL.glClientWaitSync(
+                    previous_fence,
+                    GL.GL_SYNC_FLUSH_COMMANDS_BIT,
+                    1_000_000_000,
+                )
+                GL.glDeleteSync(previous_fence)
+                self._fences[slot] = None
+                if status not in (
+                    GL.GL_ALREADY_SIGNALED,
+                    GL.GL_CONDITION_SATISFIED,
+                ):
+                    raise RuntimeError(
+                        f"OpenGL PBO slot fence failed: status={status}"
+                    )
             GL.glBindBuffer(GL.GL_PIXEL_UNPACK_BUFFER, pbo)
             GL.glBufferSubData(GL.GL_PIXEL_UNPACK_BUFFER, 0, rgba)
             GL.glBindTexture(GL.GL_TEXTURE_2D, self._texture)
@@ -597,18 +616,11 @@ class OpenGLFallbackBackend:
                 GL.GL_UNSIGNED_BYTE,
                 None,
             )
-            sync = GL.glFenceSync(GL.GL_SYNC_GPU_COMMANDS_COMPLETE, 0)
+            self._fences[slot] = GL.glFenceSync(GL.GL_SYNC_GPU_COMMANDS_COMPLETE, 0)
             GL.glFlush()
-            status = GL.glClientWaitSync(sync, GL.GL_SYNC_FLUSH_COMMANDS_BIT, 1_000_000_000)
-            GL.glDeleteSync(sync)
-            if status not in (
-                GL.GL_ALREADY_SIGNALED,
-                GL.GL_CONDITION_SATISFIED,
-            ):
-                raise RuntimeError(f"OpenGL texture upload fence failed: status={status}")
+        finally:
             GL.glBindBuffer(GL.GL_PIXEL_UNPACK_BUFFER, 0)
             GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
-        finally:
             glfw.make_context_current(previous)
         return np.ascontiguousarray(rgb)
 
@@ -628,6 +640,10 @@ class OpenGLFallbackBackend:
                 self._hip_interop.close()
                 self._hip_interop = None
             if self._gl is not None:
+                for fence in self._fences:
+                    if fence is not None:
+                        self._gl.glDeleteSync(fence)
+                self._fences = []
                 if self._pbos:
                     self._gl.glDeleteBuffers(len(self._pbos), self._pbos)
                 if self._texture:
