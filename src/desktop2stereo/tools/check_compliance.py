@@ -48,6 +48,10 @@ def _validate_path(value: str, *, row_id: str, label: str, strict: bool, errors:
         return
     for raw_path in value.split(";"):
         path = raw_path.strip().strip("`")
+        # The source package was renamed from the historical typo
+        # ``desktop2steoro`` to ``desktop2stereo``. Keep older matrix rows
+        # valid while the documentation is migrated incrementally.
+        path = path.replace("src/desktop2steoro", "src/desktop2stereo")
         if (
             not path
             or path.startswith(("实机", "CI", "Actions"))

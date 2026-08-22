@@ -61,7 +61,7 @@ def _source_bindings(source: str) -> list[dict[str, object]]:
 
 
 def validate_manifest(root: Path) -> list[str]:
-    shader_root = root / "src" / "desktop2steoro" / "shaders"
+    shader_root = root / "src" / "desktop2stereo" / "shaders"
     manifest_path = shader_root / "manifest.json"
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     errors: list[str] = []
