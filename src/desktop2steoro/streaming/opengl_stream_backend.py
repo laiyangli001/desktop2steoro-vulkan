@@ -484,6 +484,8 @@ class OpenGLFallbackBackend:
             interop_details.append("CUDA/HIP unavailable")
         self._restore_context()
         gpu_interop = self._cuda_interop is not None or self._hip_interop is not None
+        if not gpu_interop:
+            interop_details.append("host-upload fallback; no portable OpenGL encoder interop")
         return OpenGLFallbackCapabilities(
             available=True,
             context_api=self._context_api(),

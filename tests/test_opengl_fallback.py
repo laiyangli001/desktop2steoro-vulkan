@@ -158,6 +158,7 @@ def test_opengl_fallback_contract_is_documented_and_wired():
     assert "glFenceSync" in backend_source
     assert "self._fences" in backend_source
     assert "PBO slot fence failed" in backend_source
+    assert "host-upload fallback; no portable OpenGL encoder interop" in backend_source
     assert "cudaGraphicsGLRegisterImage" in backend_source
     assert "cudaMemcpy2DFromArrayAsync" in backend_source
     assert "_HipOpenGLInterop" in backend_source
@@ -176,4 +177,5 @@ def test_vulkan_doc_records_current_opengl_copy_boundary():
     assert "OpenGL" in document
     assert "gpu_to_cpu=True" in document
     assert "interop=none" in document
+    assert "host-upload fallback" in document
     assert "zero_copy=False" in document

@@ -2,6 +2,8 @@
 
 ## 2026-08-22
 
+- 明确跨平台 OpenGL 能力边界：没有 CUDA/HIP graphics interop 时，运行时报告 `host-upload fallback; no portable OpenGL encoder interop`，Intel 继续使用 FFmpeg QSV/VAAPI，macOS 继续使用 VideoToolbox；不再把 OpenGL texture 误报为 QSV/VAAPI surface 或 IOSurface-backed VideoToolbox frame。
+
 - 完善 OpenGL 备用后端的三槽 PBO/fence 环：每个槽位保留 GPU 完成 fence，复用前只等待对应槽位，不再每帧立即等待并销毁 fence；关闭时统一释放未完成同步对象，降低 host-upload 图像提交的串行阻塞。
 
 - 修复 OpenGL 无 interop 回退分支：CUDA/ROCm 图像先转换为 CPU RGB 后直接交给稳定 FFmpeg/QSV/VAAPI/VideoToolbox 路径，不再引用未初始化的 RGB 变量，也不把已在 CPU 的帧重复上传 OpenGL 再读回；新增 `interop=cuda/hip/none` 能力日志，明确区分 GPU interop 与 host-upload。
