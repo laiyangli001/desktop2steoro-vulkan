@@ -2,6 +2,10 @@
 
 ## 2026-08-22
 
+- 修正 OpenGL smoke 路径统计：GPU interop 能力存在但使用 `--force-host` 时，不再误报 `gpu_to_cpu=false`；GPU probe 和 host probe 现在分别输出 `path=gpu-interop` / `path=host-upload` 及对应复制边界。
+
+- OpenGL smoke 工具增加 `--force-host`：在具有 CUDA/AMD interop 的机器上也能单独压测 PBO/fence host-upload 分支，便于 GPU 与 CPU 回退 A/B 对比。
+
 - 新增 `tools/opengl_fallback_smoke.py`：在不启动 MediaMTX 的情况下，验证真实 headless OpenGL、RGBA8 texture、PBO/fence 环及 CUDA/HIP GPU probe 或 host-upload probe，并以 JSON 输出能力和吞吐结果。
 
 - 加强 OpenGL fallback 初始化异常安全：GLFW 初始化、隐藏窗口、纹理或 interop 探针中途失败时统一调用清理逻辑，确保 GLFW 状态、窗口和已创建 GPU 资源不会残留。

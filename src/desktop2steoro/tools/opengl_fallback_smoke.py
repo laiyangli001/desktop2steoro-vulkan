@@ -29,6 +29,11 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="fail if CUDA/HIP OpenGL graphics interop is unavailable",
     )
+    parser.add_argument(
+        "--force-host",
+        action="store_true",
+        help="skip CUDA/HIP probe and exercise the PBO/fence host path",
+    )
     return parser.parse_args()
 
 
@@ -53,13 +58,14 @@ def _gpu_probe(backend: OpenGLFallbackBackend, frames: int) -> dict[str, Any]:
     assert output is not None
     return {
         "tested": True,
+        "path": "gpu-interop",
         "frames": frames,
         "elapsed_seconds": round(elapsed, 6),
         "fps": round(frames / elapsed, 3),
         "device": str(output.device),
         "shape": list(output.shape),
         "dtype": str(output.dtype),
-        "gpu_to_cpu": backend.capabilities.gpu_to_cpu,
+        "gpu_to_cpu": False,
         "zero_copy": backend.capabilities.zero_copy,
     }
 
@@ -75,13 +81,14 @@ def _host_probe(backend: OpenGLFallbackBackend, frames: int) -> dict[str, Any]:
     assert output is not None
     return {
         "tested": True,
+        "path": "host-upload",
         "frames": frames,
         "elapsed_seconds": round(elapsed, 6),
         "fps": round(frames / elapsed, 3),
         "shape": list(output.shape),
         "dtype": str(output.dtype),
-        "gpu_to_cpu": backend.capabilities.gpu_to_cpu,
-        "zero_copy": backend.capabilities.zero_copy,
+        "gpu_to_cpu": True,
+        "zero_copy": False,
     }
 
 
@@ -93,7 +100,11 @@ def main() -> int:
     backend = OpenGLFallbackBackend(args.width, args.height, pbo_count=args.pbo_count)
     try:
         capabilities = backend.capabilities
-        gpu = _gpu_probe(backend, args.frames)
+        gpu = (
+            {"tested": False, "reason": "forced by --force-host"}
+            if args.force_host
+            else _gpu_probe(backend, args.frames)
+        )
         host = None if gpu["tested"] else _host_probe(backend, args.frames)
         if args.require_gpu_interop and not gpu["tested"]:
             print(json.dumps({"capabilities": capabilities.__dict__, "gpu": gpu}, ensure_ascii=False))

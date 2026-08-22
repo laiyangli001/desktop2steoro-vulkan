@@ -238,8 +238,11 @@ def test_opengl_smoke_tool_contract_is_present():
     ).read_text(encoding="utf-8")
     assert "OpenGLFallbackBackend" in tool
     assert "--require-gpu-interop" in tool
+    assert "--force-host" in tool
     assert "gpu_probe" in tool
     assert "host_probe" in tool
+    assert '"path": "gpu-interop"' in tool
+    assert '"path": "host-upload"' in tool
     assert "json.dumps" in tool
 
 
