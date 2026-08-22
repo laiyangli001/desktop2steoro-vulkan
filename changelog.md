@@ -2,6 +2,8 @@
 
 ## 2026-08-22
 
+- 修复 Requirements Compliance GitHub Actions 在源码目录改名为 `src/desktop2stereo` 后仍引用旧 `src/desktop2steoro` 路径的问题；shader 编译、合规检查和测试矩阵现在使用新路径。
+
 - 修正 CPU 帧进入 OpenGL fallback 时的活动路径日志：不再把可用但未使用的 CUDA interop 报成 GPU-only，实际 host-upload 现在明确输出 `interop=none gpu_to_cpu=True zero_copy=False gpu_copy_count=0`。
 
 - 为 `opengl_fallback_rtsp_soak.py` 增加 `--cpu` 诊断模式；Windows 实测 CPU RGB 640×360@30 通过 10/10 帧，日志为 `path=host-upload`，MediaMTX 确认 H264 发布，使无 CUDA 平台也能验证完整回退链。

@@ -5,12 +5,12 @@ on:
   push:
     paths:
       - 'native/vulkan_ffmpeg_bridge/**'
-      - 'src/desktop2steoro/streaming/vulkan_bridge.py'
+      - 'src/desktop2stereo/streaming/vulkan_bridge.py'
       - '.github/workflows/vulkan-ffmpeg-bridge.yml'
   pull_request:
     paths:
       - 'native/vulkan_ffmpeg_bridge/**'
-      - 'src/desktop2steoro/streaming/vulkan_bridge.py'
+      - 'src/desktop2stereo/streaming/vulkan_bridge.py'
       - '.github/workflows/vulkan-ffmpeg-bridge.yml'
 
 permissions:

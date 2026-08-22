@@ -25,14 +25,14 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/d2s-shaders"
-          for source in src/desktop2steoro/shaders/*.comp src/desktop2steoro/shaders/*.vert src/desktop2steoro/shaders/*.frag; do
+          for source in src/desktop2stereo/shaders/*.comp src/desktop2stereo/shaders/*.vert src/desktop2stereo/shaders/*.frag; do
             output="$RUNNER_TEMP/d2s-shaders/$(basename "${source%.comp}").spv"
             glslc -std=450 "$source" -o "$output"
             spirv-val "$output"
           done
 
       - name: Validate shader manifest
-        run: python src/desktop2steoro/tools/validate_shader_manifest.py
+        run: python src/desktop2stereo/tools/validate_shader_manifest.py
 
   matrix:
     name: Requirements matrix
@@ -50,16 +50,16 @@ jobs:
           python -m pip install --disable-pip-version-check torch --index-url https://download.pytorch.org/whl/cpu
 
       - name: Validate requirements traceability
-        run: python src/desktop2steoro/tools/check_compliance.py
+        run: python src/desktop2stereo/tools/check_compliance.py
 
       - name: Test requirements traceability
         env:
-          PYTHONPATH: src/desktop2steoro
+          PYTHONPATH: src/desktop2stereo
         run: python -m pytest -q tests/test_requirements_matrix.py
 
       - name: Test Vulkan runtime scaffold
         env:
-          PYTHONPATH: src/desktop2steoro
+          PYTHONPATH: src/desktop2stereo
         run: >-
           python -m pytest -q
           tests/test_migration_scaffold.py

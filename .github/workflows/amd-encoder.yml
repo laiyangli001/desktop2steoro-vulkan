@@ -5,7 +5,7 @@ on:
   push:
     paths:
       - "native/amd_encoder/**"
-      - "src/desktop2steoro/streaming/amd_encoder.py"
+      - "src/desktop2stereo/streaming/amd_encoder.py"
       - ".github/workflows/amd-encoder.yml"
 
 permissions:
