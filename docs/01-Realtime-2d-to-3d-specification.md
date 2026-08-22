@@ -902,7 +902,7 @@ Bridge 源码变更
     -> Linux x86_64:   libfilament_bridge.so
     -> macOS arm64:    libfilament_bridge.dylib
     -> 上传 Actions Artifact 或 GitHub Release
-    -> 下载对应平台产物到 src/desktop2steoro/xr_viewer/native/<platform>/
+    -> 下载对应平台产物到 src/desktop2stereo/xr_viewer/native/<platform>/
     -> Python ctypes 加载并运行
 ```
 
@@ -913,7 +913,7 @@ Bridge 源码变更
 3. 本地默认只下载并使用 CI 已验证的对应平台二进制。日常修改 Python 代码、配置、GUI 或资源时，不得触发 Filament 本地重编译。
 4. 只有 Bridge 源码、C ABI、Filament 版本或平台构建配置发生变化时，才重新触发三平台 Bridge CI 构建。
 5. 本地编译仅用于 CI 不可用时的故障诊断、调试器定位或尚未提交的 Bridge 原生代码验证；本地编译结果不得作为正式跨平台发布依据。
-6. 二进制下载后必须放入 `src/desktop2steoro/xr_viewer/native/` 的平台目录，由 Python 根据当前操作系统加载对应文件；缺少或校验失败时必须在启动探测阶段报告明确错误。
+6. 二进制下载后必须放入 `src/desktop2stereo/xr_viewer/native/` 的平台目录，由 Python 根据当前操作系统加载对应文件；缺少或校验失败时必须在启动探测阶段报告明确错误。
 7. Bridge 的 C ABI 必须保持窄接口和版本化。新增 Filament 能力应先扩展 Bridge 接口并通过 CI 矩阵验证，不得让 Python 直接依赖未封装的 Filament C++ ABI。
 
 ---
@@ -980,4 +980,4 @@ Bridge 源码变更
 本规格的每一项架构、平台、推理、渲染、OpenXR、配置、性能、安全和测试要求，统一登记在
 [`docs/requirements-matrix.md`](requirements-matrix.md)。矩阵中的每个需求必须关联实现位置、测试或人工验收方式和状态；未登记、无映射或无验收条件的实现不得视为完成。
 
-发布候选版本必须通过 `src/desktop2steoro/tools/check_compliance.py --strict`、自动化测试、三平台 Bridge CI 和必要的 GPU/OpenXR 实机验收。
+发布候选版本必须通过 `src/desktop2stereo/tools/check_compliance.py --strict`、自动化测试、三平台 Bridge CI 和必要的 GPU/OpenXR 实机验收。

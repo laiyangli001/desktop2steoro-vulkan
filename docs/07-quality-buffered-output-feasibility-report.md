@@ -24,7 +24,7 @@
 项目里的队列工具采用 latest-frame 语义：
 
 ```text
-src/desktop2steoro/utils/queue_utils.py
+src/desktop2stereo/utils/queue_utils.py
 
 put_latest(q, item)
 -> queue 满时丢弃旧 item，再放入最新 item
@@ -36,7 +36,7 @@ drain_latest(q, first_item)
 OpenXR viewer 侧也采用类似策略：
 
 ```text
-src/desktop2steoro/xr_viewer/core_source_state.py
+src/desktop2stereo/xr_viewer/core_source_state.py
 
 _poll_source_frame()
 -> 非阻塞读取 depth_q

@@ -49,7 +49,7 @@
 | 项目 | 规定 |
 |------|------|
 | 核心语言 | Python；版本按平台锁定文件确定 |
-| Python运行方式 | 源码直接执行，正式入口保持为 `python src/desktop2steoro/main.py` |
+| Python运行方式 | 源码直接执行，正式入口保持为 `python src/desktop2stereo/main.py` |
 | 包管理 | 固定版本清单；依赖必须可校验 SHA-256 |
 | 图形 API | 默认请求 Vulkan 1.4，按 OpenXR Runtime 协商，最低 Vulkan 1.2；OpenGL 4.3+ Fallback，macOS 为 OpenGL 4.1 受限模式 |
 | XR API | OpenXR 1.1；主路径使用 `XR_KHR_vulkan_enable2`，Fallback 使用 Runtime 支持的 OpenGL Graphics Binding |
@@ -74,7 +74,7 @@ Python产品代码必须直接支持Windows x86_64、Linux x86_64和macOS arm64�
 
 Filament Vulkan 外部源图像接口必须以源码扩展方式接入，不得把 release SDK 的通用 `Texture::Builder::import()` 猜测为 Vulkan `VkImage` 接口。当前版本锁定 Filament `v1.75.0`，补丁脚本为 `native/filament/patches/apply_d2s_vulkan_external_image.py`：它在 `VulkanPlatform` 中增加借用式 `VkImage` 外部句柄、格式/尺寸元数据和 `ExternalImage` 工厂，Bridge 通过 `D2S_FILAMENT_VULKAN_EXTERNAL_IMAGE` 编译开关启用。补丁只包装调用方所有的 `VkImage`，不负责销毁图像、内存、OpenXR swapchain 或 producer semaphore；layout、queue family、producer-ready 和 consumer-release 仍由 Python Presenter 的 Vulkan 同步契约负责。
 
-该 Filament 源码和 Bridge 必须由 GitHub Actions 在 Windows、Linux、macOS 三个平台远程构建并安装到临时构建前缀；本机不编译 C++/Filament。三平台二进制只有在 CI 构建完成、ABI 能力探针通过并下载回 `src/desktop2steoro/xr_viewer/native/<platform>/` 后，才允许实机启用外部源图像路径。旧 stock SDK 或旧 Bridge 的能力探针返回 false 时，必须保持 Vulkan GPU copy/Quad Layer 回退。
+该 Filament 源码和 Bridge 必须由 GitHub Actions 在 Windows、Linux、macOS 三个平台远程构建并安装到临时构建前缀；本机不编译 C++/Filament。三平台二进制只有在 CI 构建完成、ABI 能力探针通过并下载回 `src/desktop2stereo/xr_viewer/native/<platform>/` 后，才允许实机启用外部源图像路径。旧 stock SDK 或旧 Bridge 的能力探针返回 false 时，必须保持 Vulkan GPU copy/Quad Layer 回退。
 
 ### 2.4 推荐的 Fallback 策略
 
@@ -166,7 +166,7 @@ Desktop2Stereo/
     fixtures/
 ```
 
-`src/`是产品发布边界。发行流程整体复制或打包`src/`；Filament对应平台的预编译库必须已放入`src/desktop2steoro/xr_viewer/native/<platform>/`，不得在用户启动时编译。产品启动方式继续保持当前习惯，只要求建立Python环境并执行`src/desktop2steoro/main.py`或`src/desktop2steoro/main.bat`，不要求CMake或C++编译器。
+`src/`是产品发布边界。发行流程整体复制或打包`src/`；Filament对应平台的预编译库必须已放入`src/desktop2stereo/xr_viewer/native/<platform>/`，不得在用户启动时编译。产品启动方式继续保持当前习惯，只要求建立Python环境并执行`src/desktop2stereo/main.py`或`src/desktop2stereo/main.bat`，不要求CMake或C++编译器。
 
 新项目不建立`migration_reference`运行目录。可以整文件复用的实现直接复制到与当前项目相同的模块路径；尚未确认可用的代码留在旧项目或文档归档，不进入新项目`src/`。目录一致用于降低排查成本，不代表复制旧兼容分支和废弃实现。
 
@@ -219,16 +219,16 @@ viewer.opengl_renderer and xr_viewer.core_openxr_opengl
 
 | 当前项目路径 | 新项目路径 | 处理方式 |
 |-------------|-----------|----------|
-| `src/desktop2steoro/main.py` / `src/desktop2steoro/main.bat` | 原路径保留 | 重写装配逻辑，启动习惯不变 |
-| `src/desktop2steoro/app_runtime/` | 原路径保留 | 保留状态、队列和生命周期职责 |
-| `src/desktop2steoro/capture/` | 原路径保留 | 优先整文件迁入已验证Capture实现 |
-| `src/desktop2steoro/gui/` | 原路径保留 | 保留Flet界面和配置职责 |
-| `src/desktop2steoro/stereo_runtime/` | 原路径保留 | 保留Provider、模型和立体算法，新增Vulkan Graph模块 |
-| `src/desktop2steoro/viewer/` | 原路径保留 | 删除旧图形实现，在原目录加入Vulkan主路径和OpenGL Fallback |
-| `src/desktop2steoro/xr_viewer/` | 原路径保留 | 用Python重写Vulkan OpenXR路径，保留控制器、环境和帧调度职责 |
-| `src/desktop2steoro/xr_viewer/native/` | 原路径保留 | 仅存放Filament Bridge源码和平台预编译库 |
+| `src/desktop2stereo/main.py` / `src/desktop2stereo/main.bat` | 原路径保留 | 重写装配逻辑，启动习惯不变 |
+| `src/desktop2stereo/app_runtime/` | 原路径保留 | 保留状态、队列和生命周期职责 |
+| `src/desktop2stereo/capture/` | 原路径保留 | 优先整文件迁入已验证Capture实现 |
+| `src/desktop2stereo/gui/` | 原路径保留 | 保留Flet界面和配置职责 |
+| `src/desktop2stereo/stereo_runtime/` | 原路径保留 | 保留Provider、模型和立体算法，新增Vulkan Graph模块 |
+| `src/desktop2stereo/viewer/` | 原路径保留 | 删除旧图形实现，在原目录加入Vulkan主路径和OpenGL Fallback |
+| `src/desktop2stereo/xr_viewer/` | 原路径保留 | 用Python重写Vulkan OpenXR路径，保留控制器、环境和帧调度职责 |
+| `src/desktop2stereo/xr_viewer/native/` | 原路径保留 | 仅存放Filament Bridge源码和平台预编译库 |
 | `src/streaming/` | 原路径保留 | 接入新的GPU输出契约 |
-| `src/desktop2steoro/tools/` / `src/desktop2steoro/utils/` | 原路径保留 | 放置probe、模型工具、benchmark和公共辅助 |
+| `src/desktop2stereo/tools/` / `src/desktop2stereo/utils/` | 原路径保留 | 放置probe、模型工具、benchmark和公共辅助 |
 
 目录兼容只保证定位和职责连续性，不保证旧模块内部API兼容。新项目禁止通过`sys.path`指向旧仓库，也禁止从旧仓库动态导入模块；所有正式依赖必须实际存在于新项目同名路径中。
 
@@ -241,7 +241,7 @@ viewer.opengl_renderer and xr_viewer.core_openxr_opengl
 正式数据面运行在单个Python进程中，一次进程会话只加载一个Graphics Backend。Flet GUI、Capture、Inference、Vulkan、OpenXR和Telemetry可以作为同一Python应用内的模块协作；也允许GUI通过`multiprocessing`启动独立Python Runtime进程以提高故障隔离，但进程之间只传控制消息，不传整帧像素。
 
 ```text
-python src/desktop2steoro/main.py
+python src/desktop2stereo/main.py
    |- Flet Control UI / CLI
    |- Python Capture Adapter
    |- Python Inference Provider
@@ -413,7 +413,7 @@ Glow 外部图像和 Filament 外部纹理包装必须按严格生命周期销�
 
 Presenter 只能通过 `GpuProducerAdapter` 注册表创建具体 producer；不得在 OpenXR、Filament 或 `VulkanContext` 中直接实例化 CUDA、HIP 或其它厂商适配器。未注册或能力不足的后端必须明确进入 GPU copy/Quad Layer 回退路径，禁止将一个厂商的句柄或同步语义伪装成另一个厂商的实现。
 
-`src/desktop2steoro/tools/probe.py` 的 capability report 必须输出 producer 自动选择结果、CUDA/HIP runtime 状态和显式覆盖标记；探测只读取运行时能力，不应为了生成报告而创建 Vulkan external memory 或导入厂商句柄。
+`src/desktop2stereo/tools/probe.py` 的 capability report 必须输出 producer 自动选择结果、CUDA/HIP runtime 状态和显式覆盖标记；探测只读取运行时能力，不应为了生成报告而创建 Vulkan external memory 或导入厂商句柄。
 
 当前已注册 `cuda`/`nvidia`、`rocm`/`hip` 与 `vulkan_zero_copy` producer。OpenXR runtime result 携带 `VulkanComputeRequest` 时，Presenter 必须选择 `vulkan_zero_copy`，不能误选 `vulkan_host` 回退；只有请求不满足（例如仍启用尚未迁移的时域状态）或能力探测失败时才进入兼容路径。ROCm 适配器延迟加载 `amdhip64`/`libamdhip64`，使用 Vulkan 导出的 Win32 handle 或 FD；HIP external memory/semaphore 不可用时，不得启用直接采样实验路径，必须保留 Vulkan GPU copy 回退。`D2S_ENABLE_ROCM_EXTERNAL_SEMAPHORE=0` 仅作为调试禁用开关，不是正常运行前提。
 
@@ -899,7 +899,7 @@ native/filament/bridge/
 
 `filament_bridge.h` 是唯一面向 Python 的原生契约。内部模块不得直接导出 C++ 类型；Engine、Scene、GLB、材质、纹理和 Shader 的 ownership 归 `bridge_context`，各功能模块只通过 `bridge_internal.h` 访问共享状态。Linux/macOS 构建默认隐藏内部符号，只有带 `FILAMENT_BRIDGE_API` 的 C ABI 可见。
 
-三平台二进制固定存放在 `src/desktop2steoro/xr_viewer/native/windows`、`src/desktop2steoro/xr_viewer/native/linux` 和 `src/desktop2steoro/xr_viewer/native/macos`；运行时、能力探测、CMake 和 GitHub Actions 必须共用该路径契约，根目录不得保留兼容副本。
+三平台二进制固定存放在 `src/desktop2stereo/xr_viewer/native/windows`、`src/desktop2stereo/xr_viewer/native/linux` 和 `src/desktop2stereo/xr_viewer/native/macos`；运行时、能力探测、CMake 和 GitHub Actions 必须共用该路径契约，根目录不得保留兼容副本。
 
 接口清单以本节为功能基线，另在实现任务中记录“已实现、待实现、暂不需要、验证证据”。新增能力不得只修改 C++ 而遗漏 Python wrapper、错误处理、CI 或测试；也不得为了所谓完整性导出 Filament 未使用的模板、内部类型、Entity 管理器或逐资源底层 API。
 
@@ -1274,7 +1274,7 @@ native/filament/bridge source change
     -> macOS runner   -> libfilament_bridge.dylib
     -> ABI/link/runtime checks
     -> upload artifact or release asset
-    -> download into src/desktop2steoro/xr_viewer/native/<platform>/
+    -> download into src/desktop2stereo/xr_viewer/native/<platform>/
 ```
 
 必须遵守以下规则：
@@ -1284,7 +1284,7 @@ native/filament/bridge source change
 - 发布包使用 CI 产物，不把本地 `build/`、临时 SDK 解压目录或未验证的本地 DLL/SO/DYLIB 作为正式交付物。
 - 本地开发默认下载与当前平台匹配的 CI 产物。只有在 CI 故障、调试原生崩溃或验证未提交的 Bridge 修改时，才允许本地编译。
 - 本地编译结果只能用于诊断和开发验证；合并和发布前仍必须通过三平台 CI，且本地编译不得替代 Linux/macOS 平台验证。
-- Python 通过 `ctypes` 加载 `src/desktop2steoro/xr_viewer/native/` 下对应平台的 Bridge。加载前检查文件存在性、架构、依赖库可解析性和 ABI 版本；检查失败必须在 capability report 中明确报告。
+- Python 通过 `ctypes` 加载 `src/desktop2stereo/xr_viewer/native/` 下对应平台的 Bridge。加载前检查文件存在性、架构、依赖库可解析性和 ABI 版本；检查失败必须在 capability report 中明确报告。
 - Bridge 二进制与 Filament 运行库必须作为同一版本构建包管理，禁止混用不同 Filament 版本的库文件。
 
 ### 20.2 构建产物
@@ -1309,7 +1309,7 @@ licenses
 推荐的运行时目录：
 
 ```text
-src/desktop2steoro/xr_viewer/native/
+src/desktop2stereo/xr_viewer/native/
 ├── windows/filament_bridge.dll
 ├── linux/libfilament_bridge.so
 └── macos/libfilament_bridge.dylib
@@ -1319,7 +1319,7 @@ src/desktop2steoro/xr_viewer/native/
 
 ### 20.3 启动探测
 
-`python src/desktop2steoro/tools/probe.py`必须可独立输出JSON capability report，包括GPU、Vulkan、OpenGL、MoltenVK、external memory、OpenXR Graphics Binding、swapchain format、Filament Bridge初始化和推理Provider可用性。GUI只根据该报告启用可选项。
+`python src/desktop2stereo/tools/probe.py`必须可独立输出JSON capability report，包括GPU、Vulkan、OpenGL、MoltenVK、external memory、OpenXR Graphics Binding、swapchain format、Filament Bridge初始化和推理Provider可用性。GUI只根据该报告启用可选项。
 
 ---
 
@@ -1357,7 +1357,7 @@ src/desktop2steoro/xr_viewer/native/
 ### Phase 1：工程骨架与 Vulkan/OpenXR
 
 1. 建立以`src/`为产品发布边界的Python package和平台依赖锁定文件。
-2. 在`src/desktop2steoro/tools/probe.py`、`src/desktop2steoro/viewer/vulkan_renderer.py`和`src/desktop2steoro/xr_viewer/core_openxr_vulkan.py`中实现能力探测、`VulkanContext`、`GpuAllocator`和`GpuScheduler`。
+2. 在`src/desktop2stereo/tools/probe.py`、`src/desktop2stereo/viewer/vulkan_renderer.py`和`src/desktop2stereo/xr_viewer/core_openxr_vulkan.py`中实现能力探测、`VulkanContext`、`GpuAllocator`和`GpuScheduler`。
 3. 使用Python OpenXR代码建立Vulkan Session和每眼清屏闭环。
 4. 接入Validation、timestamp、结构化日志和显式资源清理测试。
 
@@ -1406,7 +1406,7 @@ src/desktop2steoro/xr_viewer/native/
 
 ### Phase 6：旧架构删除
 
-保留并整理有效的Python Capture、Inference、调度和诊断代码；删除旧OpenGL/D3D11 viewer、Panda3D、WGL/CUDA-GL bridge、CPU实时fallback和历史兼容配置。旧Filament OpenGL-only Bridge由新版Vulkan/OpenGL Bridge取代。更新`src/desktop2steoro/main.py`、`src/desktop2steoro/main.bat`、依赖、CI和发布清单，保持当前启动方式并在启动阶段选择后端。
+保留并整理有效的Python Capture、Inference、调度和诊断代码；删除旧OpenGL/D3D11 viewer、Panda3D、WGL/CUDA-GL bridge、CPU实时fallback和历史兼容配置。旧Filament OpenGL-only Bridge由新版Vulkan/OpenGL Bridge取代。更新`src/desktop2stereo/main.py`、`src/desktop2stereo/main.bat`、依赖、CI和发布清单，保持当前启动方式并在启动阶段选择后端。
 
 完成标准：发布包和运行依赖中不存在旧图形桥接后端；OpenGL只通过Python `GraphicsBackend`、`viewer.opengl_renderer`和`xr_viewer.core_openxr_opengl`出现；Filament Bridge是唯一自有原生组件。
 
@@ -1434,4 +1434,4 @@ Vulkan 工程迁移只有同时满足以下条件才算完成：
 
 本文与 `docs/01` 的所有要求统一由 [`docs/requirements-matrix.md`](requirements-matrix.md) 追踪。矩阵按架构、捕捉、推理、Vulkan、Compute Graph、Filament、OpenXR、输出、配置、GUI、错误恢复、诊断、性能、测试、平台、CI 和安全领域登记要求，且每条要求必须关联代码映射和测试/实机验收记录。
 
-日常开发使用 `src/desktop2steoro/tools/check_compliance.py` 检查矩阵结构；发布候选版本使用 `--strict`，只允许 `verified` 或 `accepted` 条目，并额外要求 pytest、三平台 Bridge CI 和专用 GPU/OpenXR 实机验收通过。
+日常开发使用 `src/desktop2stereo/tools/check_compliance.py` 检查矩阵结构；发布候选版本使用 `--strict`，只允许 `verified` 或 `accepted` 条目，并额外要求 pytest、三平台 Bridge CI 和专用 GPU/OpenXR 实机验收通过。

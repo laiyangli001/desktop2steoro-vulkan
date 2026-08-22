@@ -201,8 +201,8 @@ bool load_convert_shader(std::vector<uint32_t>* code) {
     if (const char* configured = std::getenv("D2S_RGB_TO_NV12_SPV"))
         candidates.emplace_back(configured);
     const auto cwd = std::filesystem::current_path();
-    candidates.emplace_back(cwd / "src/desktop2steoro/shaders/d2s_rgb_to_nv12.spv");
-    candidates.emplace_back(cwd / "desktop2steoro-vulkan/src/desktop2steoro/shaders/d2s_rgb_to_nv12.spv");
+    candidates.emplace_back(cwd / "src/desktop2stereo/shaders/d2s_rgb_to_nv12.spv");
+    candidates.emplace_back(cwd / "desktop2steoro-vulkan/src/desktop2stereo/shaders/d2s_rgb_to_nv12.spv");
     for (const auto& path : candidates) {
         std::ifstream file(path, std::ios::binary | std::ios::ate);
         if (!file) continue;

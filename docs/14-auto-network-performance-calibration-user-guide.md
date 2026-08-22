@@ -128,8 +128,8 @@ flowchart LR
 运行状态和最终结果保存在：
 
 ```text
-src/desktop2steoro/logs/stream_calibration_state.json
-src/desktop2steoro/logs/stream_calibration_profile.json
+src/desktop2stereo/logs/stream_calibration_state.json
+src/desktop2stereo/logs/stream_calibration_profile.json
 ```
 
 普通用户不需要手动修改这两个文件。排查问题时可以用它们确认当前测试档位、发送 FPS、头显样本数量和最后一次校准结果。

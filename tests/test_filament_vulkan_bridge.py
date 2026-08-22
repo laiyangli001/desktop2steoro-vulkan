@@ -420,7 +420,7 @@ def test_controller_eye_diagnostic_launcher_enables_backend_stereo_trace() -> No
     assert '$env:D2S_FILAMENT_CONTROLLER_EYE_DIAGNOSTIC = "1"' in launcher
     assert '$env:D2S_FILAMENT_EYE_DIAGNOSTIC = "1"' in launcher
     assert '$env:D2S_FILAMENT_SHADER_DUMP_DIR = $shaderDumpDir' in launcher
-    assert 'commonLightingPath = Join-Path $repoRoot "src\\desktop2steoro\\xr_viewer\\environments\\common.json"' in launcher
+    assert 'commonLightingPath = Join-Path $repoRoot "src\\desktop2stereo\\xr_viewer\\environments\\common.json"' in launcher
     assert 'controller_head_light_weight' in launcher
     assert 'controller_top_light_weight' in launcher
     assert 'controller_screen_light_intensity_lux' in launcher

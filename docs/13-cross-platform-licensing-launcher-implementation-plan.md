@@ -516,6 +516,6 @@ macOS arm64：
 - 实现授权、启动器或服务端功能时，必须同步更新 `requirements-matrix.md`。
 - 每个阶段完成后更新 `changelog.md`，记录用户可见结果和发布影响。
 - 服务端和客户端分别维护 API、数据库迁移、密钥和发布版本。
-- `src/desktop2steoro/settings.yaml` 不保存密码、刷新令牌、原始设备指纹或私钥。
-- `src/desktop2steoro/settings.yaml` 不保存区域、余额、邀请关系、授权编号、支付或提现资料。
+- `src/desktop2stereo/settings.yaml` 不保存密码、刷新令牌、原始设备指纹或私钥。
+- `src/desktop2stereo/settings.yaml` 不保存区域、余额、邀请关系、授权编号、支付或提现资料。
 - 正式发布入口只允许 EXE、AppImage 和 DMG；脚本仅用于开发和诊断。

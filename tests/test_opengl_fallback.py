@@ -279,12 +279,12 @@ def test_hip_runtime_alias_maps_graphics_api_symbols():
 
 
 def test_opengl_fallback_contract_is_documented_and_wired():
-    source = (Path(__file__).parents[1] / "src/desktop2steoro/streaming/direct_sbs.py").read_text(
+    source = (Path(__file__).parents[1] / "src/desktop2stereo/streaming/direct_sbs.py").read_text(
         encoding="utf-8"
     )
     backend_source = (
         Path(__file__).parents[1]
-        / "src/desktop2steoro/streaming/opengl_stream_backend.py"
+        / "src/desktop2stereo/streaming/opengl_stream_backend.py"
     ).read_text(encoding="utf-8")
 
     assert "OpenGLFallbackBackend" in source
@@ -316,7 +316,7 @@ def test_opengl_fallback_contract_is_documented_and_wired():
 def test_opengl_smoke_tool_contract_is_present():
     tool = (
         Path(__file__).parents[1]
-        / "src/desktop2steoro/tools/opengl_fallback_smoke.py"
+        / "src/desktop2stereo/tools/opengl_fallback_smoke.py"
     ).read_text(encoding="utf-8")
     assert "OpenGLFallbackBackend" in tool
     assert "--require-gpu-interop" in tool
@@ -333,7 +333,7 @@ def test_opengl_smoke_tool_contract_is_present():
 def test_opengl_rtsp_soak_tool_forces_real_fallback_boundary():
     tool = (
         Path(__file__).parents[1]
-        / "src/desktop2steoro/tools/opengl_fallback_rtsp_soak.py"
+        / "src/desktop2stereo/tools/opengl_fallback_rtsp_soak.py"
     ).read_text(encoding="utf-8")
     assert "VulkanDirectSbsOutput" in tool
     assert "output._native_vulkan_bridge = None" in tool

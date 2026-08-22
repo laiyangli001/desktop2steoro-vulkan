@@ -615,8 +615,8 @@ sha256sums.txt
 当前项目的接入点是：
 
 ```text
-src/desktop2steoro/streaming/rtmp/runtime-manifest.json
-src/desktop2steoro/streaming/rtmp/download_runtime.py
+src/desktop2stereo/streaming/rtmp/runtime-manifest.json
+src/desktop2stereo/streaming/rtmp/download_runtime.py
 ```
 
 迁移步骤：

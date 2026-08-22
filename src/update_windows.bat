@@ -38,8 +38,8 @@ for /d %%F in (temp_extract\*) do xcopy "%%F\*" ".\" /E /H /Y
 :: Clean up
 rmdir /S /Q temp_extract
 :: Remove unnecessary platform folders
-rmdir /S /Q desktop2steoro\streaming\rtmp\mac 2>nul
-rmdir /S /Q desktop2steoro\streaming\rtmp\linux 2>nul
+rmdir /S /Q desktop2stereo\streaming\rtmp\mac 2>nul
+rmdir /S /Q desktop2stereo\streaming\rtmp\linux 2>nul
 del /F /Q update_mac_linux 2>nul
 del /F /Q update.bat 2>nul
 del /F /Q main 2>nul

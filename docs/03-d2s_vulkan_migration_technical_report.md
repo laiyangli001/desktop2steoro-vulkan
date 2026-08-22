@@ -237,7 +237,7 @@ Presenter 每个 OpenXR tick 只消费最新一条原始输出命令。禁止在
 
 控制器路径已按旧工程生命周期迁移到 Vulkan：Python Presenter 维护逐手 Grip/Aim 跟踪、移动时间、One Euro 位置滤波和四元数方向平滑；Filament Bridge 在共享 Projection Layer Scene 中加载左右手 GLB、更新 profile 校准姿态和按键动画，并通过独立 C ABI 控制模型与 3D 激光实体显隐。按键动画按 GLB `_value/_min/_max` 层级匹配，使用输入平滑、平移/缩放插值和四元数 SLERP；加载日志列出逐手动画节点与语义。静止 5 秒或 Grip 跟踪丢失时隐藏对应手柄和激光，重新移动后恢复；激光不再通过 Quad Layer 模拟，并恢复旧工程两张交叉锥形面及动态蓝至红彩虹渐变。
 
-原生 Bridge 已从单一实现文件拆分为 Context、Eye、Scene、Controller、Laser、Screen、Material 和 Preview 模块。`filament_bridge.cpp` 只保留与 `filament_bridge.h` 一一对应的 C ABI 转发，因此 Python wrapper 无需变化；共享 Engine/Scene 和资源 ownership 仍集中在 `bridge_context`，模块拆分不复制 GLB、材质、纹理或 Shader。CMake 默认隐藏内部 C++ 符号，防止后续功能把内部实现扩展成不稳定 ABI。三平台二进制分别进入 `src/desktop2steoro/xr_viewer/native/windows`、`linux`、`macos`，不再平铺在 `native` 根目录。
+原生 Bridge 已从单一实现文件拆分为 Context、Eye、Scene、Controller、Laser、Screen、Material 和 Preview 模块。`filament_bridge.cpp` 只保留与 `filament_bridge.h` 一一对应的 C ABI 转发，因此 Python wrapper 无需变化；共享 Engine/Scene 和资源 ownership 仍集中在 `bridge_context`，模块拆分不复制 GLB、材质、纹理或 Shader。CMake 默认隐藏内部 C++ 符号，防止后续功能把内部实现扩展成不稳定 ABI。三平台二进制分别进入 `src/desktop2stereo/xr_viewer/native/windows`、`linux`、`macos`，不再平铺在 `native` 根目录。
 
 ### 5.0.1 Vulkan 1.4 Binding 与传输基准（未来目标）
 

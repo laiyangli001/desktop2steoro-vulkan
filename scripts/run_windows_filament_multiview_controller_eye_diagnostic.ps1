@@ -14,7 +14,7 @@ $shaderDumpDir = Join-Path $repoRoot "artifacts"
 New-Item -ItemType Directory -Force -Path $shaderDumpDir | Out-Null
 $env:D2S_FILAMENT_SHADER_DUMP_DIR = $shaderDumpDir
 
-$commonLightingPath = Join-Path $repoRoot "src\desktop2steoro\xr_viewer\environments\common.json"
+$commonLightingPath = Join-Path $repoRoot "src\desktop2stereo\xr_viewer\environments\common.json"
 if (-not (Test-Path -LiteralPath $commonLightingPath -PathType Leaf)) {
     throw "Filament lighting defaults not found: $commonLightingPath"
 }

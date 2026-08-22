@@ -156,7 +156,7 @@ elseif(UNIX)
     set(_filament_output_platform linux)
 endif()
 set(_filament_output_dir
-    "${CMAKE_SOURCE_DIR}/../../../src/desktop2steoro/xr_viewer/native/${_filament_output_platform}")
+    "${CMAKE_SOURCE_DIR}/../../../src/desktop2stereo/xr_viewer/native/${_filament_output_platform}")
 file(MAKE_DIRECTORY "${_filament_output_dir}")
 set_target_properties(filament_bridge PROPERTIES
     CXX_VISIBILITY_PRESET hidden

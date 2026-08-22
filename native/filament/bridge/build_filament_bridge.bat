@@ -3,7 +3,7 @@ setlocal
 pushd "%~dp0"
 set ROOT=%~dp0..\..\..
 set SDK=%ROOT%\native\filament\sdk\windows\v1.75.0
-set OUT=%ROOT%\src\desktop2steoro\xr_viewer\native
+set OUT=%ROOT%\src\desktop2stereo\xr_viewer\native
 if not exist "%OUT%" mkdir "%OUT%"
 set LIB=%SDK%\lib\x86_64\md
 call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat"

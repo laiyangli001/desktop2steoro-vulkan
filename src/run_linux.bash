@@ -13,7 +13,7 @@ cd "$SCRIPT_DIR"
 # ----------------------------------------------------------------------
 # Configuration
 # ----------------------------------------------------------------------
-APP_DIR="${SCRIPT_DIR}/desktop2steoro"
+APP_DIR="${SCRIPT_DIR}/desktop2stereo"
 PYTHON_EXE="${SCRIPT_DIR}/python3/bin/python"
 LOG_DIR="${APP_DIR}/logs"
 GUI_READY_FILE="${LOG_DIR}/gui_ready.flag"

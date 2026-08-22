@@ -64,7 +64,7 @@ if ! "$PYTHON_EXE" -m pip install -r "$SCRIPT_DIR/requirements.txt" --no-cache-d
     exit 1
 fi
 chmod a+x "$PROJECT_ROOT/run_mac" "$0"
-chmod -R 777 "$PROJECT_ROOT/desktop2steoro/streaming/rtmp"
+chmod -R 777 "$PROJECT_ROOT/desktop2stereo/streaming/rtmp"
 echo "Python environment deployed successfully."
 read -p "You can close this terminal window to exit..."
 exit

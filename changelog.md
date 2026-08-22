@@ -2,6 +2,8 @@
 
 ## 2026-08-22
 
+- 统一修正源码、构建脚本、测试和发布文档中的 `src/desktop2steoro` 目录引用为 `src/desktop2stereo`；保留 `desktop2steoro-vulkan` 项目名、历史记录和合规检查中的兼容映射不变。
+
 - 修复 Requirements Compliance GitHub Actions 在源码目录改名为 `src/desktop2stereo` 后仍引用旧 `src/desktop2steoro` 路径的问题；shader 编译、合规检查和测试矩阵现在使用新路径。
 
 - 修复目录改名后遗留在 shader manifest 校验器和 requirements 路径检查器中的旧源码路径；本地校验与 CI 校验现在都能解析 `src/desktop2stereo`。
@@ -30,7 +32,7 @@
 
 - OpenGL fallback 新增 RGBA8 texture 的 framebuffer attachment 完整性检查，能力日志和候选日志输出 `framebuffer=complete`/`framebuffer=1`；初始化失败会沿用现有清理和稳定回退。
 
-- 新增并修正 `opengl_fallback_rtsp_soak.py`：在单次诊断进程内禁用 native Vulkan 入口，真实提交 CUDA RGBA 帧并验证 OpenGL fallback、厂商编码器/host-upload 和 MediaMTX 发布边界；修正默认仓库根目录与 `VulkanDirectSbsOutput` 的 `src/desktop2steoro` base_dir 语义。本机 RTX 3090 实测 640×360@30 通过 60/60 帧，3840×2160@30 通过 300/300 帧，均为 `cuda-opengl-interop` + PyNvVideoCodec/NVENC + MediaMTX H264；新增 `--force-host` 诊断分支并实测 640×360@30 通过 60/60 帧，日志正确报告 `interop=none gpu_to_cpu=True` 和 FFmpeg `h264_nvenc` host-upload；追加 3840×2160@30、60/60 帧闭环，耗时 5.56 秒（约 10.8 FPS），确认 CPU host-upload 回退不能满足 4K/30，但 MediaMTX H264 发布稳定；文档补充运行命令，并将 AMD 验证清单拆分为代码完成与真机未验证两项。
+- 新增并修正 `opengl_fallback_rtsp_soak.py`：在单次诊断进程内禁用 native Vulkan 入口，真实提交 CUDA RGBA 帧并验证 OpenGL fallback、厂商编码器/host-upload 和 MediaMTX 发布边界；修正默认仓库根目录与 `VulkanDirectSbsOutput` 的 `src/desktop2stereo` base_dir 语义。本机 RTX 3090 实测 640×360@30 通过 60/60 帧，3840×2160@30 通过 300/300 帧，均为 `cuda-opengl-interop` + PyNvVideoCodec/NVENC + MediaMTX H264；新增 `--force-host` 诊断分支并实测 640×360@30 通过 60/60 帧，日志正确报告 `interop=none gpu_to_cpu=True` 和 FFmpeg `h264_nvenc` host-upload；追加 3840×2160@30、60/60 帧闭环，耗时 5.56 秒（约 10.8 FPS），确认 CPU host-upload 回退不能满足 4K/30，但 MediaMTX H264 发布稳定；文档补充运行命令，并将 AMD 验证清单拆分为代码完成与真机未验证两项。
 
 - 完成 OpenGL fallback 4K 图像边界 A/B：RTX 3090/WGL/3840×2160/30 帧，CUDA interop probe 为 `501.1 FPS gpu_to_cpu=false`，强制 host/PBO probe 为 `12.9 FPS gpu_to_cpu=true`；结果已写入实现指南，明确这不是最终 WebRTC 帧率。
 
@@ -145,8 +147,8 @@
 - 检查并修复其余平台安装脚本：Linux CUDA、Linux ROCm 和 macOS MPS 激活环境后统一调用 `src/python3` 内的解释器，各依赖步骤独立检查失败状态，避免前序安装失败被后一条命令掩盖；macOS 的 `run_mac` 权限路径适配新目录结构；Windows ROCm 安装器规范化并验证 Python 3.12 x64 路径，同时检查 ROCm requirements 与 SDK 初始化结果。
 
 - 统一 GPU 推流运行模式：GUI 使用“GPU 推流”，旧的 NVIDIA GPU 推流名称自动归一化；运行时根据显卡型号选择 NVIDIA PyNvVideoCodec 或 AMD/其他平台的硬件编码探测链，并在初始化失败时安全回退，不改变音频、协议和 MediaMTX 配置。
-- 新增 Windows AMD 原生编码桥接工程 `native/amd_encoder`：动态检测 AMD AMF 运行时 `amfrt64.dll` 与 Radeon DXGI 适配器，提供 Python 可选加载接口；GitHub Actions 已成功编译并将 `src/desktop2steoro/streaming/amd_encoder/d2s_amd_encoder.dll` 随项目发布，运行时未安装 AMD AMF 或 HIP 时仍保持 FFmpeg 回退。桥接现在可将 ROCm HIP RGBA device tensor 通过共享 D3D11 texture 导入 AMF，并用 FFmpeg 仅复用 H.264/H.265 包送入 SRT；音频开启时继续使用原有 FFmpeg 音视频路径。
-- 完成项目目录重组后的路径统一：源码归档到 `src/desktop2steoro`，Python 运行环境统一位于 `src/python3`，安装脚本位于 `src/env_install`，脚本、测试和启动入口通过统一项目路径配置解析。
+- 新增 Windows AMD 原生编码桥接工程 `native/amd_encoder`：动态检测 AMD AMF 运行时 `amfrt64.dll` 与 Radeon DXGI 适配器，提供 Python 可选加载接口；GitHub Actions 已成功编译并将 `src/desktop2stereo/streaming/amd_encoder/d2s_amd_encoder.dll` 随项目发布，运行时未安装 AMD AMF 或 HIP 时仍保持 FFmpeg 回退。桥接现在可将 ROCm HIP RGBA device tensor 通过共享 D3D11 texture 导入 AMF，并用 FFmpeg 仅复用 H.264/H.265 包送入 SRT；音频开启时继续使用原有 FFmpeg 音视频路径。
+- 完成项目目录重组后的路径统一：源码归档到 `src/desktop2stereo`，Python 运行环境统一位于 `src/python3`，安装脚本位于 `src/env_install`，脚本、测试和启动入口通过统一项目路径配置解析。
 
 - 兼容旧的“NVIDIA GPU 推流”配置名称：读取时自动归一化为“GPU 推流”；NVIDIA 模式现在通过 PyNvVideoCodec 在 CUDA/NVENC 内完成 NV12 转换与 H.264/H.265 编码，同时允许 SoundCard WASAPI 回环音频由 FFmpeg 编码为 Opus/AAC 并与已编码视频复用，不再因启用音频退回 RGB24 CPU 管线。PyNvVideoCodec、音频或复用器启动失败时仍自动回退现有 FFmpeg 硬件/软件编码，并保持高级网络推流使用独立的 FFmpeg 自动编码后端。
 - 修复 WebRTC 音视频发布约 10 秒后被 MediaMTX 以 RTSP `i/o timeout` 断开的情况：将 FFmpeg `max_interleave_delta` 从会无限等待稀疏音视频包的 `0` 改为 `100000` 微秒，SoundCard 或视频短暂无包时仍会持续刷新 RTSP。
@@ -1075,7 +1077,7 @@
 
 ### 已实现
 
-- 建立独立项目`desktop2steoro-vulkan`，保持原项目的Python源码组织方式，不在运行时依赖原仓库。
+- 建立独立项目`desktop2stereo-vulkan`，保持原项目的Python源码组织方式，不在运行时依赖原仓库。
 - 迁移可复用的Capture、AI推理、Stereo、GUI、OpenXR平台无关模块、Samples、测试和工具；原项目文件保持不变。
 - 迁移`native/filament`及Windows、Linux、macOS多平台GitHub Actions构建流程，统一产物目录为`src/xr_viewer/native/`。
 - 确立Vulkan为主图形路径、OpenGL为隔离Fallback，不迁入旧Panda3D、D3D11 OpenXR、WGL/CUDA-GL Bridge和旧OpenGL上传链路。

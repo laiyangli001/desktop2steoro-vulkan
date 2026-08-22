@@ -35,7 +35,7 @@ def main() -> int:
         parser.error("fps and frames must be positive")
 
     base_dir = Path(args.base_dir).resolve() if args.base_dir else Path(__file__).resolve().parents[3]
-    source_root = base_dir / "src" / "desktop2steoro"
+    source_root = base_dir / "src" / "desktop2stereo"
     sys.path.insert(0, str(source_root))
 
     import numpy as np

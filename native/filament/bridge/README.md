@@ -24,9 +24,9 @@ CMake with `FILAMENT_SDK_ROOT` pointing at that extracted archive. The generated
 library is placed in its platform directory for packaging:
 
 ```text
-Windows: src/desktop2steoro/xr_viewer/native/windows/filament_bridge.dll
-macOS:   src/desktop2steoro/xr_viewer/native/macos/libfilament_bridge.dylib
-Linux:   src/desktop2steoro/xr_viewer/native/linux/libfilament_bridge.so
+Windows: src/desktop2stereo/xr_viewer/native/windows/filament_bridge.dll
+macOS:   src/desktop2stereo/xr_viewer/native/macos/libfilament_bridge.dylib
+Linux:   src/desktop2stereo/xr_viewer/native/linux/libfilament_bridge.so
 ```
 
 The C ABI in `filament_bridge.h` is intentionally narrow. Python first creates
@@ -70,6 +70,6 @@ one issue for a newly published version. It never changes runtime binaries.
 
 To upgrade, update that manifest from the official release, then run `Build
 Filament Bridge`. Merge only after all three platform jobs pass; download their
-artifacts into the matching `src/desktop2steoro/xr_viewer/native/<platform>` directories and commit those three libraries together
+artifacts into the matching `src/desktop2stereo/xr_viewer/native/<platform>` directories and commit those three libraries together
 with the manifest change. Reverting that commit restores the last verified SDK
 and binaries.
