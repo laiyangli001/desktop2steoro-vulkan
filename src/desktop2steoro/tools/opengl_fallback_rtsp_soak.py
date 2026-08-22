@@ -45,8 +45,6 @@ def main() -> int:
         raise RuntimeError("CUDA is unavailable; use opengl_fallback_smoke.py for host-only probing")
 
     previous_force_host = os.environ.get("D2S_OPENGL_FORCE_HOST")
-    if args.force_host:
-        os.environ["D2S_OPENGL_FORCE_HOST"] = "1"
 
     output = VulkanDirectSbsOutput(
         base_dir=source_root,
@@ -60,6 +58,8 @@ def main() -> int:
         prefer_nvenc=True,
         display_mode="Half-SBS",
     )
+    if args.force_host:
+        os.environ["D2S_OPENGL_FORCE_HOST"] = "1"
     # Force the documented transition point without changing production code:
     # the first submit must enter _fallback_to_opengl().
     output._native_vulkan_bridge = None

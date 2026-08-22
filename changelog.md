@@ -2,6 +2,8 @@
 
 ## 2026-08-22
 
+- 修正 `opengl_fallback_rtsp_soak.py` 的 `--force-host` 环境变量生命周期：只有输出对象成功创建后才设置，退出时恢复原值，避免构造失败污染后续推流进程。
+
 - OpenGL fallback 新增 RGBA8 texture 的 framebuffer attachment 完整性检查，能力日志和候选日志输出 `framebuffer=complete`/`framebuffer=1`；初始化失败会沿用现有清理和稳定回退。
 
 - 新增并修正 `opengl_fallback_rtsp_soak.py`：在单次诊断进程内禁用 native Vulkan 入口，真实提交 CUDA RGBA 帧并验证 OpenGL fallback、厂商编码器/host-upload 和 MediaMTX 发布边界；修正默认仓库根目录与 `VulkanDirectSbsOutput` 的 `src/desktop2steoro` base_dir 语义。本机 RTX 3090 实测 640×360@30 通过 60/60 帧，3840×2160@30 通过 300/300 帧，均为 `cuda-opengl-interop` + PyNvVideoCodec/NVENC + MediaMTX H264；新增 `--force-host` 诊断分支并实测 640×360@30 通过 60/60 帧，日志正确报告 `interop=none gpu_to_cpu=True` 和 FFmpeg `h264_nvenc` host-upload；追加 3840×2160@30、60/60 帧闭环，耗时 5.56 秒（约 10.8 FPS），确认 CPU host-upload 回退不能满足 4K/30，但 MediaMTX H264 发布稳定；文档补充运行命令，并将 AMD 验证清单拆分为代码完成与真机未验证两项。
