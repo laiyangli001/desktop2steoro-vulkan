@@ -246,6 +246,19 @@ def test_opengl_smoke_tool_contract_is_present():
     assert "json.dumps" in tool
 
 
+def test_opengl_rtsp_soak_tool_forces_real_fallback_boundary():
+    tool = (
+        Path(__file__).parents[1]
+        / "src/desktop2steoro/tools/opengl_fallback_rtsp_soak.py"
+    ).read_text(encoding="utf-8")
+    assert "VulkanDirectSbsOutput" in tool
+    assert "output._native_vulkan_bridge = None" in tool
+    assert "output.submit_cuda_frame(tensor)" in tool
+    assert "output._opengl_fallback_active" in tool
+    assert "cuda-opengl-interop" in tool
+    assert "opengl_fallback_rtsp_soak: PASS" in tool
+
+
 def test_vulkan_doc_records_current_opengl_copy_boundary():
     document = (
         Path(__file__).parents[1]

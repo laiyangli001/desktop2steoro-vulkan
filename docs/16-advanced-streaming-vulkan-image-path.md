@@ -626,6 +626,27 @@ src/python3/python.exe src/desktop2steoro/tools/opengl_fallback_smoke.py --width
 
 当前 Windows RTX 3090、OpenGL 3.3、WGL 实测同一 3840×2160、30 帧条件：CUDA/OpenGL interop GPU probe 为 `501.1 FPS`，`gpu_to_cpu=false`；强制 host/PBO probe 为 `12.9 FPS`，`gpu_to_cpu=true`。该数据只衡量图像提交边界，不代表最终 NVENC/MediaMTX/WebRTC 帧率；最终验收仍需使用完整高级网络推流和头显浏览器闭环。
 
+## OpenGL fallback MediaMTX 闭环工具
+
+要验证“Vulkan 失败后确实进入 OpenGL fallback，并且压缩视频仍能发布到 MediaMTX”，运行：
+
+```powershell
+$env:PYTHONPATH = "src/desktop2steoro"
+src/python3/python.exe src/desktop2steoro/tools/opengl_fallback_rtsp_soak.py `
+  --width 640 --height 360 --fps 30 --frames 60
+```
+
+该工具会在本次进程中将 `VulkanDirectSbsOutput._native_vulkan_bridge` 置空，随后提交 CUDA RGBA 帧并调用真实的 fallback 选择、编码器和 MediaMTX 发布逻辑。成功条件是输出 `opengl_fallback_rtsp_soak: PASS`，并报告 `path=cuda-opengl-interop`、`path=hip-opengl-interop` 或 `path=host-upload`。它只禁用 native Vulkan 入口，不修改生产代码或全局配置；因此可以与 `vulkan_ffmpeg_rtsp_soak.py` 对照定位问题在 Vulkan 图像路径还是 OpenGL/编码/MediaMTX 路径。
+
+在 NVIDIA 主机上建议追加 3840×2160、30 FPS、至少 300 帧的测试：
+
+```powershell
+src/python3/python.exe src/desktop2steoro/tools/opengl_fallback_rtsp_soak.py `
+  --width 3840 --height 2160 --fps 30 --frames 300
+```
+
+本机 RTX 3090 实测：640×360@30、60/60 帧和 3840×2160@30、300/300 帧均输出 `PASS`；日志确认 `cuda-opengl-interop`、`PyNvVideoCodec h264 GPU path active`、MediaMTX `1 track (H264)` 在线发布。该工具的 `PASS` 只证明发送端编码和 MediaMTX 发布边界；头显浏览器的解码帧率、丢帧、花屏和音画同步仍必须用实际 PICO/Quest/Wolvic 页面验证。
+
 ## 测试与验收
 
 ### 单元测试
@@ -810,7 +831,8 @@ GPU 零拷贝只解决电脑端原始帧搬运。继续检查：
 - [x] OpenGL 备用路径的架构、能力探测、回退顺序和日志规范已定义。
 - [x] OpenGL headless context、RGBA8 texture、3 槽 PBO/fence 和 host-upload fallback 已实现并完成本机小帧提交验证。
 - [x] NVIDIA CUDA–OpenGL interop → CUDA RGBA → PyNvVideoCodec/NVENC GPU-only fallback 已实现并完成本机 roundtrip 与压缩包烟测。
-- [x] OpenGL → AMF 的 HIP interop 代码路径已接入；[ ] AMD 真机驱动、音频和 4K 编码验证。
+- [x] OpenGL → AMF 的 HIP interop 代码路径已接入。
+- [ ] AMD 真机驱动、音频和 4K 编码验证。
 - [ ] OpenGL → QSV/VideoToolbox 的跨平台硬件路径实现与验证。
 - [ ] CUDA–OpenGL interop 的严格 zero-copy 编码路径；当前 interop 仍有 CUDA linear memory ↔ OpenGL array GPU copy。
 - [x] CUDA/ROCm 和 Vulkan 设备按 UUID 匹配；native bridge 暴露 `VkPhysicalDeviceIDProperties` UUID，当前 CUDA/Vulkan 不匹配时自动回退。
