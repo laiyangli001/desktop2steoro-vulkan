@@ -2,6 +2,8 @@
 
 ## 2026-08-22
 
+- 根据 NVIDIA PyNvVideoCodec 官方 GPU 编码输入契约补充 zero-copy 边界：当前 Python API 只接收 NV12 plane 的 CUDA Array Interface 设备指针，不接收 `cudaArray_t`/OpenGL texture handle；严格 zero-copy 下一步必须使用原生 NVENC `CUDAARRAY` bridge，现有路径继续明确报告 2 次 GPU copy。
+
 - OpenGL 能力报告新增 `gpu_copy_count`：CUDA/HIP interop 明确记录当前 2 次 GPU copy，host-upload 记录 0 次 GPU copy；同步扩展 fallback 候选日志和 smoke JSON，避免把 GPU-only 误报成严格 zero-copy。
 
 - 修正 `opengl_fallback_rtsp_soak.py` 的 `--force-host` 环境变量生命周期：只有输出对象成功创建后才设置，退出时恢复原值，避免构造失败污染后续推流进程。
