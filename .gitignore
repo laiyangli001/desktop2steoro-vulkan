@@ -4,6 +4,7 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 .codegraph/
+.drawio-tmp
 .venv/
 venv/
 python3/
