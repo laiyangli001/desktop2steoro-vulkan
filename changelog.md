@@ -2,6 +2,8 @@
 
 ## 2026-08-22
 
+- OpenGL 能力报告新增 `gpu_copy_count`：CUDA/HIP interop 明确记录当前 2 次 GPU copy，host-upload 记录 0 次 GPU copy；同步扩展 fallback 候选日志和 smoke JSON，避免把 GPU-only 误报成严格 zero-copy。
+
 - 修正 `opengl_fallback_rtsp_soak.py` 的 `--force-host` 环境变量生命周期：只有输出对象成功创建后才设置，退出时恢复原值，避免构造失败污染后续推流进程。
 
 - OpenGL fallback 新增 RGBA8 texture 的 framebuffer attachment 完整性检查，能力日志和候选日志输出 `framebuffer=complete`/`framebuffer=1`；初始化失败会沿用现有清理和稳定回退。

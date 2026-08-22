@@ -2114,6 +2114,7 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
                 f"pbo={caps.pbo_count} fence={int(caps.fence_supported)} "
                 f"cuda_gl_interop={caps.cuda_gl_interop} "
                 f"hip_gl_interop={getattr(caps, 'hip_gl_interop', False)} "
+                f"gpu_copy_count={getattr(caps, 'gpu_copy_count', 0)} "
                 f"interop={getattr(caps, 'interop_mode', 'none')}",
                 flush=True,
             )
@@ -2128,6 +2129,7 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
                 print(
                     "[OpenGLStream] active: encoder=PyNvVideoCodec/NVENC "
                     f"gpu_to_cpu={caps.gpu_to_cpu} zero_copy={caps.zero_copy} "
+                    f"gpu_copy_count={getattr(caps, 'gpu_copy_count', 0)} "
                     f"resolution={width}x{height} fps={self.fps}",
                     flush=True,
                 )
@@ -2145,6 +2147,7 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
                 print(
                     "[OpenGLStream] active: encoder=AMF "
                     f"gpu_to_cpu={caps.gpu_to_cpu} zero_copy={caps.zero_copy} "
+                    f"gpu_copy_count={getattr(caps, 'gpu_copy_count', 0)} "
                     f"resolution={width}x{height} fps={self.fps}",
                     flush=True,
                 )
@@ -2163,6 +2166,7 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
                     f"[OpenGLStream] active: encoder=FFmpeg/{selected_encoder} "
                     f"interop={getattr(caps, 'interop_mode', 'none')} "
                     f"gpu_to_cpu={caps.gpu_to_cpu} zero_copy={caps.zero_copy} "
+                    f"gpu_copy_count={getattr(caps, 'gpu_copy_count', 0)} "
                     f"resolution={width}x{height} fps={self.fps}",
                     flush=True,
                 )

@@ -622,7 +622,7 @@ $env:PYTHONPATH = "src/desktop2steoro"
 src/python3/python.exe src/desktop2steoro/tools/opengl_fallback_smoke.py --width 640 --height 360 --frames 30
 ```
 
-工具输出 JSON，至少包含 `context_api`、`texture_format`、`pbo_count`、`fence_supported`、`interop_mode`、`gpu_to_cpu` 和 `zero_copy`。NVIDIA/AMD interop 可用时运行 GPU probe；其他平台运行 PBO/fence host probe。使用 `--require-gpu-interop` 可将没有 CUDA/HIP interop 的平台作为能力探测失败返回，不会误报为零复制；使用 `--force-host` 可在 NVIDIA/AMD 机器上强制验证 PBO/fence host-upload 分支。
+工具输出 JSON，至少包含 `context_api`、`texture_format`、`framebuffer_supported`、`pbo_count`、`fence_supported`、`interop_mode`、`gpu_to_cpu`、`gpu_copy_count` 和 `zero_copy`。NVIDIA/AMD interop 可用时运行 GPU probe；其他平台运行 PBO/fence host probe。使用 `--require-gpu-interop` 可将没有 CUDA/HIP interop 的平台作为能力探测失败返回，不会误报为零复制；使用 `--force-host` 可在 NVIDIA/AMD 机器上强制验证 PBO/fence host-upload 分支。
 
 当前 Windows RTX 3090、OpenGL 3.3、WGL 实测同一 3840×2160、30 帧条件：CUDA/OpenGL interop GPU probe 为 `501.1 FPS`，`gpu_to_cpu=false`；强制 host/PBO probe 为 `12.9 FPS`，`gpu_to_cpu=true`。该数据只衡量图像提交边界，不代表最终 NVENC/MediaMTX/WebRTC 帧率；最终验收仍需使用完整高级网络推流和头显浏览器闭环。
 

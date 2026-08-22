@@ -34,6 +34,11 @@ def test_opengl_backend_creates_texture_pbo_fence_and_submits_frame():
         assert backend.capabilities.pbo_count == 3
         assert backend.capabilities.fence_supported is True
         assert backend.capabilities.zero_copy is False
+        assert backend.capabilities.gpu_copy_count == (
+            2
+            if backend.capabilities.cuda_gl_interop or backend.capabilities.hip_gl_interop
+            else 0
+        )
 
         frame = np.zeros((36, 64, 3), dtype=np.uint8)
         frame[0, 0] = [7, 23, 42]
@@ -234,6 +239,8 @@ def test_opengl_fallback_contract_is_documented_and_wired():
     assert "zero_copy=False" in backend_source
     assert "D2S_OPENGL_FORCE_HOST" in backend_source
     assert "framebuffer_supported=True" in backend_source
+    assert "gpu_copy_count=2 if gpu_interop else 0" in backend_source
+    assert "gpu_copy_count" in source
 
 
 def test_opengl_smoke_tool_contract_is_present():

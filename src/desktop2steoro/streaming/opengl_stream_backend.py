@@ -38,6 +38,7 @@ class OpenGLFallbackCapabilities:
     cuda_gl_interop: bool
     gpu_to_cpu: bool
     zero_copy: bool
+    gpu_copy_count: int = 0
     detail: str = ""
     framebuffer_supported: bool = False
     hip_gl_interop: bool = False
@@ -533,6 +534,7 @@ class OpenGLFallbackBackend:
             cuda_gl_interop=self._cuda_interop is not None,
             gpu_to_cpu=not gpu_interop,
             zero_copy=False,
+            gpu_copy_count=2 if gpu_interop else 0,
             detail=(
                 f"OpenGL {version_text}; framebuffer=complete; "
                 f"{'; '.join(interop_details)}"
