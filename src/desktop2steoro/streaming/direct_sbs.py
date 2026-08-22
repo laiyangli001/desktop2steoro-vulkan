@@ -2109,8 +2109,9 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
             caps = backend.capabilities
             print(
                 f"[OpenGLStream] fallback candidate: context={caps.context_api} "
-                f"texture={caps.texture_format} pbo={caps.pbo_count} "
-                f"fence={int(caps.fence_supported)} "
+                f"texture={caps.texture_format} framebuffer="
+                f"{int(getattr(caps, 'framebuffer_supported', False))} "
+                f"pbo={caps.pbo_count} fence={int(caps.fence_supported)} "
                 f"cuda_gl_interop={caps.cuda_gl_interop} "
                 f"hip_gl_interop={getattr(caps, 'hip_gl_interop', False)} "
                 f"interop={getattr(caps, 'interop_mode', 'none')}",

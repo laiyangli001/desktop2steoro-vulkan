@@ -39,6 +39,7 @@ class OpenGLFallbackCapabilities:
     gpu_to_cpu: bool
     zero_copy: bool
     detail: str = ""
+    framebuffer_supported: bool = False
     hip_gl_interop: bool = False
     interop_mode: str = "none"
 
@@ -345,6 +346,7 @@ class OpenGLFallbackBackend:
         self._glfw_initialized = False
         self._window = None
         self._texture = None
+        self._framebuffer = None
         self._pbos: list[int] = []
         self._fences: list[Any] = []
         self._slot = 0
@@ -441,6 +443,25 @@ class OpenGLFallbackBackend:
         GL.glBindBuffer(GL.GL_PIXEL_UNPACK_BUFFER, 0)
         GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
 
+        framebuffer = GL.glGenFramebuffers(1)
+        self._framebuffer = int(
+            framebuffer[0] if isinstance(framebuffer, (tuple, list)) else framebuffer
+        )
+        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, self._framebuffer)
+        GL.glFramebufferTexture2D(
+            GL.GL_FRAMEBUFFER,
+            GL.GL_COLOR_ATTACHMENT0,
+            GL.GL_TEXTURE_2D,
+            self._texture,
+            0,
+        )
+        framebuffer_status = GL.glCheckFramebufferStatus(GL.GL_FRAMEBUFFER)
+        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, 0)
+        if framebuffer_status != GL.GL_FRAMEBUFFER_COMPLETE:
+            raise RuntimeError(
+                f"OpenGL RGBA8 framebuffer is incomplete: status={framebuffer_status}"
+            )
+
         fence_supported = hasattr(GL, "glFenceSync") and hasattr(GL, "glClientWaitSync")
         if not fence_supported:
             raise RuntimeError("OpenGL sync objects are unavailable")
@@ -512,7 +533,11 @@ class OpenGLFallbackBackend:
             cuda_gl_interop=self._cuda_interop is not None,
             gpu_to_cpu=not gpu_interop,
             zero_copy=False,
-            detail=f"OpenGL {version_text}; {'; '.join(interop_details)}",
+            detail=(
+                f"OpenGL {version_text}; framebuffer=complete; "
+                f"{'; '.join(interop_details)}"
+            ),
+            framebuffer_supported=True,
             hip_gl_interop=self._hip_interop is not None,
             interop_mode=(
                 "cuda"
@@ -672,6 +697,9 @@ class OpenGLFallbackBackend:
                     self._gl.glDeleteBuffers(len(self._pbos), self._pbos)
                 if self._texture:
                     self._gl.glDeleteTextures(1, [self._texture])
+                if self._framebuffer:
+                    self._gl.glDeleteFramebuffers(1, [self._framebuffer])
+                    self._framebuffer = None
         finally:
             self._glfw.destroy_window(self._window)
             self._glfw.make_context_current(self._previous_context or previous)

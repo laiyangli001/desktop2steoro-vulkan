@@ -831,7 +831,7 @@ GPU 零拷贝只解决电脑端原始帧搬运。继续检查：
 ### GPU 通路
 
 - [x] OpenGL 备用路径的架构、能力探测、回退顺序和日志规范已定义。
-- [x] OpenGL headless context、RGBA8 texture、3 槽 PBO/fence 和 host-upload fallback 已实现并完成本机小帧提交验证。
+- [x] OpenGL headless context、RGBA8 texture、完整 framebuffer attachment、3 槽 PBO/fence 和 host-upload fallback 已实现并完成本机验证。
 - [x] NVIDIA CUDA–OpenGL interop → CUDA RGBA → PyNvVideoCodec/NVENC GPU-only fallback 已实现并完成本机 roundtrip 与压缩包烟测。
 - [x] OpenGL → AMF 的 HIP interop 代码路径已接入。
 - [ ] AMD 真机驱动、音频和 4K 编码验证。

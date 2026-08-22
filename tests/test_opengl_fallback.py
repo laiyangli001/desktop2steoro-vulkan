@@ -30,6 +30,7 @@ def test_opengl_backend_creates_texture_pbo_fence_and_submits_frame():
     try:
         assert backend.capabilities.available is True
         assert backend.capabilities.texture_format == "RGBA8"
+        assert backend.capabilities.framebuffer_supported is True
         assert backend.capabilities.pbo_count == 3
         assert backend.capabilities.fence_supported is True
         assert backend.capabilities.zero_copy is False
@@ -215,6 +216,8 @@ def test_opengl_fallback_contract_is_documented_and_wired():
     assert "_fallback_to_opengl" in source
     assert "D2S_STATUS] Vulkan unavailable; using OpenGL fallback" in source
     assert "glGenBuffers" in backend_source
+    assert "glGenFramebuffers" in backend_source
+    assert "glCheckFramebufferStatus" in backend_source
     assert "glFenceSync" in backend_source
     assert "self._fences" in backend_source
     assert "PBO slot fence failed" in backend_source
@@ -230,6 +233,7 @@ def test_opengl_fallback_contract_is_documented_and_wired():
     assert "fallback.submit_frame(rgb)" in source
     assert "zero_copy=False" in backend_source
     assert "D2S_OPENGL_FORCE_HOST" in backend_source
+    assert "framebuffer_supported=True" in backend_source
 
 
 def test_opengl_smoke_tool_contract_is_present():
