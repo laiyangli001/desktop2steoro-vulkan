@@ -647,7 +647,7 @@ src/python3/python.exe src/desktop2steoro/tools/opengl_fallback_rtsp_soak.py `
   --width 3840 --height 2160 --fps 30 --frames 300
 ```
 
-本机 RTX 3090 实测：640×360@30、60/60 帧和 3840×2160@30、300/300 帧均输出 `PASS`；日志确认 `cuda-opengl-interop`、`PyNvVideoCodec h264 GPU path active`、MediaMTX `1 track (H264)` 在线发布。强制 host 分支另完成 640×360@30、60/60 帧闭环，日志确认 `interop=none`、`gpu_to_cpu=True` 和 FFmpeg host-upload 编码路径。该工具的 `PASS` 只证明发送端编码和 MediaMTX 发布边界；头显浏览器的解码帧率、丢帧、花屏和音画同步仍必须用实际 PICO/Quest/Wolvic 页面验证。
+本机 RTX 3090 实测：640×360@30、60/60 帧和 3840×2160@30、300/300 帧均输出 `PASS`；日志确认 `cuda-opengl-interop`、`PyNvVideoCodec h264 GPU path active`、MediaMTX `1 track (H264)` 在线发布。强制 host 分支另完成 640×360@30、60/60 帧闭环，日志确认 `interop=none`、`gpu_to_cpu=True` 和 FFmpeg host-upload 编码路径；3840×2160@30、60/60 帧也能发布成功，但耗时 5.56 秒，约 10.8 FPS，证明该回退在 4K 下不能满足 30 FPS。该工具的 `PASS` 只证明发送端编码和 MediaMTX 发布边界；头显浏览器的解码帧率、丢帧、花屏和音画同步仍必须用实际 PICO/Quest/Wolvic 页面验证。
 
 ## 测试与验收
 
