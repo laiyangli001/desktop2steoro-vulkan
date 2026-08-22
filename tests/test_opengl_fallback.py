@@ -132,6 +132,66 @@ def test_vulkan_failure_selects_cuda_opengl_nvenc_branch(monkeypatch):
     assert output._host_fallback is None
 
 
+def test_no_interop_uses_host_encoder_without_cpu_gl_roundtrip(monkeypatch):
+    import streaming.direct_sbs as direct_sbs
+
+    class FakeFrame:
+        sbs = object()
+
+    class FakeBackend:
+        capabilities = SimpleNamespace(
+            context_api="NSGL",
+            texture_format="RGBA8",
+            pbo_count=3,
+            fence_supported=True,
+            cuda_gl_interop=False,
+            hip_gl_interop=False,
+            interop_mode="none",
+            gpu_to_cpu=True,
+            zero_copy=False,
+        )
+
+        def submit_rgb(self, _frame):
+            raise AssertionError("host fallback must not upload RGB to OpenGL")
+
+        def close(self):
+            pass
+
+    class FakeHost:
+        video_encoder = "h264_videotoolbox"
+        server_process = None
+
+        def __init__(self):
+            self.frames = []
+
+        def submit_frame(self, frame):
+            self.frames.append(frame)
+
+        def close(self):
+            pass
+
+    rgb = np.zeros((36, 64, 3), dtype=np.uint8)
+    host = FakeHost()
+    output = object.__new__(direct_sbs.VulkanDirectSbsOutput)
+    output._opengl_fallback_attempted = False
+    output._opengl_fallback = None
+    output._opengl_pynv_fallback = None
+    output._opengl_amd_fallback = None
+    output._opengl_fallback_active = False
+    output._host_fallback = None
+    output.fps = 30
+    output.server_process = None
+    output._new_host_fallback = lambda: host
+    monkeypatch.setattr(direct_sbs, "OpenGLFallbackBackend", lambda *args, **kwargs: FakeBackend())
+    monkeypatch.setattr(direct_sbs, "runtime_sbs_to_rgb", lambda _frame: rgb)
+
+    output._fallback_to_opengl(FakeFrame(), RuntimeError("vulkan probe failed"))
+
+    assert output._opengl_fallback_active is True
+    assert output._host_fallback is host
+    assert host.frames == [rgb]
+
+
 def test_hip_runtime_alias_maps_graphics_api_symbols():
     class FakeHipRuntime:
         hipGraphicsGLRegisterImage = object()
