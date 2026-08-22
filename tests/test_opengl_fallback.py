@@ -231,6 +231,18 @@ def test_opengl_fallback_contract_is_documented_and_wired():
     assert "zero_copy=False" in backend_source
 
 
+def test_opengl_smoke_tool_contract_is_present():
+    tool = (
+        Path(__file__).parents[1]
+        / "src/desktop2steoro/tools/opengl_fallback_smoke.py"
+    ).read_text(encoding="utf-8")
+    assert "OpenGLFallbackBackend" in tool
+    assert "--require-gpu-interop" in tool
+    assert "gpu_probe" in tool
+    assert "host_probe" in tool
+    assert "json.dumps" in tool
+
+
 def test_vulkan_doc_records_current_opengl_copy_boundary():
     document = (
         Path(__file__).parents[1]

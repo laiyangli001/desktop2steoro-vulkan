@@ -613,6 +613,17 @@ src/python3/python.exe src/desktop2steoro/tools/vulkan_ffmpeg_bridge_smoke.py --
 4. 保留 AMF、QSV、VAAPI 回退。
 5. macOS 继续使用 VideoToolbox，不等待 Vulkan Video。
 
+## OpenGL fallback smoke 工具
+
+可在目标平台运行以下命令验证 headless OpenGL、RGBA8 texture、PBO/fence 环和可用的 CUDA/HIP interop：
+
+```powershell
+$env:PYTHONPATH = "src/desktop2steoro"
+src/python3/python.exe src/desktop2steoro/tools/opengl_fallback_smoke.py --width 640 --height 360 --frames 30
+```
+
+工具输出 JSON，至少包含 `context_api`、`texture_format`、`pbo_count`、`fence_supported`、`interop_mode`、`gpu_to_cpu` 和 `zero_copy`。NVIDIA/AMD interop 可用时运行 GPU probe；其他平台运行 PBO/fence host probe。使用 `--require-gpu-interop` 可将没有 CUDA/HIP interop 的平台作为能力探测失败返回，不会误报为零复制。
+
 ## 测试与验收
 
 ### 单元测试

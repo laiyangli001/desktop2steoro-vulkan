@@ -2,6 +2,8 @@
 
 ## 2026-08-22
 
+- 新增 `tools/opengl_fallback_smoke.py`：在不启动 MediaMTX 的情况下，验证真实 headless OpenGL、RGBA8 texture、PBO/fence 环及 CUDA/HIP GPU probe 或 host-upload probe，并以 JSON 输出能力和吞吐结果。
+
 - 加强 OpenGL fallback 初始化异常安全：GLFW 初始化、隐藏窗口、纹理或 interop 探针中途失败时统一调用清理逻辑，确保 GLFW 状态、窗口和已创建 GPU 资源不会残留。
 
 - 增加无 interop 回退回归测试：模拟 NSGL/VideoToolbox 能力时验证 RGB 帧直接进入 host encoder，测试会在任何重新引入 CPU→OpenGL→CPU 往返时失败。
