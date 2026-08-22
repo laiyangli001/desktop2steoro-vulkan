@@ -194,7 +194,7 @@ RGBA texture/FBO + 3 槽 PBO/fence
 压缩 H.264/H.265 → FFmpeg mux-only → MediaMTX/WebRTC
 ```
 
-OpenGL 路径的能力探测必须验证实际 context、纹理格式、PBO/fence、CUDA–OpenGL interop、厂商编码器和目标分辨率，不能仅凭 `OpenGL` 字符串或显卡名称选择。当前代码已实现三级能力探测：NVIDIA 且 CUDA graphics interop 成功时，CUDA RGBA tensor 通过 `cudaGraphicsGLRegisterImage` 映射 OpenGL RGBA8 texture，再通过 CUDA device-to-device copy 返回 CUDA RGBA tensor，交给 PyNvVideoCodec/NVENC 和现有压缩包 muxer。[PyNvVideoCodec 官方 GPU 编码接口](https://docs.nvidia.com/video-technologies/pynvvideocodec/pynvc-api-prog-guide/using_pynvvideocodec_apis.html)要求 NV12 每个 plane 提供 CUDA Array Interface 的设备指针，并没有接收 `cudaArray_t` 或 OpenGL texture handle 的 Python 接口；因此当前路径不能把已映射的 OpenGL array 直接交给 PyNvVideoCodec，严格 zero-copy 需要新增原生 Video Codec SDK `NV_ENC_INPUT_RESOURCE_TYPE_CUDAARRAY` bridge。ROCm/HIP 环境使用同一 graphics-resource ABI 映射 OpenGL texture，并交给已有 AMF surface 编码器；这两条 GPU 图像链路都记录 `gpu_to_cpu=False`，但由于 GPU linear memory 与 OpenGL array 之间存在 GPU copy，仍记录 `zero_copy=False`。没有 CUDA/HIP interop、使用 Intel/macOS 或互操作探针失败时，先完成 OpenGL context/纹理/PBO/fence 能力探测，再直接回退现有 host-upload，明确记录 `interop=none gpu_to_cpu=True` 和 `host-upload fallback`；由于此时原始帧已经在 CPU，不能再把它上传 OpenGL 后读回，否则只会增加无意义的 CPU↔GPU 往返。当前项目没有把 OpenGL texture 伪装成 QSV/VAAPI surface，也没有把它伪装成 VideoToolbox 的 IOSurface-backed `CVPixelBuffer`；这些需要各平台原生硬件帧和进程内编码桥，不能由 FFmpeg rawvideo stdin 实现。OpenGL 路径发生运行时错误后熔断本次会话并回退 host-upload，避免 Vulkan/OpenGL 之间来回抖动。
+OpenGL 路径的能力探测必须验证实际 context、纹理格式、PBO/fence、CUDA–OpenGL interop、厂商编码器和目标分辨率，不能仅凭 `OpenGL` 字符串或显卡名称选择。当前代码已实现三级能力探测：NVIDIA 且 CUDA graphics interop 成功时，CUDA RGBA tensor 通过 `cudaGraphicsGLRegisterImage` 映射 OpenGL RGBA8 texture，再通过 CUDA device-to-device copy 返回 CUDA RGBA tensor，交给 PyNvVideoCodec/NVENC 和现有压缩包 muxer。[PyNvVideoCodec 官方 GPU 编码接口](https://docs.nvidia.com/video-technologies/pynvvideocodec/pynvc-api-prog-guide/using_pynvvideocodec_apis.html)要求 NV12 每个 plane 提供 CUDA Array Interface 的设备指针，并没有接收 `cudaArray_t` 或 OpenGL texture handle 的 Python 接口；因此当前路径不能把已映射的 OpenGL array 直接交给 PyNvVideoCodec，严格 zero-copy 需要新增原生 Video Codec SDK `NV_ENC_INPUT_RESOURCE_TYPE_CUDAARRAY` bridge。ROCm/HIP 环境使用同一 graphics-resource ABI 映射 OpenGL texture，并交给已有 AMF surface 编码器；这两条 GPU 图像链路都记录 `gpu_to_cpu=False`，但由于 GPU linear memory 与 OpenGL array 之间存在 GPU copy，仍记录 `zero_copy=False`。没有 CUDA/HIP interop、使用 Intel/macOS、输入本身已经是 CPU RGB，或互操作探针失败时，先完成 OpenGL context/纹理/PBO/fence 能力探测，再直接回退现有 host-upload，明确记录 `interop=none gpu_to_cpu=True` 和 `host-upload fallback`；CPU/非 CUDA 帧通过 `VulkanDirectSbsOutput.submit_frame()` 进入同一回退边界，不会错误调用 Vulkan rawvideo 编码命令；由于此时原始帧已经在 CPU，不能再把它上传 OpenGL 后读回，否则只会增加无意义的 CPU↔GPU 往返。当前项目没有把 OpenGL texture 伪装成 QSV/VAAPI surface，也没有把它伪装成 VideoToolbox 的 IOSurface-backed `CVPixelBuffer`；这些需要各平台原生硬件帧和进程内编码桥，不能由 FFmpeg rawvideo stdin 实现。OpenGL 路径发生运行时错误后熔断本次会话并回退 host-upload，避免 Vulkan/OpenGL 之间来回抖动。
 
 ## 平台支持范围
 
@@ -615,10 +615,9 @@ src/python3/python.exe src/desktop2steoro/tools/vulkan_ffmpeg_bridge_smoke.py --
 
 ## OpenGL fallback smoke 工具
 
-可在目标平台运行以下命令验证 headless OpenGL、RGBA8 texture、PBO/fence 环和可用的 CUDA/HIP interop：
+可在目标平台从仓库根目录或任意工作目录运行以下命令验证 headless OpenGL、RGBA8 texture、PBO/fence 环和可用的 CUDA/HIP interop；工具会自动定位 `src/desktop2steoro`，不要求预先设置 `PYTHONPATH`：
 
 ```powershell
-$env:PYTHONPATH = "src/desktop2steoro"
 src/python3/python.exe src/desktop2steoro/tools/opengl_fallback_smoke.py --width 640 --height 360 --frames 30
 ```
 
@@ -636,9 +635,9 @@ src/python3/python.exe src/desktop2steoro/tools/opengl_fallback_rtsp_soak.py `
   --width 640 --height 360 --fps 30 --frames 60
 ```
 
-该工具会在本次进程中将 `VulkanDirectSbsOutput._native_vulkan_bridge` 置空，随后提交 CUDA RGBA 帧并调用真实的 fallback 选择、编码器和 MediaMTX 发布逻辑。成功条件是输出 `opengl_fallback_rtsp_soak: PASS`，并报告 `path=cuda-opengl-interop`、`path=hip-opengl-interop` 或 `path=host-upload`。它只禁用 native Vulkan 入口，不修改生产代码或全局配置；因此可以与 `vulkan_ffmpeg_rtsp_soak.py` 对照定位问题在 Vulkan 图像路径还是 OpenGL/编码/MediaMTX 路径。
+该工具会在本次进程中将 `VulkanDirectSbsOutput._native_vulkan_bridge` 置空，随后提交 CUDA RGBA 帧并调用真实的 fallback 选择、编码器和 MediaMTX 发布逻辑。成功条件是输出 `opengl_fallback_rtsp_soak: PASS`，并报告 `path=cuda-opengl-interop`、`path=hip-opengl-interop` 或 `path=host-upload`。当前 Windows RTX 3090 实测 3840×2160@30 连续 60 帧通过，实际路径为 `cuda-opengl-interop → PyNvVideoCodec/NVENC → MediaMTX H264`，优化 staging buffer 后耗时 2.08 秒（此前 2.44 秒）；这证明 OpenGL fallback 已越过 4K 图像、编码和本机发布边界，但尚不等同于头显 WebRTC 长时间验收。它只禁用 native Vulkan 入口，不修改生产代码或全局配置；因此可以与 `vulkan_ffmpeg_rtsp_soak.py` 对照定位问题在 Vulkan 图像路径还是 OpenGL/编码/MediaMTX 路径。
 
-使用 `--force-host` 会设置仅用于诊断的 `D2S_OPENGL_FORCE_HOST=1`，跳过 CUDA/HIP graphics interop 探测，但仍创建真实 OpenGL context、RGBA8 texture、PBO/fence，并强制进入 CPU RGB → FFmpeg 厂商/软件编码回退。该参数用于模拟 Intel/macOS 或 interop 不可用机器，不能作为正常生产配置。
+使用 `--force-host` 会设置仅用于诊断的 `D2S_OPENGL_FORCE_HOST=1`，跳过 CUDA/HIP graphics interop 探测，但仍创建真实 OpenGL context、RGBA8 texture、PBO/fence，并强制进入 CPU RGB → FFmpeg 厂商/软件编码回退。使用 `--cpu` 可在没有 CUDA 的平台提交真实 CPU RGB 帧，验证 `submit_frame()` → OpenGL 能力探测 → host-upload → MediaMTX 的完整链路；该参数用于诊断，不是正常生产配置。
 
 在 NVIDIA 主机上建议追加 3840×2160、30 FPS、至少 300 帧的测试：
 

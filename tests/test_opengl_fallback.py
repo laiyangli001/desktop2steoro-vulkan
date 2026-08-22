@@ -70,7 +70,12 @@ def test_opengl_cuda_interop_roundtrip_stays_on_gpu():
         source = torch.zeros((3, 36, 64), device="cuda", dtype=torch.uint8)
         source[0, 0, 0] = 19
         roundtrip = backend.submit_cuda(source)
+        staging = backend._rgba_staging
+        assert staging is not None
+        second = backend.submit_cuda(source)
+        assert backend._rgba_staging is staging
         assert bool(roundtrip.is_cuda)
+        assert bool(second.is_cuda)
         assert tuple(roundtrip.shape) == (36, 64, 4)
         assert int(roundtrip[0, 0, 0].item()) == 19
         assert int(roundtrip[0, 0, 3].item()) == 255
@@ -191,9 +196,74 @@ def test_no_interop_uses_host_encoder_without_cpu_gl_roundtrip(monkeypatch):
     monkeypatch.setattr(direct_sbs, "OpenGLFallbackBackend", lambda *args, **kwargs: FakeBackend())
     monkeypatch.setattr(direct_sbs, "runtime_sbs_to_rgb", lambda _frame: rgb)
 
-    output._fallback_to_opengl(FakeFrame(), RuntimeError("vulkan probe failed"))
+    output.submit_frame(rgb)
+    output.submit_frame(rgb)
 
     assert output._opengl_fallback_active is True
+    assert output._host_fallback is host
+    assert len(host.frames) == 2
+    for submitted in host.frames:
+        np.testing.assert_array_equal(submitted, rgb)
+
+
+def test_opengl_runtime_submit_failure_switches_to_stable_host_path(monkeypatch):
+    import streaming.direct_sbs as direct_sbs
+
+    class FakeFrame:
+        sbs = object()
+
+    class FakeBackend:
+        capabilities = SimpleNamespace(
+            context_api="WGL",
+            texture_format="RGBA8",
+            pbo_count=3,
+            fence_supported=True,
+            cuda_gl_interop=True,
+            hip_gl_interop=False,
+            interop_mode="cuda",
+            gpu_to_cpu=False,
+            zero_copy=False,
+        )
+        closed = False
+
+        def submit_cuda(self, _frame):
+            raise RuntimeError("OpenGL interop lost")
+
+        def close(self):
+            self.closed = True
+
+    class FakeHost:
+        video_encoder = "h264_nvenc"
+        server_process = None
+
+        def __init__(self):
+            self.frames = []
+
+        def submit_frame(self, frame):
+            self.frames.append(frame)
+
+        def close(self):
+            pass
+
+    backend = FakeBackend()
+    host = FakeHost()
+    rgb = np.zeros((36, 64, 3), dtype=np.uint8)
+    output = object.__new__(direct_sbs.VulkanDirectSbsOutput)
+    output._opengl_fallback_attempted = True
+    output._opengl_fallback = backend
+    output._opengl_pynv_fallback = None
+    output._opengl_amd_fallback = None
+    output._opengl_fallback_active = True
+    output._host_fallback = None
+    output.server_process = None
+    output._new_host_fallback = lambda: host
+    output._stop_native = lambda: None
+    monkeypatch.setattr(direct_sbs, "runtime_sbs_to_rgb", lambda _frame: rgb)
+
+    output.submit_cuda_frame(FakeFrame())
+
+    assert backend.closed is True
+    assert output._opengl_fallback_active is False
     assert output._host_fallback is host
     assert host.frames == [rgb]
 
@@ -256,6 +326,8 @@ def test_opengl_smoke_tool_contract_is_present():
     assert '"path": "gpu-interop"' in tool
     assert '"path": "host-upload"' in tool
     assert "json.dumps" in tool
+    assert "_SOURCE_ROOT = Path(__file__).resolve().parents[1]" in tool
+    assert "sys.path.insert(0, str(_SOURCE_ROOT))" in tool
 
 
 def test_opengl_rtsp_soak_tool_forces_real_fallback_boundary():
@@ -269,6 +341,8 @@ def test_opengl_rtsp_soak_tool_forces_real_fallback_boundary():
     assert "output._opengl_fallback_active" in tool
     assert "cuda-opengl-interop" in tool
     assert "--force-host" in tool
+    assert "--cpu" in tool
+    assert "output.submit_frame(tensor)" in tool
     assert "D2S_OPENGL_FORCE_HOST" in tool
     assert "opengl_fallback_rtsp_soak: PASS" in tool
 

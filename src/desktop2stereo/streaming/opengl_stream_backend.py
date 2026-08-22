@@ -355,6 +355,9 @@ class OpenGLFallbackBackend:
         self._closed = False
         self._cuda_interop: _CudaOpenGLInterop | None = None
         self._hip_interop: _HipOpenGLInterop | None = None
+        self._rgba_staging = None
+        self._rgba_staging_shape: tuple[int, int] | None = None
+        self._rgba_staging_device = None
         try:
             self._capabilities = self._initialize()
         except Exception:
@@ -562,8 +565,8 @@ class OpenGLFallbackBackend:
         if self._glfw is not None:
             self._glfw.make_context_current(self._previous_context)
 
-    @staticmethod
-    def _cuda_rgba_tensor(image: Any) -> Any:
+    def _cuda_rgba_tensor(self, image: Any) -> Any:
+        """Normalize a device frame into a reusable RGBA8 GPU staging tensor."""
         import torch
 
         image = getattr(image, "sbs", image)
@@ -576,11 +579,13 @@ class OpenGLFallbackBackend:
         if image.ndim != 3:
             raise ValueError(f"unsupported CUDA SBS shape: {tuple(image.shape)!r}")
         if int(image.shape[0]) in (1, 3, 4):
-            if int(image.shape[0]) == 1:
+            channels = int(image.shape[0])
+            if channels == 1:
                 image = image.expand(3, -1, -1)
             image = image[:3].permute(1, 2, 0)
         elif int(image.shape[-1]) in (1, 3, 4):
-            if int(image.shape[-1]) == 1:
+            channels = int(image.shape[-1])
+            if channels == 1:
                 image = image.expand(-1, -1, 3)
             image = image[..., :3]
         else:
@@ -588,13 +593,21 @@ class OpenGLFallbackBackend:
         if image.dtype != torch.uint8:
             image = image.clamp(0.0, 1.0).mul(255.0).round().to(torch.uint8)
         image = image.contiguous()
-        alpha = torch.full(
-            (*image.shape[:2], 1),
-            255,
-            dtype=torch.uint8,
-            device=image.device,
-        )
-        return torch.cat((image, alpha), dim=-1).contiguous()
+        shape = (int(image.shape[0]), int(image.shape[1]))
+        device = image.device
+        if (
+            self._rgba_staging is None
+            or self._rgba_staging_shape != shape
+            or self._rgba_staging_device != device
+        ):
+            self._rgba_staging = torch.empty(
+                (shape[0], shape[1], 4), dtype=torch.uint8, device=device
+            )
+            self._rgba_staging_shape = shape
+            self._rgba_staging_device = device
+        self._rgba_staging[..., :3].copy_(image)
+        self._rgba_staging[..., 3].fill_(255)
+        return self._rgba_staging
 
     def submit_cuda(self, image: Any) -> Any:
         if self._closed:
@@ -690,6 +703,9 @@ class OpenGLFallbackBackend:
             if self._hip_interop is not None:
                 self._hip_interop.close()
                 self._hip_interop = None
+            self._rgba_staging = None
+            self._rgba_staging_shape = None
+            self._rgba_staging_device = None
             if self._gl is not None:
                 for fence in self._fences:
                     if fence is not None:

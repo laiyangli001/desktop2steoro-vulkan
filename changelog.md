@@ -2,6 +2,20 @@
 
 ## 2026-08-22
 
+- 修正 CPU 帧进入 OpenGL fallback 时的活动路径日志：不再把可用但未使用的 CUDA interop 报成 GPU-only，实际 host-upload 现在明确输出 `interop=none gpu_to_cpu=True zero_copy=False gpu_copy_count=0`。
+
+- 为 `opengl_fallback_rtsp_soak.py` 增加 `--cpu` 诊断模式；Windows 实测 CPU RGB 640×360@30 通过 10/10 帧，日志为 `path=host-upload`，MediaMTX 确认 H264 发布，使无 CUDA 平台也能验证完整回退链。
+
+- 补齐 `VulkanDirectSbsOutput.submit_frame()` 的 CPU/非 CUDA 入口：不再错误进入 Vulkan rawvideo 编码命令，而是统一经过 OpenGL 能力探测并进入 host-upload 回退；后续 CPU 帧复用同一稳定输出，覆盖 AMD/Intel/macOS 无 CUDA 场景的实际回退边界。
+
+- OpenGL CUDA/HIP fallback 复用按分辨率和设备缓存的 RGBA8 GPU staging buffer，去掉每帧 `torch.cat` 的 4K 临时分配；新增 staging 复用断言，保持输入、OpenGL texture 和编码提交全程不落 CPU。
+
+- 增加 OpenGL interop 运行中断回归测试：提交阶段发生 graphics resource/fence 错误时，关闭 OpenGL 资源、熔断本次 OpenGL 会话并将当前帧交给稳定高级 FFmpeg 路径，避免推流线程退出或重复抖动切换。
+
+- 真实 4K OpenGL fallback 闭环复测通过：RTX 3090/WGL/3840×2160@30 连续 60 帧，实际选择 CUDA–OpenGL interop → PyNvVideoCodec/NVENC，日志为 `gpu_to_cpu=False zero_copy=False gpu_copy_count=2`，MediaMTX 确认 H264 发布，优化 staging buffer 后耗时 2.08 秒（此前 2.44 秒）。
+
+- 修复 `opengl_fallback_smoke.py` 直接从仓库根目录或任意工作目录启动时的模块路径问题；诊断工具现在会自动加入 `src/desktop2steoro`，可直接执行 OpenGL context、PBO/fence 和 GPU/host fallback 探测。
+
 - 根据 NVIDIA PyNvVideoCodec 官方 GPU 编码输入契约补充 zero-copy 边界：当前 Python API 只接收 NV12 plane 的 CUDA Array Interface 设备指针，不接收 `cudaArray_t`/OpenGL texture handle；严格 zero-copy 下一步必须使用原生 NVENC `CUDAARRAY` bridge，现有路径继续明确报告 2 次 GPU copy。
 
 - OpenGL 能力报告新增 `gpu_copy_count`：CUDA/HIP interop 明确记录当前 2 次 GPU copy，host-upload 记录 0 次 GPU copy；同步扩展 fallback 候选日志和 smoke JSON，避免把 GPU-only 误报成严格 zero-copy。

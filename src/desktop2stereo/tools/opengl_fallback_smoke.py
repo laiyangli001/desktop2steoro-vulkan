@@ -10,10 +10,19 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
+import sys
 import time
 from typing import Any
 
 import numpy as np
+
+
+# Make the diagnostic runnable directly from the repository root or from any
+# working directory, matching the RTSP soak tool's standalone behavior.
+_SOURCE_ROOT = Path(__file__).resolve().parents[1]
+if str(_SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SOURCE_ROOT))
 
 from streaming.opengl_stream_backend import OpenGLFallbackBackend
 

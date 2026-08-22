@@ -8,13 +8,13 @@
 *.cmd -text whitespace=cr-at-eol
 *.reg -text whitespace=cr-at-eol
 
-src/desktop2steoro/xr_viewer/environments/**/*.hdr filter=lfs diff=lfs merge=lfs -text
-src/desktop2steoro/xr_viewer/environments/**/*.glb filter=lfs diff=lfs merge=lfs -text
-src/desktop2steoro/streaming/rtmp/mediamtx/*.exe filter=lfs diff=lfs merge=lfs -text
-src/desktop2steoro/streaming/rtmp/ffmpeg/bin/*.exe filter=lfs diff=lfs merge=lfs -text
-src/desktop2steoro/streaming/rtmp/ffmpeg/ffmpeg filter=lfs diff=lfs merge=lfs -text
-src/desktop2steoro/native/windows/*.dll binary -text
-src/desktop2steoro/streaming/amd_encoder/*.dll binary -text
-src/desktop2steoro/streaming/rtmp/*.zip filter=lfs diff=lfs merge=lfs -text
-src/desktop2steoro/streaming/rtmp/*.tar.gz filter=lfs diff=lfs merge=lfs -text
-src/desktop2steoro/streaming/rtmp/*.tar.xz filter=lfs diff=lfs merge=lfs -text
+src/desktop2stereo/xr_viewer/environments/**/*.hdr filter=lfs diff=lfs merge=lfs -text
+src/desktop2stereo/xr_viewer/environments/**/*.glb filter=lfs diff=lfs merge=lfs -text
+src/desktop2stereo/streaming/rtmp/mediamtx/*.exe filter=lfs diff=lfs merge=lfs -text
+src/desktop2stereo/streaming/rtmp/ffmpeg/bin/*.exe filter=lfs diff=lfs merge=lfs -text
+src/desktop2stereo/streaming/rtmp/ffmpeg/ffmpeg filter=lfs diff=lfs merge=lfs -text
+src/desktop2stereo/native/windows/*.dll binary -text
+src/desktop2stereo/streaming/amd_encoder/*.dll binary -text
+src/desktop2stereo/streaming/rtmp/*.zip filter=lfs diff=lfs merge=lfs -text
+src/desktop2stereo/streaming/rtmp/*.tar.gz filter=lfs diff=lfs merge=lfs -text
+src/desktop2stereo/streaming/rtmp/*.tar.xz filter=lfs diff=lfs merge=lfs -text

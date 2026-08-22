@@ -26,6 +26,7 @@ def main() -> int:
     parser.add_argument("--frames", type=int, default=60)
     parser.add_argument("--protocol", default="WEBRTC", choices=("WEBRTC", "SRT"))
     parser.add_argument("--force-host", action="store_true", help="force the OpenGL PBO/host-upload branch")
+    parser.add_argument("--cpu", action="store_true", help="submit CPU RGB frames to exercise the non-CUDA fallback")
     args = parser.parse_args()
 
     if args.width < 2 or args.height < 2 or args.width % 2 or args.height % 2:
@@ -37,12 +38,17 @@ def main() -> int:
     source_root = base_dir / "src" / "desktop2steoro"
     sys.path.insert(0, str(source_root))
 
-    import torch
+    import numpy as np
+    torch = None
+    if not args.cpu:
+        import torch as torch_module
+
+        torch = torch_module
 
     from streaming.direct_sbs import VulkanDirectSbsOutput
 
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA is unavailable; use opengl_fallback_smoke.py for host-only probing")
+    if not args.cpu and not torch.cuda.is_available():
+        raise RuntimeError("CUDA is unavailable; use --cpu or opengl_fallback_smoke.py")
 
     previous_force_host = os.environ.get("D2S_OPENGL_FORCE_HOST")
 
@@ -63,10 +69,13 @@ def main() -> int:
     # Force the documented transition point without changing production code:
     # the first submit must enter _fallback_to_opengl().
     output._native_vulkan_bridge = None
-    tensor = torch.empty(
-        (args.height, args.width, 4), dtype=torch.uint8, device="cuda"
+    tensor = (
+        np.empty((args.height, args.width, 3), dtype=np.uint8)
+        if args.cpu
+        else torch.empty((args.height, args.width, 4), dtype=torch.uint8, device="cuda")
     )
-    tensor[..., 3] = 255
+    if not args.cpu:
+        tensor[..., 3] = 255
 
     submitted = 0
     started = time.monotonic()
@@ -77,7 +86,11 @@ def main() -> int:
             tensor[..., 0] = (32 + frame_index) % 256
             tensor[..., 1] = (96 + frame_index * 3) % 256
             tensor[..., 2] = (192 + frame_index * 5) % 256
-            output.submit_cuda_frame(tensor)
+            if args.cpu:
+                output.submit_frame(tensor)
+            else:
+                tensor[..., 3] = 255
+                output.submit_cuda_frame(tensor)
             submitted += 1
             next_deadline += 1.0 / args.fps
             remaining = next_deadline - time.monotonic()

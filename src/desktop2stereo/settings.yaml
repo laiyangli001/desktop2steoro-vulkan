@@ -539,10 +539,11 @@ Stream Protocol: WebRTC
 Streamer Port: 1122
 Stream Quality: 100
 Use Stream Calibration: true
-Stream Target Bitrate Mbps: 29
-Stream Peak Bitrate Mbps: 33
+Stream Target Bitrate Mbps: 57
+Stream Peak Bitrate Mbps: 64
 Stream Calibration Port: 1123
 Stream Key: live
+Stereo Mix: null
 Audio Capture Backend: auto
 Video Encoder Backend: auto
 CRF: 23

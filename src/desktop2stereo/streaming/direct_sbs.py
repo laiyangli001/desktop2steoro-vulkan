@@ -2164,9 +2164,8 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
                 selected_encoder = getattr(fallback, "video_encoder", "unknown")
                 print(
                     f"[OpenGLStream] active: encoder=FFmpeg/{selected_encoder} "
-                    f"interop={getattr(caps, 'interop_mode', 'none')} "
-                    f"gpu_to_cpu={caps.gpu_to_cpu} zero_copy={caps.zero_copy} "
-                    f"gpu_copy_count={getattr(caps, 'gpu_copy_count', 0)} "
+                    "interop=none gpu_to_cpu=True zero_copy=False "
+                    "gpu_copy_count=0 "
                     f"resolution={width}x{height} fps={self.fps}",
                     flush=True,
                 )
@@ -2206,6 +2205,24 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
         fallback = self._new_host_fallback()
         self._host_fallback = fallback
         fallback.submit_frame(runtime_sbs_to_rgb(frame))
+
+    def submit_frame(self, frame: np.ndarray) -> None:
+        """Route CPU/non-CUDA frames through the same OpenGL fallback boundary.
+
+        The native Vulkan bridge currently accepts CUDA device frames only. A
+        CPU frame must not enter the Vulkan rawvideo command; probing OpenGL
+        first keeps the platform decision and diagnostics identical to the
+        CUDA path, then selects the stable host encoder when no GPU interop is
+        available.
+        """
+        fallback = getattr(self, "_host_fallback", None)
+        if fallback is not None:
+            fallback.submit_frame(frame)
+            return
+        self._fallback_to_opengl(
+            frame,
+            RuntimeError("native Vulkan image path requires a CUDA device frame"),
+        )
 
     def submit_cuda_frame(self, frame: Any) -> None:
         opengl = self._opengl_fallback
