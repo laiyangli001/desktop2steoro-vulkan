@@ -144,6 +144,9 @@ def test_opengl_fallback_contract_is_documented_and_wired():
     assert "glFenceSync" in backend_source
     assert "cudaGraphicsGLRegisterImage" in backend_source
     assert "cudaMemcpy2DFromArrayAsync" in backend_source
+    assert "_HipOpenGLInterop" in backend_source
+    assert 'name = "hip" + name[4:]' in backend_source
+    assert "encoder=AMF" in source
     assert "zero_copy=False" in backend_source
 
 

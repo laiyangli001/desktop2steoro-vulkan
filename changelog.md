@@ -2,7 +2,7 @@
 
 ## 2026-08-22
 
-- 扩展高级网络推流 OpenGL 备用路径：NVIDIA 上新增 CUDA–OpenGL interop，将 CUDA RGBA tensor 映射到 OpenGL RGBA8 texture，再以 GPU device-to-device copy 返回 CUDA tensor，交给 PyNvVideoCodec/NVENC 压缩发布；实测 OpenGL 3.3/NVIDIA/CUDA roundtrip 与 640×360 NVENC 压缩包烟测通过，日志明确 `gpu_to_cpu=False zero_copy=False`。非 NVIDIA 或 interop 失败时仍自动使用 PBO/fence + host-upload，并保留单次熔断回退。严格 zero-copy 及 AMD/Intel/macOS 硬件路径仍待后续验证。
+- 扩展高级网络推流 OpenGL 备用路径：NVIDIA 上新增 CUDA–OpenGL interop，将 CUDA RGBA tensor 映射到 OpenGL RGBA8 texture，再以 GPU device-to-device copy 返回 CUDA tensor，交给 PyNvVideoCodec/NVENC 压缩发布；同时接入 HIP graphics-resource 适配层和已有 AMF surface 编码器。实测 OpenGL 3.3/NVIDIA/CUDA roundtrip、3840×2160 NVENC 压缩包和 RTSP 发布闭环通过，日志明确 `gpu_to_cpu=False zero_copy=False`。AMD 真机驱动/音频/4K 仍待验证；Intel/macOS 和严格 zero-copy 仍待后续实现。
 
 - 新增 MediaMTX 端到端 Vulkan RTSP soak 工具：启动 MediaMTX 和 FFmpeg mux-only TCP 发布，验证压缩 H.264 包进入 `live` 路径；本机 3840×2160@30 连续 300 帧发布通过，未经过 4K rawvideo stdin。
 

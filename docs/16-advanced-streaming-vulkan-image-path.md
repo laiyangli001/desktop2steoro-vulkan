@@ -194,7 +194,7 @@ RGBA texture/FBO + 3 槽 PBO/fence
 压缩 H.264/H.265 → FFmpeg mux-only → MediaMTX/WebRTC
 ```
 
-OpenGL 路径的能力探测必须验证实际 context、纹理格式、PBO/fence、CUDA–OpenGL interop、厂商编码器和目标分辨率，不能仅凭 `OpenGL` 字符串或显卡名称选择。当前代码已实现两级路径：NVIDIA 且 CUDA graphics interop 成功时，CUDA RGBA tensor 通过 `cudaGraphicsGLRegisterImage` 映射 OpenGL RGBA8 texture，再通过 CUDA device-to-device copy 返回 CUDA RGBA tensor，交给 PyNvVideoCodec/NVENC 和现有压缩包 muxer；整个图像链路 `gpu_to_cpu=False`，但由于 CUDA linear memory 与 OpenGL array 之间存在 GPU copy，仍记录 `zero_copy=False`。没有 CUDA interop、使用 AMD/Intel/macOS 或互操作探针失败时，使用 PBO/fence 后回退现有 host-upload，明确记录 `gpu_to_cpu=True`。OpenGL 路径发生运行时错误后熔断本次会话并回退 host-upload，避免 Vulkan/OpenGL 之间来回抖动。
+OpenGL 路径的能力探测必须验证实际 context、纹理格式、PBO/fence、CUDA–OpenGL interop、厂商编码器和目标分辨率，不能仅凭 `OpenGL` 字符串或显卡名称选择。当前代码已实现三级能力探测：NVIDIA 且 CUDA graphics interop 成功时，CUDA RGBA tensor 通过 `cudaGraphicsGLRegisterImage` 映射 OpenGL RGBA8 texture，再通过 CUDA device-to-device copy 返回 CUDA RGBA tensor，交给 PyNvVideoCodec/NVENC 和现有压缩包 muxer；ROCm/HIP 环境使用同一 graphics-resource ABI 映射 OpenGL texture，并交给已有 AMF surface 编码器；这两条 GPU 图像链路都记录 `gpu_to_cpu=False`，但由于 GPU linear memory 与 OpenGL array 之间存在 GPU copy，仍记录 `zero_copy=False`。没有 CUDA/HIP interop、使用 Intel/macOS 或互操作探针失败时，使用 PBO/fence 后回退现有 host-upload，明确记录 `gpu_to_cpu=True`。OpenGL 路径发生运行时错误后熔断本次会话并回退 host-upload，避免 Vulkan/OpenGL 之间来回抖动。
 
 ## 平台支持范围
 
@@ -202,7 +202,7 @@ OpenGL 路径的能力探测必须验证实际 context、纹理格式、PBO/fenc
 | --- | --- | --- | --- | --- |
 | Windows + NVIDIA | CUDA external memory/semaphore | 支持时启用 | CUDA–OpenGL interop → NVENC | 首个实施与验收目标 |
 | Linux + NVIDIA | CUDA external memory/semaphore FD | 支持时启用 | EGL/GLX + CUDA interop → NVENC | 第二阶段 |
-| Windows + AMD | HIP/Vulkan 或 Vulkan Compute | 驱动支持时启用 | WGL/PBO → AMF | 保留 AMF 回退 |
+| Windows + AMD | HIP/Vulkan 或 Vulkan Compute | 驱动支持时启用 | HIP–OpenGL interop → AMF；失败时 PBO/host | 保留 AMF 回退 |
 | Linux + AMD | ROCm/Vulkan 或 Vulkan Compute | 驱动支持时启用 | EGL/PBO → VAAPI/AMF | 保留 VAAPI 回退 |
 | Windows/Linux + Intel | Vulkan Compute/Vulkan image | 驱动支持时启用 | EGL/WGL/PBO → QSV/VAAPI | 保留 QSV/VAAPI 回退 |
 | macOS | 不作为通用 Vulkan Video 目标 | 不强制 | OpenGL/Metal → VideoToolbox | 使用 VideoToolbox |
@@ -797,7 +797,8 @@ GPU 零拷贝只解决电脑端原始帧搬运。继续检查：
 - [x] OpenGL 备用路径的架构、能力探测、回退顺序和日志规范已定义。
 - [x] OpenGL headless context、RGBA8 texture、3 槽 PBO/fence 和 host-upload fallback 已实现并完成本机小帧提交验证。
 - [x] NVIDIA CUDA–OpenGL interop → CUDA RGBA → PyNvVideoCodec/NVENC GPU-only fallback 已实现并完成本机 roundtrip 与压缩包烟测。
-- [ ] OpenGL → AMF/QSV/VideoToolbox 的跨平台硬件路径验证。
+- [x] OpenGL → AMF 的 HIP interop 代码路径已接入；[ ] AMD 真机驱动、音频和 4K 编码验证。
+- [ ] OpenGL → QSV/VideoToolbox 的跨平台硬件路径实现与验证。
 - [ ] CUDA–OpenGL interop 的严格 zero-copy 编码路径；当前 interop 仍有 CUDA linear memory ↔ OpenGL array GPU copy。
 - [x] CUDA/ROCm 和 Vulkan 设备按 UUID 匹配；native bridge 暴露 `VkPhysicalDeviceIDProperties` UUID，当前 CUDA/Vulkan 不匹配时自动回退。
 - [x] 编码输入格式来自 Vulkan Video/FFmpeg frame-pool 的格式与 profile query；native bridge 只接受 profile-compatible NV12 multi-plane frame。

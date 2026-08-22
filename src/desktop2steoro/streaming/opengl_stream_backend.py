@@ -2,14 +2,15 @@
 
 The backend has two deliberately separate implementations:
 
-* NVIDIA + CUDA/OpenGL interop: the CUDA tensor is uploaded to and read back
-  from an OpenGL RGBA8 texture through CUDA graphics interop. The round trip
-  stays on the GPU and returns a CUDA tensor for the PyNvVideoCodec/NVENC
-  encoder. No raw RGB frame crosses the CPU.
+* NVIDIA + CUDA/OpenGL interop or AMD + HIP/OpenGL interop: the GPU tensor
+  is uploaded to and read back from an OpenGL RGBA8 texture through the
+  vendor graphics API. The round trip stays on the GPU and returns a GPU
+  tensor for the PyNvVideoCodec/NVENC or AMF encoder. No raw RGB frame crosses
+  the CPU.
 * Other/unsupported systems: a hidden OpenGL context, RGBA8 texture and PBO
   ring are still validated, then the existing host-upload FFmpeg path is used.
 
-The NVIDIA interop path contains GPU copies between CUDA linear memory and the
+The vendor interop path contains GPU copies between linear GPU memory and the
 OpenGL array; it is therefore GPU-only but not strict zero-copy.
 """
 
@@ -38,6 +39,7 @@ class OpenGLFallbackCapabilities:
     gpu_to_cpu: bool
     zero_copy: bool
     detail: str = ""
+    hip_gl_interop: bool = False
 
 
 class _CudaOpenGLInterop:
@@ -278,6 +280,54 @@ class _CudaOpenGLInterop:
             self._resource = ctypes.c_void_p()
 
 
+class _HipRuntimeAlias:
+    """Expose HIP Runtime graphics symbols under the CUDA-shaped adapter API."""
+
+    def __init__(self, library: Any) -> None:
+        self._library = library
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("cuda"):
+            name = "hip" + name[4:]
+        return getattr(self._library, name)
+
+
+class _HipOpenGLInterop(_CudaOpenGLInterop):
+    """HIP equivalent of the CUDA/OpenGL graphics-resource adapter."""
+
+    @staticmethod
+    def _load_cudart() -> Any:
+        candidates: list[str] = []
+        hip_path = os.environ.get("HIP_PATH") or os.environ.get("ROCM_PATH")
+        if platform.system() == "Windows":
+            if hip_path:
+                candidates.append(str(Path(hip_path) / "bin" / "amdhip64.dll"))
+            candidates.append("amdhip64.dll")
+        else:
+            if hip_path:
+                candidates.append(str(Path(hip_path) / "lib" / "libamdhip64.so"))
+            candidates.extend(["libamdhip64.so", "libamdhip64.so.6"])
+        for candidate in candidates:
+            try:
+                library = (
+                    ctypes.WinDLL(candidate)
+                    if platform.system() == "Windows"
+                    else ctypes.CDLL(candidate)
+                )
+                return _HipRuntimeAlias(library)
+            except (OSError, TypeError):
+                continue
+        located = ctypes.util.find_library("amdhip64")
+        if located:
+            library = (
+                ctypes.WinDLL(located)
+                if platform.system() == "Windows"
+                else ctypes.CDLL(located)
+            )
+            return _HipRuntimeAlias(library)
+        raise RuntimeError("HIP Runtime library (amdhip64) is unavailable")
+
+
 class OpenGLFallbackBackend:
     """Own a hidden OpenGL context and validate a reusable texture/PBO ring."""
 
@@ -298,6 +348,7 @@ class OpenGLFallbackBackend:
         self._previous_context = None
         self._closed = False
         self._cuda_interop: _CudaOpenGLInterop | None = None
+        self._hip_interop: _HipOpenGLInterop | None = None
         self._capabilities = self._initialize()
 
     @property
@@ -390,24 +441,46 @@ class OpenGLFallbackBackend:
             if isinstance(version, bytes)
             else str(version)
         )
+        interop_details: list[str] = []
         try:
-            if self._cuda_tensor_available() and platform.system() != "Darwin":
+            import torch
+            has_cuda = bool(torch.cuda.is_available())
+            has_hip = bool(getattr(torch.version, "hip", None))
+        except Exception:
+            has_cuda = False
+            has_hip = False
+        if has_cuda and not has_hip and platform.system() != "Darwin":
+            try:
                 self._cuda_interop = _CudaOpenGLInterop(
                     texture=self._texture,
                     width=self.width,
                     height=self.height,
                     gl_target=GL.GL_TEXTURE_2D,
                 )
-        except Exception as exc:
-            self._cuda_interop = None
-            interop_detail = f"CUDA/OpenGL interop unavailable: {type(exc).__name__}: {exc}"
-        else:
-            interop_detail = (
-                "CUDA/OpenGL interop active"
-                if self._cuda_interop is not None
-                else "CUDA unavailable"
-            )
+            except Exception as exc:
+                interop_details.append(
+                    f"CUDA/OpenGL unavailable: {type(exc).__name__}: {exc}"
+                )
+        if has_hip and platform.system() != "Darwin" and self._cuda_interop is None:
+            try:
+                self._hip_interop = _HipOpenGLInterop(
+                    texture=self._texture,
+                    width=self.width,
+                    height=self.height,
+                    gl_target=GL.GL_TEXTURE_2D,
+                )
+            except Exception as exc:
+                interop_details.append(
+                    f"HIP/OpenGL unavailable: {type(exc).__name__}: {exc}"
+                )
+        if self._cuda_interop is not None:
+            interop_details.append("CUDA/OpenGL interop active")
+        if self._hip_interop is not None:
+            interop_details.append("HIP/OpenGL interop active")
+        if not interop_details:
+            interop_details.append("CUDA/HIP unavailable")
         self._restore_context()
+        gpu_interop = self._cuda_interop is not None or self._hip_interop is not None
         return OpenGLFallbackCapabilities(
             available=True,
             context_api=self._context_api(),
@@ -415,9 +488,10 @@ class OpenGLFallbackBackend:
             pbo_count=self.pbo_count,
             fence_supported=True,
             cuda_gl_interop=self._cuda_interop is not None,
-            gpu_to_cpu=False if self._cuda_interop is not None else True,
+            gpu_to_cpu=not gpu_interop,
             zero_copy=False,
-            detail=f"OpenGL {version_text}; {interop_detail}",
+            detail=f"OpenGL {version_text}; {'; '.join(interop_details)}",
+            hip_gl_interop=self._hip_interop is not None,
         )
 
     def _context_api(self) -> str:
@@ -469,13 +543,14 @@ class OpenGLFallbackBackend:
     def submit_cuda(self, image: Any) -> Any:
         if self._closed:
             raise RuntimeError("OpenGL fallback backend is closed")
-        if self._cuda_interop is None:
-            raise RuntimeError("CUDA/OpenGL interop is unavailable")
+        interop = self._cuda_interop or self._hip_interop
+        if interop is None:
+            raise RuntimeError("CUDA/HIP OpenGL interop is unavailable")
         rgba = self._cuda_rgba_tensor(image)
         previous = self._glfw.get_current_context()
         self._glfw.make_context_current(self._window)
         try:
-            return self._cuda_interop.roundtrip(rgba)
+            return interop.roundtrip(rgba)
         finally:
             self._glfw.make_context_current(previous)
 
@@ -541,6 +616,9 @@ class OpenGLFallbackBackend:
             if self._cuda_interop is not None:
                 self._cuda_interop.close()
                 self._cuda_interop = None
+            if self._hip_interop is not None:
+                self._hip_interop.close()
+                self._hip_interop = None
             if self._gl is not None:
                 if self._pbos:
                     self._gl.glDeleteBuffers(len(self._pbos), self._pbos)
