@@ -40,6 +40,7 @@ class OpenGLFallbackCapabilities:
     zero_copy: bool
     detail: str = ""
     hip_gl_interop: bool = False
+    interop_mode: str = "none"
 
 
 class _CudaOpenGLInterop:
@@ -492,6 +493,13 @@ class OpenGLFallbackBackend:
             zero_copy=False,
             detail=f"OpenGL {version_text}; {'; '.join(interop_details)}",
             hip_gl_interop=self._hip_interop is not None,
+            interop_mode=(
+                "cuda"
+                if self._cuda_interop is not None
+                else "hip"
+                if self._hip_interop is not None
+                else "none"
+            ),
         )
 
     def _context_api(self) -> str:

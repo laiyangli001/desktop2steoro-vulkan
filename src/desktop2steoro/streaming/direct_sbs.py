@@ -2111,7 +2111,9 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
                 f"[OpenGLStream] fallback candidate: context={caps.context_api} "
                 f"texture={caps.texture_format} pbo={caps.pbo_count} "
                 f"fence={int(caps.fence_supported)} "
-                f"cuda_gl_interop={caps.cuda_gl_interop}",
+                f"cuda_gl_interop={caps.cuda_gl_interop} "
+                f"hip_gl_interop={getattr(caps, 'hip_gl_interop', False)} "
+                f"interop={getattr(caps, 'interop_mode', 'none')}",
                 flush=True,
             )
             self._opengl_fallback = backend
@@ -2146,12 +2148,19 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
                     flush=True,
                 )
             else:
+                # OpenGL has no portable resource-sharing ABI with QSV,
+                # VAAPI, or VideoToolbox. Once the context/PBO/fence probe
+                # succeeds, keep the stable host-upload path and do not upload
+                # the already-CPU RGB frame into GL merely to read it back.
+                if is_cuda:
+                    rgb = runtime_sbs_to_rgb(frame)
                 fallback = self._new_host_fallback()
                 self._host_fallback = fallback
-                fallback.submit_frame(backend.submit_rgb(rgb))
+                fallback.submit_frame(rgb)
                 selected_encoder = getattr(fallback, "video_encoder", "unknown")
                 print(
                     f"[OpenGLStream] active: encoder=FFmpeg/{selected_encoder} "
+                    f"interop={getattr(caps, 'interop_mode', 'none')} "
                     f"gpu_to_cpu={caps.gpu_to_cpu} zero_copy={caps.zero_copy} "
                     f"resolution={width}x{height} fps={self.fps}",
                     flush=True,
@@ -2208,7 +2217,9 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
                 elif amd_fallback is not None:
                     amd_fallback._submit_amd_packet(opengl.submit_cuda(frame))
                 elif fallback is not None:
-                    fallback.submit_frame(opengl.submit_rgb(runtime_sbs_to_rgb(frame)))
+                    # The no-interop branch is intentionally host-upload. Do
+                    # not perform a redundant CPU→OpenGL→CPU round trip.
+                    fallback.submit_frame(runtime_sbs_to_rgb(frame))
                 else:
                     raise RuntimeError("OpenGL fallback output is unavailable")
             except Exception as exc:

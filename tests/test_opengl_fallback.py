@@ -157,6 +157,8 @@ def test_opengl_fallback_contract_is_documented_and_wired():
     assert "_HipOpenGLInterop" in backend_source
     assert 'name = "hip" + name[4:]' in backend_source
     assert "encoder=AMF" in source
+    assert "interop={getattr(caps, 'interop_mode', 'none')}" in source
+    assert "fallback.submit_frame(rgb)" in source
     assert "zero_copy=False" in backend_source
 
 
@@ -167,4 +169,5 @@ def test_vulkan_doc_records_current_opengl_copy_boundary():
     ).read_text(encoding="utf-8")
     assert "OpenGL" in document
     assert "gpu_to_cpu=True" in document
+    assert "interop=none" in document
     assert "zero_copy=False" in document
