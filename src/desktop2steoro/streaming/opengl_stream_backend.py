@@ -451,13 +451,24 @@ class OpenGLFallbackBackend:
             else str(version)
         )
         interop_details: list[str] = []
-        try:
-            import torch
-            has_cuda = bool(torch.cuda.is_available())
-            has_hip = bool(getattr(torch.version, "hip", None))
-        except Exception:
+        force_host = os.environ.get("D2S_OPENGL_FORCE_HOST", "").strip().casefold() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        if force_host:
+            interop_details.append("forced host-upload probe")
             has_cuda = False
             has_hip = False
+        else:
+            try:
+                import torch
+                has_cuda = bool(torch.cuda.is_available())
+                has_hip = bool(getattr(torch.version, "hip", None))
+            except Exception:
+                has_cuda = False
+                has_hip = False
         if has_cuda and not has_hip and platform.system() != "Darwin":
             try:
                 self._cuda_interop = _CudaOpenGLInterop(

@@ -229,6 +229,7 @@ def test_opengl_fallback_contract_is_documented_and_wired():
     assert "interop={getattr(caps, 'interop_mode', 'none')}" in source
     assert "fallback.submit_frame(rgb)" in source
     assert "zero_copy=False" in backend_source
+    assert "D2S_OPENGL_FORCE_HOST" in backend_source
 
 
 def test_opengl_smoke_tool_contract_is_present():
@@ -256,6 +257,8 @@ def test_opengl_rtsp_soak_tool_forces_real_fallback_boundary():
     assert "output.submit_cuda_frame(tensor)" in tool
     assert "output._opengl_fallback_active" in tool
     assert "cuda-opengl-interop" in tool
+    assert "--force-host" in tool
+    assert "D2S_OPENGL_FORCE_HOST" in tool
     assert "opengl_fallback_rtsp_soak: PASS" in tool
 
 

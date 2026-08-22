@@ -638,6 +638,8 @@ src/python3/python.exe src/desktop2steoro/tools/opengl_fallback_rtsp_soak.py `
 
 该工具会在本次进程中将 `VulkanDirectSbsOutput._native_vulkan_bridge` 置空，随后提交 CUDA RGBA 帧并调用真实的 fallback 选择、编码器和 MediaMTX 发布逻辑。成功条件是输出 `opengl_fallback_rtsp_soak: PASS`，并报告 `path=cuda-opengl-interop`、`path=hip-opengl-interop` 或 `path=host-upload`。它只禁用 native Vulkan 入口，不修改生产代码或全局配置；因此可以与 `vulkan_ffmpeg_rtsp_soak.py` 对照定位问题在 Vulkan 图像路径还是 OpenGL/编码/MediaMTX 路径。
 
+使用 `--force-host` 会设置仅用于诊断的 `D2S_OPENGL_FORCE_HOST=1`，跳过 CUDA/HIP graphics interop 探测，但仍创建真实 OpenGL context、RGBA8 texture、PBO/fence，并强制进入 CPU RGB → FFmpeg 厂商/软件编码回退。该参数用于模拟 Intel/macOS 或 interop 不可用机器，不能作为正常生产配置。
+
 在 NVIDIA 主机上建议追加 3840×2160、30 FPS、至少 300 帧的测试：
 
 ```powershell
@@ -645,7 +647,7 @@ src/python3/python.exe src/desktop2steoro/tools/opengl_fallback_rtsp_soak.py `
   --width 3840 --height 2160 --fps 30 --frames 300
 ```
 
-本机 RTX 3090 实测：640×360@30、60/60 帧和 3840×2160@30、300/300 帧均输出 `PASS`；日志确认 `cuda-opengl-interop`、`PyNvVideoCodec h264 GPU path active`、MediaMTX `1 track (H264)` 在线发布。该工具的 `PASS` 只证明发送端编码和 MediaMTX 发布边界；头显浏览器的解码帧率、丢帧、花屏和音画同步仍必须用实际 PICO/Quest/Wolvic 页面验证。
+本机 RTX 3090 实测：640×360@30、60/60 帧和 3840×2160@30、300/300 帧均输出 `PASS`；日志确认 `cuda-opengl-interop`、`PyNvVideoCodec h264 GPU path active`、MediaMTX `1 track (H264)` 在线发布。强制 host 分支另完成 640×360@30、60/60 帧闭环，日志确认 `interop=none`、`gpu_to_cpu=True` 和 FFmpeg host-upload 编码路径。该工具的 `PASS` 只证明发送端编码和 MediaMTX 发布边界；头显浏览器的解码帧率、丢帧、花屏和音画同步仍必须用实际 PICO/Quest/Wolvic 页面验证。
 
 ## 测试与验收
 

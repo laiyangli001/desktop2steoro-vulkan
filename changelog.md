@@ -2,7 +2,7 @@
 
 ## 2026-08-22
 
-- 新增并修正 `opengl_fallback_rtsp_soak.py`：在单次诊断进程内禁用 native Vulkan 入口，真实提交 CUDA RGBA 帧并验证 OpenGL fallback、厂商编码器/host-upload 和 MediaMTX 发布边界；修正默认仓库根目录与 `VulkanDirectSbsOutput` 的 `src/desktop2steoro` base_dir 语义。本机 RTX 3090 实测 640×360@30 通过 60/60 帧，3840×2160@30 通过 300/300 帧，均为 `cuda-opengl-interop` + PyNvVideoCodec/NVENC + MediaMTX H264；文档补充运行命令，并将 AMD 验证清单拆分为代码完成与真机未验证两项。
+- 新增并修正 `opengl_fallback_rtsp_soak.py`：在单次诊断进程内禁用 native Vulkan 入口，真实提交 CUDA RGBA 帧并验证 OpenGL fallback、厂商编码器/host-upload 和 MediaMTX 发布边界；修正默认仓库根目录与 `VulkanDirectSbsOutput` 的 `src/desktop2steoro` base_dir 语义。本机 RTX 3090 实测 640×360@30 通过 60/60 帧，3840×2160@30 通过 300/300 帧，均为 `cuda-opengl-interop` + PyNvVideoCodec/NVENC + MediaMTX H264；新增 `--force-host` 诊断分支并实测 640×360@30 通过 60/60 帧，日志正确报告 `interop=none gpu_to_cpu=True` 和 FFmpeg `h264_nvenc` host-upload；文档补充运行命令，并将 AMD 验证清单拆分为代码完成与真机未验证两项。
 
 - 完成 OpenGL fallback 4K 图像边界 A/B：RTX 3090/WGL/3840×2160/30 帧，CUDA interop probe 为 `501.1 FPS gpu_to_cpu=false`，强制 host/PBO probe 为 `12.9 FPS gpu_to_cpu=true`；结果已写入实现指南，明确这不是最终 WebRTC 帧率。
 

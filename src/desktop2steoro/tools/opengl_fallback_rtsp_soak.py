@@ -11,6 +11,7 @@ texture probe.
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 import sys
 import time
@@ -24,6 +25,7 @@ def main() -> int:
     parser.add_argument("--fps", type=int, default=30)
     parser.add_argument("--frames", type=int, default=60)
     parser.add_argument("--protocol", default="WEBRTC", choices=("WEBRTC", "SRT"))
+    parser.add_argument("--force-host", action="store_true", help="force the OpenGL PBO/host-upload branch")
     args = parser.parse_args()
 
     if args.width < 2 or args.height < 2 or args.width % 2 or args.height % 2:
@@ -41,6 +43,10 @@ def main() -> int:
 
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is unavailable; use opengl_fallback_smoke.py for host-only probing")
+
+    previous_force_host = os.environ.get("D2S_OPENGL_FORCE_HOST")
+    if args.force_host:
+        os.environ["D2S_OPENGL_FORCE_HOST"] = "1"
 
     output = VulkanDirectSbsOutput(
         base_dir=source_root,
@@ -101,6 +107,10 @@ def main() -> int:
     finally:
         del tensor
         output.close()
+        if previous_force_host is None:
+            os.environ.pop("D2S_OPENGL_FORCE_HOST", None)
+        else:
+            os.environ["D2S_OPENGL_FORCE_HOST"] = previous_force_host
 
 
 if __name__ == "__main__":
