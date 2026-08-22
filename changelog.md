@@ -2,6 +2,8 @@
 
 ## 2026-08-22
 
+- 完成 OpenGL fallback 4K 图像边界 A/B：RTX 3090/WGL/3840×2160/30 帧，CUDA interop probe 为 `501.1 FPS gpu_to_cpu=false`，强制 host/PBO probe 为 `12.9 FPS gpu_to_cpu=true`；结果已写入实现指南，明确这不是最终 WebRTC 帧率。
+
 - 修正 OpenGL smoke 路径统计：GPU interop 能力存在但使用 `--force-host` 时，不再误报 `gpu_to_cpu=false`；GPU probe 和 host probe 现在分别输出 `path=gpu-interop` / `path=host-upload` 及对应复制边界。
 
 - OpenGL smoke 工具增加 `--force-host`：在具有 CUDA/AMD interop 的机器上也能单独压测 PBO/fence host-upload 分支，便于 GPU 与 CPU 回退 A/B 对比。
