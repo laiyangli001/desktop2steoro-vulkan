@@ -187,8 +187,8 @@ OpenGL headless context（WGL/EGL/GLX）
     ↓
 RGBA texture/FBO + 3 槽 PBO/fence
     ├─ NVIDIA：CUDA–OpenGL interop → NVENC/PyNvVideoCodec
-    ├─ AMD：OpenGL/PBO → AMF
-    ├─ Intel：OpenGL/PBO → QSV
+    ├─ AMD：HIP–OpenGL interop → AMF；失败时 PBO/FFmpeg
+    ├─ Intel：PBO/FFmpeg → QSV/VAAPI
     └─ 无 GPU interop：PBO glReadPixels → 现有 host-upload FFmpeg
     ↓
 压缩 H.264/H.265 → FFmpeg mux-only → MediaMTX/WebRTC

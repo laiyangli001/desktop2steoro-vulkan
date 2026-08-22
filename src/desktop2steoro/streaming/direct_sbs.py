@@ -2149,9 +2149,11 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
                 fallback = self._new_host_fallback()
                 self._host_fallback = fallback
                 fallback.submit_frame(backend.submit_rgb(rgb))
+                selected_encoder = getattr(fallback, "video_encoder", "unknown")
                 print(
-                    "[OpenGLStream] active: encoder=host-upload "
-                    f"gpu_to_cpu={caps.gpu_to_cpu} zero_copy={caps.zero_copy}",
+                    f"[OpenGLStream] active: encoder=FFmpeg/{selected_encoder} "
+                    f"gpu_to_cpu={caps.gpu_to_cpu} zero_copy={caps.zero_copy} "
+                    f"resolution={width}x{height} fps={self.fps}",
                     flush=True,
                 )
             print("[D2S_STATUS] Vulkan unavailable; using OpenGL fallback", flush=True)

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from streaming.opengl_stream_backend import OpenGLFallbackBackend
+from streaming.opengl_stream_backend import OpenGLFallbackBackend, _HipRuntimeAlias
 
 
 def test_opengl_backend_requires_two_pbo_slots():
@@ -126,6 +126,16 @@ def test_vulkan_failure_selects_cuda_opengl_nvenc_branch(monkeypatch):
     assert output._opengl_fallback_active is True
     assert output._opengl_pynv_fallback is not None
     assert output._host_fallback is None
+
+
+def test_hip_runtime_alias_maps_graphics_api_symbols():
+    class FakeHipRuntime:
+        hipGraphicsGLRegisterImage = object()
+        hipGetErrorString = object()
+
+    alias = _HipRuntimeAlias(FakeHipRuntime())
+    assert alias.cudaGraphicsGLRegisterImage is FakeHipRuntime.hipGraphicsGLRegisterImage
+    assert alias.cudaGetErrorString is FakeHipRuntime.hipGetErrorString
 
 
 def test_opengl_fallback_contract_is_documented_and_wired():
