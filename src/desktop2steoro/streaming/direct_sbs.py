@@ -1661,6 +1661,7 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
         self._native_active = False
         self._native_pts = 0
         self._opengl_fallback: OpenGLFallbackBackend | None = None
+        self._opengl_pynv_fallback: PyNvDirectSbsOutput | None = None
         self._opengl_fallback_active = False
         self._opengl_fallback_attempted = False
         try:
@@ -2014,6 +2015,44 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
         fallback.server_process = self.server_process
         return fallback
 
+    def _new_opengl_pynv_fallback(self) -> PyNvDirectSbsOutput:
+        fallback = PyNvDirectSbsOutput(
+            base_dir=self.base_dir,
+            protocol=self.protocol,
+            port=self.port,
+            stream_key=self.stream_key,
+            fps=self.fps,
+            crf=self.crf,
+            stereo_mix_device=self.stereo_mix_device,
+            audio_delay=self.audio_delay,
+            os_name=self.os_name,
+            prefer_nvenc=self.prefer_nvenc,
+            display_mode=self.display_mode,
+            target_bitrate_mbps=self.target_bitrate_mbps,
+            peak_bitrate_mbps=self.peak_bitrate_mbps,
+            auto_calibration=False,
+            calibration_port=self.calibration_port,
+            on_calibration_fps=self._on_calibration_fps,
+            calibration_fingerprint=None,
+        )
+        fallback.server_process = self.server_process
+        return fallback
+
+    @staticmethod
+    def _close_secondary_output(output: Any) -> None:
+        if output is None:
+            return
+        # The Vulkan owner keeps MediaMTX alive. A secondary output must release
+        # only its encoder/audio resources during a path transition.
+        try:
+            output.server_process = None
+        except Exception:
+            pass
+        try:
+            output.close()
+        except Exception:
+            pass
+
     def _fallback_to_opengl(self, frame: Any, reason: Exception) -> None:
         if self._opengl_fallback_attempted:
             self._fallback_to_host(frame, reason)
@@ -2024,26 +2063,56 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
             self._fallback_to_host(frame, reason)
             return
         try:
-            rgb = runtime_sbs_to_rgb(frame)
-            height, width = int(rgb.shape[0]), int(rgb.shape[1])
+            image = getattr(frame, "sbs", frame)
+            is_cuda = bool(getattr(image, "is_cuda", False))
+            if is_cuda:
+                import torch
+
+                if image.ndim == 4:
+                    image = image[0]
+                if image.ndim != 3:
+                    raise RuntimeError(f"unsupported CUDA SBS shape: {tuple(image.shape)!r}")
+                height, width = (
+                    (int(image.shape[-2]), int(image.shape[-1]))
+                    if int(image.shape[0]) in (1, 3, 4)
+                    else (int(image.shape[0]), int(image.shape[1]))
+                )
+                del torch
+            else:
+                rgb = runtime_sbs_to_rgb(frame)
+                height, width = int(rgb.shape[0]), int(rgb.shape[1])
             backend = OpenGLFallbackBackend(width, height, pbo_count=3)
             caps = backend.capabilities
             print(
                 f"[OpenGLStream] fallback candidate: context={caps.context_api} "
                 f"texture={caps.texture_format} pbo={caps.pbo_count} "
-                f"fence={int(caps.fence_supported)}",
+                f"fence={int(caps.fence_supported)} "
+                f"cuda_gl_interop={caps.cuda_gl_interop}",
                 flush=True,
             )
-            fallback = self._new_host_fallback()
             self._opengl_fallback = backend
             self._opengl_fallback_active = True
-            self._host_fallback = fallback
-            fallback.submit_frame(backend.submit_rgb(rgb))
-            print(
-                f"[OpenGLStream] active: encoder=host-upload "
-                f"gpu_to_cpu={caps.gpu_to_cpu} zero_copy={caps.zero_copy}",
-                flush=True,
-            )
+            if is_cuda and caps.cuda_gl_interop:
+                fallback = self._new_opengl_pynv_fallback()
+                fallback._start_ffmpeg(width, height)
+                assert fallback._pynv_output is not None
+                fallback._pynv_output.submit_cuda_frame(backend.submit_cuda(frame))
+                self._opengl_pynv_fallback = fallback
+                print(
+                    "[OpenGLStream] active: encoder=PyNvVideoCodec/NVENC "
+                    f"gpu_to_cpu={caps.gpu_to_cpu} zero_copy={caps.zero_copy} "
+                    f"resolution={width}x{height} fps={self.fps}",
+                    flush=True,
+                )
+            else:
+                fallback = self._new_host_fallback()
+                self._host_fallback = fallback
+                fallback.submit_frame(backend.submit_rgb(rgb))
+                print(
+                    "[OpenGLStream] active: encoder=host-upload "
+                    f"gpu_to_cpu={caps.gpu_to_cpu} zero_copy={caps.zero_copy}",
+                    flush=True,
+                )
             print("[D2S_STATUS] Vulkan unavailable; using OpenGL fallback", flush=True)
         except Exception as exc:
             print(
@@ -2051,6 +2120,8 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
                 "fallback=stable advanced FFmpeg path",
                 flush=True,
             )
+            self._close_secondary_output(self._opengl_pynv_fallback)
+            self._opengl_pynv_fallback = None
             if self._opengl_fallback is not None:
                 self._opengl_fallback.close()
             self._opengl_fallback = None
@@ -2065,6 +2136,8 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
         )
         print("[D2S_STATUS] Vulkan unavailable; using stable advanced FFmpeg path", flush=True)
         self._stop_native()
+        self._close_secondary_output(self._opengl_pynv_fallback)
+        self._opengl_pynv_fallback = None
         if self._opengl_fallback is not None:
             self._opengl_fallback.close()
             self._opengl_fallback = None
@@ -2075,10 +2148,19 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
 
     def submit_cuda_frame(self, frame: Any) -> None:
         opengl = self._opengl_fallback
+        pynv_fallback = self._opengl_pynv_fallback
         fallback = getattr(self, "_host_fallback", None)
-        if self._opengl_fallback_active and opengl is not None and fallback is not None:
+        if self._opengl_fallback_active and opengl is not None:
             try:
-                fallback.submit_frame(opengl.submit_rgb(runtime_sbs_to_rgb(frame)))
+                if pynv_fallback is not None:
+                    assert pynv_fallback._pynv_output is not None
+                    pynv_fallback._pynv_output.submit_cuda_frame(
+                        opengl.submit_cuda(frame)
+                    )
+                elif fallback is not None:
+                    fallback.submit_frame(opengl.submit_rgb(runtime_sbs_to_rgb(frame)))
+                else:
+                    raise RuntimeError("OpenGL fallback output is unavailable")
             except Exception as exc:
                 self._opengl_fallback_active = False
                 self._fallback_to_host(frame, exc)
@@ -2112,13 +2194,15 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
 
     def close(self) -> None:
         self._stop_native()
+        self._close_secondary_output(self._opengl_pynv_fallback)
+        self._opengl_pynv_fallback = None
         if self._opengl_fallback is not None:
             self._opengl_fallback.close()
             self._opengl_fallback = None
         self._opengl_fallback_active = False
         fallback = getattr(self, "_host_fallback", None)
         if fallback is not None:
-            fallback.close()
+            self._close_secondary_output(fallback)
             self._host_fallback = None
         super().close()
 

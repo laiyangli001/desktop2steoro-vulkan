@@ -4,7 +4,7 @@
 
 目标是消除当前 4K SBS 推流中的 CUDA/ROCm → CPU RGB24 → FFmpeg stdin 路径，让图像在 GPU 内完成 SBS 整理、颜色转换和硬件编码。编码后的 H.264/H.265 小数据包仍通过 FFmpeg/MediaMTX 发布，并由局域网头显浏览器通过 WebRTC 播放。
 
-> 本文同时记录实施设计和当前验收状态。native Vulkan 编码桥已完成独立 4K 编码烟测并接入高级网络推流；本机已完成连续 600 帧 3840×2160@30 发布和 ffprobe 媒体参数验证；SoundCard/WASAPI 连续运行 10.12 秒无 runtime error，MediaMTX 确认 `2 tracks (H264, Opus)`。头显端持续 4K/30 FPS 实机验收仍需继续完成；Khronos validation 层会触发 FFmpeg 内部 NV12 frame-pool 的已知 VUID 与 flush/idle 阻塞，程序检测到该层后主动回退稳定 host-upload 路径。
+> 本文同时记录实施设计和当前验收状态。native Vulkan 编码桥已完成独立 4K 编码烟测并接入高级网络推流；本机已完成连续 600 帧 3840×2160@30 发布和 ffprobe 媒体参数验证；SoundCard/WASAPI 连续运行 10.12 秒无 runtime error，MediaMTX 确认 `2 tracks (H264, Opus)`。Vulkan 失败后的 OpenGL NVIDIA CUDA interop → PyNvVideoCodec/NVENC 分支已完成本机 640×360 RTSP 压缩包闭环；头显端持续 4K/30 FPS 实机验收仍需继续完成；Khronos validation 层会触发 FFmpeg 内部 NV12 frame-pool 的已知 VUID 与 flush/idle 阻塞，程序检测到该层后主动进入 OpenGL 探测并按能力回退。
 
 ## 目录
 
@@ -154,7 +154,7 @@ multi-plane external-memory CUDA 映射，再切换到 CUDA 直接写入路径�
 
 | 模式 | 定位 | 首选编码路径 | 平台策略 |
 | --- | --- | --- | --- |
-| 高级网络推流 | 跨厂商、跨平台、自动回退 | Vulkan Video → 厂商 FFmpeg 后端 → CPU | NVIDIA、AMD、Intel；macOS 用 VideoToolbox |
+| 高级网络推流 | 跨厂商、跨平台、自动回退 | Vulkan Video → OpenGL GPU fallback → 厂商 FFmpeg 后端 → CPU | NVIDIA、AMD、Intel；macOS 用 VideoToolbox |
 | GPU 推流 | 厂商专用最低延迟路径 | PyNvVideoCodec、AMF 原生桥等 | 按显卡厂商实现 |
 
 高级推流不直接变成 PyNvVideoCodec 模式。Vulkan 是高级推流中的跨厂商 GPU 路径；GPU 推流继续保留厂商专用 API 和独立诊断信息。
@@ -164,6 +164,7 @@ multi-plane external-memory CUDA 映射，再切换到 CUDA 直接写入路径�
 ```text
 高级推流 Auto
 ├─ Windows/Linux：h264_vulkan / hevc_vulkan
+├─ OpenGL GPU fallback：CUDA–OpenGL → NVENC；PBO → 厂商/CPU
 ├─ Windows：NVENC → QSV → AMF
 ├─ Linux：QSV → VAAPI
 ├─ macOS：VideoToolbox
@@ -193,7 +194,7 @@ RGBA texture/FBO + 3 槽 PBO/fence
 压缩 H.264/H.265 → FFmpeg mux-only → MediaMTX/WebRTC
 ```
 
-OpenGL 路径的能力探测必须验证实际 context、纹理格式、PBO/fence、厂商编码器和目标分辨率，不能仅凭 `OpenGL` 字符串或显卡名称选择。NVIDIA 的 CUDA–OpenGL interop 可避免 CPU 回读，但它依赖同一 GPU、驱动和 CUDA graphics interop；跨厂商 OpenGL 路径不承诺零复制。没有互操作能力时，必须明确记录 `gpu_to_cpu=True`，再回退 host-upload。当前代码已实现第一阶段 OpenGL fallback：创建 WGL/EGL/GLX 隐藏上下文、RGBA8 texture、3 槽 PBO 和 fence，并将有效 RGB8 帧通过该边界提交后交给现有 host-upload FFmpeg 编码器。该阶段明确记录 `gpu_to_cpu=True`、`zero_copy=False`，尚未实现 CUDA–OpenGL interop/NVENC、AMF 或 QSV 的零复制编码。OpenGL 路径发生运行时错误后熔断本次会话并回退 host-upload，避免 Vulkan/OpenGL 之间来回抖动。
+OpenGL 路径的能力探测必须验证实际 context、纹理格式、PBO/fence、CUDA–OpenGL interop、厂商编码器和目标分辨率，不能仅凭 `OpenGL` 字符串或显卡名称选择。当前代码已实现两级路径：NVIDIA 且 CUDA graphics interop 成功时，CUDA RGBA tensor 通过 `cudaGraphicsGLRegisterImage` 映射 OpenGL RGBA8 texture，再通过 CUDA device-to-device copy 返回 CUDA RGBA tensor，交给 PyNvVideoCodec/NVENC 和现有压缩包 muxer；整个图像链路 `gpu_to_cpu=False`，但由于 CUDA linear memory 与 OpenGL array 之间存在 GPU copy，仍记录 `zero_copy=False`。没有 CUDA interop、使用 AMD/Intel/macOS 或互操作探针失败时，使用 PBO/fence 后回退现有 host-upload，明确记录 `gpu_to_cpu=True`。OpenGL 路径发生运行时错误后熔断本次会话并回退 host-upload，避免 Vulkan/OpenGL 之间来回抖动。
 
 ## 平台支持范围
 
@@ -730,8 +731,8 @@ SBS 生成 → GPU 转换 → 编码提交 → packet 输出 → RTSP 发布 →
 ```text
 [VulkanStream] unavailable: no H.264 encode profile for 3840x2160 NV12
 [OpenGLStream] fallback candidate: context=WGL texture=RGBA8 pbo=3 fence=3
-[OpenGLStream] active: encoder=host-upload gpu_to_cpu=True zero_copy=False
-[DirectSbsStream] fallback: Vulkan Video → OpenGL → NVIDIA NVENC
+[OpenGLStream] active: encoder=PyNvVideoCodec/NVENC gpu_to_cpu=False zero_copy=False
+[DirectSbsStream] fallback: Vulkan Video → OpenGL CUDA interop → NVIDIA NVENC
 ```
 
 禁止只输出“Vulkan failed”或吞掉 FFmpeg/Vulkan 错误码。
@@ -794,9 +795,10 @@ GPU 零拷贝只解决电脑端原始帧搬运。继续检查：
 ### GPU 通路
 
 - [x] OpenGL 备用路径的架构、能力探测、回退顺序和日志规范已定义。
-- [x] OpenGL 第一阶段 headless context、RGBA8 texture、3 槽 PBO/fence 和 host-upload fallback 已实现并完成本机小帧提交验证。
-- [ ] OpenGL CUDA–OpenGL interop、NVENC/AMF/QSV 零复制编码实现。
-- [ ] CUDA–OpenGL interop 或厂商 PBO/硬件编码路径完成跨平台验证。
+- [x] OpenGL headless context、RGBA8 texture、3 槽 PBO/fence 和 host-upload fallback 已实现并完成本机小帧提交验证。
+- [x] NVIDIA CUDA–OpenGL interop → CUDA RGBA → PyNvVideoCodec/NVENC GPU-only fallback 已实现并完成本机 roundtrip 与压缩包烟测。
+- [ ] OpenGL → AMF/QSV/VideoToolbox 的跨平台硬件路径验证。
+- [ ] CUDA–OpenGL interop 的严格 zero-copy 编码路径；当前 interop 仍有 CUDA linear memory ↔ OpenGL array GPU copy。
 - [x] CUDA/ROCm 和 Vulkan 设备按 UUID 匹配；native bridge 暴露 `VkPhysicalDeviceIDProperties` UUID，当前 CUDA/Vulkan 不匹配时自动回退。
 - [x] 编码输入格式来自 Vulkan Video/FFmpeg frame-pool 的格式与 profile query；native bridge 只接受 profile-compatible NV12 multi-plane frame。
 - [x] RGB/RGBA→NV12 在 GPU 上完成。

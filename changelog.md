@@ -2,7 +2,7 @@
 
 ## 2026-08-22
 
-- 实现高级网络推流的第一阶段 OpenGL 备用路径：新增隐藏 WGL/EGL/GLX context、RGBA8 texture、3 槽 PBO/fence 和 Vulkan 失败后的单次熔断回退；当前通过 host-upload FFmpeg 编码，明确记录 `gpu_to_cpu=True`、`zero_copy=False`。已完成本机 OpenGL 3.3/NVIDIA 小帧提交与资源释放验证；CUDA–OpenGL interop 及 NVENC/AMF/QSV 零复制仍待后续实现。
+- 扩展高级网络推流 OpenGL 备用路径：NVIDIA 上新增 CUDA–OpenGL interop，将 CUDA RGBA tensor 映射到 OpenGL RGBA8 texture，再以 GPU device-to-device copy 返回 CUDA tensor，交给 PyNvVideoCodec/NVENC 压缩发布；实测 OpenGL 3.3/NVIDIA/CUDA roundtrip 与 640×360 NVENC 压缩包烟测通过，日志明确 `gpu_to_cpu=False zero_copy=False`。非 NVIDIA 或 interop 失败时仍自动使用 PBO/fence + host-upload，并保留单次熔断回退。严格 zero-copy 及 AMD/Intel/macOS 硬件路径仍待后续验证。
 
 - 新增 MediaMTX 端到端 Vulkan RTSP soak 工具：启动 MediaMTX 和 FFmpeg mux-only TCP 发布，验证压缩 H.264 包进入 `live` 路径；本机 3840×2160@30 连续 300 帧发布通过，未经过 4K rawvideo stdin。
 
