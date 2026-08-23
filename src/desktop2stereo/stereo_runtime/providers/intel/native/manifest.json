@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "platform": "windows-x64",
+  "capture": "d2s_desktop_duplication.dll",
+  "final_sbs_surface": "d2s_d3d11_sbs_surface.dll",
+  "encoder": "d2s_onevpl_d3d11_encoder.dll",
+  "inference": "d2s_openvino_d3d11_bridge.dll",
+  "onevpl_runtime": "libvpl.dll",
+  "remote_build": "GitHub Actions windows-2022",
+  "openvino_runtime": "Install the matching official OpenVINO Windows runtime on the target machine",
+  "intel_driver": "Required on the target machine for Desktop Duplication, GPU RemoteTensor and oneVPL hardware encoding"
+}
