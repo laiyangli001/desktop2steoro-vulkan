@@ -10,9 +10,9 @@
 
 - 根据远程 OpenVINO archive 的实际布局补充 `Release/Debug` library 搜索路径，使官方 Windows C++ package 能进入 D3D11 bridge 配置阶段。
 
-- 远程构建验证发现 Windows runtime archive 不包含 `openvino/preprocess` 开发头；GitHub workflow 改为按官方 Windows 构建流程从 OpenVINO 源码生成开发包，再编译 D3D11 RemoteTensor bridge。
+- 远程构建验证发现 bridge 使用了旧的 `openvino/preprocess` 头路径；已改为当前 `openvino/core/preprocess` 路径，并继续使用官方 Windows C++ archive 作为远程编译依赖。
 
-- OpenVINO 远程构建改用官方 `ov_dev_targets` 目标，避免为 native bridge 编译不必要的完整 runtime/样例集合。
+- OpenVINO 远程 workflow 保持 archive 下载路径，避免为 native bridge 重复构建完整 runtime；native bridge 本身仍只在 GitHub Windows runner 编译。
 
 - 对齐当前 OpenVINO C++ API 头文件布局，将 PrePostProcessor include 修正为 `openvino/core/preprocess/pre_post_process.hpp`，并同步远程开发头检查路径。
 
