@@ -203,6 +203,9 @@ class StereoRuntimeResult:
     # Optional final composed BGRA8 D3D11 texture supplied by a native
     # compositor. When present, Intel native output can import it directly.
     native_final_sbs_surface: Any | None = None
+    # Optional deferred Vulkan request used by a network sink that owns its
+    # own Vulkan image ring rather than an OpenXR presenter.
+    vulkan_compute_request: "VulkanComputeRequest | None" = None
 
 
 @dataclass(frozen=True)
@@ -1162,17 +1165,43 @@ class StereoRuntime:
         stereo_config, convergence_debug = _dynamic_convergence_config_for_depth(self, depth, self.stereo_config)
 
         synth_start = time.perf_counter()
-        vulkan_stereo, vulkan_skip = self._try_vulkan_fused_stereo(
-            output_rgb,
-            depth,
-            stereo_config,
-            skip_sbs_output=skip_sbs_output,
-        )
-        fused_sbs, fused_skip = (None, "vulkan_selected") if vulkan_stereo is not None else (
-            (None, "skip_sbs_output")
-            if skip_sbs_output
-            else self._try_fast_plus_fused_sbs(output_rgb, depth, stereo_config)
-        )
+        deferred_vulkan_request = None
+        deferred_vulkan_reason = "disabled"
+        if _intel_vulkan_network_path_enabled() and not skip_sbs_output:
+            deferred_vulkan_request, deferred_vulkan_reason = self._build_vulkan_compute_request(
+                output_rgb,
+                depth,
+                stereo_config,
+            )
+        if deferred_vulkan_request is not None:
+            vulkan_stereo = None
+            vulkan_skip = "intel_network_deferred"
+            fused_sbs = None
+            fused_skip = "intel_network_deferred"
+            stereo = StereoResult(
+                left_eye=output_rgb,
+                right_eye=output_rgb,
+                sbs=output_rgb,
+                debug_info={
+                    "backend": stereo_config.backend,
+                    "sbs_backend": "vulkan_deferred_intel_network",
+                    "stereo_compute_backend": "vulkan",
+                    "vulkan_zero_copy_deferred": 1,
+                    "vulkan_zero_copy_reason": deferred_vulkan_reason,
+                },
+            )
+        else:
+            vulkan_stereo, vulkan_skip = self._try_vulkan_fused_stereo(
+                output_rgb,
+                depth,
+                stereo_config,
+                skip_sbs_output=skip_sbs_output,
+            )
+            fused_sbs, fused_skip = (None, "vulkan_selected") if vulkan_stereo is not None else (
+                (None, "skip_sbs_output")
+                if skip_sbs_output
+                else self._try_fast_plus_fused_sbs(output_rgb, depth, stereo_config)
+            )
         if vulkan_stereo is not None:
             stereo = vulkan_stereo
             stereo.debug_info.setdefault("fast_plus_fused_backend", "not_used")
@@ -1191,6 +1220,10 @@ class StereoRuntime:
                     "hole_fill_backend": "triton_fused_directional_4tap",
                 },
             )
+        elif deferred_vulkan_request is not None:
+            # The deferred branch already created a lightweight placeholder;
+            # the Intel network sink performs the actual image dispatch.
+            pass
         else:
             stereo_config_for_frame = stereo_config
             if skip_sbs_output:
@@ -1231,6 +1264,8 @@ class StereoRuntime:
         debug["runtime_output_format"] = self.stereo_config.output_format
         debug["packing_format"] = self.stereo_config.output_format
         debug["runtime_depth_upsample"] = self.config.depth_upsample
+        debug["vulkan_zero_copy_request"] = int(deferred_vulkan_request is not None)
+        debug["vulkan_zero_copy_reason"] = str(deferred_vulkan_reason)
         debug["active_settings_version"] = int(self.active_settings_version)
         debug["hot_reload_class"] = self.last_settings_change_class
         debug["hot_reload_changed_fields"] = list(self.last_settings_changed_fields)
@@ -1333,6 +1368,7 @@ class StereoRuntime:
             provider_info=provider_info,
             cuda_ready_event=None,
             cuda_timing_events=cuda_events,
+            vulkan_compute_request=deferred_vulkan_request,
         )
 
     def process_openxr_frame(
@@ -2370,6 +2406,11 @@ def _openxr_prewarp_eyes_enabled() -> bool:
     # OpenXR uses the Presenter-owned Vulkan image path by default. The
     # environment variable remains an explicit escape hatch for diagnostics.
     return _env_flag("D2S_OPENXR_PREWARP_EYES", "1")
+
+
+def _intel_vulkan_network_path_enabled() -> bool:
+    """Return whether Intel native network output may defer stereo to Vulkan."""
+    return _env_flag("D2S_INTEL_VULKAN_SBS", "0")
 
 
 def _is_triton_stereo_compute_backend(value: object) -> bool:

@@ -16,6 +16,9 @@
 
 - Intel 网络输出新增 Vulkan eyes → D3D11 shared BGRA SBS → NV12 → oneVPL 接线；当前是无 CPU 回读的两次 GPU blit 兼容路径，明确记录 `zero_copy=False gpu_copy_count=2`，严格零拷贝融合 shader 仍待实现。
 
+- 高级网络模式在启用 Intel oneVPL final-SBS 时新增 Vulkan 延迟请求和独立图像环：StereoRuntime 不再先回读 Vulkan 眼图，Intel sink 直接 dispatch 到 D3D11-owned SBS；当前仍明确记录 `zero_copy=False gpu_copy_count=2`。
+- Intel native workflow 增加上述运行时接线文件的触发路径，后续网络桥接变更会自动进入 GitHub Windows runner 的远程构建验证。
+
 - 修正 Intel Windows native workflow 仍使用 Node.js 20 运行时的 GitHub Actions 警告：`checkout` 升级到 v5，`upload-artifact` 升级到 v6，`download-artifact` 升级到 v7；远程 C++ 编译逻辑不变。
 
 - Intel oneVPL final-SBS native 路径新增 Adapter LUID 导出与运行时一致性校验；D3D11 surface 与 oneVPL encoder 不属于同一适配器时立即拒绝该路径并回退，日志明确记录校验结果。

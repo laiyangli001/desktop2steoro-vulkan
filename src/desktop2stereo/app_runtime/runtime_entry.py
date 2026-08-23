@@ -666,6 +666,15 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
                         "falling back to FFmpeg hardware/software encoder",
                         flush=True,
                     )
+                if (
+                    isinstance(network_output, IntelD3D11DirectSbsOutput)
+                    and str(os.environ.get("D2S_ONEVPL_FINAL_SBS", "0")).strip().casefold()
+                    in {"1", "true", "yes", "on"}
+                ):
+                    # StereoRuntime defers the supported Vulkan request to the
+                    # Intel sink, which owns the Vulkan image ring and the
+                    # D3D11/oneVPL lifetime.
+                    os.environ.setdefault("D2S_INTEL_VULKAN_SBS", "1")
             else:
                 network_output = MjpegDirectSbsOutput(
                     port=int(settings.get("Streamer Port", 1122)),

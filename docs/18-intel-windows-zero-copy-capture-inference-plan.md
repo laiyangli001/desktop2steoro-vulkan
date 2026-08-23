@@ -278,6 +278,7 @@ AMD         -> WindowsCaptureROCm
 - [x] D3D11 SBS bridge 新增按 Adapter LUID 创建设备的入口，Vulkan 侧可避免默认选择错误的 DXGI 适配器；创建失败时保持回退，不跨适配器猜测。
 - [x] 从 Vulkan 设备查询并填充真实 Vulkan `VkPhysicalDeviceIDProperties.deviceLUID`；当前若驱动/绑定不提供有效 LUID，仍拒绝 D3D11/Vulkan 共享导入，不能用 PCI vendor/device 代替。真实 Intel 驱动匹配仍待真机验证。
 - [x] 网络输出接入 Vulkan eyes → D3D11-owned shared BGRA SBS → VideoProcessor NV12 → oneVPL；当前使用两次 GPU blit 组合左右眼，明确记录 `gpu_to_cpu=false zero_copy=false gpu_copy_count=2`，未将 GPU-only copy 误报为严格零拷贝。
+- [x] 高级网络模式新增 `D2S_INTEL_VULKAN_SBS` 延迟请求：`StereoRuntime` 不再为该路径先回读 Vulkan 眼图，而由 Intel sink 自有 Vulkan 图像环 dispatch 到 D3D11-owned SBS；当前仍是两次 GPU blit，并保持 `zero_copy=false gpu_copy_count=2`。
 - [ ] 将最终 SBS 原生 D3D11/Vulkan surface 接入 oneVPL/QSV，消除当前 RGB24 stdin 边界。
 - [ ] 在 Intel 真机完成 4K 长时间验证，并确认 Desktop Duplication、OpenVINO 与编码设备的 Adapter LUID 一致。
 

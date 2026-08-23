@@ -96,4 +96,124 @@ class IntelVulkanSbsComposer:
             self.surface = None
 
 
-__all__ = ["IntelVulkanSbsComposer", "IntelVulkanSbsFrame"]
+class IntelVulkanSbsRuntimeBridge:
+    """Run a deferred Vulkan stereo request for the Intel network sink.
+
+    Network mode has no OpenXR presenter that can provide image slots. This
+    bridge owns a small Vulkan image ring, dispatches the existing layered
+    image pass into those images, and then reuses :class:`IntelVulkanSbsComposer`
+    to produce the D3D11-owned final SBS texture. The bridge is deliberately
+    opt-in and reports the existing two-GPU-blit compatibility boundary.
+    """
+
+    def __init__(self, eye_width: int, eye_height: int, *, ring_size: int = 3) -> None:
+        from viewer.vulkan_context import VulkanContext, VulkanContextConfig
+        from viewer.vulkan_resources import VulkanExportableImage
+        from stereo_runtime.vulkan_backend import VulkanStereoImageComputeBackend
+
+        self.eye_width = int(eye_width)
+        self.eye_height = int(eye_height)
+        self.ring_size = max(2, int(ring_size))
+        self.context = VulkanContext.create(
+            VulkanContextConfig(frame_context_count=self.ring_size)
+        )
+        self.backend = VulkanStereoImageComputeBackend(self.context)
+        self.composer = IntelVulkanSbsComposer(
+            self.context, self.eye_width, self.eye_height
+        )
+        self.left_slots = []
+        self.right_slots = []
+        self._frame_id = 0
+        try:
+            for index in range(self.ring_size):
+                left = VulkanExportableImage(
+                    self.context,
+                    self.eye_width,
+                    self.eye_height,
+                    label=f"intel-network-vulkan-left-{index}",
+                    format=self.context.vk.VK_FORMAT_R8G8B8A8_UNORM,
+                )
+                right = VulkanExportableImage(
+                    self.context,
+                    self.eye_width,
+                    self.eye_height,
+                    label=f"intel-network-vulkan-right-{index}",
+                    format=self.context.vk.VK_FORMAT_R8G8B8A8_UNORM,
+                )
+                self.context.prepare_external_image_for_producer(left.resource)
+                self.context.prepare_external_image_for_producer(right.resource)
+                self.left_slots.append(left)
+                self.right_slots.append(right)
+        except Exception:
+            self.close()
+            raise
+
+    def submit(self, request: Any) -> IntelVulkanSbsFrame:
+        rgb = getattr(request, "rgb", None)
+        depth = getattr(request, "depth", None)
+        params = getattr(request, "params", None)
+        if rgb is None or depth is None or params is None:
+            raise ValueError("Vulkan Intel SBS request is incomplete")
+        height = int(getattr(rgb, "shape", (0, 0, 0, 0))[-2])
+        width = int(getattr(rgb, "shape", (0, 0, 0, 0))[-1])
+        if (width, height) != (self.eye_width, self.eye_height):
+            raise RuntimeError(
+                "Vulkan Intel SBS request dimensions changed: "
+                f"expected={self.eye_width}x{self.eye_height} actual={width}x{height}"
+            )
+        index = self._frame_id % self.ring_size
+        left = self.left_slots[index].resource
+        right = self.right_slots[index].resource
+        if left is None or right is None:
+            raise RuntimeError("Vulkan Intel SBS image ring is unavailable")
+        timeline, _debug = self.backend.submit_to_images(
+            rgb,
+            depth,
+            left,
+            right,
+            params=params,
+        )
+        frame = self.composer.compose(
+            left,
+            right,
+            ready_timeline=int(timeline),
+        )
+        self._frame_id += 1
+        return frame
+
+    def close(self) -> None:
+        backend = getattr(self, "backend", None)
+        if backend is not None:
+            try:
+                backend.close()
+            except Exception:
+                pass
+            self.backend = None
+        composer = getattr(self, "composer", None)
+        if composer is not None:
+            try:
+                composer.close()
+            except Exception:
+                pass
+            self.composer = None
+        for slot in (*getattr(self, "left_slots", ()), *getattr(self, "right_slots", ())):
+            try:
+                slot.close()
+            except Exception:
+                pass
+        self.left_slots = []
+        self.right_slots = []
+        context = getattr(self, "context", None)
+        if context is not None:
+            try:
+                context.close()
+            except Exception:
+                pass
+            self.context = None
+
+
+__all__ = [
+    "IntelVulkanSbsComposer",
+    "IntelVulkanSbsFrame",
+    "IntelVulkanSbsRuntimeBridge",
+]

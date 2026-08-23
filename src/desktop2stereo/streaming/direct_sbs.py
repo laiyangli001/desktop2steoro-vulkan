@@ -281,6 +281,15 @@ class DirectSbsOutputConsumer:
                     self.source_stat_inc("network_stream_frames")
                     self._report_fps_if_due()
                     continue
+                if callable(submit_vulkan_stereo) and getattr(
+                    runtime_result, "vulkan_compute_request", None
+                ) is not None:
+                    submit_vulkan_stereo(runtime_result)
+                    self._fps_submitted_frames += 1
+                    self.source_stat_inc("runtime_output_frames")
+                    self.source_stat_inc("network_stream_frames")
+                    self._report_fps_if_due()
+                    continue
                 native_surface = getattr(runtime_result, "native_final_sbs_surface", None)
                 submit_native_surface = getattr(
                     self.output, "submit_native_d3d11_surface", None
@@ -2419,6 +2428,7 @@ class IntelD3D11DirectSbsOutput(IntelQsvDirectSbsOutput):
         self._native_onevpl_pts = 0
         self._native_onevpl_active = False
         self._vulkan_sbs_composer = None
+        self._vulkan_runtime_bridge = None
 
     @staticmethod
     def _rgb_to_bgra(frame: np.ndarray) -> np.ndarray:
@@ -2518,6 +2528,10 @@ class IntelD3D11DirectSbsOutput(IntelQsvDirectSbsOutput):
             try: self._vulkan_sbs_composer.close()
             except Exception: pass
             self._vulkan_sbs_composer = None
+        if self._vulkan_runtime_bridge is not None:
+            try: self._vulkan_runtime_bridge.close()
+            except Exception: pass
+            self._vulkan_runtime_bridge = None
         self._stop_process(self._native_onevpl_mux)
         self._native_onevpl_mux = None
 
@@ -2613,6 +2627,25 @@ class IntelD3D11DirectSbsOutput(IntelQsvDirectSbsOutput):
         enabled = os.environ.get("D2S_ONEVPL_FINAL_SBS", "0").strip().casefold()
         if enabled not in {"1", "true", "yes", "on"}:
             raise RuntimeError("native final SBS surface path is disabled")
+        deferred_request = getattr(runtime_result, "vulkan_compute_request", None)
+        if deferred_request is not None:
+            from desktop2stereo.stereo_runtime.intel_vulkan_sbs import (
+                IntelVulkanSbsRuntimeBridge,
+            )
+            shape = tuple(int(value) for value in getattr(deferred_request.rgb, "shape", ()))
+            if len(shape) != 4 or shape[0] != 1 or shape[1] != 3:
+                raise RuntimeError(f"deferred Vulkan SBS request has invalid RGB shape: {shape}")
+            height, width = shape[-2:]
+            if self._vulkan_runtime_bridge is None:
+                self._vulkan_runtime_bridge = IntelVulkanSbsRuntimeBridge(width, height)
+            elif (
+                self._vulkan_runtime_bridge.eye_width != width
+                or self._vulkan_runtime_bridge.eye_height != height
+            ):
+                raise RuntimeError("deferred Vulkan SBS dimensions changed during stream")
+            frame = self._vulkan_runtime_bridge.submit(deferred_request)
+            self.submit_native_d3d11_surface(frame)
+            return
         left_eye = getattr(runtime_result, "left_eye", None)
         right_eye = getattr(runtime_result, "right_eye", None)
         context = getattr(left_eye, "context", None)

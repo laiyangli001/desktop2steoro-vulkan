@@ -413,6 +413,27 @@ def test_runtime_routes_fast_plus_to_vulkan_fused_backend(monkeypatch):
     runtime.close()
 
 
+def test_intel_network_mode_defers_supported_vulkan_stereo_request(monkeypatch):
+    monkeypatch.setenv("D2S_INTEL_VULKAN_SBS", "1")
+    config = StereoRuntimeConfig(
+        model_id="lc700x/Distill-Any-Depth-Base-hf",
+        stereo_quality="fast_plus",
+        stereo_compute_backend="vulkan",
+        output_format="half_sbs",
+        temporal=False,
+    )
+    runtime = StereoRuntime(config, depth_provider=_Provider(), collect_memory_stats=False)
+
+    result = runtime.process_rgb_frame(torch.rand(1, 3, 8, 12))
+
+    assert result.vulkan_compute_request is not None
+    assert result.vulkan_compute_request.rgb.shape == (1, 3, 8, 12)
+    assert result.vulkan_compute_request.depth.shape == (1, 1, 8, 12)
+    assert result.debug_info["vulkan_zero_copy_request"] == 1
+    assert result.debug_info["sbs_backend"] == "vulkan_deferred_intel_network"
+    runtime.close()
+
+
 @pytest.mark.parametrize(
     ("hole_fill_mode", "expected_mode", "expected_radius", "expected_strength", "expected_backend"),
     (

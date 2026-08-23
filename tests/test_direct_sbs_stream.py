@@ -94,6 +94,30 @@ def test_direct_consumer_submits_latest_sbs_frame():
     assert "network_stream_frames" in stats
 
 
+def test_direct_consumer_routes_deferred_vulkan_request_to_native_sink():
+    runtime_q = queue.Queue()
+    shutdown = threading.Event()
+    submitted = []
+
+    class Output:
+        def submit_vulkan_stereo_frame(self, runtime_result):
+            submitted.append(runtime_result.vulkan_compute_request)
+            shutdown.set()
+
+    request = object()
+    runtime_q.put((SimpleNamespace(vulkan_compute_request=request), 1.0))
+    consumer = DirectSbsOutputConsumer(
+        runtime_q=runtime_q,
+        shutdown_event=shutdown,
+        output=Output(),
+        source_stat_inc=lambda *args, **kwargs: None,
+    )
+
+    consumer.run()
+
+    assert submitted == [request]
+
+
 def test_direct_consumer_drops_frame_before_conversion_when_not_due():
     runtime_q = queue.Queue()
     shutdown = threading.Event()
