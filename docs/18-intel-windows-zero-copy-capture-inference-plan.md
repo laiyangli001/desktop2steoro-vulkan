@@ -282,12 +282,16 @@ AMD         -> WindowsCaptureROCm
 - [x] packed SBS shader 接入 Vulkan image pass：在 `packed_output` 模式下直接写入 D3D11 导入的 SBS 图像，不再经过左右眼中间图像和 blit；远程 SPIR-V 编译完成后，最终 SBS 边界记录 `vulkan_sbs_gpu_copy_count=0`。
 - [x] 将高级 Vulkan 网络路径的最终 SBS 原生 D3D11/Vulkan surface 接入 oneVPL/QSV，消除该路径的 RGB24 stdin 边界；普通 CPU/RGB 路径仍保留兼容上传。
 - [ ] 在 Intel 真机完成 4K 长时间验证，并确认 Desktop Duplication、OpenVINO 与编码设备的 Adapter LUID 一致。
+- [x] 新增 `intel_native_hardware_smoke.py`，在 Intel Windows 目标机上按帧验证同一 Desktop Duplication D3D11 纹理、OpenVINO D3D11 provider、VideoProcessor NV12 和 oneVPL 的 Adapter LUID/生命周期；`--frames 1800` 可执行约 30 分钟长跑。
 
 目标机诊断命令：
 
 ```powershell
 src\python3\python.exe src\tools\intel_native_runtime_probe.py
 src\python3\python.exe src\tools\intel_native_runtime_probe.py --strict
+src\python3\python.exe src\tools\intel_native_hardware_smoke.py --model path\to\depth.xml --frames 1
+# 约 30 分钟的 60 FPS 长跑：
+src\python3\python.exe src\tools\intel_native_hardware_smoke.py --model path\to\depth.xml --frames 1800 --fps 60
 ```
 
 默认模式用于收集 JSON 能力报告；`--strict` 只有在 Windows Intel 驱动、OpenVINO runtime、oneVPL 和四个发布 DLL 都可用时才返回成功。
