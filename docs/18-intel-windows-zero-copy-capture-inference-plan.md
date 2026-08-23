@@ -262,15 +262,15 @@ AMD         -> WindowsCaptureROCm
 - [x] Desktop Duplication C ABI 暴露同一捕捉适配器的 `ID3D11Device`，provider 创建默认复用该 device，并通过 DXGI Adapter LUID 拒绝跨适配器推理。
 - [x] 新增 `infer_native_frame()` 生命周期封装，provider 异常时也会释放借用的 Desktop Duplication frame。
 - [x] 新增同帧 `copy_frame` readback C ABI；原生 Desktop Duplication monitor 路径在同一借用帧内完成推理和兼容 BGR 输出，GitHub workflow 校验该导出符号。
-- [ ] 在可用 OpenVINO SDK/编译器环境中构建并验证原生桥 DLL 与输出 surface。
+- [x] 通过 GitHub-hosted Windows runner 使用官方 OpenVINO Windows C++ archive 构建并验证原生 bridge DLL；输出 surface ABI 已完成导出校验，真实设备运行仍待验证。
 - [x] 将原生 `ID3D11Texture2D` 接入 OpenVINO RemoteTensor 的代码链路；仍需在真实 DLL/Intel 驱动环境验证。
 - [x] 接入可选 FFmpeg D3D11/QSV Surface upload 边界；仍需将 OpenVINO/Vulkan 原生输出在真实环境交给 oneVPL/QSV。
-- [x] 新增可选 `native/onevpl_d3d11_encoder` bridge 和 Python 能力探测/Surface 提交 API；仍需使用 oneVPL SDK 编译并在 Intel 真机验证。
-- [x] 新增 `native/d3d11_sbs_surface` 最终 SBS BGRA8→NV12 bridge、Python surface owner 和 oneVPL final-SBS 输出接线；GitHub workflow 已配置远程编译，oneVPL 真实 SDK/硬件编码仍待 CI artifact 和 Intel 真机验证。
+- [x] 新增可选 `native/onevpl_d3d11_encoder` bridge 和 Python 能力探测/Surface 提交 API；已由 GitHub Actions 使用官方 oneVPL dispatcher 远程编译并完成导出/链接校验，Intel 真机仍待验证。
+- [x] 新增 `native/d3d11_sbs_surface` 最终 SBS BGRA8→NV12 bridge、Python surface owner 和 oneVPL final-SBS 输出接线；已由 GitHub Actions 远程编译，真实 oneVPL 硬件编码仍待 Intel 真机验证。
 - [ ] 将最终 SBS 原生 D3D11/Vulkan surface 接入 oneVPL/QSV，消除当前 RGB24 stdin 边界。
 - [ ] 在 Intel 真机完成 4K 长时间验证，并确认 Desktop Duplication、OpenVINO 与编码设备的 Adapter LUID 一致。
 
-新增 `.github/workflows/intel-windows-native.yml`，以后以 GitHub-hosted `windows-2022` runner 作为 C++ 编译依据：workflow 从官方 `oneapi-src/oneVPL` 拉取 dispatcher，编译 Desktop Duplication、D3D11 SBS surface 和 oneVPL bridge，并上传 DLL artifact；workflow 还使用 `dumpbin` 验证 C ABI 导出，并确认 oneVPL bridge 确实链接远程构建的 `libvpl.dll`。本地不再作为 native C++ 编译验证环境；当前 oneVPL Intel GPU runtime 和真机编码仍需在 CI artifact 下载后于目标 Intel 机器验证。当前仍缺少 OpenVINO SDK，因此 `d2s_openvino_d3d11_bridge.dll` 尚未编译，oneVPL bridge 也尚未用真实 SDK 编译。Python 侧已能探测 `D2S_OPENVINO_D3D11_DLL` 或仓库候选路径；只有 DLL 可加载且导出 ABI 完整时才会报告 `directx_remote_tensor=True`。本轮新增 Intel surface/oneVPL/QSV 及同帧 readback 回归测试；全量 Python 测试 `1200 passed`，尚未进行 GitHub Actions 远程 native 构建、oneVPL Intel 真机编码和 OpenVINO SDK 验证。仓库中未发现 `docs/00-api-handoff-progress.md`，因此未修改不存在的交接文档。
+新增 `.github/workflows/intel-windows-native.yml`，以 GitHub-hosted `windows-2022` runner 作为 C++ 编译依据：workflow 从官方 `oneapi-src/oneVPL`、OpenVINO Windows C++ archive、Khronos OpenCL-Headers/CLHPP/ICD-Loader 拉取依赖，编译 Desktop Duplication、D3D11 SBS surface、oneVPL 和 OpenVINO bridge，并上传 DLL artifact。workflow run `32644145650` 已成功完成全部配置、编译、DLL C ABI 导出及 oneVPL `libvpl.dll` 链接校验；本地不作为 native C++ 编译验证环境。Python 侧已能探测 `D2S_OPENVINO_D3D11_DLL` 或仓库候选路径；只有 DLL 可加载且导出 ABI 完整时才会报告 `directx_remote_tensor=True`。本轮新增 Intel surface/oneVPL/QSV 及同帧 readback 回归测试；全量 Python 测试此前为 `1202 passed`。当前剩余工作是下载 artifact 到 Intel 目标机完成驱动、OpenVINO GPU RemoteTensor、oneVPL 硬件编码、Adapter LUID、4K 长时间和最终 SBS 原生 surface 验证。仓库中未发现 `docs/00-api-handoff-progress.md`，因此未修改不存在的交接文档。
 
 ## 9. 交付文件
 
