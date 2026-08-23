@@ -160,6 +160,19 @@ multi-plane external-memory CUDA 映射，再切换到 CUDA 直接写入路径�
 
 高级推流不直接变成 PyNvVideoCodec 模式。Vulkan 是高级推流中的跨厂商 GPU 路径；GPU 推流继续保留厂商专用 API 和独立诊断信息。两种模式共享网络会话配置、MediaMTX/音频复用、编码包发布、生命周期回收和 WebRTC 自动校准控制器；只有视频编码器选择、GPU 帧输入契约和回退顺序保持不同。
 
+Intel Windows 的高级网络推流已完成原生 GPU 共享路径：
+
+```text
+Vulkan packed SBS image pass
+    -> D3D11-owned shared BGRA8 texture
+    -> Vulkan/D3D11 Adapter LUID 校验与 producer 同步
+    -> D3D11 VideoProcessor BGRA8 -> NV12
+    -> oneVPL/QSV D3D11 surface
+    -> H.264/H.265 -> MediaMTX/WebRTC
+```
+
+该路径不经过 CPU RGB stdin，也不再经过左右眼中间图像 blit；运行时使用同一 D3D11 设备和 Adapter LUID，并记录 `gpu_to_cpu=False`、`gpu_copy_count=0`、`zero_copy=True`。如果 Vulkan/D3D11 句柄、同步、格式、LUID、oneVPL 或驱动能力探测失败，只允许熔断到 Intel QSV/D3D11 或 CPU host-upload，并记录真实回退边界。Desktop Duplication 到 OpenVINO 的 GPU 纹理输入也已接通；当前深度结果 ABI 仍是 CPU 张量，因此 `native_depth_input_zero_copy=True` 与 `native_depth_zero_copy=False` 必须分开记录。
+
 推荐回退顺序：
 
 ```text
@@ -167,6 +180,7 @@ multi-plane external-memory CUDA 映射，再切换到 CUDA 直接写入路径�
 ├─ Windows/Linux：h264_vulkan / hevc_vulkan
 ├─ OpenGL GPU fallback：CUDA–OpenGL → NVENC；PBO → 厂商/CPU
 ├─ Windows：NVENC → QSV → AMF
+├─ Windows + Intel：Vulkan packed SBS → D3D11 shared BGRA/NV12 → oneVPL/QSV
 ├─ Linux：QSV → VAAPI
 ├─ macOS：VideoToolbox
 └─ libx264 / libx265
@@ -189,7 +203,7 @@ OpenGL headless context（WGL/EGL/GLX）
 RGBA texture/FBO + 3 槽 PBO/fence
     ├─ NVIDIA：CUDA–OpenGL interop → NVENC/PyNvVideoCodec
     ├─ AMD：HIP–OpenGL interop → AMF；失败时 PBO/FFmpeg
-    ├─ Intel：OpenGL 能力探测 → CPU RGB → FFmpeg QSV/VAAPI
+    ├─ Intel：Vulkan packed SBS → D3D11 VideoProcessor → oneVPL/QSV；失败时 CPU RGB → QSV/VAAPI
     └─ 无 GPU interop：OpenGL 能力探测通过 → 现有 host-upload FFmpeg
     ↓
 压缩 H.264/H.265 → FFmpeg mux-only → MediaMTX/WebRTC
@@ -205,7 +219,7 @@ OpenGL 路径的能力探测必须验证实际 context、纹理格式、PBO/fenc
 | Linux + NVIDIA | CUDA external memory/semaphore FD | 支持时启用 | EGL/GLX + CUDA interop → NVENC | 第二阶段 |
 | Windows + AMD | HIP/Vulkan 或 Vulkan Compute | 驱动支持时启用 | HIP–OpenGL interop → AMF；失败时 PBO/host | 保留 AMF 回退 |
 | Linux + AMD | ROCm/Vulkan 或 Vulkan Compute | 驱动支持时启用 | EGL/PBO → VAAPI/AMF | 保留 VAAPI 回退 |
-| Windows/Linux + Intel | Vulkan Compute/Vulkan image | 驱动支持时启用 | OpenGL 能力探测 → CPU RGB → QSV/VAAPI | 保留 QSV/VAAPI 回退 |
+| Windows/Linux + Intel | Vulkan Compute/Vulkan image；Windows packed SBS → D3D11 shared BGRA | Windows oneVPL/QSV 已接入，Linux 按 VAAPI/QSV 能力探测 | Vulkan/D3D11 native path；失败时 CPU RGB → QSV/VAAPI | Intel 原生 GPU 路径优先，保留 QSV/VAAPI 回退 |
 | macOS | 不作为通用 Vulkan Video 目标 | 不强制 | OpenGL 能力探测 → CPU RGB → VideoToolbox | 使用 VideoToolbox |
 
 不能只检查显卡名称。运行时必须查询 Vulkan 扩展、视频队列、编码 Profile 和输入格式。
@@ -994,7 +1008,8 @@ GUI 检查校准指纹
 
 - NVIDIA PyNvVideoCodec Python API 不能直接接收 OpenGL `cudaArray_t`，OpenGL fallback 可能记录 `gpu_to_cpu=False` 但 `zero_copy=False`。
 - 当前 RTX 3090 Vulkan 驱动对编码 NV12 `STORAGE_IMAGE` 能力不满足，native Vulkan 选择固定槽位 device-local copy；该路径不下载 CPU，但不是严格 zero-copy。
-- Intel/macOS 和无 CUDA/HIP interop 平台必须明确进入 host-upload 或平台原生硬件路径。
+- Intel Windows 已完成 Vulkan packed SBS → D3D11 shared BGRA → VideoProcessor NV12 → oneVPL/QSV 原生路径；能力和 LUID 验证通过时记录 `gpu_to_cpu=False gpu_copy_count=0 zero_copy=True`，失败时回退 QSV/VAAPI 或 host-upload。
+- macOS 和无可用 GPU interop 的平台仍必须明确进入平台原生硬件路径或 host-upload，不能套用 Intel Windows 的 D3D11 契约。
 
 ### 9. 可观测性与故障分类
 
@@ -1064,6 +1079,8 @@ GUI 检查校准指纹
 - [x] 正常路径没有 CPU 原始帧下载（运行日志 `gpu_to_cpu=False`）。
 - [x] 使用 ready/release semaphore 管理槽位。
 - [x] 没有逐帧 device-wide synchronize；RGB→NV12 转换使用按 NV12 输出槽分配的 command/fence 环，只有同一槽再次复用时等待该槽 fence。
+- [x] Intel Windows Vulkan packed SBS 直接写入 D3D11-owned BGRA8，并通过 VideoProcessor/oneVPL 消费同一适配器资源；不经过 CPU RGB stdin。
+- [x] Intel Windows 校验 Vulkan/D3D11/oneVPL Adapter LUID、共享句柄、producer 同步和资源生命周期；失败时只回退一次并记录真实后端。
 
 ### 编码与发布
 
@@ -1073,6 +1090,7 @@ GUI 检查校准指纹
 - [x] RTSP 本机发布使用稳定传输设置（TCP、`pkt_size=1452`）。
 - [x] MediaMTX 输出 WebRTC H.264 + Opus（本机 MediaMTX 日志确认 `2 tracks (H264, Opus)`）。
 - [x] 音频短暂异常不会终止视频；SoundCard/WASAPI 捕获线程异常后持续发送静音 PCM，视频 mux/编码链路继续运行。
+- [x] Intel Windows native final-SBS surface 进入 oneVPL/QSV 并发布到 MediaMTX/WebRTC；日志区分 `native_depth_input_zero_copy` 与 `native_depth_zero_copy`，不把 CPU 深度输出误报为完整推理零拷贝。
 
 ### 回退与闭环
 

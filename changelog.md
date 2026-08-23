@@ -1314,3 +1314,4 @@
 
 - 统一 GitHub Actions 的 `download-artifact` 到 `v7`，消除遗留 Node.js 20 action 在 Node.js 24 runner 上的弃用警告。
 - 同步将 Filament workflow 的 `actions/cache` 升级到 `v5`；该版本使用 Node.js 24。
+- 更新网络推流规格书中的 Intel 部分：标记 Vulkan packed SBS → D3D11 shared BGRA → VideoProcessor NV12 → oneVPL/QSV 原生路径已完成，并补充 LUID、同步、回退和深度输出边界。
