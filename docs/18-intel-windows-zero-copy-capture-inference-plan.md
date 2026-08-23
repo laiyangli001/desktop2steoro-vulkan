@@ -259,7 +259,7 @@ AMD         -> WindowsCaptureROCm
 - [x] 原生桥不可用时明确回退到 DXCamera，并保持 `gpu_to_cpu=True zero_copy=False`。
 - [x] Desktop Duplication 探针合并捕捉能力、OpenVINO RemoteTensor 能力、`native_inference_zero_copy_ready`、端到端 `zero_copy_ready` 和回退原因日志，避免把 staging readback 误报为零拷贝。
 - [x] 实现 D3D11 VideoProcessor 的 BGRA8→NV12 GPU 转换器、NV12 RemoteTensor 接线，以及输出 shape/float buffer ABI。
-- [x] 暴露 bridge 内部借用的 NV12 D3D11 surface 契约，供后续 oneVPL/QSV 复用；直接编码提交仍需 native encoder 实现和实机验证。
+- [x] 暴露 bridge 内部借用的 NV12 D3D11 surface 契约，并由 native oneVPL encoder 复用；真实硬件编码仍需 Intel 真机验证。
 - [x] 新增 `OpenVINOD3D11DepthProvider` 适配器，将原生输出转换为现有 `DepthProfileResult`，并在桥接能力不完整时拒绝初始化。
 - [x] Desktop Duplication C ABI 暴露同一捕捉适配器的 `ID3D11Device`，provider 创建默认复用该 device，并通过 DXGI Adapter LUID 拒绝跨适配器推理。
 - [x] 新增 `infer_native_frame()` 生命周期封装，provider 异常时也会释放借用的 Desktop Duplication frame。
@@ -270,15 +270,15 @@ AMD         -> WindowsCaptureROCm
 - [x] 新增可选 `native/onevpl_d3d11_encoder` bridge 和 Python 能力探测/Surface 提交 API；已由 GitHub Actions 使用官方 oneVPL dispatcher 远程编译并完成导出/链接校验，Intel 真机仍待验证。
 - [x] oneVPL final-SBS 路径增加 Adapter LUID C ABI、ctypes 读取和启动期一致性门；GitHub Actions 已验证新增导出，真实 Intel 设备仍待运行时验证。
 - [x] 新增 `native/d3d11_sbs_surface` 最终 SBS BGRA8→NV12 bridge、Python surface owner 和 oneVPL final-SBS 输出接线；已由 GitHub Actions 远程编译，真实 oneVPL 硬件编码仍待 Intel 真机验证。
-- [x] 新增外部 D3D11 BGRA8 texture 导入、同 device 创建和 Adapter LUID/格式/尺寸校验；GitHub Actions 需要继续验证新增 C ABI，立体合成器实际 surface 传递仍未完成。
+- [x] 新增外部 D3D11 BGRA8 texture 导入、同 device 创建和 Adapter LUID/格式/尺寸校验；packed Vulkan image pass 已实际传递该 surface，真实设备仍待验证。
 - [x] 建立 Vulkan→D3D11 公共外部资源 contract：统一描述 Win32 memory handle、handle type、格式、尺寸、分配大小、producer-ready semaphore/timeline 和 Adapter LUID；缺少任一关键条件时明确拒绝报告为零拷贝。
 - [x] 明确 Win32 句柄方向：Vulkan 当前 `OPAQUE_WIN32` 导出句柄不能直接交给 `ID3D11Device1::OpenSharedResource1`；可行的 D3D11/Vulkan 共享方向是由 D3D11 创建带 NT shared handle 的纹理，Vulkan 以 `D3D11_TEXTURE` handle type 导入，随后再由 D3D11/oneVPL 消费同一资源。
-- [x] D3D11 SBS bridge 的自有 BGRA surface 已改为 `D3D11_RESOURCE_MISC_SHARED_NTHANDLE`，并暴露 `IDXGIResource1::CreateSharedHandle` C ABI；Vulkan 导入器仍需实现 `D3D11_TEXTURE` memory import 和 producer-ready 同步。
-- [x] Vulkan Python 侧新增 `VulkanD3D11ImportedImage`：使用 dedicated allocation 和 `VkImportMemoryWin32HandleInfoKHR` 以 `D3D11_TEXTURE` 类型导入共享 BGRA8，并在导入前强制校验 Vulkan/D3D11 Adapter LUID；仍需 GitHub 远程编译及 Intel 真机验证。
+- [x] D3D11 SBS bridge 的自有 BGRA surface 已改为 `D3D11_RESOURCE_MISC_SHARED_NTHANDLE`，并暴露 `IDXGIResource1::CreateSharedHandle` C ABI；Vulkan 导入器已实现 `D3D11_TEXTURE` memory import 和 producer-ready preparation。
+- [x] Vulkan Python 侧新增 `VulkanD3D11ImportedImage`：使用 dedicated allocation 和 `VkImportMemoryWin32HandleInfoKHR` 以 `D3D11_TEXTURE` 类型导入共享 BGRA8，并在导入前强制校验 Vulkan/D3D11 Adapter LUID；GitHub 远程编译已验证，仍需 Intel 真机验证。
 - [x] D3D11 SBS bridge 新增按 Adapter LUID 创建设备的入口，Vulkan 侧可避免默认选择错误的 DXGI 适配器；创建失败时保持回退，不跨适配器猜测。
 - [x] 从 Vulkan 设备查询并填充真实 Vulkan `VkPhysicalDeviceIDProperties.deviceLUID`；当前若驱动/绑定不提供有效 LUID，仍拒绝 D3D11/Vulkan 共享导入，不能用 PCI vendor/device 代替。真实 Intel 驱动匹配仍待真机验证。
 - [x] 网络输出接入 Vulkan eyes → D3D11-owned shared BGRA SBS → VideoProcessor NV12 → oneVPL；保留旧左右眼 blit 兼容路径，并明确记录 `gpu_to_cpu=false zero_copy=false gpu_copy_count=2`。
-- [x] 高级网络模式新增 `D2S_INTEL_VULKAN_SBS` 延迟请求：`StereoRuntime` 不再为该路径先回读 Vulkan 眼图，而由 Intel sink 自有 Vulkan 图像环 dispatch 到 D3D11-owned SBS；当前仍是两次 GPU blit，并保持 `zero_copy=false gpu_copy_count=2`。
+- [x] 高级网络模式新增 `D2S_INTEL_VULKAN_SBS` 延迟请求：`StereoRuntime` 不再为该路径先回读 Vulkan 眼图；旧 composer 保留两次 GPU blit 兼容路径，新 packed shader 路径直接写 D3D11-owned SBS。
 - [x] packed SBS shader 接入 Vulkan image pass：在 `packed_output` 模式下直接写入 D3D11 导入的 SBS 图像，不再经过左右眼中间图像和 blit；远程 SPIR-V 编译完成后，最终 SBS 边界记录 `vulkan_sbs_gpu_copy_count=0`。
 - [x] 将高级 Vulkan 网络路径的最终 SBS 原生 D3D11/Vulkan surface 接入 oneVPL/QSV，消除该路径的 RGB24 stdin 边界；普通 CPU/RGB 路径仍保留兼容上传。
 - [ ] 在 Intel 真机完成 4K 长时间验证，并确认 Desktop Duplication、OpenVINO 与编码设备的 Adapter LUID 一致。
