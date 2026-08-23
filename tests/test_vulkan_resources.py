@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from viewer.vulkan_resources import (
@@ -128,6 +130,7 @@ def test_external_memory_contract_rejects_opaque_win32_for_d3d11_texture_import(
     )
 
 
+@pytest.mark.skipif(os.name != "nt", reason="D3D11/Vulkan shared import is Windows-only")
 def test_d3d11_vulkan_import_requires_a_verified_vulkan_adapter_luid():
     with pytest.raises(RuntimeError, match="Vulkan adapter LUID is unavailable"):
         VulkanD3D11ImportedImage(
