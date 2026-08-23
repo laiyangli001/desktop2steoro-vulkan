@@ -25,7 +25,10 @@ def resolve_capture_tool(raw_value, os_name=OS_NAME):
                 return "DXCamera"
         except Exception:
             pass
-        return "DXCamera"
+        # Desktop Duplication is the generic Windows GPU capture fallback.
+        # Its backend owns the DXCamera compatibility fallback if DXGI or the
+        # optional native bridge is unavailable.
+        return "DesktopDuplication"
     if os_name == "Darwin":
         return "ScreenCaptureKit"
     return "DXCamera"

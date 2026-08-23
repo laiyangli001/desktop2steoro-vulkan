@@ -17,7 +17,7 @@ def get_default_windows_capture_tool():
         return "WindowsCaptureCUDA"
     if "CUDA" in device_name and devices_module.IS_ROCM:
         return "WindowsCaptureROCm"
-    return "DXCamera"
+    return "DesktopDuplication"
 
 
 def get_primary_monitor_index():
