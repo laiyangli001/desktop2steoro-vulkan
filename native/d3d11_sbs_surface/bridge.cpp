@@ -63,7 +63,7 @@ bool initialize(State& state, int width, int height, int adapter_index,
     HRESULT status = S_OK;
     if (existing_device) {
         state.device = existing_device;
-        state.device.As(&state.context);
+        state.device->GetImmediateContext(&state.context);
         if (!state.context) {
             set_error("existing D3D11 device has no immediate context");
             return false;

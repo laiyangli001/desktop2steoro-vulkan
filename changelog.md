@@ -8,6 +8,8 @@
 
 - 补充最终 SBS 外部 D3D11 BGRA8 texture 导入契约：surface bridge 可从调用方 D3D11 device 创建，并校验外部纹理的设备、格式、尺寸和 Adapter LUID；Intel oneVPL 输出消费者新增 `native_final_sbs_surface` 入口，满足契约时记录 `gpu_to_cpu=False zero_copy=True gpu_copy_count=0`，否则继续使用原有 RGB 上传回退。
 
+- 修正外部 D3D11 device 创建 surface 时的 immediate context 获取方式：改用 `ID3D11Device::GetImmediateContext`，避免把不存在的 COM QueryInterface 当作 context 来源。
+
 - Desktop Duplication 捕捉链改为优先使用同一份借用 D3D11 帧：原生纹理在保持 `AcquireNextFrame` 生命周期期间同时交给 OpenVINO 推理，并通过受控 staging readback 生成兼容 BGR 帧，避免此前“兼容捕捉一次、原生推理再捕捉一次”的不同帧问题。该阶段仍明确为 `gpu_to_cpu=True`、`zero_copy=False`、`gpu_copy_count=1`；新增 readback C ABI 的导出检查，C++ 编译继续只由 GitHub Actions 远程 workflow 负责。
 
 - 修正 OpenVINO/D3D11 ctypes 与 C ABI 的真实运行时契约：`last_error` 使用两参数签名，`set_texture` 正确识别返回值 `1` 为成功，并增加对应回归测试。
