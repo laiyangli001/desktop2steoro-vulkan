@@ -2460,6 +2460,13 @@ class IntelD3D11DirectSbsOutput(IntelQsvDirectSbsOutput):
             bitrate=target_mbps * 1_000_000,
             d3d11_device=self._native_surface.device, hevc=self.use_hevc,
         )
+        surface_luid = int(self._native_surface.adapter_luid)
+        encoder_luid = int(self._native_onevpl_encoder.adapter_luid)
+        if not surface_luid or not encoder_luid or surface_luid != encoder_luid:
+            raise RuntimeError(
+                "Intel D3D11 surface and oneVPL encoder Adapter LUID mismatch: "
+                f"surface={surface_luid} encoder={encoder_luid}"
+            )
         self._start_native_onevpl_mux()
         self._native_onevpl_pts = 0
         self._native_onevpl_active = True
@@ -2467,6 +2474,7 @@ class IntelD3D11DirectSbsOutput(IntelQsvDirectSbsOutput):
         print(
             f"[IntelStream] native final SBS path active: RGB8 -> D3D11 BGRA8 "
             f"-> NV12 -> oneVPL -> MediaMTX; adapter_luid={self._native_surface.adapter_luid} "
+            "encoder_adapter_luid_verified=True "
             "gpu_to_cpu=True zero_copy=False gpu_copy_count=1", flush=True,
         )
 

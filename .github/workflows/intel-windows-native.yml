@@ -159,6 +159,7 @@ jobs:
             )
             "native/onevpl_d3d11_encoder/build/ci/Release/d2s_onevpl_d3d11_encoder.dll" = @(
             "d2s_onevpl_d3d11_probe",
+            "d2s_onevpl_d3d11_adapter_luid",
             "d2s_onevpl_d3d11_submit_nv12",
             "d2s_onevpl_d3d11_read_packet"
             )

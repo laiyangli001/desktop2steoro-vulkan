@@ -172,6 +172,12 @@ extern "C" D2S_ONEVPL_API void* d2s_onevpl_d3d11_create(
 #endif
 }
 
+extern "C" D2S_ONEVPL_API unsigned long long d2s_onevpl_d3d11_adapter_luid(
+    void* handle) {
+    auto* state = static_cast<State*>(handle);
+    return state ? state->adapter_luid : 0;
+}
+
 extern "C" D2S_ONEVPL_API int d2s_onevpl_d3d11_submit_nv12(
     void* handle, void* nv12_texture, long long timestamp) {
 #ifndef D2S_ONEVPL_SDK

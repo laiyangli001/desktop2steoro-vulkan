@@ -17,6 +17,7 @@ D2S_ONEVPL_API int d2s_onevpl_d3d11_last_error(char* output, int capacity);
 // an NV12 ID3D11Texture2D created by the same adapter as the device.
 D2S_ONEVPL_API void* d2s_onevpl_d3d11_create(
     int width, int height, int fps, int bitrate, int hevc, void* d3d11_device);
+D2S_ONEVPL_API unsigned long long d2s_onevpl_d3d11_adapter_luid(void* handle);
 D2S_ONEVPL_API int d2s_onevpl_d3d11_submit_nv12(
     void* handle, void* nv12_texture, long long timestamp);
 D2S_ONEVPL_API int d2s_onevpl_d3d11_read_packet(

@@ -42,6 +42,7 @@ def _load_bridge():
             "d2s_onevpl_d3d11_probe",
             "d2s_onevpl_d3d11_last_error",
             "d2s_onevpl_d3d11_create",
+            "d2s_onevpl_d3d11_adapter_luid",
             "d2s_onevpl_d3d11_submit_nv12",
             "d2s_onevpl_d3d11_read_packet",
             "d2s_onevpl_d3d11_destroy",
@@ -61,6 +62,8 @@ def _load_bridge():
             ctypes.c_void_p,
         ]
         library.d2s_onevpl_d3d11_create.restype = ctypes.c_void_p
+        library.d2s_onevpl_d3d11_adapter_luid.argtypes = [ctypes.c_void_p]
+        library.d2s_onevpl_d3d11_adapter_luid.restype = ctypes.c_ulonglong
         library.d2s_onevpl_d3d11_submit_nv12.argtypes = [
             ctypes.c_void_p,
             ctypes.c_void_p,
@@ -145,6 +148,10 @@ class OneVPLD3D11SurfaceEncoder:
         )
         if result != 1:
             raise RuntimeError(_last_error(self._library))
+
+    @property
+    def adapter_luid(self) -> int:
+        return int(self._library.d2s_onevpl_d3d11_adapter_luid(self._handle))
 
     def read_packet(self, capacity: int = 4 * 1024 * 1024) -> bytes | None:
         output = ctypes.create_string_buffer(int(capacity))
