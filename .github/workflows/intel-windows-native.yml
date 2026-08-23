@@ -311,4 +311,10 @@ jobs:
             exit 0
           fi
           git commit -m "build: update Intel native runtime binaries"
+          # The source push that triggered this workflow may be followed by
+          # another documentation/test commit while Windows compilation runs.
+          # Rebase the generated binary commit before pushing so a successful
+          # remote build is not lost to a non-fast-forward race.
+          git fetch origin main
+          git rebase origin/main
           git push origin HEAD:main

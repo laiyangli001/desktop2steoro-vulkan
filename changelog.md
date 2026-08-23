@@ -20,6 +20,7 @@
 - Intel native workflow 增加上述运行时接线文件的触发路径，后续网络桥接变更会自动进入 GitHub Windows runner 的远程构建验证。
 - 增加 Vulkan 延迟 SBS 桥的能力失败回退：初始化、尺寸或提交失败时关闭可选桥、记录原因并恢复常规 Intel QSV/D3D11 输出，不再让网络输出线程退出。
 - 将 D3D11/Vulkan 共享导入回归测试限定在 Windows；Linux 合规 runner 不再把平台保护错误误判为 Adapter LUID 回归。
+- 修正 Intel native workflow 的 artifact 提交竞态：Windows 编译期间若 `main` 有新提交，二进制 job 会先 rebase 再推送。
 
 - 修正 Intel Windows native workflow 仍使用 Node.js 20 运行时的 GitHub Actions 警告：`checkout` 升级到 v5，`upload-artifact` 升级到 v6，`download-artifact` 升级到 v7；远程 C++ 编译逻辑不变。
 
