@@ -18,6 +18,7 @@ find_library(D2S_OPENVINO_LIBRARY NAMES openvino
     PATHS "${D2S_OPENVINO_ROOT}/lib"
           "${D2S_OPENVINO_ROOT}/lib/intel64"
           "${D2S_OPENVINO_ROOT}/runtime/lib/intel64"
+    PATH_SUFFIXES Release Debug
     NO_DEFAULT_PATH REQUIRED)
 
 add_library(d2s_openvino_d3d11_bridge SHARED bridge.cpp)

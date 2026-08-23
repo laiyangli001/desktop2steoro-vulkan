@@ -8,6 +8,8 @@
 
 - GitHub Windows native workflow 修正 oneVPL 安装前缀的 PowerShell 参数传递，避免远程 dispatcher 已成功编译却因检查错误路径而提前失败。
 
+- 根据远程 OpenVINO archive 的实际布局补充 `Release/Debug` library 搜索路径，使官方 Windows C++ package 能进入 D3D11 bridge 配置阶段。
+
 - 新增 Intel Windows 零拷贝捕捉—推理计划书 `docs/18-intel-windows-zero-copy-capture-inference-plan.md`；GUI 捕捉源加入 `DesktopDuplication` 选项，并新增 DXGI/D3D11 原生桥 C ABI、CMake 工程、ctypes 能力探测、原生纹理借用帧契约和 OpenVINO RemoteTensor 能力层。启用 `D2S_INTEL_NATIVE_OPENVINO=1` 且原生 DLL/模型可用时，原生 D3D11 帧进入 OpenVINO provider；现阶段输出仍回读 CPU，因此明确记录 `zero_copy=False`。Desktop Duplication 遇到 `DXGI_ERROR_ACCESS_LOST` 时会重建输出并自动重试一次。
 
 - OpenVINO Intel 路径新增可选 `native/openvino_d3d11_bridge` C ABI/CMake 工程、D3D11 VideoProcessor 的 BGRA8→NV12 GPU 转换、NV12 RemoteTensor 接线、输出 shape/float buffer ABI，以及 `OpenVINOD3D11DepthProvider` 适配器；Desktop Duplication 暴露同一 D3D11 device 供 provider 复用，新增 DXGI Adapter LUID 校验、原生帧异常安全释放、运行时调试字段和借用 NV12 D3D11 surface 导出契约。OpenVINO SDK 尚未安装，因此该 DLL 尚未编译；直接 oneVPL/QSV 真机提交仍待验证。
