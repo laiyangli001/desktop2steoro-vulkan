@@ -85,11 +85,12 @@ bool initialize_video_processor(State& state, int width, int height) {
     state.output_view.Reset();
     state.nv12_texture.Reset();
 
-    HRESULT status = state.device->GetImmediateContext(&state.device_context);
-    if (FAILED(status)) {
-        set_hresult_error("ID3D11Device::GetImmediateContext", status);
+    state.device->GetImmediateContext(&state.device_context);
+    if (!state.device_context) {
+        set_error("ID3D11Device::GetImmediateContext returned no context");
         return false;
     }
+    HRESULT status = S_OK;
     status = state.device.As(&state.video_device);
     if (FAILED(status)) {
         set_hresult_error("ID3D11Device::QueryInterface(ID3D11VideoDevice)", status);
