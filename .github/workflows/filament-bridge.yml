@@ -177,19 +177,19 @@ jobs:
           ref: ${{ github.sha }}
 
       - name: Download Windows bridge
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: filament-bridge-windows-latest
           path: src/desktop2stereo/xr_viewer/native/windows
 
       - name: Download Linux bridge
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: filament-bridge-ubuntu-latest
           path: src/desktop2stereo/xr_viewer/native/linux
 
       - name: Download macOS bridge
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: filament-bridge-macos-14
           path: src/desktop2stereo/xr_viewer/native/macos

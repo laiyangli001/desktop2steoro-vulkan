@@ -1295,3 +1295,6 @@
 ## Unreleased
 
 - 修复 Vulkan FFmpeg bridge 的 MinGW DLL 前缀与 GitHub Actions 产物校验不一致问题。
+## 2026-08-24
+
+- 统一 GitHub Actions 的 `download-artifact` 到 `v7`，消除遗留 Node.js 20 action 在 Node.js 24 runner 上的弃用警告。
