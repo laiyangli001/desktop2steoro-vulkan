@@ -42,7 +42,7 @@ jobs:
             -DENABLE_PYTHON=OFF `
             -DENABLE_INTEL_GPU=ON `
             "-DCMAKE_INSTALL_PREFIX=$install"
-          cmake --build $build --config Release --parallel 2
+          cmake --build $build --config Release --target ov_dev_targets --parallel 2
           cmake --install $build --config Release
           if (-not (Test-Path -LiteralPath "$install\include\openvino\preprocess\pre_post_process.hpp")) {
             throw "OpenVINO preprocess developer header was not installed"
