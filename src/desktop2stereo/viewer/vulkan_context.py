@@ -800,6 +800,196 @@ class VulkanContext:
 
         return timeline_value
 
+    def compose_sbs_images(
+        self,
+        left_resource: Any,
+        right_resource: Any,
+        destination_resource: Any,
+        *,
+        wait_for_timeline: int | None = None,
+    ) -> int:
+        """Blit two Vulkan eye images into a D3D11-imported SBS image.
+
+        This is the compatibility bridge for the current two-eye Vulkan
+        producer. It performs GPU-only composition and records two GPU blits;
+        it deliberately reports a non-strict zero-copy boundary to callers.
+        A later fused shader can write the imported SBS image directly.
+        """
+        self._ensure_open()
+        resources = (left_resource, right_resource, destination_resource)
+        for resource in resources:
+            if getattr(resource, "context", self) is not self:
+                raise VulkanCapabilityError("SBS composition resource belongs to a different context")
+        left_width = int(getattr(left_resource, "width", 0))
+        left_height = int(getattr(left_resource, "height", 0))
+        right_width = int(getattr(right_resource, "width", 0))
+        right_height = int(getattr(right_resource, "height", 0))
+        destination_width = int(getattr(destination_resource, "width", 0))
+        destination_height = int(getattr(destination_resource, "height", 0))
+        if min(left_width, left_height, right_width, right_height) < 1:
+            raise ValueError("SBS source image dimensions must be positive")
+        if (right_width, right_height) != (left_width, left_height):
+            raise ValueError("SBS source eye dimensions must match")
+        if (destination_width, destination_height) != (left_width * 2, left_height):
+            raise ValueError("D3D11 SBS destination dimensions must be two eye widths")
+        vk = self.vk
+        blit_src = int(getattr(vk, "VK_FORMAT_FEATURE_BLIT_SRC_BIT", 0))
+        blit_dst = int(getattr(vk, "VK_FORMAT_FEATURE_BLIT_DST_BIT", 0))
+        if blit_src and blit_dst:
+            for resource, required in (
+                (left_resource, blit_src),
+                (right_resource, blit_src),
+                (destination_resource, blit_dst),
+            ):
+                properties = vk.vkGetPhysicalDeviceFormatProperties(
+                    self.physical_device, int(resource.format)
+                )
+                if not int(properties.optimalTilingFeatures) & required:
+                    raise VulkanCapabilityError(
+                        f"Vulkan format {int(resource.format)} lacks required SBS blit support"
+                    )
+        image_states = []
+        for resource in resources:
+            image_key = _cffi_handle_address(vk, resource.image)
+            state = self._image_states.get(
+                image_key, undefined_layout=vk.VK_IMAGE_LAYOUT_UNDEFINED
+            )
+            self._image_states.require_owner(image_key, self.queue_family_index)
+            image_states.append((resource, image_key, state))
+
+        def record(command_buffer: Any) -> None:
+            for resource, _image_key, state in image_states:
+                barrier = vk.VkImageMemoryBarrier(
+                    sType=vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                    srcAccessMask=int(state.access_mask),
+                    dstAccessMask=vk.VK_ACCESS_TRANSFER_READ_BIT
+                    if resource is not destination_resource
+                    else vk.VK_ACCESS_TRANSFER_WRITE_BIT,
+                    oldLayout=state.layout,
+                    newLayout=(
+                        vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
+                        if resource is not destination_resource
+                        else vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
+                    ),
+                    srcQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+                    dstQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+                    image=resource.image,
+                    subresourceRange=_color_subresource_range(vk),
+                )
+                vk.vkCmdPipelineBarrier(
+                    command_buffer,
+                    int(state.stage_mask) or vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                    vk.VK_PIPELINE_STAGE_TRANSFER_BIT,
+                    0,
+                    0,
+                    None,
+                    0,
+                    None,
+                    1,
+                    [barrier],
+                )
+
+            def region(source: Any, destination_x: int) -> Any:
+                return vk.VkImageBlit(
+                    srcSubresource=vk.VkImageSubresourceLayers(
+                        aspectMask=vk.VK_IMAGE_ASPECT_COLOR_BIT,
+                        mipLevel=0,
+                        baseArrayLayer=0,
+                        layerCount=1,
+                    ),
+                    srcOffsets=[
+                        vk.VkOffset3D(x=0, y=0, z=0),
+                        vk.VkOffset3D(x=int(source.width), y=int(source.height), z=1),
+                    ],
+                    dstSubresource=vk.VkImageSubresourceLayers(
+                        aspectMask=vk.VK_IMAGE_ASPECT_COLOR_BIT,
+                        mipLevel=0,
+                        baseArrayLayer=0,
+                        layerCount=1,
+                    ),
+                    dstOffsets=[
+                        vk.VkOffset3D(x=destination_x, y=0, z=0),
+                        vk.VkOffset3D(
+                            x=destination_x + int(source.width),
+                            y=int(source.height),
+                            z=1,
+                        ),
+                    ],
+                )
+
+            vk.vkCmdBlitImage(
+                command_buffer,
+                left_resource.image,
+                vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                destination_resource.image,
+                vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                1,
+                [region(left_resource, 0)],
+                vk.VK_FILTER_NEAREST,
+            )
+            vk.vkCmdBlitImage(
+                command_buffer,
+                right_resource.image,
+                vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                destination_resource.image,
+                vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                1,
+                [region(right_resource, left_width)],
+                vk.VK_FILTER_NEAREST,
+            )
+
+            for resource, _image_key, state in image_states:
+                if resource is destination_resource:
+                    old_layout = vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
+                    old_access = vk.VK_ACCESS_TRANSFER_WRITE_BIT
+                    old_stage = vk.VK_PIPELINE_STAGE_TRANSFER_BIT
+                    new_access = vk.VK_ACCESS_MEMORY_READ_BIT | vk.VK_ACCESS_MEMORY_WRITE_BIT
+                else:
+                    old_layout = vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
+                    old_access = vk.VK_ACCESS_TRANSFER_READ_BIT
+                    old_stage = vk.VK_PIPELINE_STAGE_TRANSFER_BIT
+                    new_access = vk.VK_ACCESS_MEMORY_READ_BIT | vk.VK_ACCESS_MEMORY_WRITE_BIT
+                barrier = vk.VkImageMemoryBarrier(
+                    sType=vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                    srcAccessMask=old_access,
+                    dstAccessMask=new_access,
+                    oldLayout=old_layout,
+                    newLayout=vk.VK_IMAGE_LAYOUT_GENERAL,
+                    srcQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+                    dstQueueFamilyIndex=vk.VK_QUEUE_FAMILY_IGNORED,
+                    image=resource.image,
+                    subresourceRange=_color_subresource_range(vk),
+                )
+                vk.vkCmdPipelineBarrier(
+                    command_buffer,
+                    old_stage,
+                    vk.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                    0,
+                    0,
+                    None,
+                    0,
+                    None,
+                    1,
+                    [barrier],
+                )
+
+        timeline = self.submit_on(
+            "graphics",
+            record,
+            wait_for_timeline=wait_for_timeline,
+        )
+        for resource, image_key, _state in image_states:
+            self._image_states.update(
+                image_key,
+                ImageState(
+                    layout=vk.VK_IMAGE_LAYOUT_GENERAL,
+                    access_mask=vk.VK_ACCESS_MEMORY_READ_BIT | vk.VK_ACCESS_MEMORY_WRITE_BIT,
+                    stage_mask=vk.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                    queue_family_index=self.queue_family_index,
+                ),
+            )
+        return int(timeline)
+
     def prepare_external_image_for_cuda(self, resource: Any) -> int:
         """Establish a persistent GENERAL layout before CUDA writes external memory."""
 

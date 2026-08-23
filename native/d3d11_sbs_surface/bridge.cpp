@@ -207,6 +207,37 @@ extern "C" D2S_D3D11_SURFACE_API void* d2s_d3d11_sbs_surface_create(
     return state.release();
 }
 
+extern "C" D2S_D3D11_SURFACE_API void* d2s_d3d11_sbs_surface_create_for_adapter_luid(
+    int width, int height, unsigned long long adapter_luid) {
+    g_last_error.clear();
+    if (!adapter_luid) {
+        set_error("D3D11 adapter LUID is required");
+        return nullptr;
+    }
+    ComPtr<IDXGIFactory1> factory;
+    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) {
+        set_error("CreateDXGIFactory1 failed");
+        return nullptr;
+    }
+    for (UINT index = 0;; ++index) {
+        ComPtr<IDXGIAdapter1> adapter;
+        HRESULT status = factory->EnumAdapters1(index, &adapter);
+        if (status == DXGI_ERROR_NOT_FOUND) break;
+        if (FAILED(status)) continue;
+        DXGI_ADAPTER_DESC1 desc{};
+        if (FAILED(adapter->GetDesc1(&desc))) continue;
+        const unsigned long long candidate =
+            (static_cast<unsigned long long>(static_cast<unsigned long>(desc.AdapterLuid.HighPart)) << 32) |
+            static_cast<unsigned long long>(static_cast<unsigned long>(desc.AdapterLuid.LowPart));
+        if (candidate != adapter_luid) continue;
+        auto state = std::make_unique<State>();
+        if (!initialize(*state, width, height, static_cast<int>(index))) return nullptr;
+        return state.release();
+    }
+    set_error("requested D3D11 adapter LUID was not found");
+    return nullptr;
+}
+
 extern "C" D2S_D3D11_SURFACE_API void* d2s_d3d11_sbs_surface_create_from_device(
     int width, int height, void* d3d11_device) {
     g_last_error.clear();
@@ -341,6 +372,7 @@ extern "C" D2S_D3D11_SURFACE_API void d2s_d3d11_sbs_surface_destroy(void* handle
 #else
 extern "C" int d2s_d3d11_sbs_surface_probe(void) { return 0; }
 extern "C" void* d2s_d3d11_sbs_surface_create(int, int, int) { return nullptr; }
+extern "C" void* d2s_d3d11_sbs_surface_create_for_adapter_luid(int, int, unsigned long long) { return nullptr; }
 extern "C" void* d2s_d3d11_sbs_surface_create_from_device(int, int, void*) { return nullptr; }
 extern "C" void* d2s_d3d11_sbs_surface_device(void*) { return nullptr; }
 extern "C" unsigned long long d2s_d3d11_sbs_surface_adapter_luid(void*) { return 0; }

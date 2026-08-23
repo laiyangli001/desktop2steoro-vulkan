@@ -267,6 +267,20 @@ class DirectSbsOutputConsumer:
                 if callable(should_submit) and not should_submit(self._clock()):
                     self._report_fps_if_due()
                     continue
+                submit_vulkan_stereo = getattr(
+                    self.output, "submit_vulkan_stereo_frame", None
+                )
+                left_eye = getattr(runtime_result, "left_eye", None)
+                right_eye = getattr(runtime_result, "right_eye", None)
+                if callable(submit_vulkan_stereo) and getattr(
+                    left_eye, "context", None
+                ) is not None and getattr(right_eye, "context", None) is not None:
+                    submit_vulkan_stereo(runtime_result)
+                    self._fps_submitted_frames += 1
+                    self.source_stat_inc("runtime_output_frames")
+                    self.source_stat_inc("network_stream_frames")
+                    self._report_fps_if_due()
+                    continue
                 native_surface = getattr(runtime_result, "native_final_sbs_surface", None)
                 submit_native_surface = getattr(
                     self.output, "submit_native_d3d11_surface", None
@@ -2404,6 +2418,7 @@ class IntelD3D11DirectSbsOutput(IntelQsvDirectSbsOutput):
         self._native_onevpl_mux: subprocess.Popen | None = None
         self._native_onevpl_pts = 0
         self._native_onevpl_active = False
+        self._vulkan_sbs_composer = None
 
     @staticmethod
     def _rgb_to_bgra(frame: np.ndarray) -> np.ndarray:
@@ -2499,6 +2514,10 @@ class IntelD3D11DirectSbsOutput(IntelQsvDirectSbsOutput):
             try: self._native_surface.close()
             except Exception: pass
             self._native_surface = None
+        if self._vulkan_sbs_composer is not None:
+            try: self._vulkan_sbs_composer.close()
+            except Exception: pass
+            self._vulkan_sbs_composer = None
         self._stop_process(self._native_onevpl_mux)
         self._native_onevpl_mux = None
 
@@ -2588,6 +2607,68 @@ class IntelD3D11DirectSbsOutput(IntelQsvDirectSbsOutput):
                 raise RuntimeError("Intel oneVPL packet muxer stdin is unavailable")
             self._native_onevpl_mux.stdin.write(packet)
             self._native_onevpl_mux.stdin.flush()
+
+    def submit_vulkan_stereo_frame(self, runtime_result: Any) -> None:
+        """Compose Vulkan eye resources into the Intel D3D11 encoder surface."""
+        enabled = os.environ.get("D2S_ONEVPL_FINAL_SBS", "0").strip().casefold()
+        if enabled not in {"1", "true", "yes", "on"}:
+            raise RuntimeError("native final SBS surface path is disabled")
+        left_eye = getattr(runtime_result, "left_eye", None)
+        right_eye = getattr(runtime_result, "right_eye", None)
+        context = getattr(left_eye, "context", None)
+        if context is None or getattr(right_eye, "context", None) is not context:
+            raise RuntimeError("Vulkan stereo frame lacks a shared Vulkan context")
+        width = int(getattr(left_eye, "width", 0) or 0)
+        height = int(getattr(left_eye, "height", 0) or 0)
+        if not width or not height:
+            raise RuntimeError("Vulkan stereo frame dimensions are unavailable")
+        if self._vulkan_sbs_composer is None:
+            from desktop2stereo.stereo_runtime.intel_vulkan_sbs import IntelVulkanSbsComposer
+            from desktop2stereo.stereo_runtime.providers.intel.onevpl_d3d11_encoder import (
+                OneVPLD3D11SurfaceEncoder,
+            )
+
+            self._vulkan_sbs_composer = IntelVulkanSbsComposer(context, width, height)
+            self._native_surface = self._vulkan_sbs_composer.surface
+            budget = self._dynamic_stream_rate_budget(width * 2, height)
+            target_mbps = int(budget[0] if budget else 10)
+            self._native_onevpl_encoder = OneVPLD3D11SurfaceEncoder(
+                width=width * 2,
+                height=height,
+                fps=self.fps,
+                bitrate=target_mbps * 1_000_000,
+                d3d11_device=self._native_surface.device,
+                hevc=self.use_hevc,
+            )
+            if self._native_onevpl_encoder.adapter_luid != self._native_surface.adapter_luid:
+                raise RuntimeError("Intel Vulkan/D3D11/oneVPL Adapter LUID mismatch")
+            self._start_native_onevpl_mux()
+            self._native_onevpl_active = True
+            self._native_onevpl_pts = 0
+            self._frame_size = (width * 2, height)
+            print(
+                "[IntelStream] Vulkan eyes -> D3D11 shared BGRA SBS -> "
+                "NV12 -> oneVPL -> MediaMTX; gpu_to_cpu=False "
+                "zero_copy=False gpu_copy_count=2",
+                flush=True,
+            )
+        elif (
+            self._vulkan_sbs_composer.eye_width != width
+            or self._vulkan_sbs_composer.eye_height != height
+        ):
+            raise RuntimeError("Vulkan SBS dimensions changed during stream")
+        ready_timeline = int(
+            (getattr(runtime_result, "debug_info", None) or {}).get(
+                "vulkan_submit_timeline", 0
+            )
+            or 0
+        )
+        frame = self._vulkan_sbs_composer.compose(
+            left_eye,
+            right_eye,
+            ready_timeline=ready_timeline or None,
+        )
+        self.submit_native_d3d11_surface(frame)
 
     def submit_frame(self, frame: np.ndarray) -> None:
         enabled = os.environ.get("D2S_ONEVPL_FINAL_SBS", "0").strip().casefold()

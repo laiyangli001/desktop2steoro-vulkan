@@ -42,6 +42,7 @@ def _load_bridge():
         required = (
             "d2s_d3d11_sbs_surface_probe",
             "d2s_d3d11_sbs_surface_create",
+            "d2s_d3d11_sbs_surface_create_for_adapter_luid",
             "d2s_d3d11_sbs_surface_create_from_device",
             "d2s_d3d11_sbs_surface_device",
             "d2s_d3d11_sbs_surface_adapter_luid",
@@ -59,6 +60,10 @@ def _load_bridge():
         library.d2s_d3d11_sbs_surface_probe.restype = ctypes.c_int
         library.d2s_d3d11_sbs_surface_create.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int]
         library.d2s_d3d11_sbs_surface_create.restype = ctypes.c_void_p
+        library.d2s_d3d11_sbs_surface_create_for_adapter_luid.argtypes = [
+            ctypes.c_int, ctypes.c_int, ctypes.c_ulonglong
+        ]
+        library.d2s_d3d11_sbs_surface_create_for_adapter_luid.restype = ctypes.c_void_p
         library.d2s_d3d11_sbs_surface_create_from_device.argtypes = [
             ctypes.c_int, ctypes.c_int, ctypes.c_void_p
         ]
@@ -139,6 +144,7 @@ class D3D11SbsSurface:
         height: int,
         adapter_index: int = -1,
         d3d11_device: int | None = None,
+        adapter_luid: int | None = None,
     ) -> None:
         self._library = _load_bridge()
         if self._library is None:
@@ -148,6 +154,10 @@ class D3D11SbsSurface:
         if d3d11_device:
             self._handle = self._library.d2s_d3d11_sbs_surface_create_from_device(
                 self.width, self.height, ctypes.c_void_p(int(d3d11_device))
+            )
+        elif adapter_luid:
+            self._handle = self._library.d2s_d3d11_sbs_surface_create_for_adapter_luid(
+                self.width, self.height, ctypes.c_ulonglong(int(adapter_luid))
             )
         else:
             self._handle = self._library.d2s_d3d11_sbs_surface_create(

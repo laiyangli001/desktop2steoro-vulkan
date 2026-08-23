@@ -12,6 +12,8 @@
 extern "C" {
 D2S_D3D11_SURFACE_API int d2s_d3d11_sbs_surface_probe(void);
 D2S_D3D11_SURFACE_API void* d2s_d3d11_sbs_surface_create(int width, int height, int adapter_index);
+D2S_D3D11_SURFACE_API void* d2s_d3d11_sbs_surface_create_for_adapter_luid(
+    int width, int height, unsigned long long adapter_luid);
 D2S_D3D11_SURFACE_API void* d2s_d3d11_sbs_surface_create_from_device(
     int width, int height, void* d3d11_device);
 D2S_D3D11_SURFACE_API void* d2s_d3d11_sbs_surface_device(void* handle);

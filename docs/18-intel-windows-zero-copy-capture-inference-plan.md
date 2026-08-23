@@ -275,7 +275,9 @@ AMD         -> WindowsCaptureROCm
 - [x] 明确 Win32 句柄方向：Vulkan 当前 `OPAQUE_WIN32` 导出句柄不能直接交给 `ID3D11Device1::OpenSharedResource1`；可行的 D3D11/Vulkan 共享方向是由 D3D11 创建带 NT shared handle 的纹理，Vulkan 以 `D3D11_TEXTURE` handle type 导入，随后再由 D3D11/oneVPL 消费同一资源。
 - [x] D3D11 SBS bridge 的自有 BGRA surface 已改为 `D3D11_RESOURCE_MISC_SHARED_NTHANDLE`，并暴露 `IDXGIResource1::CreateSharedHandle` C ABI；Vulkan 导入器仍需实现 `D3D11_TEXTURE` memory import 和 producer-ready 同步。
 - [x] Vulkan Python 侧新增 `VulkanD3D11ImportedImage`：使用 dedicated allocation 和 `VkImportMemoryWin32HandleInfoKHR` 以 `D3D11_TEXTURE` 类型导入共享 BGRA8，并在导入前强制校验 Vulkan/D3D11 Adapter LUID；仍需 GitHub 远程编译及 Intel 真机验证。
+- [x] D3D11 SBS bridge 新增按 Adapter LUID 创建设备的入口，Vulkan 侧可避免默认选择错误的 DXGI 适配器；创建失败时保持回退，不跨适配器猜测。
 - [x] 从 Vulkan 设备查询并填充真实 Vulkan `VkPhysicalDeviceIDProperties.deviceLUID`；当前若驱动/绑定不提供有效 LUID，仍拒绝 D3D11/Vulkan 共享导入，不能用 PCI vendor/device 代替。真实 Intel 驱动匹配仍待真机验证。
+- [x] 网络输出接入 Vulkan eyes → D3D11-owned shared BGRA SBS → VideoProcessor NV12 → oneVPL；当前使用两次 GPU blit 组合左右眼，明确记录 `gpu_to_cpu=false zero_copy=false gpu_copy_count=2`，未将 GPU-only copy 误报为严格零拷贝。
 - [ ] 将最终 SBS 原生 D3D11/Vulkan surface 接入 oneVPL/QSV，消除当前 RGB24 stdin 边界。
 - [ ] 在 Intel 真机完成 4K 长时间验证，并确认 Desktop Duplication、OpenVINO 与编码设备的 Adapter LUID 一致。
 
