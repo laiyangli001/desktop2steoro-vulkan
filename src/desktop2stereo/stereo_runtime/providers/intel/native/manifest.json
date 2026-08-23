@@ -5,6 +5,15 @@
   "final_sbs_surface": "d2s_d3d11_sbs_surface.dll",
   "encoder": "d2s_onevpl_d3d11_encoder.dll",
   "inference": "d2s_openvino_d3d11_bridge.dll",
+  "openvino_runtime_files": [
+    "openvino.dll",
+    "openvino_intel_gpu_plugin.dll",
+    "openvino_intel_cpu_plugin.dll",
+    "openvino_auto_plugin.dll",
+    "openvino_ir_frontend.dll",
+    "tbb12.dll",
+    "tbbmalloc.dll"
+  ],
   "onevpl_runtime": "libvpl.dll",
   "remote_build": "GitHub Actions windows-2022",
   "openvino_runtime": "Install the matching official OpenVINO Windows runtime on the target machine",
