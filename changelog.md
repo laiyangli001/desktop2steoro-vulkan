@@ -1,5 +1,9 @@
 # Desktop2Stereo Vulkan 项目日志
 
+## 2026-08-24
+
+- 合并 GUI 推流与高级网络推流的共享后端决策：两种模式共用网络会话、MediaMTX、音频、自动校准、最新帧消费和生命周期；`Auto` 下 GPU 模式按 NVIDIA/AMD/Intel 选择零拷贝后端，显式 Vulkan/Intel/FFmpeg 选择对两种模式一致。
+
 ## 2026-08-23
 
 - 建立 Vulkan→D3D11 外部资源公共 contract：显式携带 Win32 memory handle、格式/尺寸、分配大小、producer-ready 同步句柄和 Adapter LUID；缺少真实 LUID、BGRA8 格式或生产者同步时不会误报 Intel 零拷贝，最终 Vulkan surface 接入仍待完成。

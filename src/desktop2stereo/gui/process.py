@@ -1121,7 +1121,7 @@ class GUIProcessMixin:
         self._set_running_ui(True)
         self._collect_config()
         if (
-            self.run_mode_key == "RTMP Streamer"
+            self.run_mode_key in {"RTMP Streamer", "GPU Streamer"}
             and self._config.get("Display Mode") == "Full-SBS"
         ):
             status_logger.warning(

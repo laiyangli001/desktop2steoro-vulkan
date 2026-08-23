@@ -57,6 +57,7 @@ def test_network_stream_session_policy_covers_gpu_and_advanced_modes() -> None:
     from streaming.stream_session import (
         NetworkStreamSessionConfig,
         is_network_stream_mode,
+        resolve_network_video_backend,
         supports_network_calibration,
     )
 
@@ -71,6 +72,22 @@ def test_network_stream_session_policy_covers_gpu_and_advanced_modes() -> None:
     )
     assert config.port == 1122
     assert config.fps == 30
+
+    # Both GUI modes use one backend policy.  GPU Streamer keeps its vendor
+    # zero-copy auto selection, while Advanced Network Streaming keeps the
+    # shared FFmpeg/MediaMTX fallback unless the user explicitly selects one.
+    assert resolve_network_video_backend(
+        "GPU Streamer", "auto", device_info="NVIDIA RTX 3090"
+    ).backend == "pynv"
+    assert resolve_network_video_backend(
+        "GPU Streamer", "auto", device_info="Intel Arc"
+    ).backend == "intel"
+    assert resolve_network_video_backend(
+        "RTMP Streamer", "auto", device_info="NVIDIA RTX 3090"
+    ).backend == "ffmpeg"
+    assert resolve_network_video_backend(
+        "GPU Streamer", "vulkan", device_info="NVIDIA RTX 3090"
+    ).backend == "vulkan"
 
 
 def test_only_windows_3d_display_is_excluded_from_capture() -> None:

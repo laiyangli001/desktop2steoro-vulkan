@@ -842,7 +842,7 @@ GPU 零拷贝只解决电脑端原始帧搬运。继续检查：
 | 模式 | 内部键 | 主要定位 | 是否支持 WebRTC 自动校准 |
 | --- | --- | --- | --- |
 | 高级网络推流 | `RTMP Streamer` | 跨厂商、跨平台、自动探测与多级回退 | 是 |
-| GPU 推流 | `GPU Streamer` | NVIDIA/AMD 厂商专用低延迟 GPU 编码 | 是 |
+| GPU 推流 | `GPU Streamer` | 低延迟 GPU 编码；按能力选择 NVIDIA/AMD/Intel/Vulkan | 是 |
 
 两种模式必须共同满足：
 
@@ -867,6 +867,23 @@ DirectSbsOutputConsumer
         ↓
 可插拔视频编码器
 ```
+
+两种 GUI 模式共用同一个 `resolve_network_video_backend()` 决策层。该层保留
+`GPU Streamer` 的厂商零拷贝自动选择，同时允许两个模式显式选择 Vulkan、Intel
+QSV/D3D11 或 FFmpeg；因此模式名称只表达用户意图，不再决定一套独立的网络
+会话或编码生命周期。
+
+默认策略如下：
+
+| 配置 | GPU 推流 | 高级网络推流 |
+| --- | --- | --- |
+| `Auto` + NVIDIA | PyNvVideoCodec | FFmpeg（可使用 NVENC） |
+| `Auto` + AMD | AMF | FFmpeg 硬件/软件回退 |
+| `Auto` + Intel | Intel D3D11/oneVPL | FFmpeg 硬件/软件回退 |
+| 显式 `Vulkan`、`Intel` 或 `FFmpeg` | 两种模式相同 | 两种模式相同 |
+
+无论选择哪一种编码器，音频采集、MediaMTX 发布、WebRTC 校准、最新帧消费、
+统计和退出清理均由同一 `DirectSbsOutputConsumer` 与共享会话配置承载。
 
 `NetworkStreamSessionConfig` 是两种模式共同使用的传输配置对象，至少包含：
 

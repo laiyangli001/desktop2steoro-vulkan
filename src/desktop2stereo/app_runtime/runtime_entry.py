@@ -43,6 +43,7 @@ from streaming.stream_session import (
     CALIBRATABLE_STREAM_MODES,
     NetworkStreamSessionConfig,
     is_network_stream_mode,
+    resolve_network_video_backend,
     supports_network_calibration,
 )
 
@@ -603,18 +604,22 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
                     on_calibration_fps=adaptive_capture_rate.set_calibration_limit,
                     calibration_fingerprint=build_calibration_fingerprint(settings),
                 )
-                video_backend = str(
-                    settings.get("Video Encoder Backend", "ffmpeg") or "ffmpeg"
-                ).strip().casefold()
+                backend_decision = resolve_network_video_backend(
+                    configured_run_mode,
+                    settings.get("Video Encoder Backend", "auto"),
+                    device_info=DEVICE_INFO,
+                )
+                video_backend = backend_decision.backend
                 has_nvidia_gpu = "NVIDIA" in str(DEVICE_INFO).upper()
                 has_amd_gpu = any(
                     token in str(DEVICE_INFO).upper()
                     for token in ("AMD", "RADEON")
                 )
-                if configured_run_mode == "GPU Streamer" and has_nvidia_gpu:
-                    video_backend = "pynv"
-                elif configured_run_mode == "GPU Streamer" and has_amd_gpu:
-                    video_backend = "amd"
+                print(
+                    f"[DirectSbsStream] mode={configured_run_mode} "
+                    f"encoder={video_backend} ({backend_decision.reason})",
+                    flush=True,
+                )
                 network_output = FfmpegDirectSbsOutput(**output_kwargs)
                 if video_backend in {"intel", "qsv"}:
                     network_output.close()
@@ -623,7 +628,7 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
                         if video_backend == "intel"
                         else IntelQsvDirectSbsOutput(**output_kwargs)
                     )
-                elif video_backend == "vulkan" and configured_run_mode == "RTMP Streamer":
+                elif video_backend == "vulkan":
                     network_output.close()
                     network_output = VulkanDirectSbsOutput(**output_kwargs)
                 elif video_backend == "pynv" and has_nvidia_gpu:
