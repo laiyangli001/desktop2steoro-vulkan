@@ -254,17 +254,6 @@ class DirectSbsOutputConsumer:
             try:
                 runtime_result, _capture_timestamp = item
                 self._fps_sbs_frames += 1
-                native_surface = getattr(runtime_result, "native_final_sbs_surface", None)
-                submit_native_surface = getattr(
-                    self.output, "submit_native_d3d11_surface", None
-                )
-                if native_surface is not None and callable(submit_native_surface):
-                    submit_native_surface(native_surface)
-                    self._fps_submitted_frames += 1
-                    self.source_stat_inc("runtime_output_frames")
-                    self.source_stat_inc("network_stream_frames")
-                    self._report_fps_if_due()
-                    continue
                 prepare_calibration = getattr(
                     self.output, "prepare_calibration_source", None
                 )
@@ -276,6 +265,17 @@ class DirectSbsOutputConsumer:
                     continue
                 should_submit = getattr(self.output, "should_submit_frame", None)
                 if callable(should_submit) and not should_submit(self._clock()):
+                    self._report_fps_if_due()
+                    continue
+                native_surface = getattr(runtime_result, "native_final_sbs_surface", None)
+                submit_native_surface = getattr(
+                    self.output, "submit_native_d3d11_surface", None
+                )
+                if native_surface is not None and callable(submit_native_surface):
+                    submit_native_surface(native_surface)
+                    self._fps_submitted_frames += 1
+                    self.source_stat_inc("runtime_output_frames")
+                    self.source_stat_inc("network_stream_frames")
                     self._report_fps_if_due()
                     continue
                 submit_cuda_frame = getattr(self.output, "submit_cuda_frame", None)
