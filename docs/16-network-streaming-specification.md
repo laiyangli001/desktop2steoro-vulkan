@@ -924,7 +924,12 @@ GPU 推流：
 共同后半段：编码包 + 音频 → FFmpeg mux → MediaMTX → WebRTC/头显
 ```
 
-高级网络推流优先选择跨厂商后端，并根据能力探针动态回退。GPU 推流按 GPU 厂商选择 PyNvVideoCodec 或 AMF，追求更短的编码路径。两者不能共享具体的 Vulkan、CUDA Array Interface、D3D11 texture 或 AMF resource 生命周期，但必须共享上层编码器接口和发布会话。
+两种模式都通过 `resolve_network_video_backend()` 选择具体编码器。GPU 推流的
+`Auto` 保留 NVIDIA/AMD/Intel 厂商零拷贝优先级；高级网络推流的 `Auto` 保留
+跨平台 FFmpeg/MediaMTX 稳定路径，FFmpeg 内部再按平台能力选择 NVENC、QSV、
+VAAPI、AMF 或软件编码。显式选择 Vulkan、Intel 或 FFmpeg 时，两种模式完全
+复用同一后端入口。具体编码器仍各自管理 Vulkan、CUDA Array Interface、D3D11
+texture 或 AMF resource 生命周期，但不再重复实现会话、音频、校准和发布逻辑。
 
 ### 4. GPU 推流规格
 

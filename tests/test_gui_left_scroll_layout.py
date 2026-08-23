@@ -216,6 +216,16 @@ def test_stream_url_updates_while_stream_settings_are_collapsed() -> None:
     assert "self.stream_url_tf.value = self._format_stream_url" in handler
 
 
+def test_gpu_streaming_exposes_shared_calibration_rows() -> None:
+    source = BUILDERS_SOURCE.read_text(encoding="utf-8")
+    start = source.index("def _get_streamer_row_map")
+    end = source.index("\n    # ── data population ──", start)
+    row_map = source[start:end]
+
+    assert '"RTMP Streamer": [0, 1, 2, 3, 4, 6, 7, 8]' in row_map
+    assert '"GPU Streamer": [0, 1, 2, 3, 4, 6, 7, 8]' in row_map
+
+
 def test_compact_display_field_adapts_between_minimum_and_maximum_widths() -> None:
     field = CompactDisplayField("short", min_width=S(130), max_width=S(230))
     assert field.width == S(130)
