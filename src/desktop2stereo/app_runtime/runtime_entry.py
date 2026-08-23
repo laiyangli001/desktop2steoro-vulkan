@@ -7,6 +7,7 @@ import os
 import platform
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from capture import capture_frame_to_rgb, prepare_rgb_for_stereo_runtime
@@ -38,6 +39,12 @@ from utils import (
 )
 from utils.run_mode import normalize_run_mode
 from utils.xr_headset_presets import DEFAULT_XR_HEADSET_MODEL
+from streaming.stream_session import (
+    CALIBRATABLE_STREAM_MODES,
+    NetworkStreamSessionConfig,
+    is_network_stream_mode,
+    supports_network_calibration,
+)
 
 from .runtime_callbacks import RuntimeCallbacks
 from .runtime_context import (
@@ -367,11 +374,7 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
     configured_run_mode = normalize_run_mode(
         settings.get("Run Mode", "Local Viewer")
     )
-    direct_stream_mode = configured_run_mode in {
-        "RTMP Streamer",
-        "MJPEG Streamer",
-        "GPU Streamer",
-    }
+    direct_stream_mode = is_network_stream_mode(configured_run_mode) or configured_run_mode == "MJPEG Streamer"
     if direct_stream_mode:
         os.environ["D2S_RUNTIME_OUTPUT_UINT8"] = "1"
     try:
@@ -538,13 +541,15 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
                 DirectSbsOutputConsumer,
                 AmdAmfDirectSbsOutput,
                 FfmpegDirectSbsOutput,
+                IntelD3D11DirectSbsOutput,
+                IntelQsvDirectSbsOutput,
                 MjpegDirectSbsOutput,
                 PyNvDirectSbsOutput,
                 VulkanDirectSbsOutput,
             )
             from streaming.stream_calibration import build_calibration_fingerprint
 
-            if configured_run_mode in {"RTMP Streamer", "GPU Streamer"}:
+            if configured_run_mode in CALIBRATABLE_STREAM_MODES:
                 audio_backend = str(
                     settings.get("Audio Capture Backend", "auto") or "auto"
                 ).strip().casefold()
@@ -553,39 +558,46 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
                     ("soundcard:", "wasapi:")
                 ):
                     selected_audio = f"soundcard:{selected_audio}"
+                stream_config = replace(
+                    NetworkStreamSessionConfig.from_settings(settings, fps=int(FPS)),
+                    stereo_mix_device=selected_audio,
+                )
                 output_kwargs = dict(
                     base_dir=context.base_dir,
-                    protocol=settings.get("Stream Protocol", "WebRTC"),
-                    port=int(settings.get("Streamer Port", 1122)),
-                    stream_key=settings.get("Stream Key", "live"),
-                    fps=int(FPS),
-                    crf=int(settings.get("CRF", 23)),
-                    stereo_mix_device=selected_audio,
-                    audio_delay=float(settings.get("Audio Delay", -0.1)),
+                    protocol=stream_config.protocol,
+                    port=stream_config.port,
+                    stream_key=stream_config.stream_key,
+                    fps=stream_config.fps,
+                    crf=stream_config.crf,
+                    stereo_mix_device=stream_config.stereo_mix_device,
+                    audio_delay=stream_config.audio_delay,
                     os_name=OS_NAME,
                     prefer_nvenc=(
                         OS_NAME in {"Windows", "Linux"}
                         and "NVIDIA" in str(DEVICE_INFO).upper()
                     ),
-                    display_mode=settings.get("Display Mode", "Half-SBS"),
+                    display_mode=stream_config.display_mode,
                     target_bitrate_mbps=(
-                        int(settings.get("Stream Target Bitrate Mbps", 0) or 0)
+                        stream_config.target_bitrate_mbps
                         if bool(settings.get("Use Stream Calibration", True))
                         else 0
                     ),
                     peak_bitrate_mbps=(
-                        int(settings.get("Stream Peak Bitrate Mbps", 0) or 0)
+                        stream_config.peak_bitrate_mbps
                         if bool(settings.get("Use Stream Calibration", True))
                         else 0
                     ),
                     auto_calibration=(
-                        configured_run_mode == "RTMP Streamer"
+                        supports_network_calibration(
+                            configured_run_mode,
+                            settings.get("Stream Protocol", "WebRTC"),
+                        )
                         and os.environ.get("D2S_STREAM_CALIBRATE", "0") == "1"
                     ),
                     calibration_port=int(
                         settings.get(
                             "Stream Calibration Port",
-                            min(65535, int(settings.get("Streamer Port", 1122)) + 1),
+                            min(65535, stream_config.port + 1),
                         )
                     ),
                     on_calibration_fps=adaptive_capture_rate.set_calibration_limit,
@@ -604,7 +616,14 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
                 elif configured_run_mode == "GPU Streamer" and has_amd_gpu:
                     video_backend = "amd"
                 network_output = FfmpegDirectSbsOutput(**output_kwargs)
-                if video_backend == "vulkan" and configured_run_mode == "RTMP Streamer":
+                if video_backend in {"intel", "qsv"}:
+                    network_output.close()
+                    network_output = (
+                        IntelD3D11DirectSbsOutput(**output_kwargs)
+                        if video_backend == "intel"
+                        else IntelQsvDirectSbsOutput(**output_kwargs)
+                    )
+                elif video_backend == "vulkan" and configured_run_mode == "RTMP Streamer":
                     network_output.close()
                     network_output = VulkanDirectSbsOutput(**output_kwargs)
                 elif video_backend == "pynv" and has_nvidia_gpu:

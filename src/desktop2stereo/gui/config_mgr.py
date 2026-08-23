@@ -207,6 +207,8 @@ class GUIConfigMixin:
         self.video_backend_dd.value = {
             "auto": "Auto",
             "pynv": "PyNvVideoCodec",
+            "intel": "Intel QSV (D3D11)",
+            "qsv": "Intel QSV (D3D11)",
             "ffmpeg": "FFmpeg",
             "vulkan": "Vulkan Video",
         }.get(str(cfg.get("Video Encoder Backend", "auto")).casefold(), "Auto")
@@ -361,6 +363,7 @@ class GUIConfigMixin:
             "Video Encoder Backend": {
                 "Auto": "auto",
                 "PyNvVideoCodec": "pynv",
+                "Intel QSV (D3D11)": "intel",
                 "FFmpeg": "ffmpeg",
                 "Vulkan Video": "vulkan",
             }.get(self.video_backend_dd.value, "ffmpeg"),

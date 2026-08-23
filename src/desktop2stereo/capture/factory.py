@@ -4,6 +4,7 @@ from .runners import PollingCaptureRunner
 from .types import CaptureConfig
 
 _WINDOWS_EVENT_TOOLS = {"WindowsCapture", "WindowsCaptureROCm", "WindowsCaptureCUDA"}
+_WINDOWS_DESKTOP_DUPLICATION = "DesktopDuplication"
 
 
 def _default_os_name():
@@ -36,6 +37,9 @@ def normalize_config(config: CaptureConfig | None = None) -> CaptureConfig:
 def get_desktop_grabber_class(config: CaptureConfig | None = None):
     config = normalize_config(config)
     if config.os_name == "Windows":
+        if config.capture_tool == _WINDOWS_DESKTOP_DUPLICATION:
+            from .backends.windows_desktop_duplication import DesktopGrabber
+            return DesktopGrabber
         if config.capture_tool in _WINDOWS_EVENT_TOOLS:
             raise RuntimeError(
                 f"{config.capture_tool} is an event capture backend; use create_capture_runner instead"

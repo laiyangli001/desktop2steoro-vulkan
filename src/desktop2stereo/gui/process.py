@@ -31,6 +31,7 @@ from .localization import UI_MESSAGES
 from .log_handler import GuiLogHandler
 from utils.logging_setup import _NoisyThirdPartyDebugFilter
 from streaming.stream_calibration import build_calibration_fingerprint
+from streaming.stream_session import supports_network_calibration
 
 # ── module-level console helpers ──
 
@@ -111,20 +112,27 @@ def _detect_windows_firewall_blocks(executable=None):
     executable = os.path.normcase(os.path.abspath(executable or sys.executable))
     probe = r'''
 $exe = [Environment]::GetEnvironmentVariable('D2S_FIREWALL_EXE')
-Get-NetFirewallRule -Direction Inbound -Action Block -Enabled True -ErrorAction SilentlyContinue |
-  ForEach-Object {
-    $rule = $_
-    $app = $rule | Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue
-    if ($app.Program -and ([IO.Path]::GetFullPath($app.Program) -ieq $exe)) {
-      $port = $rule | Get-NetFirewallPortFilter -ErrorAction SilentlyContinue
-      [PSCustomObject]@{
-        Protocol = [string]$port.Protocol
-        LocalPort = [string]$port.LocalPort
-        DisplayName = [string]$rule.DisplayName
-        Name = [string]$rule.Name
+$matches = @(
+  Get-NetFirewallRule -Direction Inbound -Action Block -Enabled True -ErrorAction SilentlyContinue |
+    ForEach-Object {
+      $rule = $_
+      $app = $rule | Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue
+      if ($app.Program -and ([IO.Path]::GetFullPath($app.Program) -ieq $exe)) {
+        $port = $rule | Get-NetFirewallPortFilter -ErrorAction SilentlyContinue
+        [PSCustomObject]@{
+          Protocol = [string]$port.Protocol
+          LocalPort = [string]$port.LocalPort
+          DisplayName = [string]$rule.DisplayName
+          Name = [string]$rule.Name
+        }
       }
     }
-  } | ConvertTo-Json -Compress
+)
+if ($matches.Count -eq 0) {
+  Write-Output '[]'
+} else {
+  $matches | ConvertTo-Json -Compress
+}
 '''
     env = os.environ.copy()
     env["D2S_FIREWALL_EXE"] = executable
@@ -523,6 +531,8 @@ class GUIProcessMixin:
         warning_row = getattr(self, "stream_calibration_warning_row", None)
         result = getattr(self, "stream_calibration_result", None)
         result_row = getattr(self, "stream_calibration_result_row", None)
+        recalibrate_hint = getattr(self, "stream_calibration_recalibrate_hint", None)
+        recalibrate_hint_row = getattr(self, "stream_calibration_recalibrate_hint_row", None)
 
         def clear_warning():
             if warning is not None:
@@ -537,6 +547,11 @@ class GUIProcessMixin:
                 result.visible = False
             if result_row is not None:
                 result_row.visible = False
+            if recalibrate_hint is not None:
+                recalibrate_hint.value = ""
+                recalibrate_hint.visible = False
+            if recalibrate_hint_row is not None:
+                recalibrate_hint_row.visible = False
 
         def show_result(
             fps,
@@ -565,6 +580,14 @@ class GUIProcessMixin:
                 result.visible = True
             if result_row is not None:
                 result_row.visible = True
+            if recalibrate_hint is not None:
+                recalibrate_hint.value = UI_MESSAGES[self.locale].get(
+                    "calibration_recalibrate_hint",
+                    "Recalibrate after changing the router, Wi-Fi band or headset position; headset/browser/system upgrades; output resolution, codec or quality; or the PC GPU, driver or performance mode.",
+                )
+                recalibrate_hint.visible = True
+            if recalibrate_hint_row is not None:
+                recalibrate_hint_row.visible = True
 
         def show_warning(message):
             if warning is not None:
@@ -607,7 +630,10 @@ class GUIProcessMixin:
                     stable=False,
                 )
                 self._safe_update(control)
-                self._safe_update(warning, warning_row, result, result_row)
+                self._safe_update(
+                    warning, warning_row, result, result_row,
+                    recalibrate_hint, recalibrate_hint_row,
+                )
                 refit_visible_rows()
                 return
             clear_warning()
@@ -647,7 +673,10 @@ class GUIProcessMixin:
                     stable=True,
                 )
                 self._safe_update(control)
-                self._safe_update(result, result_row)
+                self._safe_update(
+                    result, result_row,
+                    recalibrate_hint, recalibrate_hint_row,
+                )
                 refit_visible_rows()
                 return
             clear_warning()
@@ -657,23 +686,20 @@ class GUIProcessMixin:
             )
             control.color = ft.Colors.GREY
         self._safe_update(control)
-        self._safe_update(warning, warning_row, result, result_row)
+        self._safe_update(
+            warning, warning_row, result, result_row,
+            recalibrate_hint, recalibrate_hint_row,
+        )
         refit_visible_rows()
 
     def start_stream_calibration(self, _event=None) -> None:
         if self._starting or (self.process and self.process.returncode is None):
             self.set_status(UI_MESSAGES[self.locale]["A thread already running!"])
             return
-        if self.run_mode_key != "RTMP Streamer":
+        if not supports_network_calibration(self.run_mode_key, self.stream_proto_dd.value):
             self.set_status(UI_MESSAGES[self.locale].get(
                 "calibration_requires_advanced",
-                "Automatic calibration requires Advanced Network Streaming.",
-            ))
-            return
-        if str(self.stream_proto_dd.value).casefold() != "webrtc":
-            self.set_status(UI_MESSAGES[self.locale].get(
-                "calibration_requires_webrtc",
-                "Automatic calibration requires WebRTC.",
+                "Automatic calibration requires Advanced Network Streaming or GPU Streaming with WebRTC.",
             ))
             return
         if int(self.stream_port_tf.value or DEFAULT_PORT) >= 65535:
@@ -1064,8 +1090,7 @@ class GUIProcessMixin:
             self.page.update()
             return
         if (
-            self.run_mode_key == "RTMP Streamer"
-            and str(self.stream_proto_dd.value).casefold() == "webrtc"
+            supports_network_calibration(self.run_mode_key, self.stream_proto_dd.value)
             and self._stream_calibration_auto_enabled()
             and not self._calibration_run_requested
         ):

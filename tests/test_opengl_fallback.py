@@ -350,7 +350,7 @@ def test_opengl_rtsp_soak_tool_forces_real_fallback_boundary():
 def test_vulkan_doc_records_current_opengl_copy_boundary():
     document = (
         Path(__file__).parents[1]
-        / "docs/16-advanced-streaming-vulkan-image-path.md"
+        / "docs/16-network-streaming-specification.md"
     ).read_text(encoding="utf-8")
     assert "OpenGL" in document
     assert "gpu_to_cpu=True" in document

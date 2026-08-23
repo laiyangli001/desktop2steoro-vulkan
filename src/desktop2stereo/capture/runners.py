@@ -54,6 +54,12 @@ class PollingCaptureRunner:
 
                     capture_start_time = time.perf_counter()
                     frame_raw, size = self._source.grab()
+                    native_depth_profile = None
+                    pop_native_depth = getattr(
+                        self._source, "pop_native_depth_profile", None
+                    )
+                    if callable(pop_native_depth):
+                        native_depth_profile = pop_native_depth()
                     if shutdown_event.is_set():
                         break
                     on_frame(
@@ -66,6 +72,10 @@ class PollingCaptureRunner:
                             metadata={
                                 "backend": type(self._source).__name__,
                                 "zero_copy": False,
+                                **({
+                                    "native_depth_profile": native_depth_profile,
+                                    "native_depth_backend": "openvino_d3d11_remote",
+                                } if native_depth_profile is not None else {}),
                             },
                         )
                     )

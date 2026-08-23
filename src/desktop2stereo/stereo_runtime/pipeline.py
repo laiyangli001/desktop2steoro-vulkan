@@ -1304,11 +1304,21 @@ class RuntimePipelineLoop:
                     ctx.breakdown_inc("runtime_diag_depth")
                     continue
 
-                # Submit only the depth stage to the bounded worker pool. The
-                # caller then consumes the oldest completed job in order and
-                # performs synthesis/OpenXR submission serially below.
-                depth_profile = None
-                if self._parallel_depth_scheduler is not None:
+                # A native Intel capture source may already have produced a
+                # DepthProfileResult from the borrowed D3D11 texture. Keep that
+                # result attached to the capture frame and bypass the tensor
+                # worker pool; the RGB compatibility frame is still used by
+                # the existing stereo synthesis path.
+                native_depth_profile = None
+                if captured_frame is not None:
+                    native_depth_profile = captured_frame.metadata.get(
+                        "native_depth_profile"
+                    )
+                # Submit only the depth stage to the bounded worker pool when
+                # native capture did not provide a result. The caller then
+                # consumes the oldest completed job in order.
+                depth_profile = native_depth_profile
+                if depth_profile is None and self._parallel_depth_scheduler is not None:
                     scheduler = self._parallel_depth_scheduler
                     self._parallel_recover_if_ready()
                     admission_limit = self._pending_depth_limit()
@@ -1443,6 +1453,26 @@ class RuntimePipelineLoop:
                     if ctx.output_transport:
                         debug_info["output_transport"] = ctx.output_transport
                 _attach_capture_debug(runtime_result, captured_frame, frame_rgb)
+                if isinstance(debug_info, dict) and captured_frame is not None:
+                    native_profile = captured_frame.metadata.get("native_depth_profile")
+                    if native_profile is not None:
+                        native_debug = getattr(native_profile, "cuda_timing_events", None)
+                        if not isinstance(native_debug, dict):
+                            native_debug = getattr(native_profile, "debug", {})
+                        debug_info["native_depth_inference"] = 1
+                        debug_info["native_depth_backend"] = captured_frame.metadata.get(
+                            "native_depth_backend", "openvino_d3d11_remote"
+                        )
+                        if isinstance(native_debug, dict):
+                            debug_info["native_depth_capture_gpu"] = int(
+                                bool(native_debug.get("capture_gpu", True))
+                            )
+                            debug_info["native_depth_gpu_to_cpu"] = int(
+                                bool(native_debug.get("gpu_to_cpu", True))
+                            )
+                            debug_info["native_depth_zero_copy"] = int(
+                                bool(native_debug.get("zero_copy", False))
+                            )
                 ctx.breakdown_add_runtime_timing(runtime_result)
                 ctx.log_fast_plus_fused_runtime_state(runtime_result)
                 if runtime_result.depth is None:

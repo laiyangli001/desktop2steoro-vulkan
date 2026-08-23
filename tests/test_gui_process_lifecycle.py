@@ -99,6 +99,20 @@ def test_firewall_probe_is_read_only_and_targets_bundled_python(monkeypatch):
     assert "Get-NetFirewallRule" in calls[0][0][-1]
     assert calls[0][1]["env"]["D2S_FIREWALL_EXE"].casefold().endswith(r"c:\d2s\python.exe")
     assert calls[0][1]["timeout"] == 20
+    assert "Write-Output '[]'" in calls[0][0][-1]
+    assert "$matches.Count -eq 0" in calls[0][0][-1]
+
+
+def test_firewall_probe_accepts_empty_rule_result(monkeypatch):
+    class Result:
+        returncode = 0
+        stdout = "[]\n"
+        stderr = ""
+
+    monkeypatch.setattr(gui_process, "OS_NAME", "Windows")
+    monkeypatch.setattr(gui_process.subprocess, "run", lambda *_args, **_kwargs: Result())
+
+    assert gui_process._detect_windows_firewall_blocks(r"C:\D2S\python.exe") == []
 
 
 def test_firewall_probe_timeout_is_not_treated_as_no_block_rules(monkeypatch):

@@ -958,7 +958,7 @@ class GUIBuilderMixin:
         self.audio_row = ft.Row([self.audio_label, self.audio_dd], spacing=1)
         self.video_backend_label = ft.Text("Video Encoder:", size=FONT_SIZE, width=S(150))
         self.video_backend_dd = CompactDropdown(
-            options=["Auto", "FFmpeg", "Vulkan Video", "PyNvVideoCodec"],
+            options=["Auto", "Intel QSV (D3D11)", "FFmpeg", "Vulkan Video", "PyNvVideoCodec"],
             value="Auto",
             min_width=S(130),
         )
@@ -997,6 +997,15 @@ class GUIBuilderMixin:
             spacing=1,
             visible=False,
         )
+        self.stream_calibration_recalibrate_hint = ft.Text(
+            "", size=max(10, FONT_SIZE - 1), color=ft.Colors.ORANGE,
+            visible=False, selectable=True,
+        )
+        self.stream_calibration_recalibrate_hint_row = ft.Row(
+            [self.stream_calibration_recalibrate_hint],
+            spacing=1,
+            visible=False,
+        )
         self.stream_calibration_row = ft.Row(
             [
                 self.stream_calibration_label,
@@ -1019,6 +1028,7 @@ class GUIBuilderMixin:
             self.stream_calibration_row,
             self.stream_calibration_warning_row,
             self.stream_calibration_result_row,
+            self.stream_calibration_recalibrate_hint_row,
         ]
         self.stream_container = ft.Container(
             ft.Column([], spacing=S(8)), visible=False,

@@ -63,3 +63,19 @@ def test_polling_tools_create_polling_runner(monkeypatch):
         runner = create_capture_runner(CaptureConfig(os_name="Windows", capture_tool=capture_tool))
 
         assert isinstance(runner, PollingCaptureRunner)
+
+
+def test_desktop_duplication_selects_explicit_backend():
+    cls = get_desktop_grabber_class(
+        CaptureConfig(os_name="Windows", capture_tool="DesktopDuplication")
+    )
+
+    assert cls.__module__.endswith("windows_desktop_duplication")
+
+
+def test_desktop_duplication_is_polling_runner():
+    runner = create_capture_runner(
+        CaptureConfig(os_name="Windows", capture_tool="DesktopDuplication")
+    )
+
+    assert isinstance(runner, PollingCaptureRunner)

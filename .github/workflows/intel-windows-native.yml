@@ -1,0 +1,161 @@
+name: Build Intel Windows Native Bridges
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "native/desktop_duplication/**"
+      - "native/d3d11_sbs_surface/**"
+      - "native/onevpl_d3d11_encoder/**"
+      - "src/desktop2stereo/stereo_runtime/providers/intel/**"
+      - ".github/workflows/intel-windows-native.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-intel-windows-native:
+    name: Windows x64 Desktop Duplication, D3D11 surface and oneVPL
+    runs-on: windows-2022
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download official oneVPL dispatcher source
+        shell: pwsh
+        run: |
+          git clone --depth 1 https://github.com/oneapi-src/oneVPL.git "$env:RUNNER_TEMP\oneVPL"
+
+      - name: Download official OpenVINO Windows C++ archive
+        shell: pwsh
+        run: |
+          $url = "https://storage.openvinotoolkit.org/repositories/openvino/packages/2026.3/windows/openvino_toolkit_windows_2026.3.0.22451.bd8d6542e3c_x86_64.zip"
+          $archive = "$env:RUNNER_TEMP\openvino.zip"
+          Invoke-WebRequest -Uri $url -OutFile $archive
+          Expand-Archive -LiteralPath $archive -DestinationPath "$env:RUNNER_TEMP\openvino" -Force
+          $header = Get-ChildItem -LiteralPath "$env:RUNNER_TEMP\openvino" -Recurse -Filter openvino.hpp |
+            Where-Object { $_.FullName -match "[\\/]include[\\/]openvino[\\/]openvino\.hpp$" } |
+            Select-Object -First 1
+          if (-not $header) {
+            throw "OpenVINO C++ developer header was not found in the official archive"
+          }
+          "D2S_OPENVINO_ROOT=$($header.Directory.Parent.Parent.Parent.FullName)" >> $env:GITHUB_ENV
+
+      - name: Build official oneVPL dispatcher
+        shell: pwsh
+        run: |
+          $source = "$env:RUNNER_TEMP\oneVPL"
+          $build = "$env:RUNNER_TEMP\oneVPL-build"
+          $install = "$env:RUNNER_TEMP\oneVPL-install"
+          cmake -S $source -B $build -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DBUILD_SHARED_LIBS=ON `
+            -DBUILD_EXAMPLES=OFF `
+            -DINSTALL_EXAMPLES=OFF `
+            -DCMAKE_INSTALL_PREFIX=$install
+          cmake --build $build --config Release --parallel 2
+          cmake --install $build --config Release
+          if (-not (Test-Path -LiteralPath "$install\include\vpl\mfx.h")) {
+            throw "oneVPL headers were not installed"
+          }
+          if (-not (Test-Path -LiteralPath "$install\lib\vpl.lib")) {
+            throw "oneVPL import library was not installed"
+          }
+
+      - name: Configure Desktop Duplication bridge
+        shell: pwsh
+        run: |
+          cmake -S native/desktop_duplication -B native/desktop_duplication/build/ci `
+            -G "Visual Studio 17 2022" -A x64
+
+      - name: Configure final SBS D3D11 surface bridge
+        shell: pwsh
+        run: |
+          cmake -S native/d3d11_sbs_surface -B native/d3d11_sbs_surface/build/ci `
+            -G "Visual Studio 17 2022" -A x64
+
+      - name: Configure oneVPL D3D11 encoder bridge
+        shell: pwsh
+        run: |
+          cmake -S native/onevpl_d3d11_encoder -B native/onevpl_d3d11_encoder/build/ci `
+            -G "Visual Studio 17 2022" -A x64 `
+            -DD2S_ONEVPL_ROOT="$env:RUNNER_TEMP\oneVPL-install"
+
+      - name: Configure OpenVINO D3D11 bridge
+        shell: pwsh
+        run: |
+          cmake -S native/openvino_d3d11_bridge -B native/openvino_d3d11_bridge/build/ci `
+            -G "Visual Studio 17 2022" -A x64 `
+            -DD2S_OPENVINO_ROOT="$env:D2S_OPENVINO_ROOT"
+
+      - name: Build Intel native bridges
+        shell: pwsh
+        run: |
+          cmake --build native/desktop_duplication/build/ci --config Release --parallel 2
+          cmake --build native/d3d11_sbs_surface/build/ci --config Release --parallel 2
+          cmake --build native/onevpl_d3d11_encoder/build/ci --config Release --parallel 2
+          cmake --build native/openvino_d3d11_bridge/build/ci --config Release --parallel 2
+
+          $required = @(
+            "native/desktop_duplication/build/ci/Release/d2s_desktop_duplication.dll",
+            "native/d3d11_sbs_surface/build/ci/Release/d2s_d3d11_sbs_surface.dll",
+            "native/onevpl_d3d11_encoder/build/ci/Release/d2s_onevpl_d3d11_encoder.dll"
+            ,"native/openvino_d3d11_bridge/build/ci/Release/d2s_openvino_d3d11_bridge.dll"
+          )
+          foreach ($path in $required) {
+            if (-not (Test-Path -LiteralPath $path)) {
+              throw "Native bridge was not produced: $path"
+            }
+          }
+
+      - name: Validate native bridge exports and oneVPL linkage
+        shell: pwsh
+        run: |
+          $exports = @{
+            "native/desktop_duplication/build/ci/Release/d2s_desktop_duplication.dll" = @(
+              "d2s_desktop_duplication_probe",
+              "d2s_desktop_duplication_create",
+              "d2s_desktop_duplication_acquire",
+              "d2s_desktop_duplication_copy_frame"
+            )
+            "native/d3d11_sbs_surface/build/ci/Release/d2s_d3d11_sbs_surface.dll" = @(
+              "d2s_d3d11_sbs_surface_probe",
+              "d2s_d3d11_sbs_surface_upload_bgra",
+              "d2s_d3d11_sbs_surface_nv12"
+            )
+            "native/onevpl_d3d11_encoder/build/ci/Release/d2s_onevpl_d3d11_encoder.dll" = @(
+            "d2s_onevpl_d3d11_probe",
+            "d2s_onevpl_d3d11_submit_nv12",
+            "d2s_onevpl_d3d11_read_packet"
+            )
+            "native/openvino_d3d11_bridge/build/ci/Release/d2s_openvino_d3d11_bridge.dll" = @(
+              "d2s_openvino_d3d11_capabilities",
+              "d2s_openvino_d3d11_set_texture",
+              "d2s_openvino_d3d11_infer"
+            )
+          }
+          foreach ($entry in $exports.GetEnumerator()) {
+            $dump = (dumpbin /nologo /exports $entry.Key | Out-String)
+            foreach ($symbol in $entry.Value) {
+              if ($dump -notmatch [regex]::Escape($symbol)) {
+                throw "Missing export $symbol from $($entry.Key)"
+              }
+            }
+          }
+          $onevplPath = "native/onevpl_d3d11_encoder/build/ci/Release/d2s_onevpl_d3d11_encoder.dll"
+          $imports = (dumpbin /nologo /imports $onevplPath | Out-String)
+          if ($imports -notmatch "libvpl\.dll") {
+            throw "oneVPL bridge is not linked to the remotely built dispatcher"
+          }
+
+      - name: Upload Intel native bridge artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: d2s-intel-windows-native-x64
+          if-no-files-found: error
+          path: |
+            native/desktop_duplication/build/ci/Release/d2s_desktop_duplication.dll
+            native/d3d11_sbs_surface/build/ci/Release/d2s_d3d11_sbs_surface.dll
+            native/onevpl_d3d11_encoder/build/ci/Release/d2s_onevpl_d3d11_encoder.dll
+            native/openvino_d3d11_bridge/build/ci/Release/d2s_openvino_d3d11_bridge.dll
+            ${{ runner.temp }}/oneVPL-install/bin/libvpl.dll

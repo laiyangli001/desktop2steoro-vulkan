@@ -113,6 +113,36 @@ def capture_frame_from_raw(
     )
 
 
+def capture_frame_from_native_texture(
+    resource: Any,
+    target_height: OutputResolution,
+    timestamp: float,
+    *,
+    config: CaptureConfig | None = None,
+) -> CapturedFrame:
+    """Create a borrowed native-texture frame without mapping it to the CPU."""
+    return capture_frame_from_raw(
+        resource,
+        target_height,
+        timestamp,
+        config=config,
+        copy_mode=FrameCopyMode.NONE,
+        original_format=str(getattr(resource, "format", "BGRA8")),
+        frame_raw_device="d3d11",
+        metadata={
+            "backend": "desktop_duplication",
+            "resource_kind": str(getattr(resource, "resource_kind", "d3d11_texture")),
+            "capture_gpu": True,
+            "gpu_to_cpu": False,
+            "gpu_copy_count": 0,
+            # The encoder/inference consumer has not yet been verified.
+            "zero_copy": False,
+            "adapter_luid": int(getattr(resource, "adapter_luid", 0)),
+        },
+        capture_size=(int(resource.width), int(resource.height)),
+    )
+
+
 def ensure_captured_frame(
     item: CapturedFrame | tuple[Any, OutputResolution, float],
     *,

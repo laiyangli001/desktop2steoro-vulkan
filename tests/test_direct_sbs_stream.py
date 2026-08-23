@@ -13,6 +13,7 @@ import streaming.nvidia_encoder as nvidia_encoder
 from streaming.direct_sbs import (
     DirectSbsOutputConsumer,
     FfmpegDirectSbsOutput,
+    IntelQsvDirectSbsOutput,
     PyNvDirectSbsOutput,
     RuntimeSbsRgbConverter,
     VulkanDirectSbsOutput,
@@ -37,6 +38,21 @@ def test_runtime_sbs_to_rgb_converts_chw_float_to_hwc_uint8():
     assert rgb.dtype == np.uint8
     assert rgb.flags.c_contiguous
     assert rgb[0, 1].tolist() == [255, 0, 128]
+
+
+def test_pynv_backend_uses_shared_ffmpeg_probe_for_calibration(monkeypatch):
+    calls = []
+
+    output = object.__new__(PyNvDirectSbsOutput)
+    output._calibration_controller = object()
+
+    def fake_base_start(self, width, height):
+        calls.append((width, height))
+
+    monkeypatch.setattr(FfmpegDirectSbsOutput, "_start_ffmpeg", fake_base_start)
+    direct_sbs._PyNvDirectSbsOutputMixin._start_ffmpeg(output, 1920, 1080)
+
+    assert calls == [(1920, 1080)]
 
 
 def test_runtime_sbs_to_rgb_drops_alpha_from_hwc_uint8():
@@ -482,6 +498,49 @@ def test_qsv_and_amf_commands_avoid_nvenc_only_options():
     assert "ultralowlatency" in amf_command
     assert "vbr_peak" in amf_command
     assert "-cq" not in amf_command
+
+
+def test_intel_qsv_backend_prefers_qsv_and_enables_d3d11_upload(monkeypatch):
+    output = object.__new__(IntelQsvDirectSbsOutput)
+    output.use_hevc = False
+    output.os_name = "Windows"
+    output.video_encoder = "h264_qsv"
+    monkeypatch.delenv("D2S_QSV_D3D11_UPLOAD", raising=False)
+
+    assert output._encoder_candidates() == [
+        ("h264_qsv", "Intel Quick Sync/D3D11"),
+        ("libx264", "software fallback"),
+    ]
+    assert output._qsv_d3d11_surface_upload_enabled() is True
+
+
+def test_qsv_can_use_opt_in_d3d11_surface_upload(monkeypatch):
+    output = object.__new__(FfmpegDirectSbsOutput)
+    output.os_name = "Windows"
+    output.protocol = "RTMP"
+    output.fps = 30
+    output.crf = 23
+    output.use_hevc = False
+    output.video_encoder = "h264_qsv"
+    output.stream_key = "live"
+    output._active_rate_budget = None
+    output.stereo_mix_device = ""
+    output.audio_delay = -0.1
+    output.ffmpeg_path = Path("ffmpeg")
+    monkeypatch.setenv("D2S_QSV_D3D11_UPLOAD", "1")
+    monkeypatch.setenv("D2S_QSV_D3D11_ADAPTER", "2")
+
+    command = output._ffmpeg_command(1920, 1080)
+
+    assert "d3d11va=d2s_d3d11:2" in command
+    assert "qsv=d2s_qsv@d2s_d3d11" in command
+    assert command[command.index("-filter_hw_device") + 1] == "d2s_qsv"
+    assert command[command.index("-vf") + 1] == (
+        "format=nv12,hwupload=extra_hw_frames=16,"
+        "hwmap=derive_device=qsv,format=qsv"
+    )
+    assert "-pix_fmt" not in command
+    assert output._qsv_surface_mode == "d3d11_upload"
 
 
 def test_vaapi_command_uploads_frames_to_hardware():

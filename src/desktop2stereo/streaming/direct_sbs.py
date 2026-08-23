@@ -355,6 +355,11 @@ class _PyNvDirectSbsOutputMixin:
             self._soundcard_audio = None
 
     def _start_ffmpeg(self, width: int, height: int) -> None:
+        # GPU backends override this method. Calibration is an independent
+        # deterministic FFmpeg pressure stream, so explicitly call the shared
+        # base implementation instead of starting the vendor encoder.
+        if self._calibration_controller is not None:
+            return FfmpegDirectSbsOutput._start_ffmpeg(self, width, height)
         nvc = _load_pynvvideo_codec()
         if nvc is None:
             raise RuntimeError(f"PyNvVideoCodec unavailable: {_PYNVVIDEO_CODEC_ERROR}")
@@ -520,6 +525,7 @@ class FfmpegDirectSbsOutput:
         self.video_encoder = "libx265" if self.use_hevc else "libx264"
         self._active_rate_budget: tuple[int, int, int] | None = None
         self._encoder_selected = False
+        self._qsv_surface_mode = "host_upload"
         runtime_root = Path(
             os.environ.get(
                 "D2S_STREAMING_RUNTIME_DIR",
@@ -1122,6 +1128,20 @@ class FfmpegDirectSbsOutput:
             ]
         return []
 
+    def _qsv_d3d11_surface_upload_enabled(self) -> bool:
+        """Opt into FFmpeg's Windows D3D11/QSV surface upload boundary.
+
+        Raw RGB stdin is still a host boundary; this mode only keeps the
+        post-format frame in a D3D11 hardware frame before h264_qsv/hevc_qsv.
+        It is therefore not reported as strict zero-copy.
+        """
+        return (
+            self.os_name == "Windows"
+            and self.video_encoder.endswith("_qsv")
+            and str(os.environ.get("D2S_QSV_D3D11_UPLOAD", "0")).strip().lower()
+            in {"1", "true", "yes", "on"}
+        )
+
     def _ffmpeg_command(self, width: int, height: int) -> list[str]:
         calibration_stream = getattr(self, "_calibration_controller", None) is not None
         # Calibration must not inherit inference/RGB24 throughput. FFmpeg owns
@@ -1304,6 +1324,29 @@ class FfmpegDirectSbsOutput:
                     index = command.index(option)
                     del command[index:index + 2]
             command.extend(["-global_quality", str(self.crf), "-look_ahead", "0"])
+            if self._qsv_d3d11_surface_upload_enabled():
+                adapter_index = str(os.environ.get("D2S_QSV_D3D11_ADAPTER", "0"))
+                command[1:1] = [
+                    "-init_hw_device",
+                    f"d3d11va=d2s_d3d11:{adapter_index}",
+                    "-init_hw_device",
+                    "qsv=d2s_qsv@d2s_d3d11",
+                    "-filter_hw_device",
+                    "d2s_qsv",
+                ]
+                while "-pix_fmt" in command:
+                    pix_fmt_index = command.index("-pix_fmt")
+                    del command[pix_fmt_index : pix_fmt_index + 2]
+                command.extend(
+                    [
+                        "-vf",
+                        "format=nv12,hwupload=extra_hw_frames=16,"
+                        "hwmap=derive_device=qsv,format=qsv",
+                    ]
+                )
+                self._qsv_surface_mode = "d3d11_upload"
+            else:
+                self._qsv_surface_mode = "host_upload"
         elif self.video_encoder.endswith("_amf"):
             for option in ("-tune", "-rc", "-cq", "-zerolatency", "-forced-idr", "-strict_gop", "-spatial-aq", "-temporal-aq", "-aq-strength"):
                 while option in command:
@@ -1493,7 +1536,10 @@ class FfmpegDirectSbsOutput:
         else:
             print(
                 f"[DirectSbsStream] FFmpeg consumes RGB24 SBS directly: "
-                f"{width}x{height}@{self.fps} encoder={self.video_encoder}",
+                f"{width}x{height}@{self.fps} encoder={self.video_encoder} "
+                f"qsv_surface={self._qsv_surface_mode} "
+                f"gpu_to_cpu=True zero_copy=False "
+                f"gpu_copy_count={1 if self._qsv_surface_mode == 'd3d11_upload' else 0}",
                 flush=True,
             )
 
@@ -1644,6 +1690,43 @@ class FfmpegDirectSbsOutput:
         self._server_log_thread = None
         self._ffmpeg_log_thread = None
         self._ffmpeg_stderr_tail = []
+
+
+class IntelQsvDirectSbsOutput(FfmpegDirectSbsOutput):
+    """Intel final-SBS path using FFmpeg's D3D11-to-QSV surface boundary.
+
+    The final SBS frame is currently produced as CPU RGB by the stereo
+    runtime. This backend deliberately makes that boundary visible: FFmpeg
+    uploads the RGB frame to a D3D11 surface and derives a QSV surface for
+    hardware encoding. It is a GPU-accelerated Intel path, but not strict
+    capture-to-encode zero-copy until the stereo compositor exports a native
+    D3D11/Vulkan surface.
+    """
+
+    def _encoder_candidates(self) -> list[tuple[str, str]]:
+        codec = "hevc" if self.use_hevc else "h264"
+        return [
+            (f"{codec}_qsv", "Intel Quick Sync/D3D11"),
+            ("libx265" if self.use_hevc else "libx264", "software fallback"),
+        ]
+
+    def _qsv_d3d11_surface_upload_enabled(self) -> bool:
+        configured = os.environ.get("D2S_QSV_D3D11_UPLOAD", "1")
+        return (
+            self.os_name == "Windows"
+            and self.video_encoder.endswith("_qsv")
+            and str(configured).strip().casefold()
+            in {"1", "true", "yes", "on"}
+        )
+
+    def _start_ffmpeg(self, width: int, height: int) -> None:
+        super()._start_ffmpeg(width, height)
+        if self.video_encoder.endswith("_qsv"):
+            print(
+                "[IntelStream] final SBS path: RGB24 -> D3D11 NV12 -> QSV "
+                "surface; gpu_to_cpu=True zero_copy=False gpu_copy_count=1",
+                flush=True,
+            )
 
 
 class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
@@ -2292,6 +2375,151 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
         super().close()
 
 
+
+
+class IntelD3D11DirectSbsOutput(IntelQsvDirectSbsOutput):
+    """Prefer final-SBS D3D11 surface + oneVPL, then fall back to QSV.
+
+    The native branch is opt-in until oneVPL and the D3D11 surface bridge are
+    installed. It consumes the completed SBS frame, never the mono capture or
+    depth input. The current bridge has one CPU upload boundary and therefore
+    reports zero_copy=False.
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._native_surface = None
+        self._native_onevpl_encoder = None
+        self._native_onevpl_mux: subprocess.Popen | None = None
+        self._native_onevpl_pts = 0
+        self._native_onevpl_active = False
+
+    @staticmethod
+    def _rgb_to_bgra(frame: np.ndarray) -> np.ndarray:
+        image = np.asarray(frame)
+        if image.ndim != 3 or image.shape[-1] != 3:
+            raise ValueError(f"expected final SBS RGB8 HWC frame, got {image.shape!r}")
+        bgra = np.empty((*image.shape[:2], 4), dtype=np.uint8)
+        bgra[..., 0] = image[..., 2]
+        bgra[..., 1] = image[..., 1]
+        bgra[..., 2] = image[..., 0]
+        bgra[..., 3] = 255
+        return bgra
+
+    def _native_onevpl_output_url(self) -> str:
+        if self.protocol == "WEBRTC":
+            return f"rtsp://127.0.0.1:{self.publish_rtsp_port}/{self.stream_key}?pkt_size=1452"
+        return f"srt://127.0.0.1:8890?streamid=publish:{self.stream_key}&pkt_size=1316"
+
+    def _start_native_onevpl_mux(self) -> None:
+        command = [
+            str(self.ffmpeg_path), "-hide_banner", "-loglevel", "warning",
+            "-fflags", "nobuffer", "-flags", "low_delay", "-f", "h264",
+            "-r", str(self.fps), "-i", "pipe:0", "-map", "0:v:0", "-c:v", "copy",
+            "-muxdelay", "0", "-muxpreload", "0", "-flush_packets", "1",
+            "-max_interleave_delta", "100000",
+        ]
+        if self.protocol == "WEBRTC":
+            command.extend(["-f", "rtsp", "-rtsp_transport", "tcp", "-pkt_size", "1452"])
+        else:
+            command.extend(["-f", "mpegts", "-mpegts_flags", "+resend_headers"])
+        command.append(self._native_onevpl_output_url())
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if self.os_name == "Windows" else 0
+        self._native_onevpl_mux = subprocess.Popen(
+            command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE, creationflags=creationflags,
+        )
+        self._ffmpeg_stderr_tail = []
+        self._ffmpeg_log_thread = threading.Thread(
+            target=self._drain_ffmpeg_stderr,
+            args=(self._native_onevpl_mux,), name="DirectSbsIntelOneVplMuxLog", daemon=True,
+        )
+        self._ffmpeg_log_thread.start()
+        time.sleep(0.05)
+        if self._native_onevpl_mux.poll() is not None:
+            detail = "; ".join(self._ffmpeg_stderr_tail[-3:]) or "no FFmpeg diagnostic"
+            raise RuntimeError(
+                f"Intel oneVPL packet muxer exited with code "
+                f"{self._native_onevpl_mux.returncode}: {detail}"
+            )
+
+    def _start_native_onevpl(self, width: int, height: int) -> None:
+        if self.stereo_mix_device:
+            raise RuntimeError("native Intel oneVPL final-SBS path currently requires audio disabled")
+        from desktop2stereo.stereo_runtime.providers.intel.d3d11_sbs_surface import D3D11SbsSurface
+        from desktop2stereo.stereo_runtime.providers.intel.onevpl_d3d11_encoder import OneVPLD3D11SurfaceEncoder
+
+        adapter_index = int(os.environ.get("D2S_ONEVPL_D3D11_ADAPTER", "-1"))
+        self._native_surface = D3D11SbsSurface(
+            width=width, height=height, adapter_index=adapter_index
+        )
+        budget = self._dynamic_stream_rate_budget(width, height)
+        target_mbps = int(budget[0] if budget else 10)
+        self._native_onevpl_encoder = OneVPLD3D11SurfaceEncoder(
+            width=width, height=height, fps=self.fps,
+            bitrate=target_mbps * 1_000_000,
+            d3d11_device=self._native_surface.device, hevc=self.use_hevc,
+        )
+        self._start_native_onevpl_mux()
+        self._native_onevpl_pts = 0
+        self._native_onevpl_active = True
+        self._frame_size = (width, height)
+        print(
+            f"[IntelStream] native final SBS path active: RGB8 -> D3D11 BGRA8 "
+            f"-> NV12 -> oneVPL -> MediaMTX; adapter_luid={self._native_surface.adapter_luid} "
+            "gpu_to_cpu=True zero_copy=False gpu_copy_count=1", flush=True,
+        )
+
+    def _stop_native_onevpl(self) -> None:
+        self._native_onevpl_active = False
+        if self._native_onevpl_encoder is not None:
+            try: self._native_onevpl_encoder.close()
+            except Exception: pass
+            self._native_onevpl_encoder = None
+        if self._native_surface is not None:
+            try: self._native_surface.close()
+            except Exception: pass
+            self._native_surface = None
+        self._stop_process(self._native_onevpl_mux)
+        self._native_onevpl_mux = None
+
+    def _submit_native_onevpl(self, frame: np.ndarray) -> None:
+        if not self._native_onevpl_active:
+            self._start_native_onevpl(int(frame.shape[1]), int(frame.shape[0]))
+        if self._native_surface is None or self._native_onevpl_encoder is None:
+            raise RuntimeError("Intel oneVPL final-SBS resources are unavailable")
+        self._native_surface.upload_bgra(self._rgb_to_bgra(frame))
+        texture, width, height = self._native_surface.nv12_texture()
+        if (width, height) != (self._native_surface.width, self._native_surface.height):
+            raise RuntimeError("Intel NV12 surface dimensions changed")
+        self._native_onevpl_encoder.submit_nv12(texture, self._native_onevpl_pts)
+        self._native_onevpl_pts += 1
+        while True:
+            packet = self._native_onevpl_encoder.read_packet()
+            if not packet: break
+            if self._native_onevpl_mux is None or self._native_onevpl_mux.stdin is None:
+                raise RuntimeError("Intel oneVPL packet muxer stdin is unavailable")
+            self._native_onevpl_mux.stdin.write(packet)
+            self._native_onevpl_mux.stdin.flush()
+
+    def submit_frame(self, frame: np.ndarray) -> None:
+        enabled = os.environ.get("D2S_ONEVPL_FINAL_SBS", "0").strip().casefold()
+        if enabled not in {"1", "true", "yes", "on"}:
+            super().submit_frame(frame)
+            return
+        try:
+            self._submit_native_onevpl(frame)
+        except Exception as exc:
+            print(
+                f"[IntelStream] native oneVPL final-SBS path unavailable: {exc}; "
+                "falling back to Intel QSV/D3D11 FFmpeg path", flush=True,
+            )
+            self._stop_native_onevpl()
+            super().submit_frame(frame)
+
+    def close(self) -> None:
+        self._stop_native_onevpl()
+        super().close()
 
 
 class PyNvDirectSbsOutput(_PyNvDirectSbsOutputMixin, FfmpegDirectSbsOutput):

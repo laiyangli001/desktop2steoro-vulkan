@@ -53,6 +53,26 @@ def test_gpu_streamer_is_an_explicit_viewer_stream_mode() -> None:
     assert resolved.fix_viewer_aspect
 
 
+def test_network_stream_session_policy_covers_gpu_and_advanced_modes() -> None:
+    from streaming.stream_session import (
+        NetworkStreamSessionConfig,
+        is_network_stream_mode,
+        supports_network_calibration,
+    )
+
+    assert is_network_stream_mode("RTMP Streamer")
+    assert is_network_stream_mode("GPU Streamer")
+    assert not is_network_stream_mode("MJPEG Streamer")
+    assert supports_network_calibration("RTMP Streamer", "WebRTC")
+    assert supports_network_calibration("GPU Streamer", "WebRTC")
+    assert not supports_network_calibration("GPU Streamer", "RTSP")
+    config = NetworkStreamSessionConfig.from_settings(
+        {"Stream Protocol": "WebRTC", "Streamer Port": 1122}, fps=30
+    )
+    assert config.port == 1122
+    assert config.fps == 30
+
+
 def test_only_windows_3d_display_is_excluded_from_capture() -> None:
     from app_runtime.runtime_entry import _exclude_local_output_from_capture
 
@@ -90,7 +110,9 @@ def test_direct_stream_output_uses_uint8_nvenc_and_fps_provider() -> None:
     context_create = source.index("context = create_runtime_context(")
     assert uint8_enable < context_create
     assert "prefer_nvenc=" in stream_branch
-    assert 'display_mode=settings.get("Display Mode", "Half-SBS")' in stream_branch
+    assert "NetworkStreamSessionConfig.from_settings" in stream_branch
+    assert "display_mode=stream_config.display_mode" in stream_branch
+    assert "supports_network_calibration" in stream_branch
     assert '"NVIDIA" in str(DEVICE_INFO).upper()' in stream_branch
     assert "show_fps_provider=callbacks.show_fps" in stream_branch
     assert "observe_sbs_fps if adaptive_capture_rate.enabled else None" in stream_branch

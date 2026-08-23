@@ -1,5 +1,27 @@
 # Desktop2Stereo Vulkan 项目日志
 
+## 2026-08-23
+
+- Desktop Duplication 捕捉链改为优先使用同一份借用 D3D11 帧：原生纹理在保持 `AcquireNextFrame` 生命周期期间同时交给 OpenVINO 推理，并通过受控 staging readback 生成兼容 BGR 帧，避免此前“兼容捕捉一次、原生推理再捕捉一次”的不同帧问题。该阶段仍明确为 `gpu_to_cpu=True`、`zero_copy=False`、`gpu_copy_count=1`；新增 readback C ABI 的导出检查，C++ 编译继续只由 GitHub Actions 远程 workflow 负责。
+
+- 修正 OpenVINO/D3D11 ctypes 与 C ABI 的真实运行时契约：`last_error` 使用两参数签名，`set_texture` 正确识别返回值 `1` 为成功，并增加对应回归测试。
+
+- 新增 Intel Windows 零拷贝捕捉—推理计划书 `docs/18-intel-windows-zero-copy-capture-inference-plan.md`；GUI 捕捉源加入 `DesktopDuplication` 选项，并新增 DXGI/D3D11 原生桥 C ABI、CMake 工程、ctypes 能力探测、原生纹理借用帧契约和 OpenVINO RemoteTensor 能力层。启用 `D2S_INTEL_NATIVE_OPENVINO=1` 且原生 DLL/模型可用时，原生 D3D11 帧进入 OpenVINO provider；现阶段输出仍回读 CPU，因此明确记录 `zero_copy=False`。Desktop Duplication 遇到 `DXGI_ERROR_ACCESS_LOST` 时会重建输出并自动重试一次。
+
+- OpenVINO Intel 路径新增可选 `native/openvino_d3d11_bridge` C ABI/CMake 工程、D3D11 VideoProcessor 的 BGRA8→NV12 GPU 转换、NV12 RemoteTensor 接线、输出 shape/float buffer ABI，以及 `OpenVINOD3D11DepthProvider` 适配器；Desktop Duplication 暴露同一 D3D11 device 供 provider 复用，新增 DXGI Adapter LUID 校验、原生帧异常安全释放、运行时调试字段和借用 NV12 D3D11 surface 导出契约。OpenVINO SDK 尚未安装，因此该 DLL 尚未编译；直接 oneVPL/QSV 真机提交仍待验证。
+
+- Intel QSV 新增 `Intel QSV (D3D11)` 视频编码后端和 GUI 选项：最终 SBS RGB24 经 FFmpeg D3D11/QSV surface 进入 H.264/H.265，日志明确 `gpu_to_cpu=True zero_copy=False gpu_copy_count=1`。新增 `native/d3d11_sbs_surface`，已实测完成最终 SBS BGRA8→NV12 D3D11 surface；设置 `D2S_ONEVPL_FINAL_SBS=1` 且 oneVPL SDK/DLL 可用时，可进一步走 oneVPL surface→压缩包→MediaMTX，否则回退 QSV。当前仍保留 RGB stdin，尚未宣称捕捉到编码的严格零拷贝。
+
+- 新增可选 `native/onevpl_d3d11_encoder` bridge：配置 oneVPL SDK 后可接收 OpenVINO bridge 生成的借用 NV12 D3D11 surface，调用 oneVPL D3D11 编码并返回压缩包；未配置 SDK、DLL 或 Intel 驱动时安全回退。新增 `.github/workflows/intel-windows-native.yml`，以后通过 GitHub-hosted Windows runner 拉取官方 oneVPL dispatcher、编译 Intel 原生桥并上传 artifact；本地不再作为 C++ 编译依据。
+
+- 保留独立的“GPU 推流”用户模式，同时抽出共享网络会话配置和模式策略；高级网络推流与 GPU 推流现在都可通过 WebRTC 使用同一套自动网络校准控制器，GPU 校准阶段使用独立的 FFmpeg CBR 压力流，不会误启动 PyNvVideoCodec/AMF 生产编码器。
+
+- 自动校准结果区域新增重新校准提醒，明确提示更换路由器、头显、浏览器、系统、输出参数、GPU、驱动或性能模式后重新执行校准。
+
+- 将 `docs/16-advanced-streaming-vulkan-image-path.md` 升级为完整的 `docs/16-network-streaming-specification.md`，补充 GPU 推流、共享会话层、MediaMTX/音频契约、WebRTC 自动校准、零拷贝边界、故障分类和双模式验收矩阵。
+
+- 修复 Windows 防火墙检测在没有匹配入站阻止规则时误报 PowerShell exit code 1 的问题；探针现在对空结果显式返回 `[]`，自动校准可正常继续。
+
 ## 2026-08-22
 
 - 统一修正源码、构建脚本、测试和发布文档中的 `src/desktop2steoro` 目录引用为 `src/desktop2stereo`；保留 `desktop2steoro-vulkan` 项目名、历史记录和合规检查中的兼容映射不变。

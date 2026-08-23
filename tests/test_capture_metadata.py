@@ -6,7 +6,16 @@ from capture.types import (
     FrameCopyMode,
     capture_frame_from_raw,
     ensure_captured_frame,
+    capture_frame_from_native_texture,
 )
+
+
+class FakeNativeTexture:
+    resource_kind = "d3d11_texture"
+    format = "BGRA8"
+    width = 1920
+    height = 1080
+    adapter_luid = 123
 
 
 class FakeFrame:
@@ -50,6 +59,24 @@ def test_capture_frame_from_raw_populates_metadata_contract():
     assert captured.original_format == "BGRA"
     assert captured.metadata == {"backend": "fake"}
     assert captured.metadata is not metadata
+
+
+def test_native_texture_frame_contract_preserves_gpu_resource_metadata():
+    captured = capture_frame_from_native_texture(
+        FakeNativeTexture(),
+        1080,
+        3.0,
+        config=CaptureConfig(capture_tool="DesktopDuplication"),
+    )
+
+    assert captured.copy_mode is FrameCopyMode.NONE
+    assert captured.capture_size == (1920, 1080)
+    assert captured.frame_raw_device == "d3d11"
+    assert captured.metadata["resource_kind"] == "d3d11_texture"
+    assert captured.metadata["gpu_to_cpu"] is False
+    assert captured.metadata["gpu_copy_count"] == 0
+    assert captured.metadata["zero_copy"] is False
+    assert captured.metadata["adapter_luid"] == 123
 
 
 def test_ensure_captured_frame_keeps_new_contract_and_wraps_legacy_tuple():

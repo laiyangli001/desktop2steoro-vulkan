@@ -1,6 +1,6 @@
-# 高级网络推流的 Vulkan 图像传输实现指南
+# Desktop2Stereo 网络推流规格书：高级网络推流与 GPU 推流
 
-本文定义 Desktop2Stereo“高级网络推流”增加 Vulkan 图像路径的实现方法、模块边界、回退策略和验收要求。
+本文是 Desktop2Stereo 网络推流的统一规格书，定义“高级网络推流”和“GPU 推流”的共享会话层、视频编码后端、GPU 图像路径、音频复用、MediaMTX/WebRTC 发布、自动网络校准、回退策略、可观测性和验收要求。两种模式保留独立的用户入口与厂商编码策略，但共享网络会话配置、MediaMTX 生命周期、音频/压缩包发布、配置指纹和 WebRTC 端到端校准。
 
 目标是消除当前 4K SBS 推流中的 CUDA/ROCm → CPU RGB24 → FFmpeg stdin 路径，让图像在 GPU 内完成 SBS 整理、颜色转换和硬件编码。编码后的 H.264/H.265 小数据包仍通过 FFmpeg/MediaMTX 发布，并由局域网头显浏览器通过 WebRTC 播放。
 
@@ -26,6 +26,7 @@
 - [性能指标](#性能指标)
 - [日志规范](#日志规范)
 - [常见故障](#常见故障)
+- [统一网络推流规格](#统一网络推流规格)
 - [实现检查清单](#实现检查清单)
 
 ## 当前瓶颈
@@ -157,7 +158,7 @@ multi-plane external-memory CUDA 映射，再切换到 CUDA 直接写入路径�
 | 高级网络推流 | 跨厂商、跨平台、自动回退 | Vulkan Video → OpenGL GPU fallback → 厂商 FFmpeg 后端 → CPU | NVIDIA、AMD、Intel；macOS 用 VideoToolbox |
 | GPU 推流 | 厂商专用最低延迟路径 | PyNvVideoCodec、AMF 原生桥等 | 按显卡厂商实现 |
 
-高级推流不直接变成 PyNvVideoCodec 模式。Vulkan 是高级推流中的跨厂商 GPU 路径；GPU 推流继续保留厂商专用 API 和独立诊断信息。
+高级推流不直接变成 PyNvVideoCodec 模式。Vulkan 是高级推流中的跨厂商 GPU 路径；GPU 推流继续保留厂商专用 API 和独立诊断信息。两种模式共享网络会话配置、MediaMTX/音频复用、编码包发布、生命周期回收和 WebRTC 自动校准控制器；只有视频编码器选择、GPU 帧输入契约和回退顺序保持不同。
 
 推荐回退顺序：
 
@@ -817,6 +818,227 @@ GPU 零拷贝只解决电脑端原始帧搬运。继续检查：
 - 浏览器 decoded FPS 和 dropped frames。
 
 应让自动网络与性能校准根据闭环反馈降低 FPS/码率，而不是扩大编码缓冲区。
+
+## 统一网络推流规格
+
+### 1. 适用范围与不变量
+
+本规格覆盖以下两个运行模式：
+
+| 模式 | 内部键 | 主要定位 | 是否支持 WebRTC 自动校准 |
+| --- | --- | --- | --- |
+| 高级网络推流 | `RTMP Streamer` | 跨厂商、跨平台、自动探测与多级回退 | 是 |
+| GPU 推流 | `GPU Streamer` | NVIDIA/AMD 厂商专用低延迟 GPU 编码 | 是 |
+
+两种模式必须共同满足：
+
+1. 推理、SBS 输出和编码提交使用最新帧语义，不积压过期原始帧。
+2. MediaMTX 只接收压缩视频包和编码后的音频，不接收 4K RGB24 原始帧。
+3. WebRTC 模式必须提供头显浏览器可访问的 WHEP 播放路径。
+4. 编码器、MediaMTX、音频采集和校准线程退出时必须按逆序释放，不得遗留端口、FFmpeg 子进程或音频设备。
+5. 任意 GPU 专用路径失败时，必须保留可解释的回退原因并进入稳定路径，不得静默切换为未知后端。
+
+### 2. 共享会话层
+
+共享层位于 GUI 配置、运行时推理和具体 GPU 编码器之间，当前由 `streaming/stream_session.py` 与 `FfmpegDirectSbsOutput` 共同承载。
+
+```text
+GUI / settings.yaml
+        ↓
+NetworkStreamSessionConfig
+        ↓
+DirectSbsOutputConsumer
+        ↓
+共享 MediaMTX、音频、码率、校准、日志和生命周期
+        ↓
+可插拔视频编码器
+```
+
+`NetworkStreamSessionConfig` 是两种模式共同使用的传输配置对象，至少包含：
+
+- `protocol`：推荐 `WebRTC`。
+- `port`、`stream_key`：MediaMTX 发布端口和路径。
+- `fps`、`crf`、`display_mode`：视频目标和编码格式。
+- `stereo_mix_device`、`audio_delay`：桌面回环音频配置。
+- `target_bitrate_mbps`、`peak_bitrate_mbps`：自动校准结果或手动码率预算。
+
+共享层负责：
+
+- MediaMTX 启动、日志读取、指标采样和关闭。
+- FFmpeg 音频输入、音频编码、压缩视频包复用和发布。
+- 动态 FPS/码率预算、提交节流和旧帧丢弃。
+- WebRTC 校准控制器的启动、状态、结果保存和生命周期回收。
+- 编码器失败后的统一日志和稳定回退。
+
+具体编码器只实现 GPU 帧输入、编码包读取、同步和后端专属关闭逻辑，不重复实现 MediaMTX、配置解析和校准协议。
+
+### 3. 两种模式的后端契约
+
+```text
+共同前半段：捕获 → GPU 推理 → SBS GPU 帧
+
+高级网络推流：
+  CUDA/HIP → Vulkan Video
+                ↓ 失败
+             OpenGL interop → PyNvVideoCodec/AMF
+                ↓ 失败
+             FFmpeg 硬件/软件 host-upload
+
+GPU 推流：
+  NVIDIA：CUDA RGBA → PyNvVideoCodec/NVENC
+  AMD：HIP RGBA → D3D11 texture → AMF
+                ↓ 失败
+             FFmpeg 硬件/软件回退
+
+共同后半段：编码包 + 音频 → FFmpeg mux → MediaMTX → WebRTC/头显
+```
+
+高级网络推流优先选择跨厂商后端，并根据能力探针动态回退。GPU 推流按 GPU 厂商选择 PyNvVideoCodec 或 AMF，追求更短的编码路径。两者不能共享具体的 Vulkan、CUDA Array Interface、D3D11 texture 或 AMF resource 生命周期，但必须共享上层编码器接口和发布会话。
+
+### 4. GPU 推流规格
+
+#### NVIDIA
+
+1. 输入为推理产生的 CUDA RGBA/SBS tensor。
+2. `PyNvVideoCodecEncoder` 在 CUDA/NVENC 内执行颜色转换和 H.264/H.265 编码。
+3. 压缩包通过 `PyNvSrtVideoOutput` 交给 FFmpeg mux-only 进程。
+4. SoundCard/WASAPI 回环音频由独立音频输入送入 FFmpeg，WebRTC 使用 Opus，非 WebRTC 使用 AAC。
+5. PyNvVideoCodec、音频采集、mux 或运行期提交失败时，回退到稳定 FFmpeg 视频/音频路径。
+
+#### AMD
+
+1. 输入为 HIP device tensor。
+2. 通过共享 D3D11 texture 导入 AMF surface。
+3. `AmdAmfSurfaceEncoder` 输出 H.264/H.265 压缩包。
+4. FFmpeg 仅负责包复用和 MediaMTX 发布。
+5. AMF/HIP/驱动不满足条件时，回退到 FFmpeg；当前 AMF 原生路径要求音频关闭，启用音频时使用稳定 FFmpeg 音视频路径。
+
+GPU 推流的“GPU-only”表示视频原始帧不下载到 CPU，不等于所有音频和 mux 操作都在 GPU 上执行，也不等于所有设备上都满足严格 zero-copy。
+
+### 5. 高级网络推流规格
+
+高级网络推流的后端顺序由能力探针和配置决定：
+
+1. Vulkan native：CUDA external image import → Vulkan Compute RGBA/RGB 到 NV12 → Vulkan Video 编码 → mux。
+2. OpenGL GPU fallback：NVIDIA 使用 CUDA–OpenGL interop → PyNvVideoCodec/NVENC；AMD 使用 HIP–OpenGL interop → AMF。
+3. 平台硬件回退：NVENC、QSV、AMF、VAAPI 或 VideoToolbox。
+4. 最终稳定回退：CPU host-upload → FFmpeg 软件编码。
+
+Vulkan/OpenGL 失败时只切换一次当前会话的路径，记录能力、失败原因、`gpu_to_cpu`、`gpu_copy_count` 和 `zero_copy`，避免后端之间来回抖动。
+
+### 6. 共享自动网络校准方案
+
+自动校准对高级网络推流和 GPU 推流使用同一个 `StreamCalibrationController`，前提是协议为 WebRTC。校准入口、GUI 结果、配置指纹和头显 WHEP 统计全部共享。
+
+校准流程如下：
+
+```text
+GUI 检查校准指纹
+        ↓ 无有效结果
+启动 MediaMTX + 校准 HTTP 页面
+        ↓ 头显打开页面并回传 getStats()
+启动独立 30 FPS CBR 压力流
+        ↓
+采集 sender / MediaMTX / WebRTC receiver 指标
+        ↓
+测试码率档位并确认稳定性
+        ↓
+保存 network_max、safe target、safe peak、fps
+        ↓
+正常启动所选 GPU/高级编码后端
+```
+
+关键规则：
+
+- 校准流与推理帧解耦，使用独立 FFmpeg CBR 压力源，避免推理速度影响网络测量。
+- GPU 推流校准阶段不得启动 PyNvVideoCodec 或 AMF 生产编码器；校准完成后的正常运行才选择 GPU 专用后端。
+- 校准只支持 WebRTC，因为只有 WebRTC 头显页面能回传解码帧率、冻结、丢帧、RTP 丢包、抖动缓冲、RTT 和接收码率。
+- 校准结果按输入分辨率、显示模式、编码后端、协议、GPU、模型和其他运行配置建立 fingerprint。
+- 保存安全余量：网络稳定上限用于计算安全目标码率和峰值码率，不直接作为长期运行码率。
+- 更换路由器、Wi-Fi 频段、头显、浏览器、系统、输出分辨率、编码格式、画质、GPU、驱动或性能模式后，应重新校准。
+
+校准输出至少包括：
+
+| 字段 | 含义 |
+| --- | --- |
+| `fps` | 头显端稳定解码帧率 |
+| `network_max_mbps` | 测得的网络/接收稳定上限 |
+| `target_mbps` | 应用安全目标码率 |
+| `peak_mbps` | 应用峰值码率和缓冲预算 |
+| `measured_bitrate_mbps` | 接收端实际测得码率 |
+| `encoded_bitrate_mbps` | 发送端实际编码码率 |
+| `metrics` | sender、MediaMTX 和 WebRTC receiver 指标集合 |
+| `fingerprint` | 使结果失效的运行配置指纹 |
+
+### 7. 音频与 MediaMTX 契约
+
+音频不是 GPU zero-copy 的组成部分，而是共享发布会话的一部分：
+
+- Windows SoundCard/WASAPI loopback 以实时 PCM 送入音频管线。
+- WebRTC 音频编码使用 Opus；其他协议按后端使用 AAC 或配置的音频编码器。
+- 音频采集短暂异常时，必须保持 FFmpeg 输入时钟；当前实现按实时节奏发送静音，避免视频发布因音频输入停止而超时。
+- MediaMTX 接收的是 RTSP/SRT 或 mux 后的压缩流，不应接收原始 GPU tensor。
+- MediaMTX 日志中的 WebRTC session 创建/关闭属于播放会话生命周期，不能单独作为 GPU 编码失败依据；应结合编码器、mux、RTSP/SRT 和 WebRTC 指标判断。
+
+### 8. 零拷贝和复制边界定义
+
+日志必须区分以下概念：
+
+- `gpu_to_cpu=False`：视频原始帧没有下载到 CPU。
+- `zero_copy=True`：生产者资源直接成为编码器输入，没有 GPU linear/texture 或中间 image 复制。
+- `gpu_copy=True`：仍在 GPU 内完成复制，不代表发生 CPU 往返。
+- `gpu_copy_count`：已知 GPU 内复制次数。
+- `host-upload`：原始帧已经在 CPU，走 FFmpeg host-upload；不应把它伪装成 GPU zero-copy。
+
+当前已知边界：
+
+- NVIDIA PyNvVideoCodec Python API 不能直接接收 OpenGL `cudaArray_t`，OpenGL fallback 可能记录 `gpu_to_cpu=False` 但 `zero_copy=False`。
+- 当前 RTX 3090 Vulkan 驱动对编码 NV12 `STORAGE_IMAGE` 能力不满足，native Vulkan 选择固定槽位 device-local copy；该路径不下载 CPU，但不是严格 zero-copy。
+- Intel/macOS 和无 CUDA/HIP interop 平台必须明确进入 host-upload 或平台原生硬件路径。
+
+### 9. 可观测性与故障分类
+
+每次启动应记录：
+
+- 运行模式、协议、端口、stream key、分辨率、FPS、目标/峰值码率。
+- 实际视频后端和编码器：PyNvVideoCodec、AMF、Vulkan、NVENC、QSV、VAAPI、VideoToolbox 或软件编码器。
+- `gpu_to_cpu`、`zero_copy`、`gpu_copy_count`、interop 类型。
+- 音频设备、音频编码器和音频是否启用。
+- MediaMTX 发布状态、WebRTC session、RTSP/SRT 发布错误。
+- 校准状态、当前 tier、receiver 指标和最终 profile。
+
+故障应分为：
+
+1. GPU 输入/同步失败。
+2. 编码器初始化或运行失败。
+3. 音频采集或 mux 失败。
+4. MediaMTX/RTSP/SRT 发布失败。
+5. WebRTC 头显接收、解码、丢包或冻结。
+6. 校准端口、防火墙或头显页面不可访问。
+
+### 10. 验收矩阵
+
+| 验收项 | 高级网络推流 | GPU 推流 |
+| --- | --- | --- |
+| WebRTC 播放 | 必须 | 必须 |
+| 自动网络校准 | 必须 | 必须 |
+| 头显解码 FPS/丢帧/冻结统计 | 必须 | 必须 |
+| NVIDIA 4K H.264/H.265 | Vulkan/OpenGL/回退路径分别验证 | PyNvVideoCodec 验证 |
+| AMD 4K H.264/H.265 | Vulkan/OpenGL/回退路径分别验证 | HIP/D3D11/AMF 真机验证 |
+| 音频与视频复用 | 必须 | 必须 |
+| 运行期编码器失败回退 | 必须 | 必须 |
+| 长时间头显播放 | PICO/Quest/Wolvic | PICO/Quest/Wolvic |
+| 多 GPU/驱动差异 | 按能力探针验证 | 按厂商路径验证 |
+
+未通过某一项时，不得用“GPU-only”或“zero-copy”概括整个模式；必须记录实际后端和回退边界。
+
+### 11. 配置和兼容性
+
+- 保留 `RTMP Streamer` 和 `GPU Streamer` 两个用户可选模式。
+- 旧的 `NVIDIA Streamer`、`NVIDIA GPU Streamer` 配置继续归一化为 `GPU Streamer`。
+- 校准配置与运行模式、协议、视频后端和硬件指纹绑定，切换模式后不得错误复用另一模式的校准结果。
+- GUI 的“自动校准”选项对两个 WebRTC 网络模式可见；MJPEG、本地预览和 OpenXR 不显示该入口。
+- 删除或替换某个编码后端时，必须保留共享会话和校准接口，不能让 UI 直接依赖具体编码器类。
 
 ## 实现检查清单
 
