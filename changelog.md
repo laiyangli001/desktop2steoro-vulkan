@@ -32,6 +32,8 @@
 
 - SHA-256 发布清单改为只记录 DLL 和 `libvpl.dll` 等二进制文件，避免 Git 文本换行规范化造成 manifest 哈希误报。
 
+- 新增 `src/tools/intel_native_runtime_probe.py`：目标 Intel Windows 机器可用 `--strict` 一次检查按功能发布目录、DLL 哈希、Desktop Duplication、OpenVINO RemoteTensor、D3D11 SBS Surface 和 oneVPL 能力；默认模式输出完整 JSON 诊断但不因当前机器缺少 Intel 驱动而失败。
+
 - 对齐当前 OpenVINO C++ API 头文件布局，将 PrePostProcessor include 修正为 `openvino/core/preprocess/pre_post_process.hpp`，并同步远程开发头检查路径。
 
 - 新增 Intel Windows 零拷贝捕捉—推理计划书 `docs/18-intel-windows-zero-copy-capture-inference-plan.md`；GUI 捕捉源加入 `DesktopDuplication` 选项，并新增 DXGI/D3D11 原生桥 C ABI、CMake 工程、ctypes 能力探测、原生纹理借用帧契约和 OpenVINO RemoteTensor 能力层。启用 `D2S_INTEL_NATIVE_OPENVINO=1` 且原生 DLL/模型可用时，原生 D3D11 帧进入 OpenVINO provider；现阶段输出仍回读 CPU，因此明确记录 `zero_copy=False`。Desktop Duplication 遇到 `DXGI_ERROR_ACCESS_LOST` 时会重建输出并自动重试一次。
