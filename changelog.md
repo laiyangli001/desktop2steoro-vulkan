@@ -30,6 +30,8 @@
 
 - Intel Windows native workflow 增加发布同步 job：远程构建和导出校验成功后，自动按功能把 bridge、`libvpl.dll`、manifest 和校验清单提交到 `capture/native/desktop_duplication` 及 Intel provider 下的三个 native 功能目录，对外发布程序可直接从对应运行时目录加载。
 
+- SHA-256 发布清单改为只记录 DLL 和 `libvpl.dll` 等二进制文件，避免 Git 文本换行规范化造成 manifest 哈希误报。
+
 - 对齐当前 OpenVINO C++ API 头文件布局，将 PrePostProcessor include 修正为 `openvino/core/preprocess/pre_post_process.hpp`，并同步远程开发头检查路径。
 
 - 新增 Intel Windows 零拷贝捕捉—推理计划书 `docs/18-intel-windows-zero-copy-capture-inference-plan.md`；GUI 捕捉源加入 `DesktopDuplication` 选项，并新增 DXGI/D3D11 原生桥 C ABI、CMake 工程、ctypes 能力探测、原生纹理借用帧契约和 OpenVINO RemoteTensor 能力层。启用 `D2S_INTEL_NATIVE_OPENVINO=1` 且原生 DLL/模型可用时，原生 D3D11 帧进入 OpenVINO provider；现阶段输出仍回读 CPU，因此明确记录 `zero_copy=False`。Desktop Duplication 遇到 `DXGI_ERROR_ACCESS_LOST` 时会重建输出并自动重试一次。

@@ -214,6 +214,7 @@ jobs:
           }
           $manifest | ConvertTo-Json | Set-Content -LiteralPath "$artifact\manifest.json" -Encoding utf8
           $hashes = Get-ChildItem -LiteralPath $artifact -File |
+            Where-Object { $_.Extension -ieq '.dll' } |
             ForEach-Object {
               [ordered]@{
                 file = $_.Name
