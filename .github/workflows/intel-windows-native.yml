@@ -12,7 +12,7 @@ on:
       - ".github/workflows/intel-windows-native.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-intel-windows-native:
@@ -182,7 +182,7 @@ jobs:
             throw "oneVPL bridge is not linked to the remotely built dispatcher"
           }
 
-      - name: Upload Intel native bridge artifacts
+      - name: Prepare Intel native bridge artifact
         shell: pwsh
         run: |
           $artifact = "$env:RUNNER_TEMP\d2s-intel-windows-native-x64"
@@ -213,8 +213,14 @@ jobs:
             intel_driver = "Required on the target machine for Desktop Duplication, GPU RemoteTensor and oneVPL hardware encoding"
           }
           $manifest | ConvertTo-Json | Set-Content -LiteralPath "$artifact\manifest.json" -Encoding utf8
-          Get-ChildItem -LiteralPath $artifact -File | Get-FileHash -Algorithm SHA256 |
-            Select-Object Path, Hash | ConvertTo-Json | Set-Content -LiteralPath "$artifact\sha256.json" -Encoding utf8
+          $hashes = Get-ChildItem -LiteralPath $artifact -File |
+            ForEach-Object {
+              [ordered]@{
+                file = $_.Name
+                sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
+              }
+            }
+          $hashes | ConvertTo-Json | Set-Content -LiteralPath "$artifact\sha256.json" -Encoding utf8
 
       - name: Upload Intel native bridge artifacts
         uses: actions/upload-artifact@v4
@@ -222,3 +228,43 @@ jobs:
           name: d2s-intel-windows-native-x64
           if-no-files-found: error
           path: ${{ runner.temp }}/d2s-intel-windows-native-x64/*
+
+  commit-native-binaries:
+    name: Commit Intel native bridge binaries
+    needs: build-intel-windows-native
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Download Intel native bridge artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: d2s-intel-windows-native-x64
+          path: src/desktop2stereo/native/windows
+
+      - name: Commit Intel native binaries to runtime tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime_dir="src/desktop2stereo/native/windows"
+          for file in \
+            d2s_desktop_duplication.dll \
+            d2s_d3d11_sbs_surface.dll \
+            d2s_onevpl_d3d11_encoder.dll \
+            d2s_openvino_d3d11_bridge.dll \
+            libvpl.dll \
+            manifest.json \
+            sha256.json; do
+            test -f "$runtime_dir/$file"
+          done
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$runtime_dir"
+          if git diff --cached --quiet; then
+            echo "Intel native runtime binaries are already up to date."
+            exit 0
+          fi
+          git commit -m "build: update Intel native runtime binaries"
+          git push origin HEAD:main

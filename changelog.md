@@ -28,6 +28,8 @@
 
 - Intel native artifact 改为扁平可部署目录，附带 `manifest.json` 与 SHA-256 清单；运行时新增共享 `D2S_INTEL_NATIVE_ARTIFACT_DIR` 搜索路径，四个 Intel bridge 不再需要分别配置 DLL 路径。
 
+- Intel Windows native workflow 增加发布同步 job：远程构建和导出校验成功后，自动把四个 bridge、`libvpl.dll`、manifest 和校验清单提交到 `src/desktop2stereo/native/windows/`，对外发布程序可直接从源码运行时目录加载。
+
 - 对齐当前 OpenVINO C++ API 头文件布局，将 PrePostProcessor include 修正为 `openvino/core/preprocess/pre_post_process.hpp`，并同步远程开发头检查路径。
 
 - 新增 Intel Windows 零拷贝捕捉—推理计划书 `docs/18-intel-windows-zero-copy-capture-inference-plan.md`；GUI 捕捉源加入 `DesktopDuplication` 选项，并新增 DXGI/D3D11 原生桥 C ABI、CMake 工程、ctypes 能力探测、原生纹理借用帧契约和 OpenVINO RemoteTensor 能力层。启用 `D2S_INTEL_NATIVE_OPENVINO=1` 且原生 DLL/模型可用时，原生 D3D11 帧进入 OpenVINO provider；现阶段输出仍回读 CPU，因此明确记录 `zero_copy=False`。Desktop Duplication 遇到 `DXGI_ERROR_ACCESS_LOST` 时会重建输出并自动重试一次。
