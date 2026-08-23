@@ -6,6 +6,7 @@ if(NOT WIN32)
 endif()
 
 set(D2S_OPENVINO_ROOT "" CACHE PATH "OpenVINO SDK root containing include and lib")
+set(D2S_OPENCL_INCLUDE_DIR "" CACHE PATH "OpenCL-Headers include directory")
 if(NOT D2S_OPENVINO_ROOT)
     message(FATAL_ERROR "Set D2S_OPENVINO_ROOT to an OpenVINO SDK root")
 endif()
@@ -26,6 +27,10 @@ target_compile_features(d2s_openvino_d3d11_bridge PRIVATE cxx_std_17)
 target_compile_definitions(d2s_openvino_d3d11_bridge PRIVATE D2S_OPENVINO_D3D11_BUILD=1 WIN32_LEAN_AND_MEAN NOMINMAX)
 target_include_directories(d2s_openvino_d3d11_bridge PRIVATE
     "${D2S_OPENVINO_INCLUDE_DIR}")
+if(D2S_OPENCL_INCLUDE_DIR)
+    target_include_directories(d2s_openvino_d3d11_bridge PRIVATE
+        "${D2S_OPENCL_INCLUDE_DIR}")
+endif()
 target_link_libraries(d2s_openvino_d3d11_bridge PRIVATE
     "${D2S_OPENVINO_LIBRARY}"
     d3d11

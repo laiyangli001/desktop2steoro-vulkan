@@ -43,6 +43,11 @@ jobs:
           }
           "D2S_OPENVINO_ROOT=$($header.Directory.Parent.Parent.Parent.FullName)" >> $env:GITHUB_ENV
 
+      - name: Download official Khronos OpenCL headers
+        shell: pwsh
+        run: |
+          git clone --depth 1 https://github.com/KhronosGroup/OpenCL-Headers.git "$env:RUNNER_TEMP\opencl-headers"
+
       - name: Build official oneVPL dispatcher
         shell: pwsh
         run: |
@@ -88,7 +93,8 @@ jobs:
         run: |
           cmake -S native/openvino_d3d11_bridge -B native/openvino_d3d11_bridge/build/ci `
             -G "Visual Studio 17 2022" -A x64 `
-            -DD2S_OPENVINO_ROOT="$env:D2S_OPENVINO_ROOT"
+            -DD2S_OPENVINO_ROOT="$env:D2S_OPENVINO_ROOT" `
+            -DD2S_OPENCL_INCLUDE_DIR="$env:RUNNER_TEMP\opencl-headers"
 
       - name: Build Intel native bridges
         shell: pwsh
