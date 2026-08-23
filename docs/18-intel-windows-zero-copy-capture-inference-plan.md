@@ -22,7 +22,7 @@ Desktop Duplication 是 Windows DXGI 1.2 的通用桌面捕捉接口，适用于
 ## 2. 当前实现结论
 
 - `windows_capture_event.py` 使用 `windows_capture` 回调接口，并不能证明已经实现 DXGI Desktop Duplication。
-- 已新增 `windows_desktop_duplication.py` 与 `native/desktop_duplication` 原生桥；原生 DLL 不可用时仍回退到 `DXCamera`。
+- 已新增 `windows_desktop_duplication.py` 与 `native/desktop_duplication` 原生桥；原生 DLL 不可用时按 `WindowsCapture -> DXCamera` 顺序回退。
 - Desktop Duplication 原生路径现在优先让同一借用 D3D11 texture 同时进入 OpenVINO 推理，并在保持 `AcquireNextFrame` 生命周期期间通过 staging readback 生成兼容 BGR CPU 帧；不再默认“DXCamera 捕捉一次、原生推理再捕捉一次”。该兼容边界仍是 `gpu_to_cpu=true`、`zero_copy=false`、`gpu_copy_count=1`。
 - 已建立 D3D11 Texture 到 OpenVINO RemoteTensor 的原生桥；PyTorch XPU 仍作为兼容后端。
 - Vulkan 已有 Adapter 身份、外部内存、同步和 GPU 图像路径，Intel 实现应复用这些公共能力。
@@ -256,7 +256,7 @@ AMD         -> WindowsCaptureROCm
 - [x] 新增 OpenVINO RemoteTensor 能力层，明确区分 Python runtime 与原生 D3D11 bridge。
 - [x] 新增 `native/openvino_d3d11_bridge` 的 C ABI/CMake 接口，以及 Python ctypes session facade。
 - [x] 校正 RemoteTensor 能力边界：桥接器明确暴露 NV12 surface 与 BGRA8→NV12 conversion capability，未具备二者时不报告零拷贝。
-- [x] 原生桥不可用时明确回退到 DXCamera，并保持 `gpu_to_cpu=True zero_copy=False`。
+- [x] 原生桥不可用时明确按 `WindowsCapture -> DXCamera` 回退，并保持 `gpu_to_cpu=True zero_copy=False`。
 - [x] Desktop Duplication 探针合并捕捉能力、OpenVINO RemoteTensor 能力、`native_inference_zero_copy_ready`、端到端 `zero_copy_ready` 和回退原因日志，避免把 staging readback 误报为零拷贝。
 - [x] 实现 D3D11 VideoProcessor 的 BGRA8→NV12 GPU 转换器、NV12 RemoteTensor 接线，以及输出 shape/float buffer ABI。
 - [x] 暴露 bridge 内部借用的 NV12 D3D11 surface 契约，并由 native oneVPL encoder 复用；真实硬件编码仍需 Intel 真机验证。
