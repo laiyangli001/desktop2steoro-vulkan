@@ -18,8 +18,9 @@ from typing import Any
 
 
 _SRC_ROOT = Path(__file__).resolve().parents[1]
-if str(_SRC_ROOT) not in sys.path:
-    sys.path.insert(0, str(_SRC_ROOT))
+for _import_root in (_SRC_ROOT, _SRC_ROOT / "desktop2stereo"):
+    if str(_import_root) not in sys.path:
+        sys.path.insert(0, str(_import_root))
 
 from desktop2stereo.stereo_runtime.providers.intel.d3d11_sbs_surface import (  # noqa: E402
     probe_d3d11_sbs_surface,
