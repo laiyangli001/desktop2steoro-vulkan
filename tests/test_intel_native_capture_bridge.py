@@ -4,11 +4,15 @@ import ctypes
 
 import pytest
 
+import desktop2stereo.capture.backends.windows_desktop_duplication as desktop_duplication
 from desktop2stereo.capture.backends.desktop_duplication_native import (
     NativeDesktopDuplication,
     NativeD3D11TextureFrame,
 )
 from desktop2stereo.capture.backends.windows_desktop_duplication import DesktopGrabber
+from desktop2stereo.stereo_runtime.providers.intel.openvino_remote import (
+    OpenVINORemoteTensorCapability,
+)
 
 
 class _Frame:
@@ -35,6 +39,40 @@ def _grabber_with_frame(frame: _Frame) -> DesktopGrabber:
     grabber = DesktopGrabber.__new__(DesktopGrabber)
     grabber.acquire_native_frame = lambda: frame
     return grabber
+
+
+def test_probe_does_not_promote_staging_readback_to_end_to_end_zero_copy(monkeypatch):
+    monkeypatch.setattr(
+        desktop_duplication,
+        "probe_native",
+        lambda: {"available": True, "texture_consumer": True},
+    )
+    monkeypatch.setattr(
+        desktop_duplication,
+        "probe_openvino_remote_tensor",
+        lambda: OpenVINORemoteTensorCapability(
+            runtime_available=True,
+            directx_remote_tensor=True,
+            native_bridge_required=False,
+            native_bridge_available=True,
+        ),
+    )
+    monkeypatch.setattr(
+        desktop_duplication,
+        "probe_onevpl_d3d11",
+        lambda: {"available": True, "backend": "onevpl_d3d11_surface"},
+    )
+    monkeypatch.setattr(
+        desktop_duplication,
+        "probe_d3d11_sbs_surface",
+        lambda: {"available": True, "backend": "d3d11_sbs_surface"},
+    )
+
+    result = desktop_duplication.probe()
+
+    assert result["native_inference_zero_copy_ready"] is True
+    assert result["zero_copy_ready"] is False
+    assert "staging readback" in result["zero_copy_reason"]
 
 
 class _AccessLostLibrary:

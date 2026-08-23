@@ -77,7 +77,7 @@ D3D11 BGRA8 Texture
 - 推理输入输出生命周期。
 - Fence/同步和异常恢复。
 
-注意：OpenVINO 的 D3D11 surface 互操作不能直接把 Desktop Duplication 的 BGRA8 texture 当作已验证的 NV12 RemoteTensor。转换器未完成前，能力探针必须保持 `zero_copy_ready=false`。
+注意：OpenVINO 的 D3D11 surface 互操作不能直接把 Desktop Duplication 的 BGRA8 texture 当作已验证的 NV12 RemoteTensor。当前探针分别暴露 `native_inference_zero_copy_ready`（借用纹理可供原生推理）和 `zero_copy_ready`（捕捉到输出端到端）；由于兼容输出仍有 staging readback，后者必须保持 `false`。
 
 当前实现接入方式：设置 `D2S_INTEL_NATIVE_OPENVINO=1`，并提供 `D2S_OPENVINO_MODEL` 模型路径；只有 Desktop Duplication 原生桥能力探测通过时才启用原生 provider，否则继续使用 DXCamera 兼容 RGB 帧和既有深度路径。原生 provider 的深度结果会随 `CapturedFrame.metadata.native_depth_profile` 进入运行时，现有立体合成仍使用兼容 RGB 帧。由于当前 provider 的输出 ABI 会回读 CPU，运行时必须记录 `native_depth_zero_copy=0`。
 
@@ -257,7 +257,7 @@ AMD         -> WindowsCaptureROCm
 - [x] 新增 `native/openvino_d3d11_bridge` 的 C ABI/CMake 接口，以及 Python ctypes session facade。
 - [x] 校正 RemoteTensor 能力边界：桥接器明确暴露 NV12 surface 与 BGRA8→NV12 conversion capability，未具备二者时不报告零拷贝。
 - [x] 原生桥不可用时明确回退到 DXCamera，并保持 `gpu_to_cpu=True zero_copy=False`。
-- [x] Desktop Duplication 探针合并捕捉能力、OpenVINO RemoteTensor 能力、`zero_copy_ready` 和回退原因日志。
+- [x] Desktop Duplication 探针合并捕捉能力、OpenVINO RemoteTensor 能力、`native_inference_zero_copy_ready`、端到端 `zero_copy_ready` 和回退原因日志，避免把 staging readback 误报为零拷贝。
 - [x] 实现 D3D11 VideoProcessor 的 BGRA8→NV12 GPU 转换器、NV12 RemoteTensor 接线，以及输出 shape/float buffer ABI。
 - [x] 暴露 bridge 内部借用的 NV12 D3D11 surface 契约，供后续 oneVPL/QSV 复用；直接编码提交仍需 native encoder 实现和实机验证。
 - [x] 新增 `OpenVINOD3D11DepthProvider` 适配器，将原生输出转换为现有 `DepthProfileResult`，并在桥接能力不完整时拒绝初始化。
@@ -292,7 +292,7 @@ src\python3\python.exe src\tools\intel_native_runtime_probe.py --strict
 
 默认模式用于收集 JSON 能力报告；`--strict` 只有在 Windows Intel 驱动、OpenVINO runtime、oneVPL 和四个发布 DLL 都可用时才返回成功。
 
-新增 `.github/workflows/intel-windows-native.yml`，以 GitHub-hosted `windows-2022` runner 作为 C++ 编译依据：workflow 从官方 `oneapi-src/oneVPL`、OpenVINO Windows C++ archive、Khronos OpenCL-Headers/CLHPP/ICD-Loader 拉取依赖，编译 Desktop Duplication、D3D11 SBS surface、oneVPL 和 OpenVINO bridge，并收集必要 OpenVINO runtime DLL，上传扁平化 artifact、`manifest.json` 和仅覆盖二进制文件的 SHA-256 清单；后续 job 会按功能自动提交到 `src/desktop2stereo/capture/native/desktop_duplication/`、`src/desktop2stereo/stereo_runtime/providers/intel/native/d3d11_sbs_surface/`、`onevpl_d3d11_encoder/` 和 `openvino_d3d11_bridge/`，使对外发布版无需手工设置 DLL 路径。最新 Intel workflow run `32653950840` 已成功完成配置、编译、四个 DLL 的 C ABI 导出及 oneVPL `libvpl.dll` 链接校验，并自动提交二进制；Shader workflow run `32653950821` 已远程编译并提交 packed SBS SPIR-V。源码和二进制均由 GitHub Actions 生成，本地不作为 native C++/SPIR-V 编译验证环境。下载 artifact 后，将目录设置到 `D2S_INTEL_NATIVE_ARTIFACT_DIR`，四个 Python 适配器会共享该目录；单个 `D2S_*_DLL` 环境变量仍可覆盖。OpenVINO runtime DLL 随发布包提供，Intel 驱动和 OpenCL ICD 仍需安装在目标机。Python 侧只有 DLL 可加载且导出 ABI 完整时才会报告 `directx_remote_tensor=True`。本轮新增 Intel surface/oneVPL/QSV 及同帧 readback 回归测试；当前目标路径回归集合为 `116 passed`。当前剩余工作是下载 artifact 到 Intel 目标机完成驱动、OpenVINO GPU RemoteTensor、oneVPL 硬件编码、Adapter LUID、D3D11 BGRA storage-image 互操作、4K 长时间和最终 SBS 原生 surface 验证。仓库中未发现 `docs/00-api-handoff-progress.md`，因此未修改不存在的交接文档。
+新增 `.github/workflows/intel-windows-native.yml`，以 GitHub-hosted `windows-2022` runner 作为 C++ 编译依据：workflow 从官方 `oneapi-src/oneVPL`、OpenVINO Windows C++ archive、Khronos OpenCL-Headers/CLHPP/ICD-Loader 拉取依赖，编译 Desktop Duplication、D3D11 SBS surface、oneVPL 和 OpenVINO bridge，并收集必要 OpenVINO runtime DLL，上传扁平化 artifact、`manifest.json` 和仅覆盖二进制文件的 SHA-256 清单；后续 job 会按功能自动提交到 `src/desktop2stereo/capture/native/desktop_duplication/`、`src/desktop2stereo/stereo_runtime/providers/intel/native/d3d11_sbs_surface/`、`onevpl_d3d11_encoder/` 和 `openvino_d3d11_bridge/`，使对外发布版无需手工设置 DLL 路径。最新 Intel workflow run `32653950840` 已成功完成配置、编译、四个 DLL 的 C ABI 导出及 oneVPL `libvpl.dll` 链接校验，并自动提交二进制；Shader workflow run `32653950821` 已远程编译并提交 packed SBS SPIR-V。源码和二进制均由 GitHub Actions 生成，本地不作为 native C++/SPIR-V 编译验证环境。下载 artifact 后，将目录设置到 `D2S_INTEL_NATIVE_ARTIFACT_DIR`，四个 Python 适配器会共享该目录；单个 `D2S_*_DLL` 环境变量仍可覆盖。OpenVINO runtime DLL 随发布包提供，Intel 驱动和 OpenCL ICD 仍需安装在目标机。Python 侧只有 DLL 可加载且导出 ABI 完整时才会报告 `directx_remote_tensor=True`。本轮新增 Intel surface/oneVPL/QSV 及同帧 readback 回归测试；当前目标路径回归集合为 `117 passed`。严格探针当前会因 staging readback 返回失败，等待 Intel 真机完成驱动、OpenVINO GPU RemoteTensor、oneVPL 硬件编码、Adapter LUID、D3D11 BGRA storage-image 互操作、4K 长时间和最终 SBS 原生 surface 验证。仓库中未发现 `docs/00-api-handoff-progress.md`，因此未修改不存在的交接文档。
 
 ## 9. 交付文件
 

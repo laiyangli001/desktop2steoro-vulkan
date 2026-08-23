@@ -50,8 +50,19 @@ def probe() -> dict:
             "final_sbs_surface_available": final_surface["available"],
             "final_sbs_surface_reason": final_surface.get("reason"),
             "inference_available": inference.zero_copy_ready,
+            "native_inference_zero_copy_ready": (
+                result.get("available", False) and inference.zero_copy_ready
+            ),
             "inference_reason": inference.reason,
-            "zero_copy_ready": result.get("available", False) and inference.zero_copy_ready,
+            # The current Desktop Duplication consumer intentionally performs
+            # one staging readback to preserve the existing CPU-frame contract.
+            # Do not promote the borrowed-texture inference capability to an
+            # end-to-end capture zero-copy claim.
+            "zero_copy_ready": False,
+            "zero_copy_reason": (
+                "native capture-to-inference texture is available, but the "
+                "compatibility output still performs a staging readback"
+            ),
         }
     )
     return result
@@ -93,13 +104,13 @@ class DesktopGrabber:
                 "[DesktopDuplication] native DXGI bridge is available; "
                 "D3D11 texture consumer capability=%s, inference_zero_copy=%s",
                 self._native_probe.get("texture_consumer", True),
-                self._native_probe.get("zero_copy_ready", False),
+                self._native_probe.get("native_inference_zero_copy_ready", False),
             )
         if (
             str(os.environ.get("D2S_INTEL_NATIVE_OPENVINO", "0")).strip().lower()
             in {"1", "true", "yes", "on"}
             and os.environ.get("D2S_OPENVINO_MODEL")
-            and self._native_probe.get("zero_copy_ready")
+            and self._native_probe.get("native_inference_zero_copy_ready")
         ):
             try:
                 self._native_depth_provider = self.create_native_depth_provider(

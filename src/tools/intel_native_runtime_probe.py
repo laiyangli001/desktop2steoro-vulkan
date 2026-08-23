@@ -144,7 +144,12 @@ def main(argv: list[str] | None = None) -> int:
     inference = report["openvino_remote_tensor"]
     encoder = report["onevpl_d3d11"]
     surface = report["d3d11_sbs_surface"]
-    if not capture.get("available") or not inference or not inference.get("zero_copy_ready"):
+    if (
+        not capture.get("available")
+        or not capture.get("zero_copy_ready")
+        or not inference
+        or not inference.get("zero_copy_ready")
+    ):
         return 1
     if not encoder.get("available") or not surface.get("available"):
         return 1
