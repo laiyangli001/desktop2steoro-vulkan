@@ -16,6 +16,7 @@ D2S_D3D11_SURFACE_API void* d2s_d3d11_sbs_surface_create_from_device(
     int width, int height, void* d3d11_device);
 D2S_D3D11_SURFACE_API void* d2s_d3d11_sbs_surface_device(void* handle);
 D2S_D3D11_SURFACE_API unsigned long long d2s_d3d11_sbs_surface_adapter_luid(void* handle);
+D2S_D3D11_SURFACE_API void* d2s_d3d11_sbs_surface_bgra_texture(void* handle);
 D2S_D3D11_SURFACE_API void* d2s_d3d11_sbs_surface_shared_handle(void* handle);
 D2S_D3D11_SURFACE_API int d2s_d3d11_sbs_surface_set_bgra_texture(
     void* handle, void* bgra_texture, unsigned long long adapter_luid);

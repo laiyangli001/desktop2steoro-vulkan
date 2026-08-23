@@ -45,6 +45,7 @@ def _load_bridge():
             "d2s_d3d11_sbs_surface_create_from_device",
             "d2s_d3d11_sbs_surface_device",
             "d2s_d3d11_sbs_surface_adapter_luid",
+            "d2s_d3d11_sbs_surface_bgra_texture",
             "d2s_d3d11_sbs_surface_shared_handle",
             "d2s_d3d11_sbs_surface_set_bgra_texture",
             "d2s_d3d11_sbs_surface_upload_bgra",
@@ -66,6 +67,8 @@ def _load_bridge():
         library.d2s_d3d11_sbs_surface_device.restype = ctypes.c_void_p
         library.d2s_d3d11_sbs_surface_adapter_luid.argtypes = [ctypes.c_void_p]
         library.d2s_d3d11_sbs_surface_adapter_luid.restype = ctypes.c_ulonglong
+        library.d2s_d3d11_sbs_surface_bgra_texture.argtypes = [ctypes.c_void_p]
+        library.d2s_d3d11_sbs_surface_bgra_texture.restype = ctypes.c_void_p
         library.d2s_d3d11_sbs_surface_shared_handle.argtypes = [ctypes.c_void_p]
         library.d2s_d3d11_sbs_surface_shared_handle.restype = ctypes.c_void_p
         library.d2s_d3d11_sbs_surface_set_bgra_texture.argtypes = [
@@ -165,6 +168,11 @@ class D3D11SbsSurface:
     def shared_bgra_handle(self) -> int:
         """Return a new NT handle for D3D11-owned BGRA, for Vulkan import."""
         return int(self._library.d2s_d3d11_sbs_surface_shared_handle(self._handle) or 0)
+
+    @property
+    def bgra_texture(self) -> int:
+        """Return the bridge-owned BGRA texture for a post-Vulkan D3D11 read."""
+        return int(self._library.d2s_d3d11_sbs_surface_bgra_texture(self._handle) or 0)
 
     def import_bgra_into_vulkan(self, context):
         """Import the D3D11-owned BGRA texture into a matching Vulkan device."""

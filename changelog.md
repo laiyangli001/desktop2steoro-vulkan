@@ -10,6 +10,8 @@
 
 - Vulkan 侧新增 `VulkanD3D11ImportedImage`，通过 dedicated allocation 和 `VkImportMemoryWin32HandleInfoKHR` 导入 D3D11-owned BGRA8；导入要求真实 Vulkan/D3D11 Adapter LUID 一致，producer-ready 同步与最终运行时接线仍待完成。
 
+- D3D11 SBS bridge 新增 owned BGRA texture C ABI/Python 访问器，使 Vulkan 写入共享纹理后可以交回同一 D3D11 VideoProcessor；远程 C++ 编译和真实 GPU 同步仍需验证。
+
 - 修正 Intel Windows native workflow 仍使用 Node.js 20 运行时的 GitHub Actions 警告：`checkout` 升级到 v5，`upload-artifact` 升级到 v6，`download-artifact` 升级到 v7；远程 C++ 编译逻辑不变。
 
 - Intel oneVPL final-SBS native 路径新增 Adapter LUID 导出与运行时一致性校验；D3D11 surface 与 oneVPL encoder 不属于同一适配器时立即拒绝该路径并回退，日志明确记录校验结果。

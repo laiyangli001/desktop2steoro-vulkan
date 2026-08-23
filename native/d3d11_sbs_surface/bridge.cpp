@@ -232,6 +232,11 @@ extern "C" D2S_D3D11_SURFACE_API unsigned long long d2s_d3d11_sbs_surface_adapte
     return state ? state->adapter_luid : 0;
 }
 
+extern "C" D2S_D3D11_SURFACE_API void* d2s_d3d11_sbs_surface_bgra_texture(void* handle) {
+    auto* state = static_cast<State*>(handle);
+    return state ? state->bgra.Get() : nullptr;
+}
+
 extern "C" D2S_D3D11_SURFACE_API void* d2s_d3d11_sbs_surface_shared_handle(void* handle) {
     auto* state = static_cast<State*>(handle);
     if (!state || !state->bgra) {
@@ -339,6 +344,7 @@ extern "C" void* d2s_d3d11_sbs_surface_create(int, int, int) { return nullptr; }
 extern "C" void* d2s_d3d11_sbs_surface_create_from_device(int, int, void*) { return nullptr; }
 extern "C" void* d2s_d3d11_sbs_surface_device(void*) { return nullptr; }
 extern "C" unsigned long long d2s_d3d11_sbs_surface_adapter_luid(void*) { return 0; }
+extern "C" void* d2s_d3d11_sbs_surface_bgra_texture(void*) { return nullptr; }
 extern "C" void* d2s_d3d11_sbs_surface_shared_handle(void*) { return nullptr; }
 extern "C" int d2s_d3d11_sbs_surface_set_bgra_texture(void*, void*, unsigned long long) { return 0; }
 extern "C" int d2s_d3d11_sbs_surface_upload_bgra(void*, const unsigned char*, int, int, int) { return 0; }
