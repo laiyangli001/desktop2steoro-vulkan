@@ -27,20 +27,30 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/oneapi-src/oneVPL.git "$env:RUNNER_TEMP\oneVPL"
 
-      - name: Download official OpenVINO Windows C++ archive
+      - name: Build official OpenVINO Windows developer package
         shell: pwsh
         run: |
-          $url = "https://storage.openvinotoolkit.org/repositories/openvino/packages/2026.3/windows/openvino_toolkit_windows_2026.3.0.22451.bd8d6542e3c_x86_64.zip"
-          $archive = "$env:RUNNER_TEMP\openvino.zip"
-          Invoke-WebRequest -Uri $url -OutFile $archive
-          Expand-Archive -LiteralPath $archive -DestinationPath "$env:RUNNER_TEMP\openvino" -Force
-          $header = Get-ChildItem -LiteralPath "$env:RUNNER_TEMP\openvino" -Recurse -Filter openvino.hpp |
-            Where-Object { $_.FullName -match "[\\/]include[\\/]openvino[\\/]openvino\.hpp$" } |
-            Select-Object -First 1
-          if (-not $header) {
-            throw "OpenVINO C++ developer header was not found in the official archive"
+          $source = "$env:RUNNER_TEMP\openvino-source"
+          $build = "$env:RUNNER_TEMP\openvino-build"
+          $install = "$env:RUNNER_TEMP\openvino-install"
+          git clone --depth 1 https://github.com/openvinotoolkit/openvino.git $source
+          git -C $source submodule update --init --recursive
+          cmake -S $source -B $build -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DENABLE_TESTS=OFF `
+            -DENABLE_SAMPLES=OFF `
+            -DENABLE_PYTHON=OFF `
+            -DENABLE_INTEL_GPU=ON `
+            "-DCMAKE_INSTALL_PREFIX=$install"
+          cmake --build $build --config Release --parallel 2
+          cmake --install $build --config Release
+          if (-not (Test-Path -LiteralPath "$install\include\openvino\preprocess\pre_post_process.hpp")) {
+            throw "OpenVINO preprocess developer header was not installed"
           }
-          "D2S_OPENVINO_ROOT=$($header.Directory.Parent.Parent.Parent.FullName)" >> $env:GITHUB_ENV
+          if (-not (Test-Path -LiteralPath "$install\lib\openvino.lib")) {
+            throw "OpenVINO import library was not installed"
+          }
+          "D2S_OPENVINO_ROOT=$install" >> $env:GITHUB_ENV
 
       - name: Build official oneVPL dispatcher
         shell: pwsh
