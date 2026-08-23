@@ -79,7 +79,7 @@ D3D11 BGRA8 Texture
 
 注意：OpenVINO 的 D3D11 surface 互操作不能直接把 Desktop Duplication 的 BGRA8 texture 当作已验证的 NV12 RemoteTensor。当前探针分别暴露 `native_inference_zero_copy_ready`（借用纹理可供原生推理）和 `zero_copy_ready`（捕捉到输出端到端）；由于兼容输出仍有 staging readback，后者必须保持 `false`。
 
-当前实现接入方式：设置 `D2S_INTEL_NATIVE_OPENVINO=1`，并提供 `D2S_OPENVINO_MODEL` 模型路径；只有 Desktop Duplication 原生桥能力探测通过时才启用原生 provider，否则继续使用 DXCamera 兼容 RGB 帧和既有深度路径。原生 provider 的深度结果会随 `CapturedFrame.metadata.native_depth_profile` 进入运行时，现有立体合成仍使用兼容 RGB 帧。由于当前 provider 的输出 ABI 会回读 CPU，运行时必须记录 `native_depth_zero_copy=0`。
+当前实现接入方式：设置 `D2S_INTEL_NATIVE_OPENVINO=1`，并提供 `D2S_OPENVINO_MODEL` 模型路径；只有 Desktop Duplication 原生桥能力探测通过时才启用原生 provider，否则继续使用 DXCamera 兼容 RGB 帧和既有深度路径。原生 provider 的深度结果会随 `CapturedFrame.metadata.native_depth_profile` 进入运行时，现有立体合成仍使用兼容 RGB 帧。运行时分层记录 `native_depth_input_zero_copy=1`、`native_depth_output_device=cpu`、`native_depth_output_gpu_to_cpu=1`，由于当前 provider 的输出 ABI 会回读 CPU，整体必须记录 `native_depth_zero_copy=0`。
 
 现有 PyTorch XPU 保留为兼容后端，但如果发生 CPU 映射或普通 Tensor 上传，必须标记：
 

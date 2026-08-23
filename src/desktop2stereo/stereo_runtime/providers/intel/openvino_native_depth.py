@@ -89,7 +89,12 @@ class OpenVINOD3D11DepthProvider:
             cuda_timing_events={
                 "input_resource_kind": getattr(resource, "resource_kind", "d3d11_texture"),
                 "capture_gpu": True,
+                "input_gpu_to_cpu": False,
+                "input_zero_copy": True,
                 "gpu_to_cpu": True,
+                "output_device": "cpu",
+                "output_gpu_to_cpu": True,
+                "output_zero_copy": False,
                 "zero_copy": False,
                 "adapter_luid": resource_luid,
                 "provider_adapter_luid": session_luid,

@@ -109,6 +109,12 @@ def test_native_depth_provider_reports_shared_nv12_surface() -> None:
     assert result.cuda_timing_events["nv12_surface_ready"] is True
     assert result.cuda_timing_events["nv12_surface_width"] == 64
     assert result.cuda_timing_events["nv12_surface_height"] == 64
+    assert result.cuda_timing_events["input_zero_copy"] is True
+    assert result.cuda_timing_events["input_gpu_to_cpu"] is False
+    assert result.cuda_timing_events["output_device"] == "cpu"
+    assert result.cuda_timing_events["output_gpu_to_cpu"] is True
+    assert result.cuda_timing_events["output_zero_copy"] is False
+    assert result.cuda_timing_events["zero_copy"] is False
 
 
 def test_session_requires_native_bridge() -> None:

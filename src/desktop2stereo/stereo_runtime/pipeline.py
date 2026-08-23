@@ -1470,6 +1470,18 @@ class RuntimePipelineLoop:
                             debug_info["native_depth_gpu_to_cpu"] = int(
                                 bool(native_debug.get("gpu_to_cpu", True))
                             )
+                            debug_info["native_depth_input_zero_copy"] = int(
+                                bool(native_debug.get("input_zero_copy", False))
+                            )
+                            debug_info["native_depth_input_gpu_to_cpu"] = int(
+                                bool(native_debug.get("input_gpu_to_cpu", True))
+                            )
+                            debug_info["native_depth_output_device"] = str(
+                                native_debug.get("output_device", "cpu")
+                            )
+                            debug_info["native_depth_output_gpu_to_cpu"] = int(
+                                bool(native_debug.get("output_gpu_to_cpu", True))
+                            )
                             debug_info["native_depth_zero_copy"] = int(
                                 bool(native_debug.get("zero_copy", False))
                             )
