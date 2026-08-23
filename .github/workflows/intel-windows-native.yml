@@ -139,6 +139,12 @@ jobs:
       - name: Validate native bridge exports and oneVPL linkage
         shell: pwsh
         run: |
+          $dumpbin = Get-ChildItem -Path "${env:ProgramFiles}\Microsoft Visual Studio\2022" `
+            -Recurse -Filter dumpbin.exe -ErrorAction SilentlyContinue |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $dumpbin) {
+            throw "Visual Studio dumpbin.exe was not found on the runner"
+          }
           $exports = @{
             "native/desktop_duplication/build/ci/Release/d2s_desktop_duplication.dll" = @(
               "d2s_desktop_duplication_probe",
@@ -163,7 +169,7 @@ jobs:
             )
           }
           foreach ($entry in $exports.GetEnumerator()) {
-            $dump = (dumpbin /nologo /exports $entry.Key | Out-String)
+            $dump = (& $dumpbin /nologo /exports $entry.Key | Out-String)
             foreach ($symbol in $entry.Value) {
               if ($dump -notmatch [regex]::Escape($symbol)) {
                 throw "Missing export $symbol from $($entry.Key)"
@@ -171,7 +177,7 @@ jobs:
             }
           }
           $onevplPath = "native/onevpl_d3d11_encoder/build/ci/Release/d2s_onevpl_d3d11_encoder.dll"
-          $imports = (dumpbin /nologo /imports $onevplPath | Out-String)
+          $imports = (& $dumpbin /nologo /imports $onevplPath | Out-String)
           if ($imports -notmatch "libvpl\.dll") {
             throw "oneVPL bridge is not linked to the remotely built dispatcher"
           }

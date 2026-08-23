@@ -22,6 +22,8 @@
 
 - 补齐 OpenVINO D3D11 bridge 的 OpenCL 链接依赖：GitHub Actions 现在远程构建官方 Khronos OpenCL-ICD-Loader，并将 `OpenCL.lib` 传入 bridge，解决 OpenCL C++ wrapper 的 `clRelease*` 链接错误。
 
+- 修正 Windows native workflow 的产物验证环境：GitHub runner 的普通 PowerShell 不保证 `dumpbin.exe` 在 PATH 中，验证步骤现在显式定位 Visual Studio 工具后检查 DLL 导出和 oneVPL 链接。
+
 - 对齐当前 OpenVINO C++ API 头文件布局，将 PrePostProcessor include 修正为 `openvino/core/preprocess/pre_post_process.hpp`，并同步远程开发头检查路径。
 
 - 新增 Intel Windows 零拷贝捕捉—推理计划书 `docs/18-intel-windows-zero-copy-capture-inference-plan.md`；GUI 捕捉源加入 `DesktopDuplication` 选项，并新增 DXGI/D3D11 原生桥 C ABI、CMake 工程、ctypes 能力探测、原生纹理借用帧契约和 OpenVINO RemoteTensor 能力层。启用 `D2S_INTEL_NATIVE_OPENVINO=1` 且原生 DLL/模型可用时，原生 D3D11 帧进入 OpenVINO provider；现阶段输出仍回读 CPU，因此明确记录 `zero_copy=False`。Desktop Duplication 遇到 `DXGI_ERROR_ACCESS_LOST` 时会重建输出并自动重试一次。
