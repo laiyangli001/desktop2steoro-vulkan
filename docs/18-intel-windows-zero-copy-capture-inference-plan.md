@@ -114,7 +114,7 @@ stereo runtime SBS RGB8 (CPU)
     -> H.264/H.265 packet
 ```
 
-因此这一步是 Intel GPU 编码加速和 GPU surface 复用的第一阶段，不是端到端零拷贝。后续只有当立体合成器导出最终 SBS 的 D3D11/Vulkan surface，并完成 Adapter LUID、同步和生命周期验证后，才能消除当前 RGB→D3D11 上传并切换到真正的 oneVPL native surface ABI。当前已实现可选 `D2S_ONEVPL_FINAL_SBS=1` 链路：最终 SBS → D3D11 NV12 surface → oneVPL → FFmpeg packet mux；若任一 DLL/SDK/驱动能力不可用，自动回退到 Intel QSV/D3D11 FFmpeg 路径。
+因此普通 CPU/RGB 输出仍是 Intel GPU 编码加速和 GPU surface 复用的兼容路径，不是端到端零拷贝。高级 Vulkan 网络推流则已由 packed image pass 直接写入 D3D11-owned SBS BGRA texture，再经过同设备 VideoProcessor 和 oneVPL native surface ABI，不经过 CPU RGB stdin，也不经过左右眼中间图像 blit。当前已实现可选 `D2S_ONEVPL_FINAL_SBS=1` 链路：最终 SBS → D3D11 NV12 surface → oneVPL → FFmpeg packet mux；若任一 DLL/SDK/驱动能力不可用，自动回退到 Intel QSV/D3D11 FFmpeg 路径。严格 `zero_copy=True` 仍需真实 Intel 驱动完成格式互操作、同步和长时间稳定性验证。
 
 ### 3.5 Vulkan 公共层
 
@@ -277,10 +277,10 @@ AMD         -> WindowsCaptureROCm
 - [x] Vulkan Python 侧新增 `VulkanD3D11ImportedImage`：使用 dedicated allocation 和 `VkImportMemoryWin32HandleInfoKHR` 以 `D3D11_TEXTURE` 类型导入共享 BGRA8，并在导入前强制校验 Vulkan/D3D11 Adapter LUID；仍需 GitHub 远程编译及 Intel 真机验证。
 - [x] D3D11 SBS bridge 新增按 Adapter LUID 创建设备的入口，Vulkan 侧可避免默认选择错误的 DXGI 适配器；创建失败时保持回退，不跨适配器猜测。
 - [x] 从 Vulkan 设备查询并填充真实 Vulkan `VkPhysicalDeviceIDProperties.deviceLUID`；当前若驱动/绑定不提供有效 LUID，仍拒绝 D3D11/Vulkan 共享导入，不能用 PCI vendor/device 代替。真实 Intel 驱动匹配仍待真机验证。
-- [x] 网络输出接入 Vulkan eyes → D3D11-owned shared BGRA SBS → VideoProcessor NV12 → oneVPL；当前使用两次 GPU blit 组合左右眼，明确记录 `gpu_to_cpu=false zero_copy=false gpu_copy_count=2`，未将 GPU-only copy 误报为严格零拷贝。
+- [x] 网络输出接入 Vulkan eyes → D3D11-owned shared BGRA SBS → VideoProcessor NV12 → oneVPL；保留旧左右眼 blit 兼容路径，并明确记录 `gpu_to_cpu=false zero_copy=false gpu_copy_count=2`。
 - [x] 高级网络模式新增 `D2S_INTEL_VULKAN_SBS` 延迟请求：`StereoRuntime` 不再为该路径先回读 Vulkan 眼图，而由 Intel sink 自有 Vulkan 图像环 dispatch 到 D3D11-owned SBS；当前仍是两次 GPU blit，并保持 `zero_copy=false gpu_copy_count=2`。
 - [x] packed SBS shader 接入 Vulkan image pass：在 `packed_output` 模式下直接写入 D3D11 导入的 SBS 图像，不再经过左右眼中间图像和 blit；远程 SPIR-V 编译完成后，最终 SBS 边界记录 `vulkan_sbs_gpu_copy_count=0`。
-- [ ] 将最终 SBS 原生 D3D11/Vulkan surface 接入 oneVPL/QSV，消除当前 RGB24 stdin 边界。
+- [x] 将高级 Vulkan 网络路径的最终 SBS 原生 D3D11/Vulkan surface 接入 oneVPL/QSV，消除该路径的 RGB24 stdin 边界；普通 CPU/RGB 路径仍保留兼容上传。
 - [ ] 在 Intel 真机完成 4K 长时间验证，并确认 Desktop Duplication、OpenVINO 与编码设备的 Adapter LUID 一致。
 
 目标机诊断命令：
@@ -292,7 +292,7 @@ src\python3\python.exe src\tools\intel_native_runtime_probe.py --strict
 
 默认模式用于收集 JSON 能力报告；`--strict` 只有在 Windows Intel 驱动、OpenVINO runtime、oneVPL 和四个发布 DLL 都可用时才返回成功。
 
-新增 `.github/workflows/intel-windows-native.yml`，以 GitHub-hosted `windows-2022` runner 作为 C++ 编译依据：workflow 从官方 `oneapi-src/oneVPL`、OpenVINO Windows C++ archive、Khronos OpenCL-Headers/CLHPP/ICD-Loader 拉取依赖，编译 Desktop Duplication、D3D11 SBS surface、oneVPL 和 OpenVINO bridge，并收集必要 OpenVINO runtime DLL，上传扁平化 artifact、`manifest.json` 和仅覆盖二进制文件的 SHA-256 清单；后续 job 会按功能自动提交到 `src/desktop2stereo/capture/native/desktop_duplication/`、`src/desktop2stereo/stereo_runtime/providers/intel/native/d3d11_sbs_surface/`、`onevpl_d3d11_encoder/` 和 `openvino_d3d11_bridge/`，使对外发布版无需手工设置 DLL 路径。workflow run `32644145650` 已成功完成全部配置、编译、DLL C ABI 导出及 oneVPL `libvpl.dll` 链接校验；本地不作为 native C++ 编译验证环境。下载 artifact 后，将目录设置到 `D2S_INTEL_NATIVE_ARTIFACT_DIR`，四个 Python 适配器会共享该目录；单个 `D2S_*_DLL` 环境变量仍可覆盖。OpenVINO runtime DLL 随发布包提供，Intel 驱动和 OpenCL ICD 仍需安装在目标机。Python 侧只有 DLL 可加载且导出 ABI 完整时才会报告 `directx_remote_tensor=True`。本轮新增 Intel surface/oneVPL/QSV 及同帧 readback 回归测试；全量 Python 测试此前为 `1202 passed`。当前剩余工作是下载 artifact 到 Intel 目标机完成驱动、OpenVINO GPU RemoteTensor、oneVPL 硬件编码、Adapter LUID、4K 长时间和最终 SBS 原生 surface 验证。仓库中未发现 `docs/00-api-handoff-progress.md`，因此未修改不存在的交接文档。
+新增 `.github/workflows/intel-windows-native.yml`，以 GitHub-hosted `windows-2022` runner 作为 C++ 编译依据：workflow 从官方 `oneapi-src/oneVPL`、OpenVINO Windows C++ archive、Khronos OpenCL-Headers/CLHPP/ICD-Loader 拉取依赖，编译 Desktop Duplication、D3D11 SBS surface、oneVPL 和 OpenVINO bridge，并收集必要 OpenVINO runtime DLL，上传扁平化 artifact、`manifest.json` 和仅覆盖二进制文件的 SHA-256 清单；后续 job 会按功能自动提交到 `src/desktop2stereo/capture/native/desktop_duplication/`、`src/desktop2stereo/stereo_runtime/providers/intel/native/d3d11_sbs_surface/`、`onevpl_d3d11_encoder/` 和 `openvino_d3d11_bridge/`，使对外发布版无需手工设置 DLL 路径。最新 Intel workflow run `32653950840` 已成功完成配置、编译、四个 DLL 的 C ABI 导出及 oneVPL `libvpl.dll` 链接校验，并自动提交二进制；Shader workflow run `32653950821` 已远程编译并提交 packed SBS SPIR-V。源码和二进制均由 GitHub Actions 生成，本地不作为 native C++/SPIR-V 编译验证环境。下载 artifact 后，将目录设置到 `D2S_INTEL_NATIVE_ARTIFACT_DIR`，四个 Python 适配器会共享该目录；单个 `D2S_*_DLL` 环境变量仍可覆盖。OpenVINO runtime DLL 随发布包提供，Intel 驱动和 OpenCL ICD 仍需安装在目标机。Python 侧只有 DLL 可加载且导出 ABI 完整时才会报告 `directx_remote_tensor=True`。本轮新增 Intel surface/oneVPL/QSV 及同帧 readback 回归测试；当前目标路径回归集合为 `116 passed`。当前剩余工作是下载 artifact 到 Intel 目标机完成驱动、OpenVINO GPU RemoteTensor、oneVPL 硬件编码、Adapter LUID、D3D11 BGRA storage-image 互操作、4K 长时间和最终 SBS 原生 surface 验证。仓库中未发现 `docs/00-api-handoff-progress.md`，因此未修改不存在的交接文档。
 
 ## 9. 交付文件
 
