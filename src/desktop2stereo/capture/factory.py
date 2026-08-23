@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from .runners import PollingCaptureRunner
 from .types import CaptureConfig
 
@@ -15,6 +17,48 @@ def _default_os_name():
 def _default_capture_tool():
     from utils import CAPTURE_TOOL
     return CAPTURE_TOOL
+
+
+def _desktop_duplication_native_available() -> bool:
+    try:
+        from .backends.desktop_duplication_native import probe
+
+        return bool(probe().get("available"))
+    except Exception:
+        return False
+
+
+class DesktopDuplicationFallbackRunner:
+    """Try WindowsCapture before Desktop Duplication's DXCamera fallback."""
+
+    def __init__(self, config: CaptureConfig):
+        self.config = config
+        self._polling = PollingCaptureRunner(
+            config, lambda: create_capture_source(config)
+        )
+        self._event = None
+
+    def stop(self):
+        if self._event is not None:
+            self._event.stop()
+        self._polling.stop()
+
+    def run(self, **callbacks):
+        if _desktop_duplication_native_available():
+            return self._polling.run(**callbacks)
+        try:
+            from .backends.windows_capture_event import WindowsCaptureEventRunner
+
+            event_config = replace(self.config, capture_tool="WindowsCapture")
+            self._event = WindowsCaptureEventRunner(event_config)
+            return self._event.run(**callbacks)
+        except Exception as exc:
+            print(
+                "[capture] WindowsCapture fallback unavailable; "
+                f"using Desktop Duplication/DXCamera fallback: {exc}",
+                flush=True,
+            )
+            return self._polling.run(**callbacks)
 
 
 def normalize_config(config: CaptureConfig | None = None) -> CaptureConfig:
@@ -80,6 +124,10 @@ def create_capture_source(config: CaptureConfig | None = None):
 
 def create_capture_runner(config: CaptureConfig | None = None):
     config = normalize_config(config)
+    if config.os_name == "Windows" and config.capture_tool == _WINDOWS_DESKTOP_DUPLICATION:
+        if not _desktop_duplication_native_available():
+            return DesktopDuplicationFallbackRunner(config)
+        return PollingCaptureRunner(config, lambda: create_capture_source(config))
     if config.os_name == "Windows" and config.capture_tool in _WINDOWS_EVENT_TOOLS:
         from .backends.windows_capture_event import WindowsCaptureEventRunner
         return WindowsCaptureEventRunner(config)

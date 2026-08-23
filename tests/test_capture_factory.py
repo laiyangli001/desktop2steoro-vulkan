@@ -3,6 +3,7 @@ import types
 
 from capture import CaptureConfig, create_capture_runner
 from capture.factory import get_desktop_grabber_class
+from capture.factory import DesktopDuplicationFallbackRunner
 from capture.runners import PollingCaptureRunner
 
 
@@ -79,3 +80,13 @@ def test_desktop_duplication_is_polling_runner():
     )
 
     assert isinstance(runner, PollingCaptureRunner)
+
+
+def test_desktop_duplication_tries_windows_capture_when_native_bridge_is_missing(monkeypatch):
+    monkeypatch.setattr("capture.factory._desktop_duplication_native_available", lambda: False)
+
+    runner = create_capture_runner(
+        CaptureConfig(os_name="Windows", capture_tool="DesktopDuplication")
+    )
+
+    assert isinstance(runner, DesktopDuplicationFallbackRunner)
