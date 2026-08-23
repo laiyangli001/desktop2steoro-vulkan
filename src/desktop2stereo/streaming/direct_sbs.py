@@ -275,7 +275,11 @@ class DirectSbsOutputConsumer:
                 if callable(submit_vulkan_stereo) and getattr(
                     left_eye, "context", None
                 ) is not None and getattr(right_eye, "context", None) is not None:
-                    submit_vulkan_stereo(runtime_result)
+                    handled = submit_vulkan_stereo(runtime_result)
+                    if handled is False:
+                        self.source_stat_inc("runtime_output_vulkan_fallback")
+                        self._report_fps_if_due()
+                        continue
                     self._fps_submitted_frames += 1
                     self.source_stat_inc("runtime_output_frames")
                     self.source_stat_inc("network_stream_frames")
@@ -284,7 +288,11 @@ class DirectSbsOutputConsumer:
                 if callable(submit_vulkan_stereo) and getattr(
                     runtime_result, "vulkan_compute_request", None
                 ) is not None:
-                    submit_vulkan_stereo(runtime_result)
+                    handled = submit_vulkan_stereo(runtime_result)
+                    if handled is False:
+                        self.source_stat_inc("runtime_output_vulkan_fallback")
+                        self._report_fps_if_due()
+                        continue
                     self._fps_submitted_frames += 1
                     self.source_stat_inc("runtime_output_frames")
                     self.source_stat_inc("network_stream_frames")
@@ -2622,7 +2630,7 @@ class IntelD3D11DirectSbsOutput(IntelQsvDirectSbsOutput):
             self._native_onevpl_mux.stdin.write(packet)
             self._native_onevpl_mux.stdin.flush()
 
-    def submit_vulkan_stereo_frame(self, runtime_result: Any) -> None:
+    def submit_vulkan_stereo_frame(self, runtime_result: Any) -> bool:
         """Compose Vulkan eye resources into the Intel D3D11 encoder surface."""
         enabled = os.environ.get("D2S_ONEVPL_FINAL_SBS", "0").strip().casefold()
         if enabled not in {"1", "true", "yes", "on"}:
@@ -2636,16 +2644,26 @@ class IntelD3D11DirectSbsOutput(IntelQsvDirectSbsOutput):
             if len(shape) != 4 or shape[0] != 1 or shape[1] != 3:
                 raise RuntimeError(f"deferred Vulkan SBS request has invalid RGB shape: {shape}")
             height, width = shape[-2:]
-            if self._vulkan_runtime_bridge is None:
-                self._vulkan_runtime_bridge = IntelVulkanSbsRuntimeBridge(width, height)
-            elif (
-                self._vulkan_runtime_bridge.eye_width != width
-                or self._vulkan_runtime_bridge.eye_height != height
-            ):
-                raise RuntimeError("deferred Vulkan SBS dimensions changed during stream")
-            frame = self._vulkan_runtime_bridge.submit(deferred_request)
-            self.submit_native_d3d11_surface(frame)
-            return
+            try:
+                if self._vulkan_runtime_bridge is None:
+                    self._vulkan_runtime_bridge = IntelVulkanSbsRuntimeBridge(width, height)
+                elif (
+                    self._vulkan_runtime_bridge.eye_width != width
+                    or self._vulkan_runtime_bridge.eye_height != height
+                ):
+                    raise RuntimeError("deferred Vulkan SBS dimensions changed during stream")
+                frame = self._vulkan_runtime_bridge.submit(deferred_request)
+                self.submit_native_d3d11_surface(frame)
+            except Exception as exc:
+                print(
+                    f"[IntelStream] Vulkan deferred SBS unavailable: {exc}; "
+                    "falling back to the regular Intel QSV/D3D11 path",
+                    flush=True,
+                )
+                os.environ["D2S_INTEL_VULKAN_SBS"] = "0"
+                self._stop_native_onevpl()
+                return False
+            return True
         left_eye = getattr(runtime_result, "left_eye", None)
         right_eye = getattr(runtime_result, "right_eye", None)
         context = getattr(left_eye, "context", None)
@@ -2702,6 +2720,7 @@ class IntelD3D11DirectSbsOutput(IntelQsvDirectSbsOutput):
             ready_timeline=ready_timeline or None,
         )
         self.submit_native_d3d11_surface(frame)
+        return True
 
     def submit_frame(self, frame: np.ndarray) -> None:
         enabled = os.environ.get("D2S_ONEVPL_FINAL_SBS", "0").strip().casefold()
