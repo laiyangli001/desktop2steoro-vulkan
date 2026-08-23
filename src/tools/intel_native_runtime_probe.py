@@ -56,6 +56,16 @@ def _published_files() -> dict[str, Path]:
     }
 
 
+def _published_openvino_runtime_files(manifest: dict[str, Any] | None) -> dict[str, Path]:
+    if not manifest:
+        return {}
+    root = _repository_root() / "src" / "desktop2stereo" / "stereo_runtime" / "providers" / "intel" / "native" / "openvino_d3d11_bridge"
+    return {
+        f"openvino_runtime:{name}": root / str(name)
+        for name in manifest.get("openvino_runtime_files", [])
+    }
+
+
 def _hash_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -76,7 +86,9 @@ def _artifact_report() -> dict[str, Any]:
             expected[str(entry["file"])] = str(entry["sha256"]).upper()
 
     files = {}
-    for key, path in _published_files().items():
+    paths = _published_files()
+    paths.update(_published_openvino_runtime_files(manifest))
+    for key, path in paths.items():
         actual = _hash_file(path) if path.is_file() else None
         files[key] = {
             "path": str(path),

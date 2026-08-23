@@ -36,6 +36,8 @@
 
 - 修正 Intel runtime probe 的独立启动路径，直接从仓库根目录执行时同时加入 `src` 和 `src/desktop2stereo`，兼容项目现有顶层 `stereo_runtime` 导入。
 
+- Intel 发布同步现在同时携带官方 OpenVINO runtime DLL（核心 runtime、GPU/CPU plugin、frontend 和 TBB 依赖，如 archive 中提供），并放入 OpenVINO D3D11 功能目录；目标机仍需安装匹配 Intel 驱动和 OpenCL ICD。
+
 - 对齐当前 OpenVINO C++ API 头文件布局，将 PrePostProcessor include 修正为 `openvino/core/preprocess/pre_post_process.hpp`，并同步远程开发头检查路径。
 
 - 新增 Intel Windows 零拷贝捕捉—推理计划书 `docs/18-intel-windows-zero-copy-capture-inference-plan.md`；GUI 捕捉源加入 `DesktopDuplication` 选项，并新增 DXGI/D3D11 原生桥 C ABI、CMake 工程、ctypes 能力探测、原生纹理借用帧契约和 OpenVINO RemoteTensor 能力层。启用 `D2S_INTEL_NATIVE_OPENVINO=1` 且原生 DLL/模型可用时，原生 D3D11 帧进入 OpenVINO provider；现阶段输出仍回读 CPU，因此明确记录 `zero_copy=False`。Desktop Duplication 遇到 `DXGI_ERROR_ACCESS_LOST` 时会重建输出并自动重试一次。
