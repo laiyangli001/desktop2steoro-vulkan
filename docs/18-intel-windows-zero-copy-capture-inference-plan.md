@@ -98,6 +98,7 @@ Intel 编码优先使用 oneVPL/QSV：
 - 如果无法直接导入 D3D11 Surface，可允许 GPU 内复制，但必须记录 `gpu_copy_count`，不能误报严格零拷贝。
 - 已接入 Intel QSV/D3D11 最终 SBS 后端，GUI 可显式选择 `Intel QSV (D3D11)`；它创建 D3D11 子设备和派生 QSV 设备，并使用 `hwupload=extra_hw_frames=16,hwmap=derive_device=qsv,format=qsv` 让 QSV 消费硬件帧。由于当前最终 SBS 仍来自 RGB24 stdin，该路径明确记录 `gpu_to_cpu=True zero_copy=False gpu_copy_count=1`。通用 FFmpeg 后端仍可通过 `D2S_QSV_D3D11_UPLOAD=1` 启用同一边界；它不冒充捕捉到编码的严格零拷贝。
 - 新增可选 `native/onevpl_d3d11_encoder` C ABI：在配置 oneVPL SDK 时接收借用的 NV12 `ID3D11Texture2D`，执行 D3D11 加速编码并返回压缩包；未配置 SDK、DLL 或 Intel 驱动时探针返回不可用，不能误启用。
+- oneVPL bridge 现在导出其实际 D3D11 Adapter LUID；final-SBS native 路径启动时必须验证 D3D11 surface 与 encoder LUID 非零且一致，否则拒绝该路径并回退，避免跨适配器资源被误报为共享零拷贝。
 - 新增 `native/d3d11_sbs_surface` 最终 SBS surface bridge：接收已经完成左右眼合成的 BGRA8 CPU 帧，上传到 D3D11 staging/default texture，经 VideoProcessor 在 GPU 上转换为 NV12，并向同一 D3D11 device 的 oneVPL encoder 暴露借用 surface。该过渡路径的 CPU→GPU 上传计为 `gpu_copy_count=1`，不能报告严格零拷贝。
 
 ### 3.4 最终 SBS 输出边界
@@ -266,6 +267,7 @@ AMD         -> WindowsCaptureROCm
 - [x] 将原生 `ID3D11Texture2D` 接入 OpenVINO RemoteTensor 的代码链路；仍需在真实 DLL/Intel 驱动环境验证。
 - [x] 接入可选 FFmpeg D3D11/QSV Surface upload 边界；仍需将 OpenVINO/Vulkan 原生输出在真实环境交给 oneVPL/QSV。
 - [x] 新增可选 `native/onevpl_d3d11_encoder` bridge 和 Python 能力探测/Surface 提交 API；已由 GitHub Actions 使用官方 oneVPL dispatcher 远程编译并完成导出/链接校验，Intel 真机仍待验证。
+- [x] oneVPL final-SBS 路径增加 Adapter LUID C ABI、ctypes 读取和启动期一致性门；GitHub Actions 已验证新增导出，真实 Intel 设备仍待运行时验证。
 - [x] 新增 `native/d3d11_sbs_surface` 最终 SBS BGRA8→NV12 bridge、Python surface owner 和 oneVPL final-SBS 输出接线；已由 GitHub Actions 远程编译，真实 oneVPL 硬件编码仍待 Intel 真机验证。
 - [ ] 将最终 SBS 原生 D3D11/Vulkan surface 接入 oneVPL/QSV，消除当前 RGB24 stdin 边界。
 - [ ] 在 Intel 真机完成 4K 长时间验证，并确认 Desktop Duplication、OpenVINO 与编码设备的 Adapter LUID 一致。
