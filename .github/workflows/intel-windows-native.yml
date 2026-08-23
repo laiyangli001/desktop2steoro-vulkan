@@ -47,6 +47,7 @@ jobs:
         shell: pwsh
         run: |
           git clone --depth 1 https://github.com/KhronosGroup/OpenCL-Headers.git "$env:RUNNER_TEMP\opencl-headers"
+          git clone --depth 1 https://github.com/KhronosGroup/OpenCL-CLHPP.git "$env:RUNNER_TEMP\opencl-clhpp"
 
       - name: Build official oneVPL dispatcher
         shell: pwsh
@@ -94,7 +95,8 @@ jobs:
           cmake -S native/openvino_d3d11_bridge -B native/openvino_d3d11_bridge/build/ci `
             -G "Visual Studio 17 2022" -A x64 `
             -DD2S_OPENVINO_ROOT="$env:D2S_OPENVINO_ROOT" `
-            -DD2S_OPENCL_INCLUDE_DIR="$env:RUNNER_TEMP\opencl-headers"
+            -DD2S_OPENCL_INCLUDE_DIR="$env:RUNNER_TEMP\opencl-headers" `
+            -DD2S_OPENCL_HPP_INCLUDE_DIR="$env:RUNNER_TEMP\opencl-clhpp\include"
 
       - name: Build Intel native bridges
         shell: pwsh
