@@ -48,6 +48,23 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/KhronosGroup/OpenCL-Headers.git "$env:RUNNER_TEMP\opencl-headers"
           git clone --depth 1 https://github.com/KhronosGroup/OpenCL-CLHPP.git "$env:RUNNER_TEMP\opencl-clhpp"
+          git clone --depth 1 https://github.com/KhronosGroup/OpenCL-ICD-Loader.git "$env:RUNNER_TEMP\opencl-icd-loader"
+
+      - name: Build official Khronos OpenCL ICD loader
+        shell: pwsh
+        run: |
+          $source = "$env:RUNNER_TEMP\opencl-icd-loader"
+          $build = "$env:RUNNER_TEMP\opencl-icd-build"
+          $install = "$env:RUNNER_TEMP\opencl-icd-install"
+          cmake -S $source -B $build -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DOPENCL_ICD_LOADER_HEADERS_DIR="$env:RUNNER_TEMP\opencl-headers" `
+            "-DCMAKE_INSTALL_PREFIX=$install"
+          cmake --build $build --config Release --parallel 2
+          cmake --install $build --config Release
+          if (-not (Test-Path -LiteralPath "$install\lib\OpenCL.lib")) {
+            throw "OpenCL ICD loader import library was not installed"
+          }
 
       - name: Build official oneVPL dispatcher
         shell: pwsh
@@ -96,7 +113,8 @@ jobs:
             -G "Visual Studio 17 2022" -A x64 `
             -DD2S_OPENVINO_ROOT="$env:D2S_OPENVINO_ROOT" `
             -DD2S_OPENCL_INCLUDE_DIR="$env:RUNNER_TEMP\opencl-headers" `
-            -DD2S_OPENCL_HPP_INCLUDE_DIR="$env:RUNNER_TEMP\opencl-clhpp\include"
+            -DD2S_OPENCL_HPP_INCLUDE_DIR="$env:RUNNER_TEMP\opencl-clhpp\include" `
+            -DD2S_OPENCL_LIBRARY="$env:RUNNER_TEMP\opencl-icd-install\lib\OpenCL.lib"
 
       - name: Build Intel native bridges
         shell: pwsh

@@ -8,6 +8,7 @@ endif()
 set(D2S_OPENVINO_ROOT "" CACHE PATH "OpenVINO SDK root containing include and lib")
 set(D2S_OPENCL_INCLUDE_DIR "" CACHE PATH "OpenCL-Headers include directory")
 set(D2S_OPENCL_HPP_INCLUDE_DIR "" CACHE PATH "OpenCL-CLHPP include directory")
+set(D2S_OPENCL_LIBRARY "" CACHE FILEPATH "OpenCL ICD loader import library")
 if(NOT D2S_OPENVINO_ROOT)
     message(FATAL_ERROR "Set D2S_OPENVINO_ROOT to an OpenVINO SDK root")
 endif()
@@ -40,6 +41,10 @@ target_link_libraries(d2s_openvino_d3d11_bridge PRIVATE
     "${D2S_OPENVINO_LIBRARY}"
     d3d11
     dxgi)
+if(D2S_OPENCL_LIBRARY)
+    target_link_libraries(d2s_openvino_d3d11_bridge PRIVATE
+        "${D2S_OPENCL_LIBRARY}")
+endif()
 set_target_properties(d2s_openvino_d3d11_bridge PROPERTIES
     OUTPUT_NAME "d2s_openvino_d3d11_bridge"
     PREFIX "")
