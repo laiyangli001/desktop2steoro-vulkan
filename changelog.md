@@ -1281,6 +1281,8 @@
 - 增加 CUDA/Vulkan/Filament external semaphore 路径：每个输出槽位创建可导出的 Vulkan binary semaphore，CUDA copy 完成后异步 signal，Filament Bridge 在目标 swapchain acquire 时等待对应 semaphore；平台或运行库不支持时自动退回 CUDA stream 同步。
 ## Unreleased
 
+- 修正 OpenVINO RemoteTensor 缺失运行时测试对已安装 Intel 原生 DLL 的环境依赖，确保测试显式验证缺失桥接器契约。
+
 - Vulkan FFmpeg bridge ABI 升级到 v2：原生桥现在创建真实的 FFmpeg Vulkan NV12 frame pool，提供 GPU `VkImage`/memory 描述、提交、取包和 flush 接口；应用仍保持稳定高级网络推流回退，待 Python frame-pool 消费、GPU RGB→NV12 和同步信号接入后再启用。
 - 远程 Vulkan bridge CI 的 ABI 校验扩展到 frame acquire、submit、packet read 和 flush 符号，避免新接口未导出却被误判为构建成功。
 
