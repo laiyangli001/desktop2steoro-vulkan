@@ -1298,3 +1298,4 @@
 ## 2026-08-24
 
 - 统一 GitHub Actions 的 `download-artifact` 到 `v7`，消除遗留 Node.js 20 action 在 Node.js 24 runner 上的弃用警告。
+- 同步将 Filament workflow 的 `actions/cache` 升级到 `v5`；该版本使用 Node.js 24。
