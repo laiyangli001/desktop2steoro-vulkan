@@ -7,6 +7,7 @@ on:
       - "native/desktop_duplication/**"
       - "native/d3d11_sbs_surface/**"
       - "native/onevpl_d3d11_encoder/**"
+      - "native/openvino_d3d11_bridge/**"
       - "src/desktop2stereo/stereo_runtime/providers/intel/**"
       - ".github/workflows/intel-windows-native.yml"
 
