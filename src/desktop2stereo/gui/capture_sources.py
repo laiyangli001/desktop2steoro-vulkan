@@ -12,7 +12,12 @@ logger = logging.getLogger(__name__)
 
 
 def get_default_windows_capture_tool():
-    device_name = devices_module.DEVICES.get(0, {}).get("name", "")
+    # ``DEVICES`` is lazy; indexing it triggers hardware discovery, while
+    # dict.get() would bypass the lazy loader and always look like CPU.
+    try:
+        device_name = devices_module.DEVICES[0].get("name", "")
+    except (KeyError, TypeError):
+        device_name = ""
     if "CUDA" in device_name and not devices_module.IS_ROCM:
         return "WindowsCaptureCUDA"
     if "CUDA" in device_name and devices_module.IS_ROCM:

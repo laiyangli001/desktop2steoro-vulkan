@@ -1286,6 +1286,7 @@
 - 新增 Intel Windows 原生硬件烟测工具，可验证 Desktop Duplication、OpenVINO D3D11、VideoProcessor、oneVPL 的同适配器 LUID 和按帧生命周期，并支持 4K 长时间运行。
 - 增强 Intel OpenVINO 运行时指标，分别记录 GPU 纹理输入和 CPU 深度输出，避免将输入零拷贝误读为完整推理零拷贝。
 - 调整 Windows 自动捕捉顺序：无 CUDA/ROCm 时优先选择 `DesktopDuplication`，由其在 DXGI/native bridge 不可用时回退到 DXCamera。
+- 修正 GUI 默认捕捉设备检测绕过懒加载的问题，确保 CUDA 设备仍保留 `WindowsCaptureCUDA`，Intel/CPU 才进入 `DesktopDuplication` 默认路径。
 
 - Vulkan FFmpeg bridge ABI 升级到 v2：原生桥现在创建真实的 FFmpeg Vulkan NV12 frame pool，提供 GPU `VkImage`/memory 描述、提交、取包和 flush 接口；应用仍保持稳定高级网络推流回退，待 Python frame-pool 消费、GPU RGB→NV12 和同步信号接入后再启用。
 - 远程 Vulkan bridge CI 的 ABI 校验扩展到 frame acquire、submit、packet read 和 flush 符号，避免新接口未导出却被误判为构建成功。
