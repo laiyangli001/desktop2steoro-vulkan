@@ -1,0 +1,48 @@
+name: Build Vulkan Shader Binaries
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "src/desktop2stereo/shaders/d2s_stereo_layered_output.comp"
+      - ".github/workflows/vulkan-shader-binaries.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  compile-shaders:
+    name: Compile Vulkan packed SBS shader
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install shader compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes glslc spirv-tools
+
+      - name: Compile and validate packed SBS shader
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/d2s_stereo_layered_output.spv"
+          glslc -std=450 src/desktop2stereo/shaders/d2s_stereo_layered_output.comp -o "$output"
+          spirv-val "$output"
+          cp "$output" src/desktop2stereo/shaders/d2s_stereo_layered_output.spv
+
+      - name: Commit remotely compiled shader binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/desktop2stereo/shaders/d2s_stereo_layered_output.spv
+          if git diff --cached --quiet; then
+            echo "Vulkan shader binary is already up to date."
+            exit 0
+          fi
+          git commit -m "build: update Vulkan packed SBS shader binary"
+          git fetch origin main
+          git rebase origin/main
+          git push origin HEAD:main

@@ -27,6 +27,7 @@ layout(push_constant) uniform LayeredStereoParams {
     uint screen_edge_suppression;
     uint hole_fill_mode;
     uint occlusion_enabled;
+    uint packed_output;
 } params;
 
 const uint HOLE_FILL_BALANCED = 0u;
@@ -264,5 +265,9 @@ void main() {
     float right_sign = params.symmetric != 0u ? 1.0 : 0.9;
     vec3 right = clamp(fill_eye(ix, iy, right_sign, fill_mask), 0.0, 1.0);
     imageStore(left_eye, ivec2(ix, iy), vec4(left, 1.0));
-    imageStore(right_eye, ivec2(ix, iy), vec4(right, 1.0));
+    if (params.packed_output != 0u) {
+        imageStore(right_eye, ivec2(ix + int(params.width), iy), vec4(right, 1.0));
+    } else {
+        imageStore(right_eye, ivec2(ix, iy), vec4(right, 1.0));
+    }
 }

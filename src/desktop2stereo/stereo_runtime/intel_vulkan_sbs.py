@@ -87,6 +87,20 @@ class IntelVulkanSbsComposer:
             adapter_luid=self.adapter_luid,
         )
 
+    def frame_after_vulkan_submit(self, timeline: int) -> IntelVulkanSbsFrame:
+        """Return the D3D11 surface after a packed shader write completes."""
+        if self.imported is None or self.imported.resource is None:
+            raise RuntimeError("Intel Vulkan SBS imported destination is unavailable")
+        self.context.wait_for_timeline(int(timeline))
+        return IntelVulkanSbsFrame(
+            texture=self.surface.bgra_texture,
+            device=self.surface.device,
+            width=self.surface.width,
+            height=self.surface.height,
+            adapter_luid=self.adapter_luid,
+            gpu_copy_count=0,
+        )
+
     def close(self) -> None:
         if self.imported is not None:
             self.imported.close()
@@ -100,15 +114,13 @@ class IntelVulkanSbsRuntimeBridge:
     """Run a deferred Vulkan stereo request for the Intel network sink.
 
     Network mode has no OpenXR presenter that can provide image slots. This
-    bridge owns a small Vulkan image ring, dispatches the existing layered
-    image pass into those images, and then reuses :class:`IntelVulkanSbsComposer`
-    to produce the D3D11-owned final SBS texture. The bridge is deliberately
-    opt-in and reports the existing two-GPU-blit compatibility boundary.
+    bridge owns a Vulkan context and dispatches the existing layered image pass
+    directly into the D3D11-imported SBS image. The bridge is deliberately
+    opt-in and does not perform an intermediate eye-image blit.
     """
 
     def __init__(self, eye_width: int, eye_height: int, *, ring_size: int = 3) -> None:
         from viewer.vulkan_context import VulkanContext, VulkanContextConfig
-        from viewer.vulkan_resources import VulkanExportableImage
         from stereo_runtime.vulkan_backend import VulkanStereoImageComputeBackend
 
         self.eye_width = int(eye_width)
@@ -121,32 +133,11 @@ class IntelVulkanSbsRuntimeBridge:
         self.composer = IntelVulkanSbsComposer(
             self.context, self.eye_width, self.eye_height
         )
-        self.left_slots = []
-        self.right_slots = []
+        destination = getattr(self.composer.imported, "resource", None)
+        if destination is None:
+            raise RuntimeError("Intel Vulkan SBS imported destination is unavailable")
+        self.context.prepare_external_image_for_producer(destination)
         self._frame_id = 0
-        try:
-            for index in range(self.ring_size):
-                left = VulkanExportableImage(
-                    self.context,
-                    self.eye_width,
-                    self.eye_height,
-                    label=f"intel-network-vulkan-left-{index}",
-                    format=self.context.vk.VK_FORMAT_R8G8B8A8_UNORM,
-                )
-                right = VulkanExportableImage(
-                    self.context,
-                    self.eye_width,
-                    self.eye_height,
-                    label=f"intel-network-vulkan-right-{index}",
-                    format=self.context.vk.VK_FORMAT_R8G8B8A8_UNORM,
-                )
-                self.context.prepare_external_image_for_producer(left.resource)
-                self.context.prepare_external_image_for_producer(right.resource)
-                self.left_slots.append(left)
-                self.right_slots.append(right)
-        except Exception:
-            self.close()
-            raise
 
     def submit(self, request: Any) -> IntelVulkanSbsFrame:
         rgb = getattr(request, "rgb", None)
@@ -161,23 +152,18 @@ class IntelVulkanSbsRuntimeBridge:
                 "Vulkan Intel SBS request dimensions changed: "
                 f"expected={self.eye_width}x{self.eye_height} actual={width}x{height}"
             )
-        index = self._frame_id % self.ring_size
-        left = self.left_slots[index].resource
-        right = self.right_slots[index].resource
-        if left is None or right is None:
-            raise RuntimeError("Vulkan Intel SBS image ring is unavailable")
+        destination = getattr(self.composer.imported, "resource", None)
+        if destination is None:
+            raise RuntimeError("Vulkan Intel SBS imported destination is unavailable")
         timeline, _debug = self.backend.submit_to_images(
             rgb,
             depth,
-            left,
-            right,
+            destination,
+            destination,
             params=params,
+            packed_output=True,
         )
-        frame = self.composer.compose(
-            left,
-            right,
-            ready_timeline=int(timeline),
-        )
+        frame = self.composer.frame_after_vulkan_submit(timeline)
         self._frame_id += 1
         return frame
 
@@ -196,13 +182,6 @@ class IntelVulkanSbsRuntimeBridge:
             except Exception:
                 pass
             self.composer = None
-        for slot in (*getattr(self, "left_slots", ()), *getattr(self, "right_slots", ())):
-            try:
-                slot.close()
-            except Exception:
-                pass
-        self.left_slots = []
-        self.right_slots = []
         context = getattr(self, "context", None)
         if context is not None:
             try:

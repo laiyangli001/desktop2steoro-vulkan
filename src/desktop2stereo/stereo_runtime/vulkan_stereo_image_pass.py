@@ -17,7 +17,7 @@ class VulkanStereoImagePass:
     """Write stereo eyes directly into presenter-owned storage images."""
 
     WORKGROUP_SIZE = 16
-    PUSH_CONSTANTS_SIZE = 76
+    PUSH_CONSTANTS_SIZE = 80
     BUFFER_COUNT = 4
 
     def __init__(
@@ -27,12 +27,14 @@ class VulkanStereoImagePass:
         width: int,
         height: int,
         shader_path: str | Path = Path(__file__).resolve().parents[1] / "shaders" / "d2s_stereo_layered_output.spv",
+        packed_output: bool = False,
     ) -> None:
         if int(width) < 1 or int(height) < 1:
             raise ValueError("Vulkan stereo image dimensions must be positive")
         self.context = context
         self.width = int(width)
         self.height = int(height)
+        self.packed_output = bool(packed_output)
         self.pipeline: VulkanComputePipeline | None = None
         self.descriptor_arena: VulkanDescriptorArena | None = None
         self.descriptor_sets: list[Any] = []
@@ -121,7 +123,8 @@ class VulkanStereoImagePass:
         for image in images:
             if getattr(image, "context", None) is not self.context:
                 raise ValueError("stereo output image belongs to a different Vulkan context")
-            if int(getattr(image, "width", 0)) != self.width or int(getattr(image, "height", 0)) != self.height:
+            expected_width = self.width * 2 if self.packed_output else self.width
+            if int(getattr(image, "width", 0)) != expected_width or int(getattr(image, "height", 0)) != self.height:
                 raise ValueError("stereo output image dimensions do not match")
             state = self.context.image_state(image.image)
             if state.layout != self.context.vk.VK_IMAGE_LAYOUT_GENERAL:
@@ -134,7 +137,11 @@ class VulkanStereoImagePass:
         self.descriptor_arena.update_storage_image(descriptor_set, 2, images[0])
         self.descriptor_arena.update_storage_image(descriptor_set, 3, images[1])
         self._active_descriptor_set = descriptor_set
-        self._active_push_constants = params.pack(self.width, self.height)
+        self._active_push_constants = params.pack_image(
+            self.width,
+            self.height,
+            packed_output=self.packed_output,
+        )
         submit_kwargs = {}
         if ready_timeline is not None:
             submit_kwargs["wait_for_timeline"] = int(ready_timeline)

@@ -144,6 +144,12 @@ class VulkanLayeredStereoParams:
             1 if self.occlusion_enabled else 0,
         )
 
+    def pack_image(self, width: int, height: int, *, packed_output: bool = False) -> bytes:
+        """Pack the image-output variant, including the packed SBS flag."""
+        return self.pack(width, height) + struct.pack(
+            "<I", 1 if packed_output else 0
+        )
+
 
 class VulkanStereoFusedPass:
     """Single-dispatch baseline stereo synthesis for Vulkan Compute.

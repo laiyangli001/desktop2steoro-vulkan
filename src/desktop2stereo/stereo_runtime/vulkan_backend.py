@@ -77,9 +77,13 @@ class VulkanStereoImageComputeBackend:
             raise ValueError("Vulkan stereo RGB and depth dimensions must match")
         return int(rgb.shape[-2]), int(rgb.shape[-1])
 
-    def _ensure_shape(self, height: int, width: int) -> None:
+    def _ensure_shape(self, height: int, width: int, *, packed_output: bool = False) -> None:
         shape = (int(height), int(width))
-        if self._shape == shape and self._pass is not None:
+        if (
+            self._shape == shape
+            and self._pass is not None
+            and bool(getattr(self._pass, "packed_output", False)) == bool(packed_output)
+        ):
             return
         self._close_resources()
         if self._closed or self.context is None or getattr(self.context, "closed", False):
@@ -89,6 +93,7 @@ class VulkanStereoImageComputeBackend:
             width=shape[1],
             height=shape[0],
             shader_path=self.shader_path,
+            packed_output=packed_output,
         )
         self._shape = shape
 
@@ -117,11 +122,12 @@ class VulkanStereoImageComputeBackend:
         *,
         params: VulkanLayeredStereoParams,
         ready_timeline: int | None = None,
+        packed_output: bool = False,
     ) -> tuple[int, dict[str, Any]]:
         if self._closed:
             raise VulkanStereoBackendUnavailable("Vulkan stereo image backend is closed")
         height, width = self._validate_inputs(rgb, depth)
-        self._ensure_shape(height, width)
+        self._ensure_shape(height, width, packed_output=packed_output)
         if self._pass is None:
             raise VulkanStereoBackendUnavailable("Vulkan stereo image pass is unavailable")
         for image in (left_eye, right_eye):
@@ -129,7 +135,8 @@ class VulkanStereoImageComputeBackend:
                 raise ValueError("stereo output image belongs to a different Vulkan context")
             if getattr(image, "resource", None) is not None:
                 image = image.resource
-            if int(getattr(image, "width", 0)) != width or int(getattr(image, "height", 0)) != height:
+            expected_width = width * 2 if packed_output else width
+            if int(getattr(image, "width", 0)) != expected_width or int(getattr(image, "height", 0)) != height:
                 raise ValueError("stereo output image dimensions do not match")
 
         slot_index = int(self._frame_id) % self._input_slot_count
@@ -234,7 +241,11 @@ class VulkanStereoImageComputeBackend:
             self.context.register_image_state(resource.image, output_state)
         return int(timeline), {
             "stereo_compute_backend": "vulkan",
-            "vulkan_fused_backend": "vulkan_stereo_layered_output_image",
+            "vulkan_fused_backend": (
+                "vulkan_sbs_fused_output_image"
+                if packed_output
+                else "vulkan_stereo_layered_output_image"
+            ),
             "vulkan_device": self.device_name,
             "vulkan_submit_timeline": int(timeline),
             "vulkan_readback": "none",
@@ -252,6 +263,7 @@ class VulkanStereoImageComputeBackend:
             "vulkan_input_error": self._cuda_input_error,
             "vulkan_hole_fill_mode": int(params.hole_fill_mode),
             "vulkan_hole_fill_backend": vulkan_hole_fill_backend_name(params.hole_fill_mode),
+            "vulkan_sbs_gpu_copy_count": 0 if packed_output else 2,
         }
 
     def _ensure_cuda_inputs(self, height: int, width: int) -> None:

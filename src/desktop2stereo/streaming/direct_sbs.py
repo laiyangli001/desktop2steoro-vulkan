@@ -2700,7 +2700,8 @@ class IntelD3D11DirectSbsOutput(IntelQsvDirectSbsOutput):
             print(
                 "[IntelStream] Vulkan eyes -> D3D11 shared BGRA SBS -> "
                 "NV12 -> oneVPL -> MediaMTX; gpu_to_cpu=False "
-                "zero_copy=False gpu_copy_count=2",
+                "zero_copy=False gpu_copy_count=0 "
+                "(final SBS shader; end-to-end zero-copy remains gated)",
                 flush=True,
             )
         elif (
