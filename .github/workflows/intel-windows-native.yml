@@ -20,7 +20,7 @@ jobs:
     runs-on: windows-2022
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Download official oneVPL dispatcher source
         shell: pwsh
@@ -245,7 +245,7 @@ jobs:
           $hashes | ConvertTo-Json | Set-Content -LiteralPath "$artifact\sha256.json" -Encoding utf8
 
       - name: Upload Intel native bridge artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: d2s-intel-windows-native-x64
           if-no-files-found: error
@@ -256,12 +256,12 @@ jobs:
     needs: build-intel-windows-native
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ github.sha }}
 
       - name: Download Intel native bridge artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: d2s-intel-windows-native-x64
           path: ${{ runner.temp }}/d2s-intel-windows-native-x64

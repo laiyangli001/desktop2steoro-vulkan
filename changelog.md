@@ -2,6 +2,8 @@
 
 ## 2026-08-23
 
+- 修正 Intel Windows native workflow 仍使用 Node.js 20 运行时的 GitHub Actions 警告：`checkout` 升级到 v5，`upload-artifact` 升级到 v6，`download-artifact` 升级到 v7；远程 C++ 编译逻辑不变。
+
 - Desktop Duplication 捕捉链改为优先使用同一份借用 D3D11 帧：原生纹理在保持 `AcquireNextFrame` 生命周期期间同时交给 OpenVINO 推理，并通过受控 staging readback 生成兼容 BGR 帧，避免此前“兼容捕捉一次、原生推理再捕捉一次”的不同帧问题。该阶段仍明确为 `gpu_to_cpu=True`、`zero_copy=False`、`gpu_copy_count=1`；新增 readback C ABI 的导出检查，C++ 编译继续只由 GitHub Actions 远程 workflow 负责。
 
 - 修正 OpenVINO/D3D11 ctypes 与 C ABI 的真实运行时契约：`last_error` 使用两参数签名，`set_texture` 正确识别返回值 `1` 为成功，并增加对应回归测试。
