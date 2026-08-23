@@ -44,7 +44,7 @@ jobs:
             "-DCMAKE_INSTALL_PREFIX=$install"
           cmake --build $build --config Release --target ov_dev_targets --parallel 2
           cmake --install $build --config Release
-          if (-not (Test-Path -LiteralPath "$install\include\openvino\preprocess\pre_post_process.hpp")) {
+          if (-not (Test-Path -LiteralPath "$install\include\openvino\core\preprocess\pre_post_process.hpp")) {
             throw "OpenVINO preprocess developer header was not installed"
           }
           if (-not (Test-Path -LiteralPath "$install\lib\openvino.lib")) {

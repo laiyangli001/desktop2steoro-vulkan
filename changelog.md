@@ -14,6 +14,8 @@
 
 - OpenVINO 远程构建改用官方 `ov_dev_targets` 目标，避免为 native bridge 编译不必要的完整 runtime/样例集合。
 
+- 对齐当前 OpenVINO C++ API 头文件布局，将 PrePostProcessor include 修正为 `openvino/core/preprocess/pre_post_process.hpp`，并同步远程开发头检查路径。
+
 - 新增 Intel Windows 零拷贝捕捉—推理计划书 `docs/18-intel-windows-zero-copy-capture-inference-plan.md`；GUI 捕捉源加入 `DesktopDuplication` 选项，并新增 DXGI/D3D11 原生桥 C ABI、CMake 工程、ctypes 能力探测、原生纹理借用帧契约和 OpenVINO RemoteTensor 能力层。启用 `D2S_INTEL_NATIVE_OPENVINO=1` 且原生 DLL/模型可用时，原生 D3D11 帧进入 OpenVINO provider；现阶段输出仍回读 CPU，因此明确记录 `zero_copy=False`。Desktop Duplication 遇到 `DXGI_ERROR_ACCESS_LOST` 时会重建输出并自动重试一次。
 
 - OpenVINO Intel 路径新增可选 `native/openvino_d3d11_bridge` C ABI/CMake 工程、D3D11 VideoProcessor 的 BGRA8→NV12 GPU 转换、NV12 RemoteTensor 接线、输出 shape/float buffer ABI，以及 `OpenVINOD3D11DepthProvider` 适配器；Desktop Duplication 暴露同一 D3D11 device 供 provider 复用，新增 DXGI Adapter LUID 校验、原生帧异常安全释放、运行时调试字段和借用 NV12 D3D11 surface 导出契约。OpenVINO SDK 尚未安装，因此该 DLL 尚未编译；直接 oneVPL/QSV 真机提交仍待验证。

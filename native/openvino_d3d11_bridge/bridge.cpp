@@ -9,7 +9,7 @@
 #include <wrl/client.h>
 
 #include <openvino/openvino.hpp>
-#include <openvino/preprocess/pre_post_process.hpp>
+#include <openvino/core/preprocess/pre_post_process.hpp>
 #include <openvino/runtime/intel_gpu/ocl/dx.hpp>
 
 #include <cstring>
