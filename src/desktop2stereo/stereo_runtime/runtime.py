@@ -200,6 +200,9 @@ class StereoRuntimeResult:
     provider_info: dict[str, Any] = field(default_factory=dict)
     cuda_ready_event: Any | None = None
     cuda_timing_events: dict[str, Any] = field(default_factory=dict)
+    # Optional final composed BGRA8 D3D11 texture supplied by a native
+    # compositor. When present, Intel native output can import it directly.
+    native_final_sbs_surface: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -232,6 +235,9 @@ class OpenXRRuntimeResult:
     cuda_ready_event: Any | None = None
     cuda_timing_events: dict[str, Any] = field(default_factory=dict)
     vulkan_compute_request: VulkanComputeRequest | None = None
+    # Optional final composed BGRA8 D3D11 texture supplied by a native
+    # compositor; kept separate from the Vulkan presenter request.
+    native_final_sbs_surface: Any | None = None
 
 
 def openxr_result_from_stereo_result(

@@ -42,8 +42,10 @@ def _load_bridge():
         required = (
             "d2s_d3d11_sbs_surface_probe",
             "d2s_d3d11_sbs_surface_create",
+            "d2s_d3d11_sbs_surface_create_from_device",
             "d2s_d3d11_sbs_surface_device",
             "d2s_d3d11_sbs_surface_adapter_luid",
+            "d2s_d3d11_sbs_surface_set_bgra_texture",
             "d2s_d3d11_sbs_surface_upload_bgra",
             "d2s_d3d11_sbs_surface_nv12",
             "d2s_d3d11_sbs_surface_last_error",
@@ -55,10 +57,18 @@ def _load_bridge():
         library.d2s_d3d11_sbs_surface_probe.restype = ctypes.c_int
         library.d2s_d3d11_sbs_surface_create.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int]
         library.d2s_d3d11_sbs_surface_create.restype = ctypes.c_void_p
+        library.d2s_d3d11_sbs_surface_create_from_device.argtypes = [
+            ctypes.c_int, ctypes.c_int, ctypes.c_void_p
+        ]
+        library.d2s_d3d11_sbs_surface_create_from_device.restype = ctypes.c_void_p
         library.d2s_d3d11_sbs_surface_device.argtypes = [ctypes.c_void_p]
         library.d2s_d3d11_sbs_surface_device.restype = ctypes.c_void_p
         library.d2s_d3d11_sbs_surface_adapter_luid.argtypes = [ctypes.c_void_p]
         library.d2s_d3d11_sbs_surface_adapter_luid.restype = ctypes.c_ulonglong
+        library.d2s_d3d11_sbs_surface_set_bgra_texture.argtypes = [
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_ulonglong
+        ]
+        library.d2s_d3d11_sbs_surface_set_bgra_texture.restype = ctypes.c_int
         library.d2s_d3d11_sbs_surface_upload_bgra.argtypes = [
             ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int
         ]
@@ -93,14 +103,19 @@ def probe_d3d11_sbs_surface() -> dict[str, object]:
             "gpu_to_cpu": True,
             "zero_copy": False,
             "gpu_copy_count": 1,
+            "external_bgra_texture_import": False,
+            "external_texture_zero_copy_ready": False,
             "reason": "D3D11 SBS surface bridge DLL is not installed",
         }
     capabilities = int(library.d2s_d3d11_sbs_surface_probe())
+    external_texture = bool(capabilities & 0x04)
     return {
         "available": bool(capabilities & 0x03 == 0x03),
         "backend": "d3d11_sbs_surface",
         "input": "final_sbs_bgra8_cpu_upload",
         "output": "borrowed_nv12_d3d11_texture",
+        "external_bgra_texture_import": external_texture,
+        "external_texture_zero_copy_ready": external_texture,
         "gpu_to_cpu": True,
         "zero_copy": False,
         "gpu_copy_count": 1,
@@ -111,15 +126,27 @@ def probe_d3d11_sbs_surface() -> dict[str, object]:
 class D3D11SbsSurface:
     """Own a D3D11 final-SBS conversion surface."""
 
-    def __init__(self, *, width: int, height: int, adapter_index: int = -1) -> None:
+    def __init__(
+        self,
+        *,
+        width: int,
+        height: int,
+        adapter_index: int = -1,
+        d3d11_device: int | None = None,
+    ) -> None:
         self._library = _load_bridge()
         if self._library is None:
             raise RuntimeError("D3D11 SBS surface bridge DLL is unavailable")
         self.width = int(width)
         self.height = int(height)
-        self._handle = self._library.d2s_d3d11_sbs_surface_create(
-            self.width, self.height, int(adapter_index)
-        )
+        if d3d11_device:
+            self._handle = self._library.d2s_d3d11_sbs_surface_create_from_device(
+                self.width, self.height, ctypes.c_void_p(int(d3d11_device))
+            )
+        else:
+            self._handle = self._library.d2s_d3d11_sbs_surface_create(
+                self.width, self.height, int(adapter_index)
+            )
         if not self._handle:
             raise RuntimeError(_last_error(self._library))
 
@@ -149,6 +176,16 @@ class D3D11SbsSurface:
         payload = data.tobytes()
         result = self._library.d2s_d3d11_sbs_surface_upload_bgra(
             self._handle, ctypes.c_char_p(payload), row_stride, self.width, self.height
+        )
+        if result != 1:
+            raise RuntimeError(_last_error(self._library))
+
+    def set_bgra_texture(self, texture: int, *, adapter_luid: int) -> None:
+        """Import a same-device BGRA texture without a CPU upload."""
+        result = self._library.d2s_d3d11_sbs_surface_set_bgra_texture(
+            self._handle,
+            ctypes.c_void_p(int(texture)),
+            int(adapter_luid),
         )
         if result != 1:
             raise RuntimeError(_last_error(self._library))

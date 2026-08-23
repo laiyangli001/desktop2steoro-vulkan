@@ -46,6 +46,7 @@ struct State {
     ComPtr<ID3D11VideoProcessor> processor;
     ComPtr<ID3D11Texture2D> staging_bgra;
     ComPtr<ID3D11Texture2D> bgra;
+    ComPtr<ID3D11Texture2D> external_bgra;
     ComPtr<ID3D11Texture2D> nv12;
     ComPtr<ID3D11VideoProcessorOutputView> output_view;
     unsigned long long adapter_luid = 0;
@@ -53,15 +54,25 @@ struct State {
     int height = 0;
 };
 
-bool initialize(State& state, int width, int height, int adapter_index) {
+bool initialize(State& state, int width, int height, int adapter_index,
+                ID3D11Device* existing_device = nullptr) {
     if (width <= 0 || height <= 0) {
         set_error("SBS surface dimensions must be positive");
         return false;
     }
-    UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
-    D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0};
-    ComPtr<IDXGIAdapter1> selected_adapter;
-    if (adapter_index >= 0) {
+    HRESULT status = S_OK;
+    if (existing_device) {
+        state.device = existing_device;
+        state.device.As(&state.context);
+        if (!state.context) {
+            set_error("existing D3D11 device has no immediate context");
+            return false;
+        }
+    } else {
+        UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+        D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0};
+        ComPtr<IDXGIAdapter1> selected_adapter;
+        if (adapter_index >= 0) {
         ComPtr<IDXGIFactory1> factory;
         if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) {
             set_error("CreateDXGIFactory1 failed");
@@ -72,22 +83,23 @@ bool initialize(State& state, int width, int height, int adapter_index) {
             set_hresult_error("IDXGIFactory1::EnumAdapters1", enum_status);
             return false;
         }
-    }
-    D3D_FEATURE_LEVEL obtained{};
-    HRESULT status = D3D11CreateDevice(
-        selected_adapter.Get(),
-        selected_adapter ? D3D_DRIVER_TYPE_UNKNOWN : D3D_DRIVER_TYPE_HARDWARE,
-        nullptr,
-        flags,
-        levels,
-        ARRAYSIZE(levels),
-        D3D11_SDK_VERSION,
-        &state.device,
-        &obtained,
-        &state.context);
-    if (FAILED(status)) {
-        set_hresult_error("D3D11CreateDevice", status);
-        return false;
+        }
+        D3D_FEATURE_LEVEL obtained{};
+        status = D3D11CreateDevice(
+            selected_adapter.Get(),
+            selected_adapter ? D3D_DRIVER_TYPE_UNKNOWN : D3D_DRIVER_TYPE_HARDWARE,
+            nullptr,
+            flags,
+            levels,
+            ARRAYSIZE(levels),
+            D3D11_SDK_VERSION,
+            &state.device,
+            &obtained,
+            &state.context);
+        if (FAILED(status)) {
+            set_hresult_error("D3D11CreateDevice", status);
+            return false;
+        }
     }
     state.adapter_luid = get_adapter_luid(state.device.Get());
     if (!state.adapter_luid) {
@@ -162,8 +174,11 @@ bool convert(State& state) {
     input_desc.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
     input_desc.Texture2D.MipSlice = 0;
     ComPtr<ID3D11VideoProcessorInputView> input_view;
+    ID3D11Texture2D* source = state.external_bgra
+        ? state.external_bgra.Get()
+        : state.bgra.Get();
     HRESULT status = state.video_device->CreateVideoProcessorInputView(
-        state.bgra.Get(), state.enumerator.Get(), &input_desc, &input_view);
+        source, state.enumerator.Get(), &input_desc, &input_view);
     if (FAILED(status)) { set_hresult_error("CreateVideoProcessorInputView(BGRA8)", status); return false; }
     state.video_context->VideoProcessorSetStreamFrameFormat(
         state.processor.Get(), 0, D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE);
@@ -179,7 +194,7 @@ bool convert(State& state) {
 }
 
 extern "C" D2S_D3D11_SURFACE_API int d2s_d3d11_sbs_surface_probe(void) {
-    return 0x03; // D3D11 device + BGRA upload + GPU NV12 conversion.
+    return 0x07; // + external same-device BGRA texture import.
 }
 
 extern "C" D2S_D3D11_SURFACE_API void* d2s_d3d11_sbs_surface_create(
@@ -187,6 +202,21 @@ extern "C" D2S_D3D11_SURFACE_API void* d2s_d3d11_sbs_surface_create(
     g_last_error.clear();
     auto state = std::make_unique<State>();
     if (!initialize(*state, width, height, adapter_index)) return nullptr;
+    return state.release();
+}
+
+extern "C" D2S_D3D11_SURFACE_API void* d2s_d3d11_sbs_surface_create_from_device(
+    int width, int height, void* d3d11_device) {
+    g_last_error.clear();
+    if (!d3d11_device) {
+        set_error("D3D11 device is required");
+        return nullptr;
+    }
+    auto state = std::make_unique<State>();
+    if (!initialize(*state, width, height, -1,
+                    static_cast<ID3D11Device*>(d3d11_device))) {
+        return nullptr;
+    }
     return state.release();
 }
 
@@ -200,6 +230,36 @@ extern "C" D2S_D3D11_SURFACE_API unsigned long long d2s_d3d11_sbs_surface_adapte
     return state ? state->adapter_luid : 0;
 }
 
+extern "C" D2S_D3D11_SURFACE_API int d2s_d3d11_sbs_surface_set_bgra_texture(
+    void* handle, void* bgra_texture, unsigned long long adapter_luid) {
+    auto* state = static_cast<State*>(handle);
+    if (!state || !bgra_texture) {
+        set_error("BGRA texture is unavailable");
+        return 0;
+    }
+    auto* texture = static_cast<ID3D11Texture2D*>(bgra_texture);
+    D3D11_TEXTURE2D_DESC desc{};
+    texture->GetDesc(&desc);
+    if (desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM ||
+        static_cast<int>(desc.Width) != state->width ||
+        static_cast<int>(desc.Height) != state->height) {
+        set_error("external BGRA texture format or dimensions do not match");
+        return 0;
+    }
+    ComPtr<ID3D11Device> texture_device;
+    texture->GetDevice(&texture_device);
+    if (!texture_device || texture_device.Get() != state->device.Get()) {
+        set_error("external BGRA texture belongs to a different D3D11 device");
+        return 0;
+    }
+    if (!adapter_luid || adapter_luid != state->adapter_luid) {
+        set_error("external BGRA texture Adapter LUID does not match the surface");
+        return 0;
+    }
+    state->external_bgra = texture;
+    return convert(*state) ? 1 : 0;
+}
+
 extern "C" D2S_D3D11_SURFACE_API int d2s_d3d11_sbs_surface_upload_bgra(
     void* handle, const unsigned char* data, int stride, int width, int height) {
     auto* state = static_cast<State*>(handle);
@@ -207,6 +267,7 @@ extern "C" D2S_D3D11_SURFACE_API int d2s_d3d11_sbs_surface_upload_bgra(
         set_error("BGRA upload dimensions or stride do not match the surface");
         return 0;
     }
+    state->external_bgra.Reset();
     D3D11_MAPPED_SUBRESOURCE mapped{};
     HRESULT status = state->context->Map(state->staging_bgra.Get(), 0, D3D11_MAP_WRITE, 0, &mapped);
     if (FAILED(status)) { set_hresult_error("Map(BGRA8 staging)", status); return 0; }
@@ -248,8 +309,10 @@ extern "C" D2S_D3D11_SURFACE_API void d2s_d3d11_sbs_surface_destroy(void* handle
 #else
 extern "C" int d2s_d3d11_sbs_surface_probe(void) { return 0; }
 extern "C" void* d2s_d3d11_sbs_surface_create(int, int, int) { return nullptr; }
+extern "C" void* d2s_d3d11_sbs_surface_create_from_device(int, int, void*) { return nullptr; }
 extern "C" void* d2s_d3d11_sbs_surface_device(void*) { return nullptr; }
 extern "C" unsigned long long d2s_d3d11_sbs_surface_adapter_luid(void*) { return 0; }
+extern "C" int d2s_d3d11_sbs_surface_set_bgra_texture(void*, void*, unsigned long long) { return 0; }
 extern "C" int d2s_d3d11_sbs_surface_upload_bgra(void*, const unsigned char*, int, int, int) { return 0; }
 extern "C" int d2s_d3d11_sbs_surface_nv12(void*, void**, int*, int*) { return 0; }
 extern "C" int d2s_d3d11_sbs_surface_last_error(char*, int) { return 0; }

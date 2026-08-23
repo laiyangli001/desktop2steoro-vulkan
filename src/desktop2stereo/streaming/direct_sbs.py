@@ -254,6 +254,17 @@ class DirectSbsOutputConsumer:
             try:
                 runtime_result, _capture_timestamp = item
                 self._fps_sbs_frames += 1
+                native_surface = getattr(runtime_result, "native_final_sbs_surface", None)
+                submit_native_surface = getattr(
+                    self.output, "submit_native_d3d11_surface", None
+                )
+                if native_surface is not None and callable(submit_native_surface):
+                    submit_native_surface(native_surface)
+                    self._fps_submitted_frames += 1
+                    self.source_stat_inc("runtime_output_frames")
+                    self.source_stat_inc("network_stream_frames")
+                    self._report_fps_if_due()
+                    continue
                 prepare_calibration = getattr(
                     self.output, "prepare_calibration_source", None
                 )
@@ -2505,6 +2516,74 @@ class IntelD3D11DirectSbsOutput(IntelQsvDirectSbsOutput):
         while True:
             packet = self._native_onevpl_encoder.read_packet()
             if not packet: break
+            if self._native_onevpl_mux is None or self._native_onevpl_mux.stdin is None:
+                raise RuntimeError("Intel oneVPL packet muxer stdin is unavailable")
+            self._native_onevpl_mux.stdin.write(packet)
+            self._native_onevpl_mux.stdin.flush()
+
+    def submit_native_d3d11_surface(self, frame: Any) -> None:
+        """Encode a same-device final BGRA8 texture without CPU upload."""
+        enabled = os.environ.get("D2S_ONEVPL_FINAL_SBS", "0").strip().casefold()
+        if enabled not in {"1", "true", "yes", "on"}:
+            raise RuntimeError("native final SBS surface path is disabled")
+        texture_value = getattr(frame, "texture", 0)
+        device_value = getattr(frame, "device", 0)
+        texture = int(getattr(texture_value, "value", texture_value) or 0)
+        device = int(getattr(device_value, "value", device_value) or 0)
+        width = int(getattr(frame, "width", 0) or 0)
+        height = int(getattr(frame, "height", 0) or 0)
+        adapter_luid = int(getattr(frame, "adapter_luid", 0) or 0)
+        if not texture or not device or not width or not height or not adapter_luid:
+            raise RuntimeError("native final SBS frame lacks D3D11 texture contract")
+        from desktop2stereo.stereo_runtime.providers.intel.d3d11_sbs_surface import D3D11SbsSurface
+        from desktop2stereo.stereo_runtime.providers.intel.onevpl_d3d11_encoder import OneVPLD3D11SurfaceEncoder
+
+        if self._native_surface is None:
+            self._native_surface = D3D11SbsSurface(
+                width=width, height=height, d3d11_device=device
+            )
+            if self._native_surface.adapter_luid != adapter_luid:
+                raise RuntimeError(
+                    "native final SBS frame Adapter LUID does not match D3D11 surface"
+                )
+            budget = self._dynamic_stream_rate_budget(width, height)
+            target_mbps = int(budget[0] if budget else 10)
+            self._native_onevpl_encoder = OneVPLD3D11SurfaceEncoder(
+                width=width, height=height, fps=self.fps,
+                bitrate=target_mbps * 1_000_000,
+                d3d11_device=self._native_surface.device, hevc=self.use_hevc,
+            )
+            if self._native_onevpl_encoder.adapter_luid != adapter_luid:
+                raise RuntimeError("native final SBS encoder Adapter LUID mismatch")
+            self._start_native_onevpl_mux()
+            self._native_onevpl_active = True
+            self._native_onevpl_pts = 0
+            self._frame_size = (width, height)
+            print(
+                "[IntelStream] native final SBS texture import active: "
+                "D3D11 BGRA8 -> NV12 -> oneVPL -> MediaMTX; "
+                f"adapter_luid={adapter_luid} gpu_to_cpu=False "
+                "zero_copy=True gpu_copy_count=0",
+                flush=True,
+            )
+        elif (
+            self._native_surface.width != width
+            or self._native_surface.height != height
+            or self._native_surface.adapter_luid != adapter_luid
+        ):
+            raise RuntimeError("native final SBS texture contract changed during stream")
+        if self._native_surface is None or self._native_onevpl_encoder is None:
+            raise RuntimeError("Intel native final SBS texture resources are unavailable")
+        self._native_surface.set_bgra_texture(texture, adapter_luid=adapter_luid)
+        _texture, out_width, out_height = self._native_surface.nv12_texture()
+        if (out_width, out_height) != (width, height):
+            raise RuntimeError("Intel imported final SBS surface dimensions changed")
+        self._native_onevpl_encoder.submit_nv12(_texture, self._native_onevpl_pts)
+        self._native_onevpl_pts += 1
+        while True:
+            packet = self._native_onevpl_encoder.read_packet()
+            if not packet:
+                break
             if self._native_onevpl_mux is None or self._native_onevpl_mux.stdin is None:
                 raise RuntimeError("Intel oneVPL packet muxer stdin is unavailable")
             self._native_onevpl_mux.stdin.write(packet)

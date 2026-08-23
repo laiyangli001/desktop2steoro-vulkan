@@ -94,6 +94,10 @@ class NativeD3D11TextureFrame:
             self._owner.release_frame()
             self._released = True
 
+    @property
+    def device(self):
+        return self._owner.device
+
     def readback_bgra(self):
         """Copy the currently borrowed texture to a tightly packed BGRA array."""
         import numpy as np

@@ -100,6 +100,7 @@ Intel 编码优先使用 oneVPL/QSV：
 - 新增可选 `native/onevpl_d3d11_encoder` C ABI：在配置 oneVPL SDK 时接收借用的 NV12 `ID3D11Texture2D`，执行 D3D11 加速编码并返回压缩包；未配置 SDK、DLL 或 Intel 驱动时探针返回不可用，不能误启用。
 - oneVPL bridge 现在导出其实际 D3D11 Adapter LUID；final-SBS native 路径启动时必须验证 D3D11 surface 与 encoder LUID 非零且一致，否则拒绝该路径并回退，避免跨适配器资源被误报为共享零拷贝。
 - 新增 `native/d3d11_sbs_surface` 最终 SBS surface bridge：接收已经完成左右眼合成的 BGRA8 CPU 帧，上传到 D3D11 staging/default texture，经 VideoProcessor 在 GPU 上转换为 NV12，并向同一 D3D11 device 的 oneVPL encoder 暴露借用 surface。该过渡路径的 CPU→GPU 上传计为 `gpu_copy_count=1`，不能报告严格零拷贝。
+- 同一 bridge 现在也支持从调用方 D3D11 device 创建，并直接导入外部 BGRA8 `ID3D11Texture2D`；导入前校验 texture 所属 device、格式、尺寸和 Adapter LUID，成功后仅执行 BGRA8→NV12 GPU VideoProcessor 转换。该接口只有在真实合成器提供 `native_final_sbs_surface` 时才可用于端到端零拷贝。
 
 ### 3.4 最终 SBS 输出边界
 
@@ -269,6 +270,7 @@ AMD         -> WindowsCaptureROCm
 - [x] 新增可选 `native/onevpl_d3d11_encoder` bridge 和 Python 能力探测/Surface 提交 API；已由 GitHub Actions 使用官方 oneVPL dispatcher 远程编译并完成导出/链接校验，Intel 真机仍待验证。
 - [x] oneVPL final-SBS 路径增加 Adapter LUID C ABI、ctypes 读取和启动期一致性门；GitHub Actions 已验证新增导出，真实 Intel 设备仍待运行时验证。
 - [x] 新增 `native/d3d11_sbs_surface` 最终 SBS BGRA8→NV12 bridge、Python surface owner 和 oneVPL final-SBS 输出接线；已由 GitHub Actions 远程编译，真实 oneVPL 硬件编码仍待 Intel 真机验证。
+- [x] 新增外部 D3D11 BGRA8 texture 导入、同 device 创建和 Adapter LUID/格式/尺寸校验；GitHub Actions 需要继续验证新增 C ABI，立体合成器实际 surface 传递仍未完成。
 - [ ] 将最终 SBS 原生 D3D11/Vulkan surface 接入 oneVPL/QSV，消除当前 RGB24 stdin 边界。
 - [ ] 在 Intel 真机完成 4K 长时间验证，并确认 Desktop Duplication、OpenVINO 与编码设备的 Adapter LUID 一致。
 

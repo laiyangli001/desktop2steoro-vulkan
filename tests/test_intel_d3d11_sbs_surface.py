@@ -13,6 +13,8 @@ def test_d3d11_sbs_surface_probe_is_safe_without_optional_dll() -> None:
     assert result["backend"] == "d3d11_sbs_surface"
     assert isinstance(result["available"], bool)
     assert result["zero_copy"] is False
+    assert isinstance(result["external_bgra_texture_import"], bool)
+    assert isinstance(result["external_texture_zero_copy_ready"], bool)
 
 
 def test_rgb_to_bgra_preserves_final_sbs_geometry_and_channels() -> None:
