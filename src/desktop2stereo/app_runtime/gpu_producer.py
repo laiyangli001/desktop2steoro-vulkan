@@ -46,6 +46,28 @@ class GpuProducerAdapter(ABC):
             "queue_family": int(state.queue_family_index),
         }
 
+    @staticmethod
+    def external_image_contract(resource: VulkanImageResource) -> dict[str, object]:
+        """Publish cross-API metadata without claiming D3D11 compatibility."""
+        contract = resource.external_memory_contract()
+        return {
+            "memory_handle": contract.memory_handle,
+            "memory_handle_type": contract.memory_handle_type,
+            "format": int(contract.format),
+            "width": int(contract.width),
+            "height": int(contract.height),
+            "allocation_size": int(contract.allocation_size),
+            "adapter_luid": int(contract.adapter_luid),
+            "adapter_identity": (
+                f"luid:{int(contract.adapter_luid):016x}"
+                if contract.adapter_luid
+                else f"pci:{int(contract.adapter_vendor_id):04x}:{int(contract.adapter_device_id):04x}"
+            ),
+            "ready_semaphore_handle": contract.ready_semaphore_handle,
+            "ready_timeline_value": contract.ready_timeline_value,
+            "producer_ready": bool(contract.producer_ready),
+        }
+
     @abstractmethod
     def convert(self, runtime_result: Any, *, frame_id: int, timestamp: float):
         """Convert a backend result without a CPU pixel round trip."""

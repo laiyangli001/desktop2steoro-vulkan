@@ -155,6 +155,7 @@ jobs:
             "native/d3d11_sbs_surface/build/ci/Release/d2s_d3d11_sbs_surface.dll" = @(
             "d2s_d3d11_sbs_surface_probe",
             "d2s_d3d11_sbs_surface_create_from_device",
+            "d2s_d3d11_sbs_surface_shared_handle",
             "d2s_d3d11_sbs_surface_set_bgra_texture",
             "d2s_d3d11_sbs_surface_upload_bgra",
               "d2s_d3d11_sbs_surface_nv12"

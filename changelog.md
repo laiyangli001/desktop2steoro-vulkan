@@ -2,6 +2,12 @@
 
 ## 2026-08-23
 
+- 建立 Vulkan→D3D11 外部资源公共 contract：显式携带 Win32 memory handle、格式/尺寸、分配大小、producer-ready 同步句柄和 Adapter LUID；缺少真实 LUID、BGRA8 格式或生产者同步时不会误报 Intel 零拷贝，最终 Vulkan surface 接入仍待完成。
+
+- 校正 Vulkan/D3D11 句柄方向：`OPAQUE_WIN32` 句柄不能直接作为 `ID3D11Device1::OpenSharedResource1` 的 D3D11 纹理句柄；contract 现在可拒绝非 `D3D11_TEXTURE` 类型，后续应采用 D3D11 创建共享纹理、Vulkan 导入的路径。
+
+- D3D11 SBS bridge 的自有 BGRA surface 增加 NT shared resource 标志，并新增 `shared_handle` 导出；这是后续 Vulkan 以 `D3D11_TEXTURE` 类型导入的入口，尚未宣称最终 Vulkan→D3D11 零拷贝链路完成。
+
 - 修正 Intel Windows native workflow 仍使用 Node.js 20 运行时的 GitHub Actions 警告：`checkout` 升级到 v5，`upload-artifact` 升级到 v6，`download-artifact` 升级到 v7；远程 C++ 编译逻辑不变。
 
 - Intel oneVPL final-SBS native 路径新增 Adapter LUID 导出与运行时一致性校验；D3D11 surface 与 oneVPL encoder 不属于同一适配器时立即拒绝该路径并回退，日志明确记录校验结果。

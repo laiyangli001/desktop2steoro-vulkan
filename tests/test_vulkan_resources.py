@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from viewer.vulkan_resources import VulkanExternalImageRegistry, VulkanImageResource
+from viewer.vulkan_resources import (
+    VulkanExternalImageRegistry,
+    VulkanExternalMemoryContract,
+    VulkanImageResource,
+)
 
 
 class FakeContext:
@@ -61,3 +65,63 @@ def test_external_image_registry_discard_releases_non_owning_references():
     registry.register(_resource(context))
     registry.discard()
     assert registry.registered_count == 0
+
+
+def test_external_memory_contract_requires_explicit_handle_format_adapter_and_sync():
+    contract = VulkanExternalMemoryContract(
+        memory_handle=11,
+        memory_handle_type=8,
+        width=1280,
+        height=720,
+        format=44,
+        allocation_size=4096,
+        adapter_luid=99,
+        ready_semaphore_handle=12,
+        ready_semaphore_handle_type=3,
+        producer_ready=True,
+    )
+    assert contract.is_d3d11_zero_copy_ready(
+        windows=True, bgra8_format=44, d3d11_texture_handle_type=8
+    )
+    assert contract.validation_reasons(
+        windows=True, bgra8_format=37, d3d11_texture_handle_type=8
+    ) == (
+        "format_not_d3d11_bgra8",
+    )
+
+
+def test_external_memory_contract_does_not_infer_zero_copy_from_memory_handle():
+    contract = VulkanExternalMemoryContract(
+        memory_handle=11,
+        memory_handle_type=8,
+        width=1280,
+        height=720,
+        format=44,
+        adapter_luid=99,
+    )
+    assert not contract.is_d3d11_zero_copy_ready(
+        windows=True, bgra8_format=44, d3d11_texture_handle_type=8
+    )
+    assert "missing_producer_ready_sync" in contract.validation_reasons(
+        windows=True, bgra8_format=44, d3d11_texture_handle_type=8
+    )
+
+
+def test_external_memory_contract_rejects_opaque_win32_for_d3d11_texture_import():
+    contract = VulkanExternalMemoryContract(
+        memory_handle=11,
+        memory_handle_type=2,
+        width=1280,
+        height=720,
+        format=44,
+        adapter_luid=99,
+        ready_semaphore_handle=12,
+        ready_semaphore_handle_type=3,
+        producer_ready=True,
+    )
+    assert not contract.is_d3d11_zero_copy_ready(
+        windows=True, bgra8_format=44, d3d11_texture_handle_type=8
+    )
+    assert "handle_type_not_d3d11_texture" in contract.validation_reasons(
+        windows=True, bgra8_format=44, d3d11_texture_handle_type=8
+    )

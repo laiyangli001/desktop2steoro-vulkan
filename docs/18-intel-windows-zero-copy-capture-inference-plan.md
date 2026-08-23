@@ -271,6 +271,10 @@ AMD         -> WindowsCaptureROCm
 - [x] oneVPL final-SBS 路径增加 Adapter LUID C ABI、ctypes 读取和启动期一致性门；GitHub Actions 已验证新增导出，真实 Intel 设备仍待运行时验证。
 - [x] 新增 `native/d3d11_sbs_surface` 最终 SBS BGRA8→NV12 bridge、Python surface owner 和 oneVPL final-SBS 输出接线；已由 GitHub Actions 远程编译，真实 oneVPL 硬件编码仍待 Intel 真机验证。
 - [x] 新增外部 D3D11 BGRA8 texture 导入、同 device 创建和 Adapter LUID/格式/尺寸校验；GitHub Actions 需要继续验证新增 C ABI，立体合成器实际 surface 传递仍未完成。
+- [x] 建立 Vulkan→D3D11 公共外部资源 contract：统一描述 Win32 memory handle、handle type、格式、尺寸、分配大小、producer-ready semaphore/timeline 和 Adapter LUID；缺少任一关键条件时明确拒绝报告为零拷贝。
+- [x] 明确 Win32 句柄方向：Vulkan 当前 `OPAQUE_WIN32` 导出句柄不能直接交给 `ID3D11Device1::OpenSharedResource1`；可行的 D3D11/Vulkan 共享方向是由 D3D11 创建带 NT shared handle 的纹理，Vulkan 以 `D3D11_TEXTURE` handle type 导入，随后再由 D3D11/oneVPL 消费同一资源。
+- [x] D3D11 SBS bridge 的自有 BGRA surface 已改为 `D3D11_RESOURCE_MISC_SHARED_NTHANDLE`，并暴露 `IDXGIResource1::CreateSharedHandle` C ABI；Vulkan 导入器仍需实现 `D3D11_TEXTURE` memory import 和 producer-ready 同步。
+- [ ] 从 Vulkan 设备查询并填充真实 DXGI Adapter LUID；当前 `VulkanDeviceInfo.adapter_luid=0` 表示绑定层尚未提供可验证的 LUID，不能用 PCI vendor/device 代替。
 - [ ] 将最终 SBS 原生 D3D11/Vulkan surface 接入 oneVPL/QSV，消除当前 RGB24 stdin 边界。
 - [ ] 在 Intel 真机完成 4K 长时间验证，并确认 Desktop Duplication、OpenVINO 与编码设备的 Adapter LUID 一致。
 

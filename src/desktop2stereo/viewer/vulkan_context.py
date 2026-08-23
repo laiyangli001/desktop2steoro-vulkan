@@ -49,6 +49,16 @@ class VulkanDeviceInfo:
     transfer_queue_family_index: int = -1
     timeline_semaphore_enabled: bool = False
     synchronization2_enabled: bool = False
+    # Vulkan does not expose a portable DXGI LUID in the base properties
+    # query. Keep it explicit so cross-API consumers never infer identity
+    # from a name or PCI vendor alone.
+    adapter_luid: int = 0
+
+    @property
+    def adapter_identity(self) -> str:
+        if self.adapter_luid:
+            return f"luid:{self.adapter_luid:016x}"
+        return f"pci:{self.vendor_id:04x}:{self.device_id:04x}"
 
     @property
     def api_version_text(self) -> str:
@@ -2023,6 +2033,7 @@ def _device_info(
         transfer_queue_family_index=int(queue_families.transfer),
         timeline_semaphore_enabled=bool(timeline_semaphore_enabled),
         synchronization2_enabled=bool(synchronization2_enabled),
+        adapter_luid=0,
     )
 
 

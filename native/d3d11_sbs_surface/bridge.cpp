@@ -6,6 +6,7 @@
 #include <windows.h>
 #include <d3d11.h>
 #include <dxgi.h>
+#include <dxgi1_2.h>
 #include <wrl/client.h>
 
 #include <cstring>
@@ -139,6 +140,7 @@ bool initialize(State& state, int width, int height, int adapter_index,
     // video-compatible flags. A shader-resource-only texture is rejected by
     // CreateVideoProcessorInputView on current Intel drivers.
     source_desc.BindFlags = 0;
+    source_desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
     status = state.device->CreateTexture2D(&source_desc, nullptr, &state.bgra);
     if (FAILED(status)) { set_hresult_error("CreateTexture2D(BGRA8)", status); return false; }
     source_desc.Usage = D3D11_USAGE_STAGING;
@@ -230,6 +232,31 @@ extern "C" D2S_D3D11_SURFACE_API unsigned long long d2s_d3d11_sbs_surface_adapte
     return state ? state->adapter_luid : 0;
 }
 
+extern "C" D2S_D3D11_SURFACE_API void* d2s_d3d11_sbs_surface_shared_handle(void* handle) {
+    auto* state = static_cast<State*>(handle);
+    if (!state || !state->bgra) {
+        set_error("shared BGRA surface is unavailable");
+        return nullptr;
+    }
+    ComPtr<IDXGIResource1> resource;
+    HRESULT status = state->bgra.As(&resource);
+    if (FAILED(status) || !resource) {
+        set_hresult_error("QueryInterface(IDXGIResource1)", status);
+        return nullptr;
+    }
+    HANDLE shared = nullptr;
+    status = resource->CreateSharedHandle(
+        nullptr,
+        DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE,
+        nullptr,
+        &shared);
+    if (FAILED(status)) {
+        set_hresult_error("IDXGIResource1::CreateSharedHandle", status);
+        return nullptr;
+    }
+    return shared;
+}
+
 extern "C" D2S_D3D11_SURFACE_API int d2s_d3d11_sbs_surface_set_bgra_texture(
     void* handle, void* bgra_texture, unsigned long long adapter_luid) {
     auto* state = static_cast<State*>(handle);
@@ -312,6 +339,7 @@ extern "C" void* d2s_d3d11_sbs_surface_create(int, int, int) { return nullptr; }
 extern "C" void* d2s_d3d11_sbs_surface_create_from_device(int, int, void*) { return nullptr; }
 extern "C" void* d2s_d3d11_sbs_surface_device(void*) { return nullptr; }
 extern "C" unsigned long long d2s_d3d11_sbs_surface_adapter_luid(void*) { return 0; }
+extern "C" void* d2s_d3d11_sbs_surface_shared_handle(void*) { return nullptr; }
 extern "C" int d2s_d3d11_sbs_surface_set_bgra_texture(void*, void*, unsigned long long) { return 0; }
 extern "C" int d2s_d3d11_sbs_surface_upload_bgra(void*, const unsigned char*, int, int, int) { return 0; }
 extern "C" int d2s_d3d11_sbs_surface_nv12(void*, void**, int*, int*) { return 0; }

@@ -8,6 +8,92 @@ from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
+class VulkanExternalMemoryContract:
+    """Explicit cross-API hand-off metadata for one Vulkan image.
+
+    A Win32 memory handle alone is not proof that D3D11 can consume the image.
+    The bridge must also validate format, dimensions, adapter identity, and a
+    producer-ready synchronization primitive before advertising zero-copy.
+    """
+
+    memory_handle: int | None
+    memory_handle_type: int | None
+    width: int
+    height: int
+    format: int
+    allocation_size: int = 0
+    adapter_luid: int = 0
+    adapter_vendor_id: int = 0
+    adapter_device_id: int = 0
+    ready_semaphore_handle: int | None = None
+    ready_semaphore_handle_type: int | None = None
+    ready_timeline_value: int | None = None
+    producer_ready: bool = False
+    source_label: str = "vulkan-image"
+
+    def __post_init__(self) -> None:
+        if int(self.width) < 1 or int(self.height) < 1:
+            raise ValueError("external Vulkan image dimensions must be positive")
+        if int(self.allocation_size) < 0:
+            raise ValueError("external Vulkan allocation size must not be negative")
+        if int(self.adapter_luid) < 0:
+            raise ValueError("Vulkan adapter LUID must not be negative")
+        if not str(self.source_label).strip():
+            raise ValueError("external Vulkan image source label must not be empty")
+
+    @property
+    def has_memory_handle(self) -> bool:
+        return bool(self.memory_handle and self.memory_handle_type)
+
+    @property
+    def has_ready_sync(self) -> bool:
+        return bool(
+            self.producer_ready
+            and self.ready_semaphore_handle
+            and self.ready_semaphore_handle_type
+        )
+
+    def validation_reasons(
+        self,
+        *,
+        windows: bool,
+        bgra8_format: int | None,
+        d3d11_texture_handle_type: int | None = None,
+    ) -> tuple[str, ...]:
+        reasons: list[str] = []
+        if not windows:
+            reasons.append("d3d11_requires_windows")
+        if not self.has_memory_handle:
+            reasons.append("missing_external_memory_handle")
+        if (
+            self.has_memory_handle
+            and d3d11_texture_handle_type is not None
+            and int(self.memory_handle_type) != int(d3d11_texture_handle_type)
+        ):
+            reasons.append("handle_type_not_d3d11_texture")
+        if bgra8_format is None or int(self.format) != int(bgra8_format):
+            reasons.append("format_not_d3d11_bgra8")
+        if int(self.adapter_luid) == 0:
+            reasons.append("missing_adapter_luid")
+        if not self.has_ready_sync:
+            reasons.append("missing_producer_ready_sync")
+        return tuple(reasons)
+
+    def is_d3d11_zero_copy_ready(
+        self,
+        *,
+        windows: bool,
+        bgra8_format: int | None,
+        d3d11_texture_handle_type: int | None = None,
+    ) -> bool:
+        return not self.validation_reasons(
+            windows=windows,
+            bgra8_format=bgra8_format,
+            d3d11_texture_handle_type=d3d11_texture_handle_type,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class VulkanImageResource:
     """Non-owning contract for an imported or externally managed Vulkan image."""
 
@@ -24,6 +110,16 @@ class VulkanImageResource:
     mip_levels: int = 1
     external: bool = True
     label: str = "external-image"
+    external_memory_handle: int | None = None
+    external_memory_handle_type: int | None = None
+    allocation_size: int = 0
+    adapter_luid: int = 0
+    adapter_vendor_id: int = 0
+    adapter_device_id: int = 0
+    ready_semaphore_handle: int | None = None
+    ready_semaphore_handle_type: int | None = None
+    ready_timeline_value: int | None = None
+    producer_ready: bool = False
 
     def __post_init__(self) -> None:
         if int(self.width) < 1 or int(self.height) < 1:
@@ -34,6 +130,27 @@ class VulkanImageResource:
             raise ValueError("Vulkan image mip level count must be positive")
         if not str(self.label).strip():
             raise ValueError("Vulkan image label must not be empty")
+        if int(self.allocation_size) < 0:
+            raise ValueError("Vulkan image allocation size must not be negative")
+
+    def external_memory_contract(self) -> VulkanExternalMemoryContract:
+        """Return the metadata that a native D3D11 bridge must validate."""
+        return VulkanExternalMemoryContract(
+            memory_handle=self.external_memory_handle,
+            memory_handle_type=self.external_memory_handle_type,
+            width=self.width,
+            height=self.height,
+            format=self.format,
+            allocation_size=self.allocation_size,
+            adapter_luid=self.adapter_luid,
+            adapter_vendor_id=self.adapter_vendor_id,
+            adapter_device_id=self.adapter_device_id,
+            ready_semaphore_handle=self.ready_semaphore_handle,
+            ready_semaphore_handle_type=self.ready_semaphore_handle_type,
+            ready_timeline_value=self.ready_timeline_value,
+            producer_ready=self.producer_ready,
+            source_label=self.label,
+        )
 
     def require_view(self) -> Any:
         if self.view is None:
@@ -881,12 +998,48 @@ class VulkanExportableImage:
             queue_family_index=self.context.queue_family_index,
             external=True,
             label=self.label,
+            allocation_size=self.allocation_size,
+            adapter_luid=int(getattr(getattr(self.context, "device_info", None), "adapter_luid", 0)),
+            adapter_vendor_id=int(getattr(getattr(self.context, "device_info", None), "vendor_id", 0)),
+            adapter_device_id=int(getattr(getattr(self.context, "device_info", None), "device_id", 0)),
         )
         self.context.register_external_image(self.resource)
 
     @property
     def handle_type(self) -> int:
         return self._handle_type
+
+    def external_memory_contract(
+        self,
+        *,
+        ready_semaphore_handle: int | None = None,
+        ready_semaphore_handle_type: int | None = None,
+        ready_timeline_value: int | None = None,
+        producer_ready: bool = False,
+    ) -> VulkanExternalMemoryContract:
+        """Export a validated metadata snapshot for a native consumer.
+
+        The Win32 handle is duplicated/exported lazily. Synchronization is
+        supplied by the caller because readiness belongs to the frame submit,
+        not to image allocation.
+        """
+        device_info = getattr(self.context, "device_info", None)
+        return VulkanExternalMemoryContract(
+            memory_handle=int(self.export_handle),
+            memory_handle_type=self.handle_type,
+            width=self.width,
+            height=self.height,
+            format=self.format,
+            allocation_size=self.allocation_size,
+            adapter_luid=int(getattr(device_info, "adapter_luid", 0)),
+            adapter_vendor_id=int(getattr(device_info, "vendor_id", 0)),
+            adapter_device_id=int(getattr(device_info, "device_id", 0)),
+            ready_semaphore_handle=ready_semaphore_handle,
+            ready_semaphore_handle_type=ready_semaphore_handle_type,
+            ready_timeline_value=ready_timeline_value,
+            producer_ready=producer_ready,
+            source_label=self.label,
+        )
 
     def require_view(self) -> Any:
         if self.view is None:
