@@ -12,24 +12,22 @@ import os
 from pathlib import Path
 from typing import Any
 
+from .native_artifacts import native_dll_candidates
+
 
 _DLL_NAME = "d2s_openvino_d3d11_bridge.dll"
 
 
 def _candidate_paths() -> list[Path]:
     root = Path(__file__).resolve().parents[5]
-    candidates: list[Path] = []
-    configured = os.environ.get("D2S_OPENVINO_D3D11_DLL")
-    if configured:
-        candidates.append(Path(configured))
-    candidates.extend(
-        [
-            root / "native" / "openvino_d3d11_bridge" / _DLL_NAME,
-            root / "src" / "native" / "windows" / _DLL_NAME,
-            root / "src" / "desktop2stereo" / "native" / _DLL_NAME,
-        ]
+    return native_dll_candidates(
+        _DLL_NAME,
+        environment_variable="D2S_OPENVINO_D3D11_DLL",
+        extra_directories=(
+            root / "native" / "openvino_d3d11_bridge",
+            root / "src" / "native" / "windows",
+        ),
     )
-    return candidates
 
 
 def load_openvino_d3d11_bridge() -> ctypes.CDLL | None:

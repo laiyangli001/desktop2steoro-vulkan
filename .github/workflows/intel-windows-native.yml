@@ -183,13 +183,42 @@ jobs:
           }
 
       - name: Upload Intel native bridge artifacts
+        shell: pwsh
+        run: |
+          $artifact = "$env:RUNNER_TEMP\d2s-intel-windows-native-x64"
+          New-Item -ItemType Directory -Path $artifact -Force | Out-Null
+          $files = @(
+            "native/desktop_duplication/build/ci/Release/d2s_desktop_duplication.dll",
+            "native/d3d11_sbs_surface/build/ci/Release/d2s_d3d11_sbs_surface.dll",
+            "native/onevpl_d3d11_encoder/build/ci/Release/d2s_onevpl_d3d11_encoder.dll",
+            "native/openvino_d3d11_bridge/build/ci/Release/d2s_openvino_d3d11_bridge.dll",
+            "$env:RUNNER_TEMP\oneVPL-install\bin\libvpl.dll"
+          )
+          foreach ($file in $files) {
+            if (-not (Test-Path -LiteralPath $file)) {
+              throw "Artifact input was not found: $file"
+            }
+            Copy-Item -LiteralPath $file -Destination $artifact -Force
+          }
+          $manifest = [ordered]@{
+            schema = 1
+            platform = "windows-x64"
+            capture = "d2s_desktop_duplication.dll"
+            final_sbs_surface = "d2s_d3d11_sbs_surface.dll"
+            encoder = "d2s_onevpl_d3d11_encoder.dll"
+            inference = "d2s_openvino_d3d11_bridge.dll"
+            onevpl_runtime = "libvpl.dll"
+            remote_build = "GitHub Actions windows-2022"
+            openvino_runtime = "Install the matching official OpenVINO Windows runtime on the target machine"
+            intel_driver = "Required on the target machine for Desktop Duplication, GPU RemoteTensor and oneVPL hardware encoding"
+          }
+          $manifest | ConvertTo-Json | Set-Content -LiteralPath "$artifact\manifest.json" -Encoding utf8
+          Get-ChildItem -LiteralPath $artifact -File | Get-FileHash -Algorithm SHA256 |
+            Select-Object Path, Hash | ConvertTo-Json | Set-Content -LiteralPath "$artifact\sha256.json" -Encoding utf8
+
+      - name: Upload Intel native bridge artifacts
         uses: actions/upload-artifact@v4
         with:
           name: d2s-intel-windows-native-x64
           if-no-files-found: error
-          path: |
-            native/desktop_duplication/build/ci/Release/d2s_desktop_duplication.dll
-            native/d3d11_sbs_surface/build/ci/Release/d2s_d3d11_sbs_surface.dll
-            native/onevpl_d3d11_encoder/build/ci/Release/d2s_onevpl_d3d11_encoder.dll
-            native/openvino_d3d11_bridge/build/ci/Release/d2s_openvino_d3d11_bridge.dll
-            ${{ runner.temp }}/oneVPL-install/bin/libvpl.dll
+          path: ${{ runner.temp }}/d2s-intel-windows-native-x64/*

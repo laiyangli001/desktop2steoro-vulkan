@@ -7,21 +7,21 @@ import os
 import platform
 from pathlib import Path
 
+from desktop2stereo.stereo_runtime.providers.intel.native_artifacts import (
+    native_dll_candidates,
+)
+
 
 def _candidate_paths() -> list[Path]:
     root = Path(__file__).resolve().parents[4]
-    candidates = []
-    env_path = os.environ.get("D2S_DESKTOP_DUPLICATION_DLL")
-    if env_path:
-        candidates.append(Path(env_path))
-    candidates.extend(
-        [
-            root / "native" / "desktop_duplication" / "d2s_desktop_duplication.dll",
-            root / "src" / "desktop2stereo" / "native" / "windows" / "d2s_desktop_duplication.dll",
-            root / "src" / "desktop2stereo" / "capture" / "native" / "d2s_desktop_duplication.dll",
-        ]
+    return native_dll_candidates(
+        "d2s_desktop_duplication.dll",
+        environment_variable="D2S_DESKTOP_DUPLICATION_DLL",
+        extra_directories=(
+            root / "native" / "desktop_duplication",
+            root / "src" / "desktop2stereo" / "capture" / "native",
+        ),
     )
-    return candidates
 
 
 def _load_library():

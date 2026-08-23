@@ -10,20 +10,21 @@ import ctypes
 import os
 from pathlib import Path
 
+from .native_artifacts import native_dll_candidates
+
 
 _DLL_NAME = "d2s_onevpl_d3d11_encoder.dll"
 
 
 def _candidate_paths() -> list[Path]:
     root = Path(__file__).resolve().parents[5]
-    values = [os.environ.get("D2S_ONEVPL_D3D11_DLL")]
-    values.extend(
-        [
-            str(root / "native" / "onevpl_d3d11_encoder" / _DLL_NAME),
-            str(root / "src" / "desktop2stereo" / "native" / "windows" / _DLL_NAME),
-        ]
+    return native_dll_candidates(
+        _DLL_NAME,
+        environment_variable="D2S_ONEVPL_D3D11_DLL",
+        extra_directories=(
+            root / "native" / "onevpl_d3d11_encoder",
+        ),
     )
-    return [Path(value) for value in values if value]
 
 
 def _load_bridge():
