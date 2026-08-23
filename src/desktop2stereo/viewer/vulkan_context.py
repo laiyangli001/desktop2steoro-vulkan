@@ -2021,6 +2021,7 @@ def _device_info(
     synchronization2_enabled: bool = False,
 ) -> VulkanDeviceInfo:
     properties = vk.vkGetPhysicalDeviceProperties(physical_device)
+    adapter_luid = _query_adapter_luid(vk, physical_device)
     return VulkanDeviceInfo(
         name=str(properties.deviceName),
         api_version=int(properties.apiVersion),
@@ -2033,8 +2034,31 @@ def _device_info(
         transfer_queue_family_index=int(queue_families.transfer),
         timeline_semaphore_enabled=bool(timeline_semaphore_enabled),
         synchronization2_enabled=bool(synchronization2_enabled),
-        adapter_luid=0,
+        adapter_luid=adapter_luid,
     )
+
+
+def _query_adapter_luid(vk: Any, physical_device: Any) -> int:
+    """Read VkPhysicalDeviceIDProperties.deviceLUID when the binding exposes it."""
+    properties2_type = getattr(vk, "VkPhysicalDeviceProperties2", None)
+    identity_type = getattr(vk, "VkPhysicalDeviceIDProperties", None)
+    get_properties2 = getattr(vk, "vkGetPhysicalDeviceProperties2", None)
+    if properties2_type is None or identity_type is None or get_properties2 is None:
+        return 0
+    try:
+        identity = identity_type(
+            sType=getattr(vk, "VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES"),
+        )
+        properties2 = properties2_type(
+            sType=getattr(vk, "VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2"),
+            pNext=identity,
+        )
+        get_properties2(physical_device, properties2)
+        if not bool(getattr(identity, "deviceLUIDValid", False)):
+            return 0
+        return int.from_bytes(bytes(vk.ffi.buffer(identity.deviceLUID, 8)), "little")
+    except Exception:
+        return 0
 
 
 def _loader_api_version(vk: Any) -> int:

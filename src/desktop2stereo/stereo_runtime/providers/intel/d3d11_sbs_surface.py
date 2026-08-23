@@ -1,8 +1,8 @@
 """Optional D3D11 surface owner for the final composed SBS frame.
 
-The bridge intentionally accepts the final RGB frame only at this transitional
-stage. It uploads into a D3D11 BGRA texture, converts it on the GPU to NV12,
-and exposes the borrowed NV12 texture to a same-device oneVPL encoder.
+The bridge supports the compatibility CPU-upload path and the shared-resource
+path. The latter exports a D3D11-owned BGRA NT handle for Vulkan import, then
+converts the same texture on the GPU to NV12 for a same-device oneVPL encoder.
 """
 
 from __future__ import annotations
@@ -165,6 +165,19 @@ class D3D11SbsSurface:
     def shared_bgra_handle(self) -> int:
         """Return a new NT handle for D3D11-owned BGRA, for Vulkan import."""
         return int(self._library.d2s_d3d11_sbs_surface_shared_handle(self._handle) or 0)
+
+    def import_bgra_into_vulkan(self, context):
+        """Import the D3D11-owned BGRA texture into a matching Vulkan device."""
+        from desktop2stereo.viewer.vulkan_resources import VulkanD3D11ImportedImage
+
+        return VulkanD3D11ImportedImage(
+            context,
+            self.width,
+            self.height,
+            self.shared_bgra_handle,
+            adapter_luid=self.adapter_luid,
+            label="intel-d3d11-sbs-bgra8",
+        )
 
     def upload_bgra(self, frame, *, stride: int | None = None) -> None:
         data = memoryview(frame)
