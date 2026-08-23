@@ -28,7 +28,7 @@
 
 - Intel native artifact 改为扁平可部署目录，附带 `manifest.json` 与 SHA-256 清单；运行时新增共享 `D2S_INTEL_NATIVE_ARTIFACT_DIR` 搜索路径，四个 Intel bridge 不再需要分别配置 DLL 路径。
 
-- Intel Windows native workflow 增加发布同步 job：远程构建和导出校验成功后，自动把四个 bridge、`libvpl.dll`、manifest 和校验清单提交到 `src/desktop2stereo/native/windows/`，对外发布程序可直接从源码运行时目录加载。
+- Intel Windows native workflow 增加发布同步 job：远程构建和导出校验成功后，自动按功能把 bridge、`libvpl.dll`、manifest 和校验清单提交到 `capture/native/desktop_duplication` 及 Intel provider 下的三个 native 功能目录，对外发布程序可直接从对应运行时目录加载。
 
 - 对齐当前 OpenVINO C++ API 头文件布局，将 PrePostProcessor include 修正为 `openvino/core/preprocess/pre_post_process.hpp`，并同步远程开发头检查路径。
 

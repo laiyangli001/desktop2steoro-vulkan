@@ -26,6 +26,7 @@ def _candidate_paths() -> list[Path]:
         extra_directories=(
             root / "native" / "openvino_d3d11_bridge",
             root / "src" / "native" / "windows",
+            root / "src" / "desktop2stereo" / "stereo_runtime" / "providers" / "intel" / "native" / "openvino_d3d11_bridge",
         ),
     )
 

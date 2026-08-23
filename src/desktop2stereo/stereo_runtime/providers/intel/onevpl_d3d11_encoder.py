@@ -23,6 +23,7 @@ def _candidate_paths() -> list[Path]:
         environment_variable="D2S_ONEVPL_D3D11_DLL",
         extra_directories=(
             root / "native" / "onevpl_d3d11_encoder",
+            root / "src" / "desktop2stereo" / "stereo_runtime" / "providers" / "intel" / "native" / "onevpl_d3d11_encoder",
         ),
     )
 

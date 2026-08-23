@@ -242,26 +242,32 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: d2s-intel-windows-native-x64
-          path: src/desktop2stereo/native/windows
+          path: ${{ runner.temp }}/d2s-intel-windows-native-x64
 
       - name: Commit Intel native binaries to runtime tree
         shell: bash
         run: |
           set -euo pipefail
-          runtime_dir="src/desktop2stereo/native/windows"
-          for file in \
-            d2s_desktop_duplication.dll \
-            d2s_d3d11_sbs_surface.dll \
-            d2s_onevpl_d3d11_encoder.dll \
-            d2s_openvino_d3d11_bridge.dll \
-            libvpl.dll \
-            manifest.json \
-            sha256.json; do
-            test -f "$runtime_dir/$file"
+          bundle="${{ runner.temp }}/d2s-intel-windows-native-x64"
+          capture_dir="src/desktop2stereo/capture/native/desktop_duplication"
+          surface_dir="src/desktop2stereo/stereo_runtime/providers/intel/native/d3d11_sbs_surface"
+          onevpl_dir="src/desktop2stereo/stereo_runtime/providers/intel/native/onevpl_d3d11_encoder"
+          openvino_dir="src/desktop2stereo/stereo_runtime/providers/intel/native/openvino_d3d11_bridge"
+          metadata_dir="src/desktop2stereo/stereo_runtime/providers/intel/native"
+          for file in d2s_desktop_duplication.dll d2s_d3d11_sbs_surface.dll d2s_onevpl_d3d11_encoder.dll d2s_openvino_d3d11_bridge.dll libvpl.dll manifest.json sha256.json; do
+            test -f "$bundle/$file"
           done
+          mkdir -p "$capture_dir" "$surface_dir" "$onevpl_dir" "$openvino_dir" "$metadata_dir"
+          cp "$bundle/d2s_desktop_duplication.dll" "$capture_dir/"
+          cp "$bundle/d2s_d3d11_sbs_surface.dll" "$surface_dir/"
+          cp "$bundle/d2s_onevpl_d3d11_encoder.dll" "$onevpl_dir/"
+          cp "$bundle/libvpl.dll" "$onevpl_dir/"
+          cp "$bundle/d2s_openvino_d3d11_bridge.dll" "$openvino_dir/"
+          cp "$bundle/manifest.json" "$metadata_dir/"
+          cp "$bundle/sha256.json" "$metadata_dir/"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "$runtime_dir"
+          git add "$capture_dir" "$surface_dir" "$onevpl_dir" "$openvino_dir" "$metadata_dir"
           if git diff --cached --quiet; then
             echo "Intel native runtime binaries are already up to date."
             exit 0

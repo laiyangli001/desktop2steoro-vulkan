@@ -20,6 +20,7 @@ def _candidate_paths() -> list[Path]:
         extra_directories=(
             root / "native" / "desktop_duplication",
             root / "src" / "desktop2stereo" / "capture" / "native",
+            root / "src" / "desktop2stereo" / "capture" / "native" / "desktop_duplication",
         ),
     )
 
