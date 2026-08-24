@@ -16,8 +16,14 @@ def normalize_run_mode(raw_run_mode: str) -> str:
     run_mode = str(raw_run_mode or "").strip()
     if run_mode.casefold() == "legacy streamer":
         return "MJPEG Streamer"
-    if run_mode.casefold() in {"nvidia streamer", "nvidia gpu streamer", "gpu streamer"}:
-        return "GPU Streamer"
+    if run_mode.casefold() in {
+        "nvidia streamer",
+        "nvidia gpu streamer",
+        "gpu streamer",
+    }:
+        # GPU streaming is now the vendor-accelerated backend policy of the
+        # single advanced network-streaming mode.
+        return "RTMP Streamer"
     return run_mode
 
 
@@ -32,7 +38,7 @@ def resolve_run_mode(
     use_3d_monitor = False
     stream_mode = None
     resolved_lossless_scaling = False
-    resolved_fix_viewer_aspect = True if raw_run_mode in {"RTMP Streamer", "GPU Streamer"} else fix_viewer_aspect
+    resolved_fix_viewer_aspect = True if raw_run_mode == "RTMP Streamer" else fix_viewer_aspect
 
     if raw_run_mode == "Local Viewer":
         run_mode = "Viewer"
@@ -45,11 +51,6 @@ def resolve_run_mode(
     elif raw_run_mode == "RTMP Streamer":
         run_mode = "Viewer"
         stream_mode = "RTMP"
-        if os_name == "Windows":
-            resolved_lossless_scaling = lossless_scaling_support
-    elif raw_run_mode == "GPU Streamer":
-        run_mode = "Viewer"
-        stream_mode = "GPU"
         if os_name == "Windows":
             resolved_lossless_scaling = lossless_scaling_support
     elif raw_run_mode == "OpenXR Link":

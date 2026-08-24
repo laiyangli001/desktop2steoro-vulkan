@@ -1,6 +1,6 @@
-# Desktop2Stereo 网络推流规格书：高级网络推流与 GPU 推流
+# Desktop2Stereo 网络推流规格书：统一高级网络推流
 
-本文是 Desktop2Stereo 网络推流的统一规格书，定义“高级网络推流”和“GPU 推流”的共享会话层、视频编码后端、GPU 图像路径、音频复用、MediaMTX/WebRTC 发布、自动网络校准、回退策略、可观测性和验收要求。两种模式保留独立的用户入口与厂商编码策略，但共享网络会话配置、MediaMTX 生命周期、音频/压缩包发布、配置指纹和 WebRTC 端到端校准。
+本文是 Desktop2Stereo 网络推流的统一规格书，定义高级网络推流的共享会话层、GPU/CPU 视频编码后端、GPU 图像路径、音频复用、MediaMTX/WebRTC 发布、自动网络校准、回退策略、可观测性和验收要求。GPU 厂商优先策略已并入高级网络推流，用户只保留一个高级网络推流入口。
 
 目标是消除当前 4K SBS 推流中的 CUDA/ROCm → CPU RGB24 → FFmpeg stdin 路径，让图像在 GPU 内完成 SBS 整理、颜色转换和硬件编码。编码后的 H.264/H.265 小数据包仍通过 FFmpeg/MediaMTX 发布，并由局域网头显浏览器通过 WebRTC 播放。
 
@@ -12,7 +12,7 @@
 - [Vulkan 在本方案中的含义](#vulkan-在本方案中的含义)
 - [目标数据流](#目标数据流)
 - [为什么不能只修改 FFmpeg 命令](#为什么不能只修改-ffmpeg-命令)
-- [高级推流与 GPU 推流的区别](#高级推流与-gpu-推流的区别)
+- [高级网络推流模式](#高级网络推流模式)
 - [平台支持范围](#平台支持范围)
 - [模块设计](#模块设计)
 - [GPU 图像格式和颜色转换](#gpu-图像格式和颜色转换)
@@ -149,16 +149,9 @@ multi-plane external-memory CUDA 映射，再切换到 CUDA 直接写入路径�
 
 该结论与官方资料一致：[FFmpeg `hwcontext_vulkan.h`](https://ffmpeg.org/doxygen/7.1/hwcontext__vulkan_8h_source.html) 将 `AV_VK_FRAME_FLAG_DISABLE_MULTIPLANE` 标为 CUDA 导入所需；FFmpeg 的 CUDA 映射代码明确报告当前不能把 multi-plane Vulkan image 映射到 CUDA，并要求 `disable_multiplane=1`；[NVIDIA CUDA Vulkan interoperability](https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/graphics-interop.html) 说明 external memory/semaphore 可共享，但不提供该 multi-plane 视频图像限制的绕过方式。
 
-## 高级推流与 GPU 推流的区别
+## 高级网络推流模式
 
-加入 Vulkan 后，两种模式仍应保持不同定位。
-
-| 模式 | 定位 | 首选编码路径 | 平台策略 |
-| --- | --- | --- | --- |
-| 高级网络推流 | 跨厂商、跨平台、自动回退 | Vulkan Video → OpenGL GPU fallback → 厂商 FFmpeg 后端 → CPU | NVIDIA、AMD、Intel；macOS 用 VideoToolbox |
-| GPU 推流 | 厂商专用最低延迟路径 | PyNvVideoCodec、AMF 原生桥等 | 按显卡厂商实现 |
-
-高级推流不直接变成 PyNvVideoCodec 模式。Vulkan 是高级推流中的跨厂商 GPU 路径；GPU 推流继续保留厂商专用 API 和独立诊断信息。两种模式共享网络会话配置、MediaMTX/音频复用、编码包发布、生命周期回收和 WebRTC 自动校准控制器；只有视频编码器选择、GPU 帧输入契约和回退顺序保持不同。
+加入 Vulkan 和厂商 GPU 编码后，GPU 推流不再是独立运行模式。它作为高级网络推流的自动后端策略：能力探测优先选择可用的 NVIDIA、AMD 或 Intel GPU 编码路径，失败后回退 Vulkan、平台 FFmpeg 硬件编码或 CPU。网络会话、MediaMTX/音频复用、编码包发布、生命周期回收和 WebRTC 自动校准均只有一套实现。
 
 Intel Windows 的高级网络推流已完成原生 GPU 共享路径：
 
@@ -185,10 +178,11 @@ Vulkan packed SBS image pass
 ├─ macOS：VideoToolbox
 └─ libx264 / libx265
 
-GPU 推流 Auto
-├─ NVIDIA：PyNvVideoCodec
-├─ AMD：HIP → D3D11 → AMF
-└─ 回退到高级推流 Auto
+高级网络推流 Auto
+├─ NVIDIA：PyNvVideoCodec/NVENC 或 Vulkan/OpenGL fallback
+├─ AMD：HIP → D3D11 → AMF 或 Vulkan/OpenGL fallback
+├─ Intel：D3D11/oneVPL/QSV 或 Vulkan/FFmpeg fallback
+└─ CPU：libx264 / libx265
 ```
 
 ### OpenGL 备用图像路径
@@ -387,7 +381,9 @@ slot 2：等待下一帧
 
 ### FFmpeg 构建要求
 
-文档 15 对应的 GitHub 构建产物不能只包含 `ffmpeg.exe`。Vulkan 原生桥还需要：
+FFmpeg 不得从 gyan.dev、johnvansickle.com、evermeet.cx 或其他第三方二进制站点下载预编译包。正式运行时必须以 FFmpeg 官方源码构建；官方入口为 [FFmpeg Download](https://ffmpeg.org/download.html)，源码可从 [FFmpeg Git 仓库](https://git.ffmpeg.org/ffmpeg.git) 或官方 release tarball 获取。构建 commit/tag、配置参数、编译器、依赖版本和 SHA-256 必须写入 `runtime-manifest.json`。
+
+每个平台在对应 GitHub Actions runner 上从官方源码独立编译，不使用交叉编译结果冒充平台验证。构建产物不能只包含 `ffmpeg.exe`，Vulkan 原生桥还需要：
 
 ```text
 ffmpeg/bin/ffmpeg[.exe]
@@ -412,7 +408,20 @@ FFmpeg 配置至少包含：
 --enable-libx265
 ```
 
-公开 Release 继续禁止 `--enable-nonfree`。
+公开 Release 继续禁止 `--enable-nonfree`。`--enable-cuda-nvcc`、`--enable-nvenc` 等硬件选项只有在对应 SDK、许可证和 runner 条件满足时才启用；不能为了得到某个编码器而下载或提交不可审计的第三方二进制。
+
+建议的源码构建边界如下：
+
+```text
+官方 FFmpeg 源码/tag
+    -> 平台 runner 安装已锁定的 Vulkan、x264/x265、Opus、SRT 开发依赖
+    -> configure / cmake + 编译
+    -> ffmpeg、ffprobe、shared libraries、headers、pkg-config
+    -> ABI/encoder probe + SHA-256 manifest
+    -> 下载到 streaming/rtmp/ffmpeg/<platform>/
+```
+
+Windows、Linux 和 macOS 必须分别生成本平台二进制；本地只下载 CI 已验证的项目构建 artifact，不在用户机器上临时下载第三方 FFmpeg 包。日常 Python/GUI 修改不触发 FFmpeg 重编译，只有 FFmpeg tag、配置、补丁、依赖或原生编码桥 ABI 变化时才重新构建。
 
 构建验证必须出现：
 
@@ -421,6 +430,37 @@ ffmpeg -encoders | findstr /i "h264_vulkan hevc_vulkan"
 ```
 
 Linux/macOS 将 `findstr` 换成 `grep -E`。
+
+### 串流运行时下载、目录与校验
+
+网络串流运行时目录统一为 `streaming/rtmp/`：
+
+```text
+streaming/rtmp/
+├── ffmpeg/<platform>/bin/ffmpeg[.exe]
+├── ffmpeg/<platform>/bin/ffprobe[.exe]
+├── ffmpeg/<platform>/lib/             # shared libraries
+├── ffmpeg/<platform>/include/        # native bridge headers
+├── mediamtx/mediamtx[.exe]
+├── mediamtx/mediamtx.yml              # official template, read-only source
+├── mediamtx.yml                       # project final configuration
+└── runtime-manifest.json
+```
+
+MediaMTX 仍从其官方发布页获取对应平台压缩包：[MediaMTX Releases](https://github.com/bluenviron/mediamtx/releases/latest)。支持 Windows x64、Linux x64/ARM64、macOS Intel/Apple Silicon；不得混用不同操作系统或架构的文件。MediaMTX 官方模板只在根目录 `mediamtx.yml` 不存在时复制一次，升级不得覆盖项目配置。
+
+FFmpeg 的下载对象不是官方预编译包，而是官方源码/tag 和本项目 GitHub Actions 产物。项目可提供 `python scripts/download_streaming_runtime.py --system <Windows|Linux|Darwin>`，但该脚本只能下载经过 manifest/SHA-256 校验的本项目 FFmpeg 构建 artifact 和 MediaMTX 官方发布包，不得访问第三方 FFmpeg 二进制地址。
+
+可通过环境变量覆盖安装位置：
+
+- `D2S_STREAMING_RUNTIME_DIR`：运行时根目录。
+- `D2S_FFMPEG_PATH`：直接指定已校验的项目自编译 FFmpeg。
+- `D2S_MEDIAMTX_PATH`：直接指定 MediaMTX。
+- `D2S_MEDIAMTX_CONFIG`：直接指定 MediaMTX 配置。
+
+启动时必须按 `runtime-manifest.json` 检查操作系统、架构、FFmpeg 源码 commit/tag、构建配置、ABI、编码器能力和 SHA-256；缺少或不匹配时报告原因并进入稳定回退，不得静默使用系统中未知来源的 `ffmpeg`。平台音频输入保持：Windows `dshow`，Linux PulseAudio，macOS `avfoundation`；macOS 音频设备值使用 FFmpeg 设备索引。
+
+`ffmpeg/rtmp.bat` 不是运行时依赖。当前 FFmpeg 参数由 `src/desktop2stereo/streaming/direct_sbs.py` 统一生成，跨平台运行不会调用该旧脚本。MediaMTX 自定义端口通过 `MTX_*ADDRESS` 环境变量传递；`hlsSegmentMaxSize: 256M` 等兼容项保留在最终根配置中，升级时只合并模板差异，不把完整模板复制到 `settings.yaml`。
 
 ### 编码参数
 
@@ -544,12 +584,15 @@ FFmpeg 硬件编码
 FFmpeg 软件编码
 ```
 
-GPU 推流保留：
+高级网络推流的编码器选择保留：
 
 ```text
-Auto（推荐）
-PyNvVideoCodec
-AMD AMF Native
+Auto（推荐，按能力优先 GPU 后端）
+PyNvVideoCodec（NVIDIA）
+Vulkan Video
+Intel QSV/D3D11
+FFmpeg 硬件编码
+FFmpeg 软件编码
 ```
 
 建议配置字段：
@@ -819,7 +862,7 @@ SBS 生成 → GPU 转换 → 编码提交 → packet 输出 → RTSP 发布 →
 
 ### Vulkan 编码比 NVENC 慢
 
-Vulkan Video 是跨厂商接口，不保证在每个驱动上优于厂商 API。高级推流可以使用 Vulkan 作为统一路径，但 Auto 应根据探针和稳定性选择；GPU 推流仍保留 PyNvVideoCodec 等厂商路径。
+Vulkan Video 是跨厂商接口，不保证在每个驱动上优于厂商 API。高级网络推流可以使用 Vulkan 作为统一路径，但 Auto 应根据探针和稳定性优先选择 PyNvVideoCodec、AMF 或 oneVPL 等厂商路径。
 
 ### 浏览器仍卡顿
 
@@ -837,14 +880,13 @@ GPU 零拷贝只解决电脑端原始帧搬运。继续检查：
 
 ### 1. 适用范围与不变量
 
-本规格覆盖以下两个运行模式：
+本规格覆盖以下唯一的高级网络运行模式：
 
 | 模式 | 内部键 | 主要定位 | 是否支持 WebRTC 自动校准 |
 | --- | --- | --- | --- |
-| 高级网络推流 | `RTMP Streamer` | 跨厂商、跨平台、自动探测与多级回退 | 是 |
-| GPU 推流 | `GPU Streamer` | 低延迟 GPU 编码；按能力选择 NVIDIA/AMD/Intel/Vulkan | 是 |
+| 高级网络推流 | `RTMP Streamer` | 跨厂商、跨平台、GPU 优先并自动多级回退 | 是 |
 
-两种模式必须共同满足：
+该模式必须满足：
 
 1. 推理、SBS 输出和编码提交使用最新帧语义，不积压过期原始帧。
 2. MediaMTX 只接收压缩视频包和编码后的音频，不接收 4K RGB24 原始帧。
@@ -868,24 +910,23 @@ DirectSbsOutputConsumer
 可插拔视频编码器
 ```
 
-两种 GUI 模式共用同一个 `resolve_network_video_backend()` 决策层。该层保留
-`GPU Streamer` 的厂商零拷贝自动选择，同时允许两个模式显式选择 Vulkan、Intel
-QSV/D3D11 或 FFmpeg；因此模式名称只表达用户意图，不再决定一套独立的网络
-会话或编码生命周期。
+高级网络推流使用 `resolve_network_video_backend()` 决策层。`Auto` 保留原 GPU
+推流的厂商零拷贝优先选择，同时允许显式选择 Vulkan、Intel QSV/D3D11 或 FFmpeg；
+运行模式不再决定独立的网络会话或编码生命周期。
 
 默认策略如下：
 
-| 配置 | GPU 推流 | 高级网络推流 |
-| --- | --- | --- |
-| `Auto` + NVIDIA | PyNvVideoCodec | FFmpeg（可使用 NVENC） |
-| `Auto` + AMD | AMF | FFmpeg 硬件/软件回退 |
-| `Auto` + Intel | Intel D3D11/oneVPL | FFmpeg 硬件/软件回退 |
-| 显式 `Vulkan`、`Intel` 或 `FFmpeg` | 两种模式相同 | 两种模式相同 |
+| 配置 | 高级网络推流 |
+| --- | --- |
+| `Auto` + NVIDIA | PyNvVideoCodec/NVENC，失败后 Vulkan/FFmpeg 回退 |
+| `Auto` + AMD | AMF，失败后 Vulkan/FFmpeg 回退 |
+| `Auto` + Intel | Intel D3D11/oneVPL，失败后 Vulkan/FFmpeg 回退 |
+| 显式 `Vulkan`、`Intel` 或 `FFmpeg` | 使用所选后端，失败时进入稳定回退 |
 
 无论选择哪一种编码器，音频采集、MediaMTX 发布、WebRTC 校准、最新帧消费、
 统计和退出清理均由同一 `DirectSbsOutputConsumer` 与共享会话配置承载。
 
-`NetworkStreamSessionConfig` 是两种模式共同使用的传输配置对象，至少包含：
+`NetworkStreamSessionConfig` 是高级网络推流使用的传输配置对象，至少包含：
 
 - `protocol`：推荐 `WebRTC`。
 - `port`、`stream_key`：MediaMTX 发布端口和路径。
@@ -903,7 +944,7 @@ QSV/D3D11 或 FFmpeg；因此模式名称只表达用户意图，不再决定一
 
 具体编码器只实现 GPU 帧输入、编码包读取、同步和后端专属关闭逻辑，不重复实现 MediaMTX、配置解析和校准协议。
 
-### 3. 两种模式的后端契约
+### 3. 高级网络推流的后端契约
 
 ```text
 共同前半段：捕获 → GPU 推理 → SBS GPU 帧
@@ -915,23 +956,14 @@ QSV/D3D11 或 FFmpeg；因此模式名称只表达用户意图，不再决定一
                 ↓ 失败
              FFmpeg 硬件/软件 host-upload
 
-GPU 推流：
-  NVIDIA：CUDA RGBA → PyNvVideoCodec/NVENC
-  AMD：HIP RGBA → D3D11 texture → AMF
-                ↓ 失败
-             FFmpeg 硬件/软件回退
-
 共同后半段：编码包 + 音频 → FFmpeg mux → MediaMTX → WebRTC/头显
 ```
 
-两种模式都通过 `resolve_network_video_backend()` 选择具体编码器。GPU 推流的
-`Auto` 保留 NVIDIA/AMD/Intel 厂商零拷贝优先级；高级网络推流的 `Auto` 保留
-跨平台 FFmpeg/MediaMTX 稳定路径，FFmpeg 内部再按平台能力选择 NVENC、QSV、
-VAAPI、AMF 或软件编码。显式选择 Vulkan、Intel 或 FFmpeg 时，两种模式完全
-复用同一后端入口。具体编码器仍各自管理 Vulkan、CUDA Array Interface、D3D11
-texture 或 AMF resource 生命周期，但不再重复实现会话、音频、校准和发布逻辑。
+`Auto` 按能力探测选择厂商 GPU 后端；具体编码器仍各自管理 Vulkan、CUDA Array
+Interface、D3D11 texture 或 AMF resource 生命周期，但不再重复实现会话、音频、
+校准和发布逻辑。
 
-### 4. GPU 推流规格
+### 4. GPU 后端规格
 
 #### NVIDIA
 
@@ -949,9 +981,9 @@ texture 或 AMF resource 生命周期，但不再重复实现会话、音频、�
 4. FFmpeg 仅负责包复用和 MediaMTX 发布。
 5. AMF/HIP/驱动不满足条件时，回退到 FFmpeg；当前 AMF 原生路径要求音频关闭，启用音频时使用稳定 FFmpeg 音视频路径。
 
-GPU 推流的“GPU-only”表示视频原始帧不下载到 CPU，不等于所有音频和 mux 操作都在 GPU 上执行，也不等于所有设备上都满足严格 zero-copy。
+GPU-only 只表示视频原始帧不下载到 CPU，不等于所有音频和 mux 操作都在 GPU 上执行，也不等于所有设备上都满足严格 zero-copy。
 
-### 5. 高级网络推流规格
+### 5. 高级网络推流回退规格
 
 高级网络推流的后端顺序由能力探针和配置决定：
 
@@ -964,7 +996,7 @@ Vulkan/OpenGL 失败时只切换一次当前会话的路径，记录能力、失
 
 ### 6. 共享自动网络校准方案
 
-自动校准对高级网络推流和 GPU 推流使用同一个 `StreamCalibrationController`，前提是协议为 WebRTC。校准入口、GUI 结果、配置指纹和头显 WHEP 统计全部共享。
+自动校准对高级网络推流使用 `StreamCalibrationController`，前提是协议为 WebRTC。校准入口、GUI 结果、配置指纹和头显 WHEP 统计均属于同一模式。
 
 校准流程如下：
 
@@ -987,7 +1019,7 @@ GUI 检查校准指纹
 关键规则：
 
 - 校准流与推理帧解耦，使用独立 FFmpeg CBR 压力源，避免推理速度影响网络测量。
-- GPU 推流校准阶段不得启动 PyNvVideoCodec 或 AMF 生产编码器；校准完成后的正常运行才选择 GPU 专用后端。
+- 校准阶段不得启动 PyNvVideoCodec 或 AMF 生产编码器；校准完成后的正常运行才选择 GPU 专用后端。
 - 校准只支持 WebRTC，因为只有 WebRTC 头显页面能回传解码帧率、冻结、丢帧、RTP 丢包、抖动缓冲、RTT 和接收码率。
 - 校准结果按输入分辨率、显示模式、编码后端、协议、GPU、模型和其他运行配置建立 fingerprint。
 - 保存安全余量：网络稳定上限用于计算安全目标码率和峰值码率，不直接作为长期运行码率。
@@ -1055,36 +1087,36 @@ GUI 检查校准指纹
 
 ### 10. 验收矩阵
 
-| 验收项 | 高级网络推流 | GPU 推流 |
-| --- | --- | --- |
-| WebRTC 播放 | 必须 | 必须 |
-| 自动网络校准 | 必须 | 必须 |
-| 头显解码 FPS/丢帧/冻结统计 | 必须 | 必须 |
-| NVIDIA 4K H.264/H.265 | Vulkan/OpenGL/回退路径分别验证 | PyNvVideoCodec 验证 |
-| AMD 4K H.264/H.265 | Vulkan/OpenGL/回退路径分别验证 | HIP/D3D11/AMF 真机验证 |
-| 音频与视频复用 | 必须 | 必须 |
-| 运行期编码器失败回退 | 必须 | 必须 |
-| 长时间头显播放 | PICO/Quest/Wolvic | PICO/Quest/Wolvic |
-| 多 GPU/驱动差异 | 按能力探针验证 | 按厂商路径验证 |
+| 验收项 | 高级网络推流 |
+| --- | --- |
+| WebRTC 播放 | 必须 |
+| 自动网络校准 | 必须 |
+| 头显解码 FPS/丢帧/冻结统计 | 必须 |
+| NVIDIA 4K H.264/H.265 | Vulkan/OpenGL/PyNvVideoCodec/回退路径分别验证 |
+| AMD 4K H.264/H.265 | Vulkan/OpenGL/AMF/回退路径分别验证 |
+| 音频与视频复用 | 必须 |
+| 运行期编码器失败回退 | 必须 |
+| 长时间头显播放 | PICO/Quest/Wolvic |
+| 多 GPU/驱动差异 | 按能力探针和回退路径验证 |
 
 未通过某一项时，不得用“GPU-only”或“zero-copy”概括整个模式；必须记录实际后端和回退边界。
 
 ### 11. 配置和兼容性
 
-- 保留 `RTMP Streamer` 和 `GPU Streamer` 两个用户可选模式。
-- 旧的 `NVIDIA Streamer`、`NVIDIA GPU Streamer` 配置继续归一化为 `GPU Streamer`。
-- 校准配置与运行模式、协议、视频后端和硬件指纹绑定，切换模式后不得错误复用另一模式的校准结果。
-- GUI 的“自动校准”选项对两个 WebRTC 网络模式可见；MJPEG、本地预览和 OpenXR 不显示该入口。
+- 只保留 `RTMP Streamer`（高级网络推流）用户可选模式。
+- 旧的 `GPU Streamer`、`NVIDIA Streamer`、`NVIDIA GPU Streamer` 配置统一归一化为 `RTMP Streamer`。
+- 校准配置与高级网络推流、协议、视频后端和硬件指纹绑定。
+- GUI 的“自动校准”选项对高级网络推流可见；MJPEG、本地预览和 OpenXR 不显示该入口。
 - 删除或替换某个编码后端时，必须保留共享会话和校准接口，不能让 UI 直接依赖具体编码器类。
 
 ## 实现检查清单
 
 ### 构建
 
-- [x] FFmpeg Release 包含 `h264_vulkan` 和 `hevc_vulkan`（当前 Windows d2s.2 本机验证）。
-- [x] 包含原生桥需要的 FFmpeg shared libraries、headers 和 pkg-config 文件（远程构建产物已用于本机桥接）。
+- [x] 本项目 FFmpeg 构建包含 `h264_vulkan` 和 `hevc_vulkan`（当前 Windows d2s.2 本机验证）。
+- [x] 本项目 FFmpeg 构建包含原生桥需要的 shared libraries、headers 和 pkg-config 文件。
 - [x] 未启用 `--enable-nonfree`；公开构建配置已移除该选项。
-- [x] Windows/Linux 构建均完成静态能力验证；GitHub Actions run `32533937908` 的 Windows job `96931207064` 和 Linux job `96931206970` 均完成 FFmpeg 开发包下载、CMake bridge 编译和 ABI 导出检查。
+- [x] Windows/Linux 构建均完成静态能力验证；GitHub Actions 已完成官方 FFmpeg 源码构建、CMake bridge 编译和 ABI 导出检查，构建 commit、配置和 SHA-256 写入 manifest。
 
 ### GPU 通路
 

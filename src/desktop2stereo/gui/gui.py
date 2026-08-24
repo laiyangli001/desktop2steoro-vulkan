@@ -157,7 +157,7 @@ class Desktop2StereoGUI(
             self.populate_devices_after_startup()
         )
         self._startup_defer_audio = False
-        if self.run_mode_key in {"RTMP Streamer", "GPU Streamer"}:
+        if self.run_mode_key == "RTMP Streamer":
             self._audio_startup_task = asyncio.create_task(
                 self.populate_audio_devices_after_startup()
             )

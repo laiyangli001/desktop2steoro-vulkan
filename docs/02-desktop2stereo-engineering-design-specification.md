@@ -1,7 +1,7 @@
 # Desktop2Stereo Python Vulkan 工程设计规范
 
-**文档版本**：4.0
-**发布日期**：2026 年 7 月 18 日
+**文档版本**：4.1
+**发布日期**：2026 年 8 月 24 日
 **规范状态**：目标态工程设计
 **上位规格**：`01-Realtime-2d-to-3d-specification.md`
 **技术依据**：`01.D2S_Vulkan_Migration_Technical_Report.md`
@@ -27,13 +27,13 @@
 7. 平台差异只存在于 Capture Adapter、Inference Adapter 和系统句柄层。
 8. 所有关键 GPU 工作可测量、可验证、可故障定位。
 9. 图形后端在启动探测阶段确定，运行中不静默切换；Fallback 必须通过受控重启进入。
-10. 项目自有原生代码仅允许存在于Filament DLL Bridge；其他模块不得新增C/C++、Rust或自定义扩展模块。
+10. 核心 XR 场景的项目自有原生代码仅允许存在于 Filament DLL Bridge；网络输出、Windows Desktop Duplication 和 Intel 推理/编码边界可以使用独立窄 ABI 原生组件，但不得拥有 OpenXR Session/交换链或场景资源。
 
 ### 1.2 明确排除
 
 - 不把现有Python Capture、Inference Provider和OpenXR行为机械改写为C++。
 - 不把 OpenGL 嵌入 Vulkan 资源图；OpenGL Fallback 必须作为独立 Graphics Backend 实现。
-- 不恢复 D3D11、WGL、CUDA-GL、PBO uploader 或旧 OpenGL viewer。
+- 不恢复 D3D11 OpenXR binding、WGL 跨 API viewer 或旧 PBO uploader。网络编码器允许使用受控的 D3D11/oneVPL 或 CUDA-OpenGL 兼容桥，但必须与 XR 图形会话隔离并输出 copy/zero-copy 诊断。
 - 不通过CPU NumPy数组、PIL Image或共享内存传递实时整帧像素；Python中的GPU tensor和GPU handle属于正式数据路径。
 - 不保留旧类名、旧环境变量、旧 YAML 字段的长期运行时适配器。
 - 不把 Filament 封装为通过 CPU 图像传输工作的独立渲染子进程。
@@ -56,9 +56,9 @@
 | 场景引擎 | Filament Vulkan Backend 为主；OpenGL 使用隔离的兼容 Scene Renderer |
 | Shader | GLSL/HLSL 离线编译为 SPIR-V |
 | 测试 | pytest；GPU/OpenXR集成测试使用独立marker和实机矩阵 |
-| 自有原生代码 | 仅Filament DLL Bridge；由独立CMake工程预编译 |
+| 自有原生代码 | Filament Bridge；可选网络/捕获/推理边界桥接；均由独立 CMake 工程预编译 |
 
-Python产品代码必须直接支持Windows x86_64、Linux x86_64和macOS arm64。只有Filament DLL Bridge按平台预编译；不得因为MoltenVK或Bridge能够加载就宣称macOS OpenXR可用。
+Python产品代码必须直接支持Windows x86_64、Linux x86_64和macOS arm64。Filament DLL Bridge以及启用平台所需的可选网络/捕获/推理桥按平台预编译；不得因为 MoltenVK、Bridge 或某个可选桥能够加载就宣称 macOS OpenXR 可用。
 
 ### 2.2 依赖版本管理
 
@@ -70,7 +70,7 @@ Python产品代码必须直接支持Windows x86_64、Linux x86_64和macOS arm64�
 
 当前 `native/filament/bridge` 已验证Filament gltfio加载和动画接口，但仍依赖调用方提供OpenGL context，尚未实现目标OpenXR/Vulkan swapchain绑定。
 
-新工程允许重新实现该Bridge，使其支持Filament Vulkan Backend和Python提供的Vulkan/OpenXR目标。Bridge是唯一自有原生边界，只管理Filament对象和渲染调用；Capture、Inference、Vulkan资源图、OpenXR生命周期和产品状态机必须保留在Python。Bridge使用窄C ABI并由Python通过`ctypes`或`cffi`加载。
+新工程允许重新实现该Bridge，使其支持Filament Vulkan Backend和Python提供的Vulkan/OpenXR目标。Bridge是核心 XR 场景的自有原生边界，只管理Filament对象和渲染调用；Capture、Inference、Vulkan资源图、OpenXR生命周期和产品状态机必须保留在Python。网络/捕获/推理边界的可选原生组件另行管理，不能越过边界拥有 OpenXR 或场景资源。所有桥接使用窄C ABI并由Python通过`ctypes`或`cffi`加载。
 
 Filament Vulkan 外部源图像接口必须以源码扩展方式接入，不得把 release SDK 的通用 `Texture::Builder::import()` 猜测为 Vulkan `VkImage` 接口。当前版本锁定 Filament `v1.75.0`，补丁脚本为 `native/filament/patches/apply_d2s_vulkan_external_image.py`：它在 `VulkanPlatform` 中增加借用式 `VkImage` 外部句柄、格式/尺寸元数据和 `ExternalImage` 工厂，Bridge 通过 `D2S_FILAMENT_VULKAN_EXTERNAL_IMAGE` 编译开关启用。补丁只包装调用方所有的 `VkImage`，不负责销毁图像、内存、OpenXR swapchain 或 producer semaphore；layout、queue family、producer-ready 和 consumer-release 仍由 Python Presenter 的 Vulkan 同步契约负责。
 
@@ -187,7 +187,7 @@ Desktop2Stereo/
 | `tools` / `utils` | Python package | 模型工具、探测、benchmark和通用辅助 |
 | `filament_bridge` | shared library | 唯一CMake目标；Filament Vulkan/OpenGL调用 |
 
-厂商后端通过Python环境锁定文件和运行时capability probe控制。OpenGL Fallback由配置控制，推理Provider不得隐式改变图形后端选择。只有Filament Bridge使用CMake feature option。
+厂商后端通过Python环境锁定文件和运行时capability probe控制。OpenGL Fallback由配置控制，推理Provider不得隐式改变图形后端选择。Filament 及可选原生边界桥均使用 CMake feature option，且不能改变 OpenXR 图形后端选择。
 
 ### 3.1.1 Vulkan 1.4 Python Binding 未来目标
 
@@ -336,7 +336,7 @@ Vulkan queue submit 由 `GpuScheduler` 统一序列化或按队列外部同步�
 |------|-----:|----------|
 | Capture latest slot | 1 | 新帧覆盖旧帧 |
 | Inference pending | 1 | 保留最新尚未开始的帧 |
-| Frame Context pool | 3，配置范围 2 至 4 | 无可用上下文时跳过旧输入 |
+| Frame Context pool | 默认 9，允许通过 `D2S_OPENXR_VULKAN_FRAME_CONTEXTS` 有界覆盖 | 无可用上下文时跳过旧输入；启动诊断必须记录实际槽位数 |
 | Effects pending | 1 | 新任务替换旧任务 |
 | Control commands | 64 | 拒绝并报告过载，不丢停止命令 |
 | Telemetry events | 固定 ring | 丢弃低级别采样，保留 warning/error |
@@ -646,6 +646,8 @@ class CaptureAdapter(Protocol):
 
 Capture Adapter 报告真实 `capture_size`、pixel format、transfer function、primaries、range 和 `color_space`。任何未知色彩空间必须告警并阻止静默推断。SDR sRGB 输入在显示输出路径中保持显示参考语义；RGB preprocess 可以为模型或线性工作 Pass 建立明确的线性副本，但不得在没有声明的情况下对原始显示 RGB 执行 gamma、tone mapping 或曝光。
 
+WindowsCaptureCUDA 在回调入口执行软件 pacing gate，目标来自 `fps_provider`，`D2S_WGC_SOFTWARE_THROTTLE` 只作为诊断覆盖。Auto 模式由 `AdaptiveCaptureRate` 按稳定 SBS 消费能力在有界评估窗口内调整为测得峰值加 5 FPS，并受配置/显示刷新上限约束；节流发生在 latest-frame 发布前，不得扩大 capture queue。
+
 正式输出契约固定为 `color_space=srgb`、RGBA8、`image_origin=top_left`。OpenXR Projection swapchain 必须使用 Vulkan sRGB 格式，不得回退到 UNORM。Filament 主场景使用线性 Rec.709/D65 和明确配置的 tone mapping；场景曝光必须进入 ColorGrading，不得乘改 glTF 材质颜色。
 
 手柄 GLB 的加载和材质处理以 WebXR Input Profiles 官方 Viewer 为基准：模型加载后必须保留 glTF 原始 PBR 参数和纹理，不得在 Bridge 中统一覆盖 roughness、specular、metallic 或 base color。房间和前景必须使用不同的 Filament Scene：房间 Scene 承载 GLB 与房间全局 `IndirectLight`；前景 Scene 只承载手柄、屏幕、激光和 UI，并共享同一 Engine、Camera 和 OpenXR 输出目标。这样房间环境光不能污染手柄和虚拟屏幕。`controller_hdr_lighting=false` 的 3D 房间模式关闭前景间接光，使用旧工程校准的 `env_head_light_color`、跟随头部主光、顶部补光和始终开启的屏幕光；`controller_hdr_lighting=true` 的 HDR 图片模式只给前景 Scene 挂载独立的 controller IBL，且必须使用与当前 HDR 匹配的预过滤 reflection cubemap 和 irradiance。当前 Bridge 的 HDR 资源仍记录为 `hdr_ibl_pending_profile_fallback`，不得伪报为完整 IBL；后续应由三平台 CI 预生成 Filament 可加载的 KTX IBL 资源并通过稳定 C ABI 接入。手柄 profile 的 `ambient_light_multiplier` 只能缩放前景 controller IBL，不得修改房间全局光、GLB 材质、屏幕光或直接补光，浅色 PICO/Quest 默认保持 `1.0`。
@@ -711,6 +713,8 @@ TensorRT engine 可能在首帧输入尺寸确定后才完成创建，因此 pip
 worker 队列上限为 2。任务对象必须携带 `frame_id`、capture timestamp、RGB tensor、depth future 和 render/capture metadata；超过上限时仅取消尚未运行的任务。运行循环退出时必须关闭 executor；后续扩展的暂停、重建或 source/尺寸切换不得遗留 worker 对已释放 GPU 资源的访问。
 
 诊断必须同时包含：`parallel_inference_enabled`、`parallel_inference_workers`、`parallel_inference_pending`、`parallel_inference_dropped`、`runtime_depth_execution_slot` 和 `runtime_depth_execution_slot_count`。`FPSBreakdown` 只在 `rt_parallel_workers=2`、`rt_pending_limit=2` 且 slot 日志交替为 `0/2`、`1/2` 时报告真实双路状态；只看到 GUI 开关或 slot_count=2 不足以证明调度器已运行。
+
+Admission 还必须读取 Presenter 反压状态：Presenter 正在合成或 SBS/latest-frame 待消费时，将在途深度任务限制为 1；Presenter 缺帧且无待消费资源时，才恢复到配置允许的并发上限。`present_fps` 只统计 Presenter 实际消费的唯一立体帧，不能把重复显示或 OpenXR refresh 当作新处理帧。
 
 RTX 2060 动态内容实机对比中，该实现较单路增加约 6~10 FPS 的处理/SBS 吞吐。该数值仅为当前模型、分辨率和补洞配置下的验证记录，不构成所有 GPU 或所有质量档位的性能承诺；`rt_gpu_synth_fill`、立体合成、Vulkan/Presenter 同步仍可能限制最终帧率。
 
@@ -1025,6 +1029,23 @@ Headless 输出将 Left/Right/SBS Vulkan image 提供给编码适配器。支持
 
 文件截图、离线测试可以回读 CPU，但必须使用独立命令和日志标签，不能进入实时执行路径。
 
+### 14.3 高级网络推流边界
+
+网络推流使用统一的 `RTMP Streamer` 运行模式（GUI 文案为“高级网络推流”）；历史 GPU 推流名称只在配置迁移层归一化。它与本地/XR 输出共享 StereoRuntime 的公共画质阶段和 latest-frame 语义，但拥有独立的 `NetworkStreamSession`，负责视频编码、音频、MediaMTX/信令、校准统计、重连和生命周期。编码器只接收压缩包或明确的 GPU surface 描述，不接收 CPU/IPC 原始 4K 眼图。
+
+Windows/Intel 的工程契约如下：
+
+1. Vulkan 眼图输出到 D3D11 共享 BGRA8 SBS surface，再由同一 Adapter 转换为 NV12 并交给 oneVPL；共享资源必须携带 Win32 memory handle、格式/尺寸/分配大小、producer-ready 同步句柄和 Adapter LUID。
+2. D3D11 texture 由消费侧创建并以 Vulkan import 方向接入；禁止把 `OPAQUE_WIN32` memory handle 直接当作 D3D11 texture handle 传给 `OpenSharedResource1`。
+3. 缺少 LUID、格式不为 BGRA8、同步句柄无效或能力探测失败时，禁用该桥并回退到已验证的 QSV/D3D11 或 FFmpeg 路径；不得终止输出线程。
+4. 每次会话必须记录 `gpu_to_cpu`、`zero_copy`、`gpu_copy_count`、实际编码后端和回退原因。Intel 当前实现的 Vulkan→D3D11→NV12 路径允许明确的 GPU copy；未完成的 fused shader 不得宣称 zero-copy。
+
+OpenGL/CUDA 兼容编码路径同样不属于 XR OpenGL Fallback：GPU 眼图路径必须记录实际 GPU copy 次数，CPU 捕获帧直接 host upload，禁止 CPU→OpenGL→CPU 往返；OpenGL interop 错误只允许触发一次会话级 handoff 到稳定 FFmpeg 编码器。编码失败不能改变核心 Vulkan/OpenXR 图形后端。
+
+### 14.4 捕获与推理原生边界
+
+Windows Desktop Duplication 可把借用的 D3D11 frame 同时提供给 OpenVINO GPU RemoteTensor；若原生能力不完整，受控 staging BGR readback 的诊断值为 `gpu_to_cpu=True zero_copy=False gpu_copy_count=1`，不能伪报零拷贝。OpenVINO、oneVPL、D3D11 surface 和 Vulkan 编码桥均使用同一 Adapter LUID 校验，并通过独立 capability probe 决定是否启用。
+
 ---
 
 ## 15. 配置系统
@@ -1304,7 +1325,7 @@ dependency/version manifest
 licenses
 ```
 
-不得包含旧OpenGL/D3D11 viewer DLL、Panda3D runtime或仅供开发的build directory。发布包只允许包含新版Filament DLL Bridge这一项自有原生组件；启用Fallback时包含Python `viewer.opengl_renderer`和`xr_viewer.core_openxr_opengl`模块及其明确依赖。
+不得包含旧OpenGL/D3D11 viewer DLL、Panda3D runtime或仅供开发的build directory。发布包可包含新版 Filament DLL Bridge，以及启用网络/Intel 平台时对应的、带 manifest/SHA-256 的 D3D11/OpenVINO/oneVPL/Vulkan 编码桥；这些可选桥不得被当作 XR 图形组件，也不得缺少能力探针和明确回退。启用 OpenGL Fallback 时包含 Python `viewer.opengl_renderer` 和 `xr_viewer.core_openxr_opengl` 模块及其明确依赖。
 
 推荐的运行时目录：
 
@@ -1408,7 +1429,7 @@ src/desktop2stereo/xr_viewer/native/
 
 保留并整理有效的Python Capture、Inference、调度和诊断代码；删除旧OpenGL/D3D11 viewer、Panda3D、WGL/CUDA-GL bridge、CPU实时fallback和历史兼容配置。旧Filament OpenGL-only Bridge由新版Vulkan/OpenGL Bridge取代。更新`src/desktop2stereo/main.py`、`src/desktop2stereo/main.bat`、依赖、CI和发布清单，保持当前启动方式并在启动阶段选择后端。
 
-完成标准：发布包和运行依赖中不存在旧图形桥接后端；OpenGL只通过Python `GraphicsBackend`、`viewer.opengl_renderer`和`xr_viewer.core_openxr_opengl`出现；Filament Bridge是唯一自有原生组件。
+完成标准：发布包和运行依赖中不存在旧图形桥接后端；OpenGL只通过Python `GraphicsBackend`、`viewer.opengl_renderer`和`xr_viewer.core_openxr_opengl`出现；Filament Bridge是核心 XR 场景唯一自有原生组件，网络/捕获/推理边界桥接必须有独立 manifest、能力探针和回退验收。
 
 ---
 
@@ -1425,8 +1446,8 @@ Vulkan 工程迁移只有同时满足以下条件才算完成：
 7. NVIDIA 主路径为 external-memory 零拷贝；其他平台不超过规范允许的一次 GPU copy。
 8. OpenXR 无新输入时仍保持 pose、controller 和 `xrEndFrame` 节奏。
 9. Validation、长稳、Session 恢复和 Device Lost 诊断通过。
-10. 发布包不包含旧OpenGL viewer、D3D11或Panda3D；Python是正式运行时，禁止的仅是CPU NumPy/PIL逐帧像素往返。
-11. Capture、Inference、Vulkan、OpenXR和Output均由Python源码实现，唯一自有原生组件为Filament DLL Bridge。
+10. 发布包不包含旧OpenGL viewer、旧 D3D11 viewer 或 Panda3D；允许包含经过 manifest/探针校验的网络/捕获/推理 D3D11 桥。Python是正式运行时，禁止的是 CPU NumPy/PIL 逐帧像素往返。
+11. Capture、Inference、Vulkan、OpenXR和核心 Output 编排均由Python源码实现；Filament DLL Bridge负责 XR 场景，网络/捕获/推理边界可使用经过 CI 交付的窄 ABI 原生桥接。
 
 本文自Python Vulkan Runtime开发开始生效。后续工程实现、代码审查和发布验收均以本文和`docs/01`为唯一目标架构依据。
 

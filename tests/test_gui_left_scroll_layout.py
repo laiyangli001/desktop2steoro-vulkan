@@ -212,18 +212,18 @@ def test_stream_url_updates_while_stream_settings_are_collapsed() -> None:
     handler = source[start:end]
 
     assert "if not self.stream_container.visible" not in handler
-    assert 'self.run_mode_key not in {"MJPEG Streamer", "RTMP Streamer", "GPU Streamer"}' in handler
+    assert 'self.run_mode_key not in {"MJPEG Streamer", "RTMP Streamer"}' in handler
     assert "self.stream_url_tf.value = self._format_stream_url" in handler
 
 
-def test_gpu_streaming_exposes_shared_calibration_rows() -> None:
+def test_advanced_streaming_exposes_shared_calibration_rows() -> None:
     source = BUILDERS_SOURCE.read_text(encoding="utf-8")
     start = source.index("def _get_streamer_row_map")
     end = source.index("\n    # ── data population ──", start)
     row_map = source[start:end]
 
     assert '"RTMP Streamer": [0, 1, 2, 3, 4, 6, 7, 8]' in row_map
-    assert '"GPU Streamer": [0, 1, 2, 3, 4, 6, 7, 8]' in row_map
+    assert '"GPU Streamer"' not in row_map
 
 
 def test_compact_display_field_adapts_between_minimum_and_maximum_widths() -> None:
@@ -323,9 +323,24 @@ def test_every_stream_parameter_control_has_an_explanatory_tooltip() -> None:
         assert f'(self.{control}, "{tooltip_key}")' in handlers
         assert localization.count(f'"{tooltip_key}":') == 2
 
-    assert "高级网络推流和 GPU 推流改由 CRF 与码率控制" in localization
-    assert "WebRTC 适合头显浏览器，延迟最低" in localization
+    assert "高级网络推流使用 CRF 和码率控制" in localization
+    assert "WebRTC 推荐用于低延迟头显浏览器" in localization
     assert "正数延后音频，负数提前音频" in localization
+
+
+def test_model_and_mode_tooltips_explain_recommendations_and_tradeoffs() -> None:
+    localization = (APP_ROOT / "gui" / "localization.py").read_text(encoding="utf-8")
+
+    assert "Distill-Any-Depth first" in localization
+    assert "InfiniDepth second" in localization
+    assert "首先使用 Distill-Any-Depth" in localization
+    assert "其次选择 InfiniDepth" in localization
+    assert "Monitor captures the selected full display" in localization
+    assert "屏幕模式捕获选定显示器的完整画面" in localization
+    assert "Advanced Network Streaming publishes compressed H.264/H.265" in localization
+    assert "高级网络推流：通过 WebRTC/RTSP/RTMP 发布 H.264/H.265" in localization
+    assert "Half-SBS packs left/right views" in localization
+    assert "Half-SBS：左右眼并排" in localization
 
 
 def test_run_mode_change_refits_native_window_height() -> None:

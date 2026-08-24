@@ -536,7 +536,6 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
         elif configured_run_mode in {
             "RTMP Streamer",
             "MJPEG Streamer",
-            "GPU Streamer",
         }:
             from streaming.direct_sbs import (
                 DirectSbsOutputConsumer,

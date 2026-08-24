@@ -1,7 +1,7 @@
 # D2S Vulkan 实时 2D 转 3D 系统规格书
 
-**文档版本**：4.0
-**发布日期**：2026 年 7 月
+**文档版本**：4.1
+**发布日期**：2026 年 8 月 24 日
 **规范状态**：Vulkan 原生架构正式规格
 **编制依据**：`01.D2S_Vulkan_Migration_Technical_Report.md`
 **适用范围**：Desktop2Stereo 新一代实时运行时、OpenXR 查看器与跨平台 GPU 后端
@@ -167,7 +167,7 @@ Filament 只输出环境 GLB 与手柄 GLB 的每眼颜色/深度。Vulkan Proje
 
 正式应用运行时以 Python 进程为主进程。Capture、Inference、Vulkan Compute、OpenXR Presenter、资源调度和控制面均由 Python 源码实现并在同一运行时内协作。WindowsCaptureCUDA/ROCm、PyTorch、TensorRT 和 OpenXR 延续当前 Python 包/API 的直接调用方式，不为它们新增项目自有绑定层。GPU 密集工作通过这些 Python API 和 SPIR-V Shader 提交，Python 不进行 CPU 逐像素循环。
 
-Filament DLL Bridge 是唯一允许由本项目维护的 C/C++ 原生桥接层。它与 Python 主进程同进程加载，只暴露场景创建、资产加载、状态更新、Vulkan Render Target 绑定和渲染提交所需的窄 C ABI。禁止为 Capture、Inference、Stereo、OpenXR 或 Output 再建立自有 C++ Runtime，也禁止通过 Filament 子进程或共享内存传递整帧图像。
+在核心 Vulkan/OpenXR 图形路径中，Filament DLL Bridge 是唯一负责场景渲染的本项目 C/C++ 原生桥接层。网络输出、Windows Desktop Duplication 和 Intel 推理/编码允许使用独立的窄 ABI 原生桥接，但它们只能位于捕获、推理或压缩编码边界，不能创建或拥有 OpenXR Session、交换链、场景资源，也不能通过进程/共享内存传递实时整帧图像。所有原生桥接均须有能力探测、版本清单和 CI 产物校验。
 
 ### 3.5 单一资源所有权
 
@@ -210,7 +210,7 @@ OpenGL Fallback 的平台基线为：Windows/Linux 使用驱动可提供的原�
 - 平台对应的 external memory 与 external semaphore 扩展，供零拷贝推理路径使用。
 - OpenXR 输出要求 `XR_KHR_vulkan_enable2` 及 Runtime 声明的 Vulkan 版本和扩展。
 
-缺失 Vulkan 必需能力时，默认启动必须给出缺失项。配置允许 Fallback 时，启动器可在尚未创建正式图形会话前选择 OpenGL；否则启动失败。任何情况下都不得静默切换到 D3D11 或 CPU 实时渲染。
+缺失 Vulkan 必需能力时，默认启动必须给出缺失项。配置允许 Fallback 时，启动器可在尚未创建正式图形会话前选择 OpenGL；否则启动失败。核心 OpenXR 图形路径不得静默切换到 D3D11 或 CPU 实时渲染；网络输出的 D3D11/编码器桥接属于独立输出边界，必须单独探测、记录和回退。
 
 ---
 
@@ -301,6 +301,8 @@ CaptureFrame {
 
 捕获资源进入 Vulkan 的优先级为：原生 Vulkan 图像、外部内存导入、GPU copy。CPU staging 只允许用于文件、测试图和明确标记的非实时输入。
 
+WindowsCaptureCUDA 必须在捕获回调入口执行软件节流门控，节流目标通过 `fps_provider` 动态读取；`D2S_WGC_SOFTWARE_THROTTLE` 仅用于诊断覆盖。Auto 捕获策略以稳定 SBS 消费能力为依据，在有界评估窗口内将目标设置为测得峰值加 5 FPS，并受显示刷新率/配置上限约束；capture queue 仍保持容量 1，节流不得通过积压帧补偿。
+
 ### 6.2 阶段 2：解析工作尺寸
 
 `render_size` 是立体合成的唯一工作坐标系。所有 Depth、Disparity、Mask、Left/Right Eye 和 Temporal 资源必须与其一致。
@@ -368,6 +370,10 @@ submit(frame_id, input_resource, output_resource, wait_value, signal_value)
 5. OpenXR swapchain acquire/wait/release、Projection/Quad Layer 构建和 `xrEndFrame` 始终由单一 Presenter 线程执行；推理 worker 不得直接访问 OpenXR 或 Presenter-owned Vulkan 资源。
 
 `Parallel Inference` 是用户可关闭的 GUI 配置，默认开启。运行时必须分别报告 `input_fps`、`processed_fps` 和 `present_fps`；重复显示或 OpenXR 刷新不得计为处理帧率。有效双路运行至少应记录 `rt_parallel=1`、`rt_parallel_workers=2`、`rt_pending_limit=2` 以及每个任务实际使用的 execution slot。
+
+推理 admission 必须感知 Presenter 状态：当 Presenter 正在合成一帧或 SBS/latest-frame 仍待消费时，最多允许一个深度任务在途；Presenter 缺帧且输出队列无待消费资源时，才可恢复到配置允许的并发上限。这样可以避免推理吞吐掩盖呈现反压，并保证 `present_fps` 统计的是 Presenter 实际消费的唯一立体帧。OpenXR 命令/Frame Context ring 默认 9 槽，可由 `D2S_OPENXR_VULKAN_FRAME_CONTEXTS` 覆盖；覆盖值必须在启动诊断中记录并保持有界。
+
+模型选择顺序是产品默认契约：首先推荐 `Distill-Any-Depth`，其次推荐 `InfiniDepth`。默认模型为 `Distill-Any-Depth-Base`，其推荐输入分辨率为 518；InfiniDepth 使用独立预处理，通常以 512 输入分辨率和 FP32 运行。GUI 与 RuntimeConfig 必须同时保存模型家族、变体、分辨率、精度和 provider，禁止仅凭显示名称推断这些参数。
 
 ### 6.5 阶段 5：深度后处理
 
@@ -618,6 +624,8 @@ LDR display View: virtual screen + UI/laser -> no post-processing/tone mapping -
 
 非 XR 输出默认使用 Vulkan。兼容模式使用独立 OpenGL Presenter，但不得加载旧 viewer 模块或共享 Vulkan 资源所有权。
 
+高级网络推流与本地输出消费同一公共画质阶段结果，但网络会话独立管理编码、音频、MediaMTX/信令、校准统计和 latest-frame 生命周期；不得把原始 4K 眼图通过 CPU/IPC 管道传递给编码器。Windows/Intel 路径可采用 Vulkan→D3D11 BGRA8 SBS→NV12→oneVPL，必须校验 Adapter LUID、格式、分配大小和 producer-ready 同步句柄；桥接失败时禁用该桥并回退到已验证的 QSV/D3D11 或 FFmpeg 编码路径，不得终止主输出线程。网络推流模式的规范名称为 `RTMP Streamer`（GUI 显示“高级网络推流”）；旧 GPU 推流别名只允许在配置迁移时归一化。
+
 ---
 
 ## 9. 配置与热更新
@@ -633,6 +641,7 @@ RuntimeConfigSnapshot {
   render_scale_tier
   depth_backend
   depth_model
+  network_stream
   parallax_preset
   depth_strength
   convergence
@@ -810,7 +819,7 @@ GUI显示启动、模型准备、运行、重配置、Session恢复和失败状�
 | 项目 | 通过标准 |
 |------|----------|
 | CPU readback | 正式实时路径为 0 次/帧 |
-| Vulkan 主路径 API 隔离 | D3D11/OpenGL/WGL 调用为 0 |
+| Vulkan/OpenXR 主路径 API 隔离 | D3D11/OpenGL/WGL 调用为 0；网络输出边界单独记录其合法桥接调用 |
 | 主路径 GPU copy | NVIDIA 零拷贝；其他平台不超过一次明确 GPU 内拷贝 |
 | Frame Context | 数量固定，无运行时持续增长 |
 | Capture queue | 始终有界，丢帧发生在 latest-frame 覆盖点 |
@@ -819,7 +828,7 @@ GUI显示启动、模型准备、运行、重配置、Session恢复和失败状�
 | 双路诊断 | `rt_parallel_workers=2`、`rt_pending_limit=2` 与交替的 `rt_depth_slot=0/2`、`1/2` 同时出现，才可判定为真实并发 |
 | Pipeline creation | 稳态帧循环中为 0 次 |
 
-OpenGL Fallback 必须单独验收，证明会话内没有 Vulkan/D3D11/WGL 混合调用、没有 CPU 实时像素回读，并正确标记受限功能。
+OpenGL Fallback（核心图形/XR 会话）必须单独验收，证明会话内没有 Vulkan/D3D11/WGL 混合调用、没有 CPU 实时像素回读，并正确标记受限功能。网络编码器的 OpenGL/CUDA 兼容路径不属于该 XR 会话边界，必须另行报告 `gpu_to_cpu`、`zero_copy` 和 `gpu_copy_count`；CPU 捕获帧应直接进入 host upload，不得执行 CPU→OpenGL→CPU 往返。
 
 ### 13.5 画质与舒适度
 
@@ -881,8 +890,8 @@ Vulkan 主路径和新 OpenGL Fallback 进入正式主线前，必须从运行�
 
 - 与新 `GraphicsBackend` 接口无关的旧 OpenGL viewer、场景渲染和资源封装。
 - D3D11 OpenXR Graphics Binding 和交换链实现。
-- WGL_NV_DX_interop2、CUDA-GL interop、PBO uploader 和 GL mipmap 实时逻辑。
-- 旧 OpenGL/D3D11/CPU fallback 分支及其配置开关；只保留本规范定义的新 OpenGL 兼容模式。
+- WGL_NV_DX_interop2、旧 CUDA-GL interop、旧 PBO uploader 和 GL mipmap 实时逻辑（网络编码器为兼容性保留的受控 OpenGL/CUDA 路径除外）。
+- 旧 OpenGL/D3D11/CPU 图形 fallback 分支及其配置开关；只保留本规范定义的新 OpenGL 兼容模式。网络输出的 D3D11/oneVPL/FFmpeg 回退不属于图形 fallback。
 - 旧 viewer shader 对 IPD、stereo scale、max shift ratio 的强度解释。
 - CPU NumPy/PIL 逐帧 RGB、Depth、SBS 往返路径；Python 中的 GPU tensor、GPU handle 和 Vulkan绑定调用属于正式路径。
 - 仅为旧模块名、旧类接口和旧环境变量存在的适配器。
@@ -893,7 +902,7 @@ Vulkan 主路径和新 OpenGL Fallback 进入正式主线前，必须从运行�
 
 ## 15.1 Filament Bridge 构建与交付规则
 
-Filament Bridge 是本项目唯一需要预编译的自有原生组件。正式构建必须由 GitHub Actions 按平台矩阵完成，不要求用户在本地编译 Filament SDK 或 Bridge。
+Filament Bridge 是核心 XR 场景唯一需要预编译的自有原生组件。网络/捕获/推理边界的可选 D3D11、OpenVINO、oneVPL 或 Vulkan 编码桥也必须由 GitHub Actions 在 Windows runner 上构建，并以带 manifest/SHA-256 的独立 artifact 交付；不要求用户在本地编译任何原生 SDK。
 
 ```text
 Bridge 源码变更

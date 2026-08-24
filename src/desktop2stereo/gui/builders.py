@@ -1053,7 +1053,6 @@ class GUIBuilderMixin:
             "Local Viewer": [], "3D Monitor": [], "OpenXR Link": [],
             "MJPEG Streamer": [0, 1],
             "RTMP Streamer": [0, 1, 2, 3, 4, 6, 7, 8],
-            "GPU Streamer": [0, 1, 2, 3, 4, 6, 7, 8],
         }
 
     # ── data population ──

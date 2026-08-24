@@ -38,10 +38,10 @@ def test_legacy_streamer_normalizes_to_mjpeg() -> None:
     assert resolved.stream_mode == "MJPEG"
 
 
-def test_gpu_streamer_is_an_explicit_viewer_stream_mode() -> None:
+def test_legacy_gpu_streamer_normalizes_to_advanced_stream_mode() -> None:
     from utils.run_mode import normalize_run_mode, resolve_run_mode
 
-    assert normalize_run_mode("NVIDIA Streamer") == "GPU Streamer"
+    assert normalize_run_mode("NVIDIA Streamer") == "RTMP Streamer"
     resolved = resolve_run_mode(
         "GPU Streamer",
         os_name="Windows",
@@ -49,11 +49,11 @@ def test_gpu_streamer_is_an_explicit_viewer_stream_mode() -> None:
         lossless_scaling_support=True,
     )
     assert resolved.run_mode == "Viewer"
-    assert resolved.stream_mode == "GPU"
+    assert resolved.stream_mode == "RTMP"
     assert resolved.fix_viewer_aspect
 
 
-def test_network_stream_session_policy_covers_gpu_and_advanced_modes() -> None:
+def test_network_stream_session_policy_uses_gpu_backends_in_advanced_mode() -> None:
     from streaming.stream_session import (
         NetworkStreamSessionConfig,
         is_network_stream_mode,
@@ -62,10 +62,10 @@ def test_network_stream_session_policy_covers_gpu_and_advanced_modes() -> None:
     )
 
     assert is_network_stream_mode("RTMP Streamer")
-    assert is_network_stream_mode("GPU Streamer")
+    assert not is_network_stream_mode("GPU Streamer")
     assert not is_network_stream_mode("MJPEG Streamer")
     assert supports_network_calibration("RTMP Streamer", "WebRTC")
-    assert supports_network_calibration("GPU Streamer", "WebRTC")
+    assert not supports_network_calibration("GPU Streamer", "WebRTC")
     assert not supports_network_calibration("GPU Streamer", "RTSP")
     config = NetworkStreamSessionConfig.from_settings(
         {"Stream Protocol": "WebRTC", "Streamer Port": 1122}, fps=30
@@ -73,20 +73,15 @@ def test_network_stream_session_policy_covers_gpu_and_advanced_modes() -> None:
     assert config.port == 1122
     assert config.fps == 30
 
-    # Both GUI modes use one backend policy.  GPU Streamer keeps its vendor
-    # zero-copy auto selection, while Advanced Network Streaming keeps the
-    # shared FFmpeg/MediaMTX fallback unless the user explicitly selects one.
-    assert resolve_network_video_backend(
-        "GPU Streamer", "auto", device_info="NVIDIA RTX 3090"
-    ).backend == "pynv"
-    assert resolve_network_video_backend(
-        "GPU Streamer", "auto", device_info="Intel Arc"
-    ).backend == "intel"
+    # Advanced Network Streaming now owns the former GPU vendor-priority policy.
     assert resolve_network_video_backend(
         "RTMP Streamer", "auto", device_info="NVIDIA RTX 3090"
-    ).backend == "ffmpeg"
+    ).backend == "pynv"
     assert resolve_network_video_backend(
-        "GPU Streamer", "vulkan", device_info="NVIDIA RTX 3090"
+        "RTMP Streamer", "auto", device_info="Intel Arc"
+    ).backend == "intel"
+    assert resolve_network_video_backend(
+        "RTMP Streamer", "vulkan", device_info="NVIDIA RTX 3090"
     ).backend == "vulkan"
 
 

@@ -478,19 +478,18 @@ class GUIHandlerMixin:
             texts.get("OpenXR Link", "OpenXR Link"): "OpenXR Link",
             texts.get("RTMP Streamer", "RTMP Streamer"): "RTMP Streamer",
             texts.get("MJPEG Streamer", "MJPEG Streamer"): "MJPEG Streamer",
-            texts.get("GPU Streamer", "GPU Streamer"): "GPU Streamer",
             texts.get("3D Monitor", "3D Monitor"): "3D Monitor",
         }
         self.run_mode_key = mode_map.get(label, "Local Viewer")
         self._config["Run Mode"] = self.run_mode_key
-        if self.run_mode_key in {"MJPEG Streamer", "RTMP Streamer", "GPU Streamer"}:
+        if self.run_mode_key in {"MJPEG Streamer", "RTMP Streamer"}:
             self.stream_settings_cb.value = False
         self._sync_visibility()
         self._fit_window_to_content(update=True, resize_window=True)
 
     def on_stream_settings_change(self, e):
         mode = self.run_mode_key
-        streamer_modes = {"MJPEG Streamer", "RTMP Streamer", "GPU Streamer"}
+        streamer_modes = {"MJPEG Streamer", "RTMP Streamer"}
         row_map = self._get_streamer_row_map()
         row_indices = row_map.get(mode, []) if mode in streamer_modes and self.stream_settings_cb.value else []
         self._show_streamer_rows(*row_indices)
@@ -532,11 +531,10 @@ class GUIHandlerMixin:
         mode_reverse = {
             "Local Viewer": texts["Local Viewer"], "OpenXR Link": texts["OpenXR Link"],
             "RTMP Streamer": texts["RTMP Streamer"], "MJPEG Streamer": texts["MJPEG Streamer"],
-            "GPU Streamer": texts["GPU Streamer"],
             "3D Monitor": texts["3D Monitor"],
         }
         self.run_mode_dd.value = mode_reverse.get(mode, texts["Local Viewer"])
-        streamer_modes = {"MJPEG Streamer", "RTMP Streamer", "GPU Streamer"}
+        streamer_modes = {"MJPEG Streamer", "RTMP Streamer"}
         is_streamer = mode in streamer_modes
         self.stream_settings_cb.visible = is_streamer
         is_openxr = mode == "OpenXR Link"
@@ -572,12 +570,12 @@ class GUIHandlerMixin:
         row_map = self._get_streamer_row_map()
         row_indices = row_map.get(mode, []) if is_streamer and self.stream_settings_cb.value else []
         self._show_streamer_rows(*row_indices)
-        self.lossless_cb.visible = (OS_NAME == "Windows" and mode in {"RTMP Streamer", "GPU Streamer"})
+        self.lossless_cb.visible = (OS_NAME == "Windows" and mode == "RTMP Streamer")
         self.update_stereo_monitor_menu()
         self._fit_window_to_content()
         if mode == "Local Viewer":
             self._auto_select_stereo_monitor()
-        if mode in {"RTMP Streamer", "GPU Streamer"}:
+        if mode == "RTMP Streamer":
             if getattr(self, "_startup_defer_audio", False):
                 # The slow SoundCard/WASAPI scan runs after the window is shown.
                 self.audio_dd.options = []
@@ -777,13 +775,11 @@ class GUIHandlerMixin:
             run_mode_texts = {
                 "Local Viewer": t["Local Viewer"], "RTMP Streamer": t["RTMP Streamer"],
                 "MJPEG Streamer": t["MJPEG Streamer"],
-                "GPU Streamer": t["GPU Streamer"],
             }
         else:
             run_mode_texts = {
                 "Local Viewer": t["Local Viewer"], "OpenXR Link": t["OpenXR Link"],
                 "RTMP Streamer": t["RTMP Streamer"], "MJPEG Streamer": t["MJPEG Streamer"],
-                "GPU Streamer": t["GPU Streamer"],
             }
             if OS_NAME == "Windows":
                 run_mode_texts["3D Monitor"] = t["3D Monitor"]
@@ -945,7 +941,7 @@ class GUIHandlerMixin:
             self._local_ip_cache = get_local_ip()
 
     def update_stream_url(self, e=None, resolve_ip=True):
-        if self.run_mode_key not in {"MJPEG Streamer", "RTMP Streamer", "GPU Streamer"}:
+        if self.run_mode_key not in {"MJPEG Streamer", "RTMP Streamer"}:
             return
         protocol = self.stream_proto_dd.value
         port = self.stream_port_tf.value or str(DEFAULT_PORT)
@@ -1125,7 +1121,7 @@ class GUIHandlerMixin:
         self.populate_monitors()
         if self.capture_mode_key == "Window":
             self.refresh_window_list()
-        if self.run_mode_key in {"RTMP Streamer", "GPU Streamer"}:
+        if self.run_mode_key == "RTMP Streamer":
             self.populate_audio_devices()
             self.auto_select_stereo_mix()
         self.update_stereo_monitor_menu()

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-NETWORK_STREAM_MODES = frozenset({"RTMP Streamer", "GPU Streamer"})
+NETWORK_STREAM_MODES = frozenset({"RTMP Streamer"})
 CALIBRATABLE_STREAM_MODES = NETWORK_STREAM_MODES
 
 
@@ -24,12 +24,10 @@ def resolve_network_video_backend(
     *,
     device_info: str,
 ) -> NetworkVideoBackendDecision:
-    """Resolve the encoder once for RTMP and GPU streaming modes.
+    """Resolve the encoder for the unified advanced network stream.
 
-    The two GUI modes intentionally keep their labels and compatibility
-    behavior, but now share the same backend policy.  Explicit choices always
-    win; ``auto`` selects the vendor zero-copy path for GPU Streamer and leaves
-    Advanced Network Streaming on the FFmpeg/MediaMTX path.
+    Explicit choices always win.  ``auto`` uses the former GPU-streaming
+    vendor preference inside the advanced mode and falls back to FFmpeg.
     """
 
     requested = str(requested_backend or "auto").strip().casefold()
@@ -47,15 +45,21 @@ def resolve_network_video_backend(
             reason="explicit GUI encoder selection",
         )
 
+    if str(run_mode or "").strip() != "RTMP Streamer":
+        return NetworkVideoBackendDecision(
+            backend="ffmpeg",
+            requested=requested,
+            reason="non-advanced mode fallback",
+        )
+
     info = str(device_info or "").upper()
-    if str(run_mode or "").strip() == "GPU Streamer":
-        if "NVIDIA" in info:
-            return NetworkVideoBackendDecision("pynv", requested, "NVIDIA GPU auto selection")
-        if "AMD" in info or "RADEON" in info:
-            return NetworkVideoBackendDecision("amd", requested, "AMD GPU auto selection")
-        if "INTEL" in info:
-            return NetworkVideoBackendDecision("intel", requested, "Intel zero-copy auto selection")
-    return NetworkVideoBackendDecision("ffmpeg", requested, "shared FFmpeg/MediaMTX fallback")
+    if "NVIDIA" in info:
+        return NetworkVideoBackendDecision("pynv", requested, "NVIDIA GPU auto selection")
+    if "AMD" in info or "RADEON" in info:
+        return NetworkVideoBackendDecision("amd", requested, "AMD GPU auto selection")
+    if "INTEL" in info:
+        return NetworkVideoBackendDecision("intel", requested, "Intel zero-copy auto selection")
+    return NetworkVideoBackendDecision("ffmpeg", requested, "FFmpeg/MediaMTX fallback")
 
 
 def is_network_stream_mode(run_mode: str) -> bool:

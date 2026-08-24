@@ -699,7 +699,7 @@ class GUIProcessMixin:
         if not supports_network_calibration(self.run_mode_key, self.stream_proto_dd.value):
             self.set_status(UI_MESSAGES[self.locale].get(
                 "calibration_requires_advanced",
-                "Automatic calibration requires Advanced Network Streaming or GPU Streaming with WebRTC.",
+                "Automatic calibration requires Advanced Network Streaming with WebRTC.",
             ))
             return
         if int(self.stream_port_tf.value or DEFAULT_PORT) >= 65535:
@@ -1121,7 +1121,7 @@ class GUIProcessMixin:
         self._set_running_ui(True)
         self._collect_config()
         if (
-            self.run_mode_key in {"RTMP Streamer", "GPU Streamer"}
+            self.run_mode_key == "RTMP Streamer"
             and self._config.get("Display Mode") == "Full-SBS"
         ):
             status_logger.warning(
