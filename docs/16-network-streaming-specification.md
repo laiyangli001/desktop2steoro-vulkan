@@ -4,7 +4,7 @@
 
 目标是消除当前 4K SBS 推流中的 CUDA/ROCm → CPU RGB24 → FFmpeg stdin 路径，让图像在 GPU 内完成 SBS 整理、颜色转换和硬件编码。编码后的 H.264/H.265 小数据包仍通过 FFmpeg/MediaMTX 发布，并由局域网头显浏览器通过 WebRTC 播放。
 
-> 本文同时记录实施设计和当前验收状态。native Vulkan 编码桥已完成独立 4K 编码烟测并接入高级网络推流；本机已完成连续 600 帧 3840×2160@30 发布和 ffprobe 媒体参数验证；SoundCard/WASAPI 连续运行 10.12 秒无 runtime error，MediaMTX 确认 `2 tracks (H264, Opus)`。Vulkan 失败后的 OpenGL NVIDIA CUDA interop 现在优先进入原生 NVENC CUDAARRAY bridge，GitHub Actions run `32825850824` 已完成 Windows x64 DLL 编译与功能目录发布，本机 ABI/probe 加载通过；原生 CUDAARRAY 实帧编码和头显画面仍待真机验收，失败时保留已完成 640×360 RTSP 闭环的 PyNvVideoCodec/NVENC 分支；头显端持续 4K/30 FPS 实机验收仍需继续完成；Khronos validation 层会触发 FFmpeg 内部 NV12 frame-pool 的已知 VUID 与 flush/idle 阻塞，程序检测到该层后主动进入 OpenGL 探测并按能力回退。
+> 本文同时记录实施设计和当前验收状态。native Vulkan 编码桥已完成独立 4K 编码烟测并接入高级网络推流；本机已完成连续 600 帧 3840×2160@30 发布和 ffprobe 媒体参数验证；SoundCard/WASAPI 连续运行 10.12 秒无 runtime error，MediaMTX 确认 `2 tracks (H264, Opus)`。Vulkan 失败后的 OpenGL NVIDIA CUDA interop 现在优先进入原生 NVENC CUDAARRAY bridge，GitHub Actions run `32828611676` 已完成 CUDA 12.4.1 Windows x64 ABI 2 DLL 编译与功能目录发布；本机 RTX 3090 已通过 CUDA SBS tensor → surface kernel → NVENC 的 640×360 H.264 实帧出包验证（198 bytes，Annex-B 起始码 `00000001`），头显画面仍待真机验收，失败时保留已完成 640×360 RTSP 闭环的 PyNvVideoCodec/NVENC 分支；头显端持续 4K/30 FPS 实机验收仍需继续完成；Khronos validation 层会触发 FFmpeg 内部 NV12 frame-pool 的已知 VUID 与 flush/idle 阻塞，程序检测到该层后主动进入 OpenGL 探测并按能力回退。
 
 ## 目录
 
@@ -971,10 +971,10 @@ Interface、D3D11 texture 或 AMF resource 生命周期，但不再重复实现�
 #### NVIDIA
 
 1. 输入为推理产生的 CUDA RGBA/SBS tensor。
-2. `PyNvVideoCodecEncoder` 在 CUDA/NVENC 内执行颜色转换和 H.264/H.265 编码。
-3. 压缩包通过 `PyNvSrtVideoOutput` 交给 FFmpeg mux-only 进程。
-4. SoundCard/WASAPI 回环音频由独立音频输入送入 FFmpeg，WebRTC 使用 Opus，非 WebRTC 使用 AAC。
-5. PyNvVideoCodec、音频采集、mux 或运行期提交失败时，回退到稳定 FFmpeg 视频/音频路径。
+2. 首选原生 CUDAARRAY surface kernel：直接读取 tensor 的 device pointer/stride/dtype 并写 NVENC 注册表面，成功时记录 `gpu_to_cpu=False zero_copy=True gpu_copy_count=0`。
+3. 原生直接写失败后，依次回退 CUDAARRAY 单次设备复制和 `PyNvVideoCodecEncoder`，分别记录真实复制次数。
+4. 压缩包交给 FFmpeg mux-only 进程；SoundCard/WASAPI 回环音频由独立音频输入送入 FFmpeg，WebRTC 使用 Opus，非 WebRTC 使用 AAC。
+5. NVIDIA 原生桥、PyNvVideoCodec、音频采集、mux 或运行期提交失败时，回退到稳定 FFmpeg 视频/音频路径。
 
 #### AMD
 
@@ -1064,7 +1064,7 @@ GUI 检查校准指纹
 
 当前已知边界：
 
-- NVIDIA PyNvVideoCodec Python API 不能直接接收 OpenGL `cudaArray_t`，OpenGL fallback 可能记录 `gpu_to_cpu=False` 但 `zero_copy=False`。
+- NVIDIA 原生 ABI 2 bridge 可由 CUDA surface kernel 将最终 SBS tensor 直接写入 NVENC 注册的 OpenGL `cudaArray_t`；本机 RTX 3090 已完成真实 H.264 出包验证，该路径记录 `gpu_to_cpu=False zero_copy=True gpu_copy_count=0`。PyNvVideoCodec Python API 仍不能直接接收 `cudaArray_t`，因此作为后续回退时记录 `zero_copy=False`。
 - 当前 RTX 3090 Vulkan 驱动对编码 NV12 `STORAGE_IMAGE` 能力不满足，native Vulkan 选择固定槽位 device-local copy；该路径不下载 CPU，但不是严格 zero-copy。
 - Intel Windows 已完成 Vulkan packed SBS → D3D11 shared BGRA → VideoProcessor NV12 → oneVPL/QSV 原生路径；能力和 LUID 验证通过时记录 `gpu_to_cpu=False gpu_copy_count=0 zero_copy=True`，失败时回退 QSV/VAAPI 或 host-upload。
 - macOS 和无可用 GPU interop 的平台仍必须明确进入平台原生硬件路径或 host-upload，不能套用 Intel Windows 的 D3D11 契约。
@@ -1130,7 +1130,7 @@ GUI 检查校准指纹
 - [x] OpenGL → AMF 的 HIP interop 代码路径已接入。
 - [ ] AMD 真机驱动、音频和 4K 编码验证。
 - [ ] OpenGL → QSV/VideoToolbox 的跨平台硬件路径实现与验证。
-- [ ] CUDA–OpenGL interop 的严格 zero-copy 编码路径；当前 interop 仍有 CUDA linear memory ↔ OpenGL array GPU copy。
+- [x] CUDA–OpenGL interop 的严格 zero-copy 编码路径：ABI 2 surface kernel 直接读取最终 SBS tensor 并写 NVENC 注册 CUDAARRAY；GitHub Actions run `32828611676` 编译成功，本机 RTX 3090 已完成 640×360 H.264 实帧出包验证。
 - [x] CUDA/ROCm 和 Vulkan 设备按 UUID 匹配；native bridge 暴露 `VkPhysicalDeviceIDProperties` UUID，当前 CUDA/Vulkan 不匹配时自动回退。
 - [x] 编码输入格式来自 Vulkan Video/FFmpeg frame-pool 的格式与 profile query；native bridge 只接受 profile-compatible NV12 multi-plane frame。
 - [x] RGB/RGBA→NV12 在 GPU 上完成。

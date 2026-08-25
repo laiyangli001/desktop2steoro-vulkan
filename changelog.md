@@ -2,7 +2,7 @@
 
 ## 2026-08-25
 
-- NVENC CUDAARRAY 进入严格零拷贝阶段：新增原生 CUDA surface kernel，直接读取最终 SBS tensor 的 device pointer、stride 和 dtype 并写入 NVENC 注册表面，不再创建 RGBA staging 或调用图像复制；成功路径记录 `gpu_to_cpu=False zero_copy=True gpu_copy_count=0`，运行时失败依次降级到 CUDAARRAY 单次设备拷贝、PyNvVideoCodec 和 FFmpeg。远程构建工具链升级到 CUDA 12.4.1，以兼容 GitHub Windows runner 的 MSVC 14.44 标准库。
+- NVENC CUDAARRAY 进入严格零拷贝阶段：新增原生 CUDA surface kernel，直接读取最终 SBS tensor 的 device pointer、stride 和 dtype 并写入 NVENC 注册表面，不再创建 RGBA staging 或调用图像复制；成功路径记录 `gpu_to_cpu=False zero_copy=True gpu_copy_count=0`，运行时失败依次降级到 CUDAARRAY 单次设备拷贝、PyNvVideoCodec 和 FFmpeg。远程构建工具链升级到 CUDA 12.4.1，以兼容 GitHub Windows runner 的 MSVC 14.44 标准库；GitHub Actions run `32828611676` 已成功编译并提交 ABI 2 DLL，本机 RTX 3090 已完成 640×360 CUDA tensor 直接写表面并输出 198-byte H.264 Annex-B 包的真实验证。
 
 - 高级网络推流新增原生 NVENC CUDAARRAY 优先路径：OpenGL 映射纹理以 `NV_ENC_INPUT_RESOURCE_TYPE_CUDAARRAY` 直接注册到 NVENC，删除 array→线性 CUDA tensor 的一次设备内拷贝；当前如实记录 `gpu_to_cpu=False zero_copy=False gpu_copy_count=1`，DLL 缺失或能力失败时自动回退 PyNvVideoCodec。GitHub Actions run `32825850824` 已完成 Windows x64 DLL 编译并提交到对应 streaming 功能目录，本机 ABI 1 与 NVENC/CUDA 驱动探针加载通过。
 
