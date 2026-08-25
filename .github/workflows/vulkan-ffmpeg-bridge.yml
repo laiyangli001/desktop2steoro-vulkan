@@ -73,18 +73,25 @@ jobs:
           & 'C:\msys64\mingw64\bin\nm.exe' -g $dll.FullName | Select-String 'd2s_vulkan_ffmpeg_bridge_abi_version|d2s_vulkan_ffmpeg_encoder_acquire_frame|d2s_vulkan_ffmpeg_encoder_submit_frame|d2s_vulkan_ffmpeg_encoder_read_packet|d2s_vulkan_ffmpeg_encoder_flush'
           if ($LASTEXITCODE -ne 0) { throw 'Required Vulkan bridge ABI exports are missing' }
 
-      - name: Verify shared runtime dependency closure and ABI 5 load
+      - name: Stage shared runtime and verify ABI 5 load
         shell: pwsh
         run: |
           $dll = Get-ChildItem -LiteralPath native\vulkan_ffmpeg_bridge\build\ci -Recurse -File |
             Where-Object { $_.Name -eq 'd2s_vulkan_ffmpeg_bridge.dll' } |
             Select-Object -First 1
           if (-not $dll) { throw 'Vulkan FFmpeg bridge DLL was not produced' }
-          $sharedRuntime = (Resolve-Path 'src\desktop2stereo\streaming\rtmp\ffmpeg\bin').Path
           $downloadedRuntime = (Resolve-Path "$env:D2S_FFMPEG_ROOT\bin").Path
           $mingwRuntime = 'C:\msys64\mingw64\bin'
+          $deploy = New-Item -ItemType Directory -Force -Path native\vulkan_ffmpeg_bridge\build\ci\deploy
+          $bridgeDeploy = New-Item -ItemType Directory -Force -Path (Join-Path $deploy.FullName 'bridge')
+          $runtimeDeploy = New-Item -ItemType Directory -Force -Path (Join-Path $deploy.FullName 'runtime')
+          Copy-Item -LiteralPath $dll.FullName -Destination $bridgeDeploy.FullName -Force
+          Get-ChildItem -LiteralPath $downloadedRuntime -File |
+            Where-Object { $_.Extension -in @('.dll', '.exe') } |
+            Copy-Item -Destination $runtimeDeploy.FullName -Force
+          $deployedBridge = Join-Path $bridgeDeploy.FullName 'd2s_vulkan_ffmpeg_bridge.dll'
           $queue = [System.Collections.Generic.Queue[string]]::new()
-          $queue.Enqueue($dll.FullName)
+          $queue.Enqueue($deployedBridge)
           $seen = @{}
           while ($queue.Count -gt 0) {
             $current = $queue.Dequeue()
@@ -94,29 +101,23 @@ jobs:
               $key = $name.ToLowerInvariant()
               if ($seen.ContainsKey($key)) { continue }
               $seen[$key] = $true
-              $downloaded = Join-Path $downloadedRuntime $name
-              if (-not (Test-Path -LiteralPath $downloaded)) {
-                $downloaded = Join-Path $mingwRuntime $name
-              }
-              if (-not (Test-Path -LiteralPath $downloaded)) { continue }
               if ($key -eq 'vulkan-1.dll') {
                 Write-Host 'vulkan-1.dll is supplied by the target system GPU driver'
                 continue
               }
-              $shared = Join-Path $sharedRuntime $name
-              if (-not (Test-Path -LiteralPath $shared)) {
+              $shared = Join-Path $runtimeDeploy.FullName $name
+              if (Test-Path -LiteralPath $shared) {
+                $queue.Enqueue($shared)
+                continue
+              }
+              $mingw = Join-Path $mingwRuntime $name
+              if (Test-Path -LiteralPath $mingw) {
                 throw "Shared FFmpeg runtime dependency is missing: $name"
               }
-              $expected = (Get-FileHash -Algorithm SHA256 -LiteralPath $downloaded).Hash
-              $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $shared).Hash
-              if ($expected -ne $actual) {
-                throw "Shared FFmpeg runtime dependency version mismatch: $name"
-              }
-              $queue.Enqueue($shared)
             }
           }
-          $env:D2S_VULKAN_BRIDGE_PROBE_DLL = $dll.FullName
-          $env:D2S_SHARED_FFMPEG_RUNTIME = $sharedRuntime
+          $env:D2S_VULKAN_BRIDGE_PROBE_DLL = $deployedBridge
+          $env:D2S_SHARED_FFMPEG_RUNTIME = $runtimeDeploy.FullName
           $env:D2S_CI_VULKAN_LOADER = $mingwRuntime
           @'
           import ctypes
@@ -133,11 +134,12 @@ jobs:
               raise SystemExit("Vulkan bridge ABI is not 5")
           print("Vulkan bridge ABI 5 shared-runtime load passed")
           '@ | python -
+          Get-ChildItem -LiteralPath $runtimeDeploy.FullName -File | Select-Object Name, Length
 
       - uses: actions/upload-artifact@v6
         with:
           name: d2s-vulkan-ffmpeg-bridge-windows-amd64
-          path: native/vulkan_ffmpeg_bridge/build/ci/**/d2s_vulkan_ffmpeg_bridge.dll
+          path: native/vulkan_ffmpeg_bridge/build/ci/deploy/**
           if-no-files-found: error
 
   build-linux:
@@ -242,20 +244,25 @@ jobs:
         run: |
           set -euo pipefail
           feature=src/desktop2stereo/streaming/vulkan_ffmpeg_bridge
+          shared_windows=src/desktop2stereo/streaming/rtmp/ffmpeg/bin
           shared_linux=src/desktop2stereo/streaming/rtmp/ffmpeg/lib
-          mkdir -p "$feature/windows" "$feature/linux" "$shared_linux"
+          mkdir -p "$feature/windows" "$feature/linux" "$shared_windows" "$shared_linux"
           find "$feature/windows" -maxdepth 1 -type f \
             ! -name d2s_vulkan_ffmpeg_bridge.dll -delete
           find "$feature/linux" -maxdepth 1 -type f \
             ! -name d2s_vulkan_ffmpeg_bridge.so -delete
+          find "$shared_windows" -maxdepth 1 -type f -delete
           find "$shared_linux" -maxdepth 1 -type f -name '*.so*' -delete
-          cp "$(find artifact/windows -type f -name d2s_vulkan_ffmpeg_bridge.dll -print -quit)" \
+          cp artifact/windows/bridge/d2s_vulkan_ffmpeg_bridge.dll \
             "$feature/windows/d2s_vulkan_ffmpeg_bridge.dll"
+          cp artifact/windows/runtime/* "$shared_windows/"
           cp artifact/linux/bridge/d2s_vulkan_ffmpeg_bridge.so \
             "$feature/linux/d2s_vulkan_ffmpeg_bridge.so"
           cp artifact/linux/runtime/* "$shared_linux/"
           test -f "$feature/windows/d2s_vulkan_ffmpeg_bridge.dll"
           test -f "$feature/linux/d2s_vulkan_ffmpeg_bridge.so"
+          test -f "$shared_windows/ffmpeg.exe"
+          test -f "$shared_windows/avcodec-63.dll"
           test -f "$shared_linux/libavcodec.so.63"
           test -f "$shared_linux/libavutil.so.61"
 
@@ -267,7 +274,8 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A src/desktop2stereo/streaming/vulkan_ffmpeg_bridge/windows
           git add -A src/desktop2stereo/streaming/vulkan_ffmpeg_bridge/linux
-          git add -A src/desktop2stereo/streaming/rtmp/ffmpeg/lib
+          git add -f src/desktop2stereo/streaming/rtmp/ffmpeg/bin
+          git add -f src/desktop2stereo/streaming/rtmp/ffmpeg/lib/*.so*
           if git diff --cached --quiet; then
             echo "Vulkan bridges and shared runtime are unchanged"
             exit 0

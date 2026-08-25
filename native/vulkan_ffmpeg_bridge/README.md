@@ -55,7 +55,8 @@ FFmpeg and MinGW dependencies from the shared `streaming/rtmp/ffmpeg/bin`
 runtime and uses the Vulkan Loader installed by the target GPU driver. Linux
 publishes the resolved FFmpeg shared-object closure once under
 `streaming/rtmp/ffmpeg/lib`; the bridge RPATH and runtime preloader both resolve
-that shared directory. CI verifies that the Windows shared DLLs match the pinned
-FFmpeg build and that the Linux dependency closure has no unresolved entries.
+that shared directory. CI publishes the Windows runtime directly from the pinned
+FFmpeg build, verifies the bridge dependency closure, and requires the Linux
+`ldd` dependency closure to have no unresolved entries.
 An explicit `D2S_VULKAN_FFMPEG_BRIDGE` value is only an override for development
 and diagnostics. Native compilation remains GitHub Actions-only.

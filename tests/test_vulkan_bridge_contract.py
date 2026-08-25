@@ -92,7 +92,7 @@ def test_vulkan_bridge_workflow_uses_shared_ffmpeg_runtime() -> None:
     ).read_text(encoding="utf-8")
 
     assert "D2S_SHARED_FFMPEG_RUNTIME" in workflow
-    assert "Shared FFmpeg runtime dependency version mismatch" in workflow
+    assert "Shared FFmpeg runtime dependency is missing" in workflow
     assert "shared_linux=src/desktop2stereo/streaming/rtmp/ffmpeg/lib" in workflow
     assert "! -name d2s_vulkan_ffmpeg_bridge.dll -delete" in workflow
     assert "! -name d2s_vulkan_ffmpeg_bridge.so -delete" in workflow

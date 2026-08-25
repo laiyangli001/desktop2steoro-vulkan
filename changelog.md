@@ -2,7 +2,7 @@
 
 ## 2026-08-25
 
-- Vulkan ABI 5 bridge 改为复用公共 FFmpeg 运行时：Windows 功能目录只保留 bridge DLL，公共 FFmpeg/MinGW DLL 统一从 `streaming/rtmp/ffmpeg/bin` 加载，Vulkan Loader 使用显卡驱动的系统版本；Linux bridge 只保留 so，依赖统一发布到 `streaming/rtmp/ffmpeg/lib`。CI 新增 Windows 固定版本哈希校验与 Linux `ldd` 闭包校验，移除功能目录中约 50 MB 的重复依赖。
+- Vulkan ABI 5 bridge 改为复用公共 FFmpeg 运行时：Windows 功能目录只保留 bridge DLL，公共 FFmpeg/MinGW DLL 统一从 `streaming/rtmp/ffmpeg/bin` 加载，Vulkan Loader 使用显卡驱动的系统版本；Linux bridge 只保留 so，依赖统一发布到 `streaming/rtmp/ffmpeg/lib`。CI 新增 Windows 固定版本依赖闭包校验与 Linux `ldd` 闭包校验，移除功能目录中约 50 MB 的重复依赖。
 
 - 将开发、诊断和合规工具统一迁移到 `src/tools`，删除可发布应用包内原有的工具重复命名空间；pytest 同时加入 `src` 与应用源码根目录后，Intel、Vulkan、合规和 shader 测试可在同一次全量收集中稳定导入。
 
