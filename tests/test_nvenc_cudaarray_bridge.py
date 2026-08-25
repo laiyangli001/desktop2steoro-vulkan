@@ -42,6 +42,18 @@ def test_native_rtp_headers_use_announced_payload_types():
     assert opus[1] == 111
 
 
+def test_native_annexb_parser_handles_three_and_four_byte_start_codes():
+    data = (
+        b"\x00\x00\x00\x01\x65first"
+        b"\x00\x00\x01\x41second"
+    )
+    assert list(NativeRtspAvOutput._annexb_nals(data)) == [
+        b"\x65first",
+        b"\x41second",
+    ]
+    assert list(NativeRtspAvOutput._annexb_nals(b"raw-nal")) == [b"raw-nal"]
+
+
 def test_native_h264_rtp_is_batched_without_losing_packet_boundaries():
     class RecordingSocket:
         def __init__(self):

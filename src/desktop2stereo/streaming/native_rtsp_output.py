@@ -205,16 +205,17 @@ class NativeRtspAvOutput:
     @staticmethod
     def _annexb_nals(data: bytes):
         markers: list[tuple[int, int]] = []
-        index = 0
-        while index + 3 < len(data):
-            if data[index:index + 4] == b"\x00\x00\x00\x01":
-                markers.append((index, index + 4))
-                index += 4
-            elif data[index:index + 3] == b"\x00\x00\x01":
-                markers.append((index, index + 3))
-                index += 3
-            else:
-                index += 1
+        search_from = 0
+        while True:
+            three_byte_marker = data.find(b"\x00\x00\x01", search_from)
+            if three_byte_marker < 0:
+                break
+            marker = three_byte_marker
+            if marker > 0 and data[marker - 1] == 0:
+                marker -= 1
+            start = three_byte_marker + 3
+            markers.append((marker, start))
+            search_from = start
         if not markers:
             if data:
                 yield data

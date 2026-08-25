@@ -7,6 +7,7 @@
 - 修复 NativeNVENC 原生 Opus 运行库路径错误：发布产物位于 `streaming/native_rtsp_output/opus.dll`，加载器此前却查找 `streaming/opus.dll`，导致存在 DLL 仍报 `Could not find module 'opus.dll'`；现改为优先使用功能目录绝对路径，并保留 `D2S_OPUS_PATH` 覆盖。
 - 修复 NativeNVENC 原生 RTP 包头错误：H.264 和 Opus 包此前只设置 Marker 位、未写入 SDP 声明的动态 payload type，MediaMTX 因而持续报 `received RTP packet with unknown payload type: 0`；现分别写入 H.264 PT 96 与 Opus PT 111，并串行化音视频 RTSP interleaved socket 写入，避免并发包边界互相穿插。
 - 优化 NativeNVENC 原生推流的音频连续性：4K H.264 RTP 不再对每个约 1400 字节分片单独调用 `sendall`，改为保持 RTP/RTSP 包边界的约 64 KiB 批量写入，显著减少每秒 Python/GIL 和 socket 争用；本地 PCM UDP 接收缓冲扩大到 1 MiB，降低视频突发期间 WASAPI 采集线程饥饿和 Opus 音频丢包导致的卡顿。
+- 修复 NativeNVENC 4K 推流仍持续触发 WASAPI discontinuity 的核心瓶颈：Annex-B 解析器此前逐字节用 Python 扫描整帧，200 KB 测试帧单次约需 52 ms，超过 25 FPS 的 40 ms 帧周期并持续占用 GIL；现改用底层 `bytes.find` 按 NAL 起始码定位，同时兼容三字节与四字节 start code，避免视频解析饿死音频采集线程。
 
 ## 2026-08-25
 
