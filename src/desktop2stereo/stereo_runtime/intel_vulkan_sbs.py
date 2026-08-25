@@ -18,8 +18,14 @@ class IntelVulkanSbsFrame:
     height: int
     adapter_luid: int
     gpu_to_cpu: bool = False
+    # Strict end-to-end zero-copy remains false until a real Intel target
+    # validates the complete Vulkan -> D3D11 -> VideoProcessor -> oneVPL path.
     zero_copy: bool = False
-    gpu_copy_count: int = 2
+    # Vulkan writes the imported BGRA image, then VideoProcessor converts it
+    # to the NV12 surface consumed by oneVPL: one GPU conversion is real.
+    gpu_copy_count: int = 1
+    producer_ready: bool = False
+    ready_timeline: int = 0
 
 
 class IntelVulkanSbsComposer:
@@ -85,6 +91,8 @@ class IntelVulkanSbsComposer:
             width=self.surface.width,
             height=self.surface.height,
             adapter_luid=self.adapter_luid,
+            producer_ready=True,
+            ready_timeline=int(timeline),
         )
 
     def frame_after_vulkan_submit(self, timeline: int) -> IntelVulkanSbsFrame:
@@ -98,7 +106,9 @@ class IntelVulkanSbsComposer:
             width=self.surface.width,
             height=self.surface.height,
             adapter_luid=self.adapter_luid,
-            gpu_copy_count=0,
+            producer_ready=True,
+            ready_timeline=int(timeline),
+            gpu_copy_count=1,
         )
 
     def close(self) -> None:

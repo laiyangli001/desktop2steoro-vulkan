@@ -164,7 +164,7 @@ Vulkan packed SBS image pass
     -> H.264/H.265 -> MediaMTX/WebRTC
 ```
 
-该路径不经过 CPU RGB stdin，也不再经过左右眼中间图像 blit；运行时使用同一 D3D11 设备和 Adapter LUID，并记录 `gpu_to_cpu=False`、`gpu_copy_count=0`、`zero_copy=True`。如果 Vulkan/D3D11 句柄、同步、格式、LUID、oneVPL 或驱动能力探测失败，只允许熔断到 Intel QSV/D3D11 或 CPU host-upload，并记录真实回退边界。Desktop Duplication 到 OpenVINO 的 GPU 纹理输入也已接通；当前深度结果 ABI 仍是 CPU 张量，因此 `native_depth_input_zero_copy=True` 与 `native_depth_zero_copy=False` 必须分开记录。
+该路径不经过 CPU RGB stdin，也不再经过左右眼中间图像 blit；运行时要求使用同一 D3D11 设备和 Adapter LUID，并在交给 D3D11 前确认 Vulkan producer timeline 已完成。当前 VideoProcessor BGRA8→NV12 是一次真实 GPU 转换，因此默认记录 `gpu_to_cpu=False`、`gpu_copy_count=1`、`zero_copy=False`；只有 Intel 目标机完成连续帧、句柄、LUID、同步、oneVPL 出包和画面验收后，才允许改为严格零拷贝标记。Desktop Duplication 到 OpenVINO 的 GPU 纹理输入也已接通；当前深度结果 ABI 仍是 CPU 张量，因此 `native_depth_input_zero_copy=True` 与 `native_depth_zero_copy=False` 必须分开记录。
 
 推荐回退顺序：
 
@@ -1072,7 +1072,7 @@ GUI 检查校准指纹
 
 - NVIDIA 原生 ABI 2 bridge 可由 CUDA surface kernel 将最终 SBS tensor 直接写入 NVENC 注册的 OpenGL `cudaArray_t`；本机 RTX 3090 已完成真实 H.264 出包验证，该路径记录 `gpu_to_cpu=False zero_copy=True gpu_copy_count=0`。PyNvVideoCodec Python API 仍不能直接接收 `cudaArray_t`，因此作为后续回退时记录 `zero_copy=False`。
 - 当前 RTX 3090 Vulkan 驱动对编码 NV12 `STORAGE_IMAGE` 能力不满足，native Vulkan 选择固定槽位 device-local copy；该路径不下载 CPU，但不是严格 zero-copy。
-- Intel Windows 已完成 Vulkan packed SBS → D3D11 shared BGRA → VideoProcessor NV12 → oneVPL/QSV 原生路径；能力和 LUID 验证通过时记录 `gpu_to_cpu=False gpu_copy_count=0 zero_copy=True`，失败时回退 QSV/VAAPI 或 host-upload。
+- Intel Windows 已完成 Vulkan packed SBS → D3D11 shared BGRA → VideoProcessor NV12 → oneVPL/QSV 的代码接线和契约校验；当前真实状态为 `gpu_to_cpu=False gpu_copy_count=1 zero_copy=False`。尚未在 Intel 目标机完成连续帧和最终画面验收，不能宣称严格零拷贝；失败时回退 QSV/VAAPI 或 host-upload。
 - macOS 和无可用 GPU interop 的平台仍必须明确进入平台原生硬件路径或 host-upload，不能套用 Intel Windows 的 D3D11 契约。
 
 ### 9. 可观测性与故障分类
@@ -1154,7 +1154,7 @@ GUI 检查校准指纹
 - [x] RTSP 本机发布使用稳定传输设置（TCP、`pkt_size=1452`）。
 - [x] MediaMTX 输出 WebRTC H.264 + Opus（本机 MediaMTX 日志确认 `2 tracks (H264, Opus)`）。
 - [x] 音频短暂异常不会终止视频；SoundCard/WASAPI 捕获线程异常后持续发送静音 PCM，视频 mux/编码链路继续运行。
-- [x] Intel Windows native final-SBS surface 进入 oneVPL/QSV 并发布到 MediaMTX/WebRTC；日志区分 `native_depth_input_zero_copy` 与 `native_depth_zero_copy`，不把 CPU 深度输出误报为完整推理零拷贝。
+- [ ] Intel Windows native final-SBS surface 在真实 Intel 目标机连续进入 oneVPL/QSV 并发布到 MediaMTX/WebRTC；代码已具备 LUID、共享句柄、producer timeline 和 D3D11 device 校验，但尚未完成目标机验收。日志区分 `native_depth_input_zero_copy` 与 `native_depth_zero_copy`，不把 CPU 深度输出误报为完整推理零拷贝。
 
 ### 回退与闭环
 

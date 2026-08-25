@@ -26,6 +26,24 @@ def test_rgb_to_bgra_preserves_final_sbs_geometry_and_channels() -> None:
     assert bgra.tolist() == [[[3, 2, 1, 255], [6, 5, 4, 255]]]
 
 
+def test_intel_vulkan_sbs_frame_requires_explicit_producer_readiness() -> None:
+    from stereo_runtime.intel_vulkan_sbs import IntelVulkanSbsFrame
+
+    frame = IntelVulkanSbsFrame(1, 2, 64, 32, 99)
+    assert frame.gpu_to_cpu is False
+    assert frame.zero_copy is False
+    assert frame.gpu_copy_count == 1
+    assert frame.producer_ready is False
+    assert frame.ready_timeline == 0
+
+    ready = IntelVulkanSbsFrame(
+        1, 2, 64, 32, 99, producer_ready=True, ready_timeline=7
+    )
+    assert ready.producer_ready is True
+    assert ready.ready_timeline == 7
+    assert ready.zero_copy is False
+
+
 def test_d3d11_surface_requires_optional_bridge() -> None:
     result = probe_d3d11_sbs_surface()
     if result["available"]:

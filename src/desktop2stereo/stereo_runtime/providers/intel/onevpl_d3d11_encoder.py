@@ -106,8 +106,12 @@ def probe_onevpl_d3d11() -> dict[str, object]:
         "available": True,
         "backend": "onevpl_d3d11_surface",
         "input": "borrowed_nv12_d3d11_texture",
+        # Encoder acceptance is not proof of end-to-end zero-copy. The
+        # caller must additionally validate Vulkan producer completion and the
+        # D3D11 VideoProcessor conversion on a real Intel target.
         "gpu_to_cpu": False,
-        "zero_copy": True,
+        "zero_copy": False,
+        "zero_copy_ready": False,
         "reason": None,
     }
 

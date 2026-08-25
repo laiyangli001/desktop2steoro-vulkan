@@ -188,6 +188,12 @@ extern "C" D2S_ONEVPL_API int d2s_onevpl_d3d11_submit_nv12(
     auto* state = static_cast<State*>(handle);
     if (!state || !nv12_texture) { set_error("invalid NV12 surface"); return 0; }
     auto* texture = static_cast<ID3D11Texture2D*>(nv12_texture);
+    ComPtr<ID3D11Device> texture_device;
+    texture->GetDevice(&texture_device);
+    if (!texture_device || texture_device.Get() != state->device.Get()) {
+        set_error("NV12 texture belongs to a different D3D11 device");
+        return 0;
+    }
     D3D11_TEXTURE2D_DESC desc{};
     texture->GetDesc(&desc);
     if (desc.Format != DXGI_FORMAT_NV12 ||

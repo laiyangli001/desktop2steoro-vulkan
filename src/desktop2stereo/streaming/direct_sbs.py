@@ -2752,11 +2752,17 @@ class IntelD3D11DirectSbsOutput(IntelQsvDirectSbsOutput):
         device_value = getattr(frame, "device", 0)
         texture = int(getattr(texture_value, "value", texture_value) or 0)
         device = int(getattr(device_value, "value", device_value) or 0)
+        producer_ready = bool(getattr(frame, "producer_ready", False))
+        ready_timeline = int(getattr(frame, "ready_timeline", 0) or 0)
         width = int(getattr(frame, "width", 0) or 0)
         height = int(getattr(frame, "height", 0) or 0)
         adapter_luid = int(getattr(frame, "adapter_luid", 0) or 0)
         if not texture or not device or not width or not height or not adapter_luid:
             raise RuntimeError("native final SBS frame lacks D3D11 texture contract")
+        if hasattr(frame, "producer_ready") and not producer_ready:
+            raise RuntimeError("native final SBS frame is not producer-ready")
+        if hasattr(frame, "ready_timeline") and ready_timeline < 1:
+            raise RuntimeError("native final SBS frame lacks completed Vulkan producer timeline")
         from desktop2stereo.stereo_runtime.providers.intel.d3d11_sbs_surface import D3D11SbsSurface
         from desktop2stereo.stereo_runtime.providers.intel.onevpl_d3d11_encoder import OneVPLD3D11SurfaceEncoder
 
@@ -2783,9 +2789,10 @@ class IntelD3D11DirectSbsOutput(IntelQsvDirectSbsOutput):
             self._frame_size = (width, height)
             print(
                 "[IntelStream] native final SBS texture import active: "
-                "D3D11 BGRA8 -> NV12 -> oneVPL -> MediaMTX; "
+                "D3D11 BGRA8 -> VideoProcessor NV12 -> oneVPL -> MediaMTX; "
                 f"adapter_luid={adapter_luid} gpu_to_cpu=False "
-                "zero_copy=True gpu_copy_count=0",
+                "zero_copy=False gpu_copy_count=1 "
+                "zero_copy_gate=unverified_intel_target",
                 flush=True,
             )
         elif (
@@ -2880,9 +2887,9 @@ class IntelD3D11DirectSbsOutput(IntelQsvDirectSbsOutput):
             self._frame_size = (width * 2, height)
             print(
                 "[IntelStream] Vulkan eyes -> D3D11 shared BGRA SBS -> "
-                "NV12 -> oneVPL -> MediaMTX; gpu_to_cpu=False "
-                "zero_copy=False gpu_copy_count=0 "
-                "(final SBS shader; end-to-end zero-copy remains gated)",
+                "VideoProcessor NV12 -> oneVPL -> MediaMTX; gpu_to_cpu=False "
+                "zero_copy=False gpu_copy_count=1 "
+                "(Vulkan producer wait verified; end-to-end zero-copy remains gated)",
                 flush=True,
             )
         elif (
