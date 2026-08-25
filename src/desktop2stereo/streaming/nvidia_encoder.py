@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 import subprocess
+import threading
 from typing import Any
 
 
@@ -221,13 +223,42 @@ class PyNvSrtVideoOutput:
             ]
         )
         self.command = command
+        self._stderr_tail = deque(maxlen=40)
         self.process = subprocess.Popen(
             command,
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             creationflags=int(creationflags),
         )
+        self._stderr_thread = None
+        stderr = getattr(self.process, "stderr", None)
+        if stderr is not None:
+            self._stderr_thread = threading.Thread(
+                target=self._drain_stderr,
+                args=(stderr,),
+                name="NativeNvencMuxLog",
+                daemon=True,
+            )
+            self._stderr_thread.start()
+        print(
+            "[DirectSbsStream] NativeNVENC mux active: "
+            f"audio={'enabled' if audio_url else 'disabled'} "
+            f"audio_codec={audio_codec if audio_url else 'none'} "
+            f"audio_input={audio_url or 'none'}",
+            flush=True,
+        )
+
+    def _drain_stderr(self, stderr) -> None:
+        try:
+            for raw_line in iter(stderr.readline, b""):
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line:
+                    continue
+                self._stderr_tail.append(line)
+                print(f"[DirectSbsStream] NativeNVENC mux: {line}", flush=True)
+        except (OSError, ValueError):
+            return
 
     def submit_cuda_frame(self, frame: Any) -> None:
         if self.process.poll() is not None:

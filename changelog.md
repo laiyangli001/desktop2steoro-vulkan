@@ -2,6 +2,8 @@
 
 ## 2026-08-25
 
+- NativeNVENC muxer 不再丢弃 FFmpeg stderr：新增音频启用状态、输入 UDP 地址和实时 mux 警告/错误日志，用于确认 Opus 输入是否因时间戳、队列或 RTSP 复用失败。
+
 - 修复 NativeNVENC 音频复用与 Vulkan 稳定路径不一致的问题：WASAPI PCM 按 240 帧拆分为 MTU 友好的 localhost UDP 数据报，避免 4096 帧/约 16 KiB 数据报分片；NativeNVENC 的 FFmpeg muxer 增加音频线程队列、快速探测和 `muxdelay/muxpreload=0`，降低视频包突发时音频输入被饿死或丢包的概率。
 
 - 修复 Windows 网络推流音频回环在 GPU 高负载下容易出现 `data discontinuity in recording` 的问题：WASAPI/SoundCard 采集块默认从 1024 增大到 4096 帧（可通过 `D2S_WASAPI_BLOCKSIZE` 调整），并新增实际扬声器、PCM 包数、峰值、静音包数和断续次数日志；MediaMTX 仍必须确认最终有 `Opus` 音频轨道。
