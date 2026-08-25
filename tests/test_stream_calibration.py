@@ -2,6 +2,8 @@ import json
 import socket
 import urllib.request
 
+import pytest
+
 from streaming.stream_calibration import (
     CalibrationTier,
     StreamCalibrationController,
@@ -9,6 +11,36 @@ from streaming.stream_calibration import (
     evaluate_calibration_window,
     build_calibration_fingerprint,
 )
+
+
+def test_calibration_fingerprint_tracks_input_display_resolution_tier():
+    base = {
+        "Run Mode": "RTMP Streamer",
+        "Input Display Resolution Tier": "1K",
+        "Stream Protocol": "WebRTC",
+    }
+    changed = dict(base, **{"Input Display Resolution Tier": "2K"})
+
+    assert build_calibration_fingerprint(base)["Input Display Resolution Tier"] == "1K"
+    assert build_calibration_fingerprint(base) != build_calibration_fingerprint(changed)
+
+
+@pytest.mark.parametrize(
+    ("width", "height", "expected"),
+    [(1920, 1080, "1K"), (2560, 1440, "2K"), (3840, 2160, "4K")],
+)
+def test_monitor_resolution_tier_uses_current_selected_display(
+    monkeypatch, width, height, expected
+):
+    import gui.capture_sources as capture_sources
+
+    monkeypatch.setattr(
+        capture_sources,
+        "list_monitors",
+        lambda: [{"capture_index": 2, "width": width, "height": height}],
+    )
+
+    assert capture_sources.monitor_resolution_tier(2) == expected
 
 
 def _receiver_report(fps=30.0, **overrides):

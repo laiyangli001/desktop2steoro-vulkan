@@ -3,6 +3,7 @@ import subprocess
 
 from utils import OS_NAME
 from utils.display_info import enumerate_displays
+from utils.screen_resolution_policy import classify_input_resolution
 
 from . import devices as devices_module
 
@@ -49,6 +50,26 @@ def get_primary_monitor_index():
 def list_monitors():
     """Return display monitors with capture index and user-facing display number."""
     return [display.as_dict() for display in enumerate_displays(OS_NAME)]
+
+
+def monitor_resolution_tier(monitor_index: int) -> str:
+    """Return the current selected monitor's calibration resolution bucket."""
+    try:
+        selected_index = int(monitor_index)
+    except (TypeError, ValueError):
+        return "unknown"
+    for monitor in list_monitors():
+        if int(monitor.get("capture_index", -1)) != selected_index:
+            continue
+        try:
+            tier = classify_input_resolution(
+                int(monitor.get("width", 0)),
+                int(monitor.get("height", 0)),
+            )
+        except (TypeError, ValueError):
+            return "unknown"
+        return f"{tier}K"
+    return "unknown"
 
 
 def _get_primary_monitor_index_unix():

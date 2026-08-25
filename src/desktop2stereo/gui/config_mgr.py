@@ -10,7 +10,11 @@ from .config import (
 )
 from .paths import BASE_DIR, DIAG_LOG
 from .localization import UI_MESSAGES
-from .capture_sources import get_monitor_index_for_point, get_primary_monitor_index
+from .capture_sources import (
+    get_monitor_index_for_point,
+    get_primary_monitor_index,
+    monitor_resolution_tier,
+)
 
 
 class GUIConfigMixin:
@@ -273,6 +277,7 @@ class GUIConfigMixin:
         self._config.update({
             "Capture Mode": self.capture_mode_key,
             "Monitor Index": monitor_idx,
+            "Input Display Resolution Tier": monitor_resolution_tier(monitor_idx),
             "Window Title": self.selected_window_name if self.capture_mode_key == "Window" else "",
             "Show FPS": self.showfps_cb.value,
             "Stereo Preset": stereo_preset,
