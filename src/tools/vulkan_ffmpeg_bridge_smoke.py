@@ -59,7 +59,7 @@ def main() -> int:
         parser.error("fps must be positive")
 
     _configure_dll_search_path(args.ffmpeg_bin)
-    source_root = Path(__file__).resolve().parents[1]
+    source_root = (Path(__file__).resolve().parents[1] / "desktop2stereo")
     sys.path.insert(0, str(source_root))
     from streaming.vulkan_bridge import VulkanNativeBridge
 

@@ -566,7 +566,7 @@ CUDA Device 0 不一定对应 Vulkan 枚举中的 Physical Device 0。必须通�
 
 Windows/Linux ABI 5 产物由同一 workflow 自动发布到 `src/desktop2stereo/streaming/vulkan_ffmpeg_bridge/<platform>/`。CI 递归解析 bridge 的动态依赖闭包，把实际需要的 FFmpeg/MinGW DLL 或 FFmpeg shared objects 一并放入对应功能目录并执行独立加载探针。运行时优先使用显式 `D2S_VULKAN_FFMPEG_BRIDGE` 覆盖路径，否则自动加载该功能目录及同目录依赖；现有 `streaming/rtmp/ffmpeg` 仅作为兼容回退，不再要求用户手工设置 DLL 路径。
 
-新增 `src/desktop2stereo/tools/vulkan_ffmpeg_rtsp_soak.py` 用于验证压缩包进入发布端：工具启动 MediaMTX，启动 FFmpeg `-c:v copy` mux-only RTSP/TCP 发布，只向 stdin 写 H.264 压缩包，不写入 4K rawvideo。RTX 3090 本机使用 run `32534594122` DLL 实测 640×360@30 运行 5 秒（150/150 帧）和 3840×2160@30 运行 10 秒（300/300 帧）均通过，FFmpeg 与 MediaMTX 未中途退出。
+新增 `src/tools/vulkan_ffmpeg_rtsp_soak.py` 用于验证压缩包进入发布端：工具启动 MediaMTX，启动 FFmpeg `-c:v copy` mux-only RTSP/TCP 发布，只向 stdin 写 H.264 压缩包，不写入 4K rawvideo。RTX 3090 本机使用 run `32534594122` DLL 实测 640×360@30 运行 5 秒（150/150 帧）和 3840×2160@30 运行 10 秒（300/300 帧）均通过，FFmpeg 与 MediaMTX 未中途退出。
 
 任何 Vulkan 初始化、导入、编码或连续提交失败都应：
 
@@ -648,7 +648,7 @@ Vulkan Probe Timeout Seconds: 8
 `D2S_VULKAN_FFMPEG_BRIDGE` 仅用于覆盖测试：
 
 ```text
-src/python3/python.exe src/desktop2stereo/tools/vulkan_ffmpeg_bridge_smoke.py --ffmpeg-bin <ffmpeg/bin>
+src/python3/python.exe src/tools/vulkan_ffmpeg_bridge_smoke.py --ffmpeg-bin <ffmpeg/bin>
 ```
 
 该测试只创建 FFmpeg-owned Vulkan Video device 和 4K NV12 frame pool、领取一个 frame descriptor 后释放；它不会提交像素，也不会把未同步帧送入编码器。
@@ -683,7 +683,7 @@ src/python3/python.exe src/desktop2stereo/tools/vulkan_ffmpeg_bridge_smoke.py --
 可在目标平台从仓库根目录或任意工作目录运行以下命令验证 headless OpenGL、RGBA8 texture、PBO/fence 环和可用的 CUDA/HIP interop；工具会自动定位 `src/desktop2stereo`，不要求预先设置 `PYTHONPATH`：
 
 ```powershell
-src/python3/python.exe src/desktop2stereo/tools/opengl_fallback_smoke.py --width 640 --height 360 --frames 30
+src/python3/python.exe src/tools/opengl_fallback_smoke.py --width 640 --height 360 --frames 30
 ```
 
 工具输出 JSON，至少包含 `context_api`、`texture_format`、`framebuffer_supported`、`pbo_count`、`fence_supported`、`interop_mode`、`gpu_to_cpu`、`gpu_copy_count` 和 `zero_copy`。NVIDIA/AMD interop 可用时运行 GPU probe；其他平台运行 PBO/fence host probe。使用 `--require-gpu-interop` 可将没有 CUDA/HIP interop 的平台作为能力探测失败返回，不会误报为零复制；使用 `--force-host` 可在 NVIDIA/AMD 机器上强制验证 PBO/fence host-upload 分支。
@@ -696,7 +696,7 @@ src/python3/python.exe src/desktop2stereo/tools/opengl_fallback_smoke.py --width
 
 ```powershell
 $env:PYTHONPATH = "src/desktop2stereo"
-src/python3/python.exe src/desktop2stereo/tools/opengl_fallback_rtsp_soak.py `
+src/python3/python.exe src/tools/opengl_fallback_rtsp_soak.py `
   --width 640 --height 360 --fps 30 --frames 60
 ```
 
@@ -707,7 +707,7 @@ src/python3/python.exe src/desktop2stereo/tools/opengl_fallback_rtsp_soak.py `
 在 NVIDIA 主机上建议追加 3840×2160、30 FPS、至少 300 帧的测试：
 
 ```powershell
-src/python3/python.exe src/desktop2stereo/tools/opengl_fallback_rtsp_soak.py `
+src/python3/python.exe src/tools/opengl_fallback_rtsp_soak.py `
   --width 3840 --height 2160 --fps 30 --frames 300
 ```
 

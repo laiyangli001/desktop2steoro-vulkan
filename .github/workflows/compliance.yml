@@ -32,7 +32,7 @@ jobs:
           done
 
       - name: Validate shader manifest
-        run: python src/desktop2stereo/tools/validate_shader_manifest.py
+        run: python src/tools/validate_shader_manifest.py
 
   matrix:
     name: Requirements matrix
@@ -50,7 +50,7 @@ jobs:
           python -m pip install --disable-pip-version-check torch --index-url https://download.pytorch.org/whl/cpu
 
       - name: Validate requirements traceability
-        run: python src/desktop2stereo/tools/check_compliance.py
+        run: python src/tools/check_compliance.py
 
       - name: Test requirements traceability
         env:

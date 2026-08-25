@@ -34,7 +34,7 @@ def main() -> int:
     if args.fps < 1 or args.frames < 1:
         parser.error("fps and frames must be positive")
 
-    base_dir = Path(args.base_dir).resolve() if args.base_dir else Path(__file__).resolve().parents[3]
+    base_dir = Path(args.base_dir).resolve() if args.base_dir else Path(__file__).resolve().parents[2]
     source_root = base_dir / "src" / "desktop2stereo"
     sys.path.insert(0, str(source_root))
 

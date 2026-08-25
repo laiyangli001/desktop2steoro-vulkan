@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(__file__).resolve().parents[2]
 MATRIX = ROOT / "docs" / "requirements-matrix.md"
 VALID_STATUSES = {"planned", "in_progress", "implemented", "verified", "accepted"}
 REQUIRED_COLUMNS = ("ID", "领域", "必须遵循的要求", "规范来源", "代码映射", "测试/验收", "状态")

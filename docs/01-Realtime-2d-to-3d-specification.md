@@ -989,4 +989,4 @@ Bridge 源码变更
 本规格的每一项架构、平台、推理、渲染、OpenXR、配置、性能、安全和测试要求，统一登记在
 [`docs/requirements-matrix.md`](requirements-matrix.md)。矩阵中的每个需求必须关联实现位置、测试或人工验收方式和状态；未登记、无映射或无验收条件的实现不得视为完成。
 
-发布候选版本必须通过 `src/desktop2stereo/tools/check_compliance.py --strict`、自动化测试、三平台 Bridge CI 和必要的 GPU/OpenXR 实机验收。
+发布候选版本必须通过 `src/tools/check_compliance.py --strict`、自动化测试、三平台 Bridge CI 和必要的 GPU/OpenXR 实机验收。

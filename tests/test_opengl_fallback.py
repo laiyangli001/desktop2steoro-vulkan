@@ -351,7 +351,7 @@ def test_opengl_fallback_contract_is_documented_and_wired():
 def test_opengl_smoke_tool_contract_is_present():
     tool = (
         Path(__file__).parents[1]
-        / "src/desktop2stereo/tools/opengl_fallback_smoke.py"
+        / "src/tools/opengl_fallback_smoke.py"
     ).read_text(encoding="utf-8")
     assert "OpenGLFallbackBackend" in tool
     assert "--require-gpu-interop" in tool
@@ -361,14 +361,14 @@ def test_opengl_smoke_tool_contract_is_present():
     assert '"path": "gpu-interop"' in tool
     assert '"path": "host-upload"' in tool
     assert "json.dumps" in tool
-    assert "_SOURCE_ROOT = Path(__file__).resolve().parents[1]" in tool
+    assert '_SOURCE_ROOT = (Path(__file__).resolve().parents[1] / "desktop2stereo")' in tool
     assert "sys.path.insert(0, str(_SOURCE_ROOT))" in tool
 
 
 def test_opengl_rtsp_soak_tool_forces_real_fallback_boundary():
     tool = (
         Path(__file__).parents[1]
-        / "src/desktop2stereo/tools/opengl_fallback_rtsp_soak.py"
+        / "src/tools/opengl_fallback_rtsp_soak.py"
     ).read_text(encoding="utf-8")
     assert "VulkanDirectSbsOutput" in tool
     assert "output._native_vulkan_bridge = None" in tool

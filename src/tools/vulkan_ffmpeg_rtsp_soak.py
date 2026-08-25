@@ -61,7 +61,7 @@ def main() -> int:
 
     if os.name == "nt" and hasattr(os, "add_dll_directory"):
         os.add_dll_directory(str(ffmpeg_bin))
-    source_root = Path(__file__).resolve().parents[1]
+    source_root = (Path(__file__).resolve().parents[1] / "desktop2stereo")
     sys.path.insert(0, str(source_root))
 
     import torch

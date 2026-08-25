@@ -4,7 +4,7 @@ import struct
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str((Path(__file__).resolve().parents[1] / "desktop2stereo")))
 
 from app_runtime.vulkan_runtime import VulkanRuntimeConfig, VulkanRuntimeSession
 from viewer.vulkan_compute_pipeline import VulkanComputePipeline

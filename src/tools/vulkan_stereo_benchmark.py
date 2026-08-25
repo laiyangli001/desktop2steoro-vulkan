@@ -8,7 +8,7 @@ from array import array
 from contextlib import ExitStack
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str((Path(__file__).resolve().parents[1] / "desktop2stereo")))
 
 from stereo_runtime.vulkan_stereo_pass import VulkanStereoFusedParams, VulkanStereoFusedPass
 from viewer.vulkan_context import VulkanContext

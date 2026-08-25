@@ -31,7 +31,7 @@ GUI 的“运行”按钮已使用独立的`--runtime`子进程入口，不会�
 连接并唤醒头显、确认目标OpenXR Runtime处于活动状态后，可执行Phase 1双眼纯色帧实测：
 
 ```powershell
-src\python3\python.exe src\desktop2stereo\tools\openxr_vulkan_smoke.py --frames 300
+src\python3\python.exe src\tools\openxr_vulkan_smoke.py --frames 300
 ```
 
 该入口只验证OpenXR Vulkan会话与交换链闭环，不代表Filament场景渲染已经接入。
@@ -39,7 +39,7 @@ src\python3\python.exe src\desktop2stereo\tools\openxr_vulkan_smoke.py --frames 
 启用Filament GLB场景渲染时，显式指定当前平台Bridge和GLB资源：
 
 ```powershell
-src\python3\python.exe src\desktop2stereo\tools\openxr_vulkan_smoke.py `
+src\python3\python.exe src\tools\openxr_vulkan_smoke.py `
   --seconds 120 `
   --filament-bridge src\desktop2stereo\xr_viewer\native\windows\filament_bridge.dll `
   --filament-glb src\desktop2stereo\xr_viewer\environments\Artemis\environment.glb `

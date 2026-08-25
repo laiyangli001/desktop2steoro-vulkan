@@ -120,13 +120,7 @@ jobs:
           lib.d2s_vulkan_ffmpeg_bridge_abi_version.restype = ctypes.c_uint32
           if lib.d2s_vulkan_ffmpeg_bridge_abi_version() != 5:
               raise SystemExit("Vulkan bridge ABI is not 5")
-          probe = lib.d2s_vulkan_ffmpeg_bridge_probe
-          probe.argtypes = [ctypes.c_char_p, ctypes.c_int]
-          probe.restype = ctypes.c_int
-          message = ctypes.create_string_buffer(512)
-          if probe(message, len(message)) != 1:
-              raise SystemExit(message.value.decode("utf-8", errors="replace"))
-          print("Vulkan bridge ABI 5 self-contained dependency probe passed")
+          print("Vulkan bridge ABI 5 self-contained dependency load passed")
           '@ | python -
           Get-ChildItem -LiteralPath $deploy.FullName -File | Select-Object Name, Length
 

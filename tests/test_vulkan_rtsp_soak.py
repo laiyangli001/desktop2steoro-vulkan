@@ -5,7 +5,7 @@ from path_config import APP_ROOT
 
 def test_vulkan_rtsp_soak_keeps_compressed_packet_boundary() -> None:
     source = (
-        APP_ROOT
+        APP_ROOT.parent
         / "tools"
         / "vulkan_ffmpeg_rtsp_soak.py"
     ).read_text(encoding="utf-8")

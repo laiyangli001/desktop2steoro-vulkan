@@ -228,7 +228,7 @@ viewer.opengl_renderer and xr_viewer.core_openxr_opengl
 | `src/desktop2stereo/xr_viewer/` | 原路径保留 | 用Python重写Vulkan OpenXR路径，保留控制器、环境和帧调度职责 |
 | `src/desktop2stereo/xr_viewer/native/` | 原路径保留 | 仅存放Filament Bridge源码和平台预编译库 |
 | `src/streaming/` | 原路径保留 | 接入新的GPU输出契约 |
-| `src/desktop2stereo/tools/` / `src/desktop2stereo/utils/` | 原路径保留 | 放置probe、模型工具、benchmark和公共辅助 |
+| `src/tools/` / `src/desktop2stereo/utils/` | 原路径保留 | 放置probe、模型工具、benchmark和公共辅助 |
 
 目录兼容只保证定位和职责连续性，不保证旧模块内部API兼容。新项目禁止通过`sys.path`指向旧仓库，也禁止从旧仓库动态导入模块；所有正式依赖必须实际存在于新项目同名路径中。
 
@@ -413,7 +413,7 @@ Glow 外部图像和 Filament 外部纹理包装必须按严格生命周期销�
 
 Presenter 只能通过 `GpuProducerAdapter` 注册表创建具体 producer；不得在 OpenXR、Filament 或 `VulkanContext` 中直接实例化 CUDA、HIP 或其它厂商适配器。未注册或能力不足的后端必须明确进入 GPU copy/Quad Layer 回退路径，禁止将一个厂商的句柄或同步语义伪装成另一个厂商的实现。
 
-`src/desktop2stereo/tools/probe.py` 的 capability report 必须输出 producer 自动选择结果、CUDA/HIP runtime 状态和显式覆盖标记；探测只读取运行时能力，不应为了生成报告而创建 Vulkan external memory 或导入厂商句柄。
+`src/tools/probe.py` 的 capability report 必须输出 producer 自动选择结果、CUDA/HIP runtime 状态和显式覆盖标记；探测只读取运行时能力，不应为了生成报告而创建 Vulkan external memory 或导入厂商句柄。
 
 当前已注册 `cuda`/`nvidia`、`rocm`/`hip` 与 `vulkan_zero_copy` producer。OpenXR runtime result 携带 `VulkanComputeRequest` 时，Presenter 必须选择 `vulkan_zero_copy`，不能误选 `vulkan_host` 回退；只有请求不满足（例如仍启用尚未迁移的时域状态）或能力探测失败时才进入兼容路径。ROCm 适配器延迟加载 `amdhip64`/`libamdhip64`，使用 Vulkan 导出的 Win32 handle 或 FD；HIP external memory/semaphore 不可用时，不得启用直接采样实验路径，必须保留 Vulkan GPU copy 回退。`D2S_ENABLE_ROCM_EXTERNAL_SEMAPHORE=0` 仅作为调试禁用开关，不是正常运行前提。
 
@@ -1340,7 +1340,7 @@ src/desktop2stereo/xr_viewer/native/
 
 ### 20.3 启动探测
 
-`python src/desktop2stereo/tools/probe.py`必须可独立输出JSON capability report，包括GPU、Vulkan、OpenGL、MoltenVK、external memory、OpenXR Graphics Binding、swapchain format、Filament Bridge初始化和推理Provider可用性。GUI只根据该报告启用可选项。
+`python src/tools/probe.py`必须可独立输出JSON capability report，包括GPU、Vulkan、OpenGL、MoltenVK、external memory、OpenXR Graphics Binding、swapchain format、Filament Bridge初始化和推理Provider可用性。GUI只根据该报告启用可选项。
 
 ---
 
@@ -1378,7 +1378,7 @@ src/desktop2stereo/xr_viewer/native/
 ### Phase 1：工程骨架与 Vulkan/OpenXR
 
 1. 建立以`src/`为产品发布边界的Python package和平台依赖锁定文件。
-2. 在`src/desktop2stereo/tools/probe.py`、`src/desktop2stereo/viewer/vulkan_renderer.py`和`src/desktop2stereo/xr_viewer/core_openxr_vulkan.py`中实现能力探测、`VulkanContext`、`GpuAllocator`和`GpuScheduler`。
+2. 在`src/tools/probe.py`、`src/desktop2stereo/viewer/vulkan_renderer.py`和`src/desktop2stereo/xr_viewer/core_openxr_vulkan.py`中实现能力探测、`VulkanContext`、`GpuAllocator`和`GpuScheduler`。
 3. 使用Python OpenXR代码建立Vulkan Session和每眼清屏闭环。
 4. 接入Validation、timestamp、结构化日志和显式资源清理测试。
 
@@ -1455,4 +1455,4 @@ Vulkan 工程迁移只有同时满足以下条件才算完成：
 
 本文与 `docs/01` 的所有要求统一由 [`docs/requirements-matrix.md`](requirements-matrix.md) 追踪。矩阵按架构、捕捉、推理、Vulkan、Compute Graph、Filament、OpenXR、输出、配置、GUI、错误恢复、诊断、性能、测试、平台、CI 和安全领域登记要求，且每条要求必须关联代码映射和测试/实机验收记录。
 
-日常开发使用 `src/desktop2stereo/tools/check_compliance.py` 检查矩阵结构；发布候选版本使用 `--strict`，只允许 `verified` 或 `accepted` 条目，并额外要求 pytest、三平台 Bridge CI 和专用 GPU/OpenXR 实机验收通过。
+日常开发使用 `src/tools/check_compliance.py` 检查矩阵结构；发布候选版本使用 `--strict`，只允许 `verified` 或 `accepted` 条目，并额外要求 pytest、三平台 Bridge CI 和专用 GPU/OpenXR 实机验收通过。
