@@ -26,8 +26,10 @@ def resolve_network_video_backend(
 ) -> NetworkVideoBackendDecision:
     """Resolve the encoder for the unified advanced network stream.
 
-    Explicit choices always win.  ``auto`` uses the former GPU-streaming
-    vendor preference inside the advanced mode and falls back to FFmpeg.
+    Explicit choices always win.  ``auto`` uses the stable FFmpeg/MediaMTX
+    path; FFmpeg may still select NVENC/QSV/AMF internally.  The PyNv/AMF/
+    Intel direct paths remain available through explicit backend selection so
+    an unvalidated GPU frame path cannot become the default display path.
     """
 
     requested = str(requested_backend or "auto").strip().casefold()
@@ -52,14 +54,12 @@ def resolve_network_video_backend(
             reason="non-advanced mode fallback",
         )
 
-    info = str(device_info or "").upper()
-    if "NVIDIA" in info:
-        return NetworkVideoBackendDecision("pynv", requested, "NVIDIA GPU auto selection")
-    if "AMD" in info or "RADEON" in info:
-        return NetworkVideoBackendDecision("amd", requested, "AMD GPU auto selection")
-    if "INTEL" in info:
-        return NetworkVideoBackendDecision("intel", requested, "Intel zero-copy auto selection")
-    return NetworkVideoBackendDecision("ffmpeg", requested, "FFmpeg/MediaMTX fallback")
+    del device_info
+    return NetworkVideoBackendDecision(
+        "ffmpeg",
+        requested,
+        "stable FFmpeg/MediaMTX auto path",
+    )
 
 
 def is_network_stream_mode(run_mode: str) -> bool:

@@ -73,13 +73,14 @@ def test_network_stream_session_policy_uses_gpu_backends_in_advanced_mode() -> N
     assert config.port == 1122
     assert config.fps == 30
 
-    # Advanced Network Streaming now owns the former GPU vendor-priority policy.
+    # Advanced Auto stays on the stable shared path; vendor-direct paths are
+    # opt-in until their encoded output has passed visual validation.
     assert resolve_network_video_backend(
         "RTMP Streamer", "auto", device_info="NVIDIA RTX 3090"
-    ).backend == "pynv"
+    ).backend == "ffmpeg"
     assert resolve_network_video_backend(
         "RTMP Streamer", "auto", device_info="Intel Arc"
-    ).backend == "intel"
+    ).backend == "ffmpeg"
     assert resolve_network_video_backend(
         "RTMP Streamer", "vulkan", device_info="NVIDIA RTX 3090"
     ).backend == "vulkan"

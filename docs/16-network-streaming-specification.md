@@ -910,17 +910,16 @@ DirectSbsOutputConsumer
 可插拔视频编码器
 ```
 
-高级网络推流使用 `resolve_network_video_backend()` 决策层。`Auto` 保留原 GPU
-推流的厂商零拷贝优先选择，同时允许显式选择 Vulkan、Intel QSV/D3D11 或 FFmpeg；
-运行模式不再决定独立的网络会话或编码生命周期。
+高级网络推流使用 `resolve_network_video_backend()` 决策层。`Auto` 使用稳定的
+FFmpeg/MediaMTX 共享路径；FFmpeg 仍可在内部选择 NVENC、QSV 或 AMF。Vulkan、
+Intel QSV/D3D11、PyNvVideoCodec 等直接 GPU 后端必须显式选择，避免未完成画面
+验证的 GPU 帧格式路径成为默认输出。运行模式不再决定独立的网络会话或编码生命周期。
 
 默认策略如下：
 
 | 配置 | 高级网络推流 |
 | --- | --- |
-| `Auto` + NVIDIA | PyNvVideoCodec/NVENC，失败后 Vulkan/FFmpeg 回退 |
-| `Auto` + AMD | AMF，失败后 Vulkan/FFmpeg 回退 |
-| `Auto` + Intel | Intel D3D11/oneVPL，失败后 Vulkan/FFmpeg 回退 |
+| `Auto` + NVIDIA/AMD/Intel | 稳定 FFmpeg/MediaMTX 路径，FFmpeg 按能力选择硬件或软件编码 |
 | 显式 `Vulkan`、`Intel` 或 `FFmpeg` | 使用所选后端，失败时进入稳定回退 |
 
 无论选择哪一种编码器，音频采集、MediaMTX 发布、WebRTC 校准、最新帧消费、
