@@ -5,9 +5,9 @@ if(NOT WIN32)
     message(FATAL_ERROR "d2s_nvenc_cudaarray_bridge is currently implemented for Windows only")
 endif()
 
-set(D2S_NV_CODEC_HEADERS "" CACHE PATH "nv-codec-headers root")
-if(NOT EXISTS "${D2S_NV_CODEC_HEADERS}/include/ffnvcodec/nvEncodeAPI.h")
-    message(FATAL_ERROR "Set D2S_NV_CODEC_HEADERS to the nv-codec-headers repository root")
+set(D2S_NVENC_SDK_HEADERS "" CACHE PATH "NVIDIA Video Codec SDK samples root")
+if(NOT EXISTS "${D2S_NVENC_SDK_HEADERS}/Samples/NvCodec/NvEncoder/nvEncodeAPI.h")
+    message(FATAL_ERROR "Set D2S_NVENC_SDK_HEADERS to the NVIDIA video-sdk-samples root")
 endif()
 
 find_package(CUDAToolkit REQUIRED)
@@ -31,7 +31,7 @@ target_compile_definitions(d2s_nvenc_cudaarray_bridge PRIVATE
     NOMINMAX
 )
 target_include_directories(d2s_nvenc_cudaarray_bridge PRIVATE
-    "${D2S_NV_CODEC_HEADERS}/include/ffnvcodec"
+    "${D2S_NVENC_SDK_HEADERS}/Samples/NvCodec/NvEncoder"
 )
 target_link_libraries(d2s_nvenc_cudaarray_bridge PRIVATE CUDA::cudart)
 set_target_properties(d2s_nvenc_cudaarray_bridge PROPERTIES

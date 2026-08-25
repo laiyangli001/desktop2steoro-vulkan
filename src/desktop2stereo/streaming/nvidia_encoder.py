@@ -126,6 +126,130 @@ class PyNvVideoCodecEncoder:
         return bytes(output)
 
 
+class H264MpegTsTimestampMuxer:
+    """Wrap timestamped H.264 access units in MPEG-TS for FFmpeg input."""
+
+    VIDEO_PID = 0x101
+    PMT_PID = 0x100
+    PROGRAM = 1
+
+    def __init__(self, *, fps: int) -> None:
+        self.fps = max(1, int(fps))
+        self._continuity = {0: 0, self.PMT_PID: 0, self.VIDEO_PID: 0}
+        self._started = False
+
+    @staticmethod
+    def _crc32(data: bytes) -> int:
+        crc = 0xFFFFFFFF
+        for byte in data:
+            crc ^= byte << 24
+            for _ in range(8):
+                crc = ((crc << 1) ^ 0x04C11DB7) & 0xFFFFFFFF if crc & 0x80000000 else (crc << 1) & 0xFFFFFFFF
+        return crc
+
+    @staticmethod
+    def _pts_bytes(prefix: int, value: int) -> bytes:
+        value = max(0, int(value)) & ((1 << 33) - 1)
+        return bytes([
+            prefix | ((value >> 30) & 0x07) << 1 | 1,
+            (value >> 22) & 0xFF,
+            ((value >> 15) & 0x7F) << 1 | 1,
+            (value >> 7) & 0xFF,
+            (value & 0x7F) << 1 | 1,
+        ])
+
+    def _section_packet(self, pid: int, section: bytes) -> bytes:
+        packet = self._ts_header(pid, payload_start=True)
+        payload = bytes([0]) + section
+        return packet + payload + bytes(188 - len(packet) - len(payload))
+
+    def _ts_header(self, pid: int, *, payload_start: bool, adaptation: bytes | None = None) -> bytes:
+        cc = self._continuity[pid]
+        self._continuity[pid] = (cc + 1) & 0x0F
+        if adaptation is None:
+            control = 1
+        else:
+            control = 3
+        return bytes([
+            0x47,
+            (0x40 if payload_start else 0) | ((pid >> 8) & 0x1F),
+            pid & 0xFF,
+            (control << 4) | cc,
+        ])
+
+    def _pat(self) -> bytes:
+        body = bytes([0x00, 0x01, 0xC1, 0x00, 0x00, 0xE0 | (self.PMT_PID >> 8), self.PMT_PID & 0xFF])
+        section = bytes([0x00, 0xB0, len(body) + 4]) + body
+        return self._section_packet(0, section + self._crc32(section).to_bytes(4, "big"))
+
+    def _pmt(self) -> bytes:
+        body = bytes([
+            0x00, 0x01, 0xC1, 0x00, 0x00,
+            0xE0 | (self.VIDEO_PID >> 8), self.VIDEO_PID & 0xFF,
+            0xF0, 0x00,
+            0x1B, 0xE0 | (self.VIDEO_PID >> 8), self.VIDEO_PID & 0xFF, 0xF0, 0x00,
+        ])
+        section = bytes([0x02, 0xB0, len(body) + 4]) + body
+        return self._section_packet(self.PMT_PID, section + self._crc32(section).to_bytes(4, "big"))
+
+    def _pes(self, data: bytes, pts: int, dts: int, duration: int) -> bytes:
+        pts90 = max(0, int(pts)) * 90000 // self.fps
+        dts90 = max(0, int(dts)) * 90000 // self.fps
+        pts_dts = self._pts_bytes(0x30 if pts90 != dts90 else 0x20, pts90)
+        if pts90 != dts90:
+            pts_dts += self._pts_bytes(0x10, dts90)
+        header = b"\x00\x00\x01\xE0\x00\x00\x80\x00" + bytes([len(pts_dts)]) + pts_dts
+        return header + data
+
+    def _packetize(self, payload: bytes, pid: int, *, pcr90: int | None = None) -> bytes:
+        output = bytearray()
+        offset = 0
+        first = True
+        while offset < len(payload):
+            remaining = len(payload) - offset
+            include_pcr = first and pcr90 is not None
+            max_payload = 176 if include_pcr else 184
+            chunk = min(remaining, max_payload)
+            needs_adaptation = include_pcr or chunk < 184
+            adaptation = None
+            if needs_adaptation:
+                pcr_bytes = b""
+                flags = 0
+                if include_pcr:
+                    pcr = max(0, int(pcr90)) * 300
+                    pcr_bytes = bytes([
+                        (pcr >> 25) & 0xFF, (pcr >> 17) & 0xFF,
+                        (pcr >> 9) & 0xFF, (pcr >> 1) & 0xFF,
+                        ((pcr & 1) << 7) | 0x7E, 0x00,
+                    ])
+                    flags = 0x10
+                adaptation_length = 183 - chunk
+                if adaptation_length < 1 or (include_pcr and adaptation_length < 7):
+                    raise RuntimeError("invalid MPEG-TS adaptation field size")
+                stuffing = adaptation_length - 1 - len(pcr_bytes)
+                adaptation = bytes([adaptation_length, flags]) + pcr_bytes + bytes([0xFF]) * stuffing
+            output.extend(self._ts_header(pid, payload_start=first, adaptation=adaptation))
+            if adaptation is not None:
+                output.extend(adaptation)
+            output.extend(payload[offset:offset + chunk])
+            offset += chunk
+            first = False
+        return bytes(output)
+
+    def wrap(self, packet: Any) -> bytes:
+        data = bytes(packet.data)
+        if not data:
+            return b""
+        pts90 = max(0, int(packet.pts)) * 90000 // self.fps
+        output = bytearray()
+        if not self._started:
+            output.extend(self._pat())
+            output.extend(self._pmt())
+            self._started = True
+        output.extend(self._packetize(self._pes(data, packet.pts, packet.dts, packet.duration), self.VIDEO_PID, pcr90=pts90))
+        return bytes(output)
+
+
 class PyNvSrtVideoOutput:
     """Mux PyNvVideoCodec packets with optional PCM audio through FFmpeg."""
 
@@ -144,6 +268,12 @@ class PyNvSrtVideoOutput:
         creationflags: int = 0,
     ):
         self.encoder = encoder
+        self._timestamped_input = callable(getattr(encoder, "encode_timed", None))
+        self._timestamp_muxer = (
+            H264MpegTsTimestampMuxer(fps=fps)
+            if self._timestamped_input
+            else None
+        )
         if output_args is None:
             if not srt_url:
                 raise ValueError("srt_url or output_args is required")
@@ -170,9 +300,10 @@ class PyNvSrtVideoOutput:
             "-use_wallclock_as_timestamps",
             "1",
             "-f",
-            "hevc" if codec.casefold() in {"hevc", "h265"} else "h264",
-            "-r",
-            str(max(1, int(fps))),
+            "mpegts" if self._timestamped_input else (
+                "hevc" if codec.casefold() in {"hevc", "h265"} else "h264"
+            ),
+            *([] if self._timestamped_input else ["-r", str(max(1, int(fps)))]),
             "-i",
             "pipe:0",
         ]
@@ -275,17 +406,30 @@ class PyNvSrtVideoOutput:
             )
         if self.process.stdin is None:
             raise RuntimeError("NVENC packet muxer stdin is unavailable")
-        packet = self.encoder.encode(frame)
-        if packet:
-            self.process.stdin.write(packet)
-            self.process.stdin.flush()
+        if self._timestamped_input:
+            for packet in self.encoder.encode_timed(frame):
+                transport_packet = self._timestamp_muxer.wrap(packet)
+                if transport_packet:
+                    self.process.stdin.write(transport_packet)
+        else:
+            packet = self.encoder.encode(frame)
+            if packet:
+                self.process.stdin.write(packet)
+        self.process.stdin.flush()
 
     def close(self) -> None:
         try:
             if self.process.poll() is None:
-                tail = self.encoder.flush()
-                if tail and self.process.stdin is not None:
-                    self.process.stdin.write(tail)
+                if self._timestamped_input:
+                    for packet in self.encoder.flush_timed():
+                        transport_packet = self._timestamp_muxer.wrap(packet)
+                        if transport_packet and self.process.stdin is not None:
+                            self.process.stdin.write(transport_packet)
+                else:
+                    tail = self.encoder.flush()
+                    if tail and self.process.stdin is not None:
+                        self.process.stdin.write(tail)
+                if self.process.stdin is not None:
                     self.process.stdin.flush()
         finally:
             if self.process.stdin is not None:

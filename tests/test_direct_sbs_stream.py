@@ -19,7 +19,7 @@ from streaming.direct_sbs import (
     VulkanDirectSbsOutput,
     runtime_sbs_to_rgb,
 )
-from streaming.nvidia_encoder import PyNvSrtVideoOutput
+from streaming.nvidia_encoder import H264MpegTsTimestampMuxer, PyNvSrtVideoOutput
 
 
 def test_runtime_sbs_to_rgb_converts_chw_float_to_hwc_uint8():
@@ -1010,6 +1010,20 @@ def test_pynv_encoder_uses_live_low_latency_nvenc_settings():
     assert captured["kwargs"]["bf"] == 0
     assert captured["kwargs"]["repeatspspps"] == 1
     assert captured["kwargs"]["gpu_id"] == 0
+
+
+def test_native_timestamped_packets_are_wrapped_as_mpegts_with_pts():
+    muxer = H264MpegTsTimestampMuxer(fps=25)
+    packet = SimpleNamespace(data=b"\x00\x00\x00\x01\x65" + b"x" * 300, pts=1, dts=1, duration=1)
+
+    output = muxer.wrap(packet)
+
+    assert output
+    assert len(output) % 188 == 0
+    assert output[0] == 0x47
+    assert output[188] == 0x47
+    assert b"\x00\x00\x01\xe0" in output
+    assert len(muxer.wrap(packet)) % 188 == 0
 
 
 def test_pynv_muxer_copies_video_and_encodes_soundcard_pcm_as_opus(monkeypatch):

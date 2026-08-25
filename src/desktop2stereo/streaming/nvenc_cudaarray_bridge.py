@@ -210,7 +210,31 @@ class NvencCudaArrayEncoder:
         if status != 0:
             raise RuntimeError(_last_error(self._library))
         self._timestamp += 1
-        return self._drain_packets()
+        return b"".join(packet.data for packet in self._drain_timed_packets())
+
+    def encode_timed(self, frame: int | CudaTensorSurfaceView) -> list[EncodedNvencPacket]:
+        """Encode and preserve NVENC output PTS/DTS metadata for a muxer."""
+        if self._closed or not self._handle:
+            raise RuntimeError("native NVENC CUDAARRAY encoder is closed")
+        if isinstance(frame, CudaTensorSurfaceView):
+            if int(frame.cuda_array) != self._cuda_array:
+                raise ValueError("native NVENC encoder cannot switch CUDA arrays")
+            status = int(self._library.d2s_nvenc_cudaarray_submit_tensor(
+                self._handle, int(frame.device_pointer), int(frame.channels),
+                int(frame.stride_y), int(frame.stride_x), int(frame.stride_c),
+                int(frame.scalar_type), int(frame.cuda_stream),
+                ctypes.c_int64(self._timestamp),
+            ))
+        else:
+            if int(frame) != self._cuda_array:
+                raise ValueError("native NVENC encoder cannot switch CUDA arrays")
+            status = int(self._library.d2s_nvenc_cudaarray_submit(
+                self._handle, ctypes.c_int64(self._timestamp)
+            ))
+        if status != 0:
+            raise RuntimeError(_last_error(self._library))
+        self._timestamp += 1
+        return self._drain_timed_packets()
 
     def _drain_timed_packets(self) -> list[EncodedNvencPacket]:
         output: list[EncodedNvencPacket] = []
@@ -250,12 +274,15 @@ class NvencCudaArrayEncoder:
     def _drain_packets(self) -> bytes:
         return b"".join(packet.data for packet in self._drain_timed_packets())
 
-    def flush(self) -> bytes:
+    def flush_timed(self) -> list[EncodedNvencPacket]:
         if self._closed or not self._handle:
-            return b""
+            return []
         if int(self._library.d2s_nvenc_cudaarray_flush(self._handle)) != 0:
             raise RuntimeError(_last_error(self._library))
-        return self._drain_packets()
+        return self._drain_timed_packets()
+
+    def flush(self) -> bytes:
+        return b"".join(packet.data for packet in self.flush_timed())
 
     def close(self) -> None:
         if self._closed:

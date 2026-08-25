@@ -9,6 +9,7 @@ on:
       - "native/nvenc_cudaarray_bridge/**"
       - "src/desktop2stereo/streaming/nvenc_cudaarray_bridge.py"
       - ".github/workflows/nvenc-cudaarray-bridge.yml"
+      - "src/desktop2stereo/streaming/native_rtsp_output.py"
 
 permissions:
   contents: write
@@ -33,17 +34,26 @@ jobs:
           method: network
           sub-packages: '["nvcc", "cudart", "visual_studio_integration"]'
 
-      - name: Download pinned NVENC headers
+      - name: Download NVIDIA Video Codec SDK headers
         shell: pwsh
         run: |
-          git clone --depth 1 --branch n12.2.72.0 https://github.com/FFmpeg/nv-codec-headers.git "$env:RUNNER_TEMP\nv-codec-headers"
+          git clone --depth 1 https://github.com/NVIDIA/video-sdk-samples.git "$env:RUNNER_TEMP\video-sdk-samples"
+
+      - name: Build pinned native Opus library
+        shell: pwsh
+        run: |
+          git clone --depth 1 --branch v1.5.2 https://github.com/xiph/opus.git "$env:RUNNER_TEMP\opus"
+          cmake -S "$env:RUNNER_TEMP\opus" -B "$env:RUNNER_TEMP\opus-build" `
+            -G 'Visual Studio 17 2022' -A x64 `
+            -DOPUS_BUILD_PROGRAMS=OFF -DOPUS_BUILD_TESTING=OFF
+          cmake --build "$env:RUNNER_TEMP\opus-build" --config Release --parallel 2
 
       - name: Configure CMake
         shell: pwsh
         run: |
           cmake -S native/nvenc_cudaarray_bridge -B native/nvenc_cudaarray_bridge/build `
             -G 'Visual Studio 17 2022' -A x64 `
-            -DD2S_NV_CODEC_HEADERS="$env:RUNNER_TEMP\nv-codec-headers"
+            -DD2S_NVENC_SDK_HEADERS="$env:RUNNER_TEMP\video-sdk-samples"
 
       - name: Build DLL
         shell: pwsh
@@ -53,12 +63,19 @@ jobs:
           if (-not (Test-Path -LiteralPath $dll)) {
             throw "NVENC CUDAARRAY bridge was not produced: $dll"
           }
+          $opus = "$env:RUNNER_TEMP\opus-build\Release\opus.dll"
+          if (-not (Test-Path -LiteralPath $opus)) {
+            throw "Native Opus library was not produced: $opus"
+          }
+          Copy-Item -LiteralPath $opus -Destination native/nvenc_cudaarray_bridge/build/Release/opus.dll
 
       - name: Upload bridge artifact
         uses: actions/upload-artifact@v6
         with:
           name: d2s-nvenc-cudaarray-windows-x64
-          path: native/nvenc_cudaarray_bridge/build/Release/d2s_nvenc_cudaarray_bridge.dll
+          path: |
+            native/nvenc_cudaarray_bridge/build/Release/d2s_nvenc_cudaarray_bridge.dll
+            native/nvenc_cudaarray_bridge/build/Release/opus.dll
           if-no-files-found: error
 
   commit-native-binary:
@@ -80,15 +97,19 @@ jobs:
         shell: bash
         run: |
           mkdir -p src/desktop2stereo/streaming/nvenc_cudaarray_bridge
+          mkdir -p src/desktop2stereo/streaming/native_rtsp_output
           cp artifact/d2s_nvenc_cudaarray_bridge.dll \
             src/desktop2stereo/streaming/nvenc_cudaarray_bridge/d2s_nvenc_cudaarray_bridge.dll
+          cp artifact/opus.dll \
+            src/desktop2stereo/streaming/native_rtsp_output/opus.dll
 
       - name: Commit generated DLL
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/desktop2stereo/streaming/nvenc_cudaarray_bridge/d2s_nvenc_cudaarray_bridge.dll
+          git add src/desktop2stereo/streaming/nvenc_cudaarray_bridge/d2s_nvenc_cudaarray_bridge.dll \
+            src/desktop2stereo/streaming/native_rtsp_output/opus.dll
           if git diff --cached --quiet; then
             echo "Native DLL is unchanged"
             exit 0

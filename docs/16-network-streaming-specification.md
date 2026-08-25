@@ -2,7 +2,7 @@
 
 本文是 Desktop2Stereo 网络推流的统一规格书，定义高级网络推流的共享会话层、GPU/CPU 视频编码后端、GPU 图像路径、音频复用、MediaMTX/WebRTC 发布、自动网络校准、回退策略、可观测性和验收要求。GPU 厂商优先策略已并入高级网络推流，用户只保留一个高级网络推流入口。
 
-目标是消除当前 4K SBS 推流中的 CUDA/ROCm → CPU RGB24 → FFmpeg stdin 路径，让图像在 GPU 内完成 SBS 整理、颜色转换和硬件编码。编码后的 H.264/H.265 小数据包仍通过 FFmpeg/MediaMTX 发布，并由局域网头显浏览器通过 WebRTC 播放。
+目标是消除当前 4K SBS 推流中的 CUDA/ROCm → CPU RGB24 → FFmpeg stdin 路径，让图像在 GPU 内完成 SBS 整理、颜色转换和硬件编码。编码后的 H.264/H.265 小数据包由对应发布后端送入 MediaMTX：NativeNVENC 使用原生 RTSP/RTP，Vulkan/CPU 等公共路径可继续使用 FFmpeg；局域网头显浏览器统一通过 WebRTC 播放。
 
 > 本文同时记录实施设计和当前验收状态。native Vulkan 编码桥已完成独立 4K 编码烟测并接入高级网络推流；本机已完成连续 600 帧 3840×2160@30 发布和 ffprobe 媒体参数验证；SoundCard/WASAPI 连续运行 10.12 秒无 runtime error，MediaMTX 确认 `2 tracks (H264, Opus)`。Auto 现在先尝试厂商原生 GPU 路径：NVIDIA 原生 NVENC CUDAARRAY bridge 的 GitHub Actions run `32828611676` 已完成 CUDA 12.4.1 Windows x64 ABI 2 DLL 编译与功能目录发布；本机 RTX 3090 已通过 CUDA SBS tensor → surface kernel → NVENC 的 640×360 H.264 实帧出包验证（198 bytes，Annex-B 起始码 `00000001`）。厂商路径失败后才懒加载 Vulkan ABI 5 bridge，再进入通用 OpenGL/FFmpeg/CPU 回退；头显画面及持续 4K/30 FPS 仍待真机验收。Khronos validation 层会触发 FFmpeg 内部 NV12 frame-pool 的已知 VUID 与 flush/idle 阻塞，显式 Vulkan 模式检测到该层后按能力回退。
 
@@ -519,6 +519,44 @@ Vulkan 只替换视频图像和编码路径，不改动音频采集原则：
 本机 FFmpeg 到 MediaMTX 的 RTSP 使用 TCP，可以避免本地 UDP RTP 包长和丢包问题。头显端最终仍由 MediaMTX 使用 WebRTC。
 
 SRT 适合服务间或原生客户端传输，但浏览器不能直接播放 SRT，因此不能替代头显端 WebRTC。
+
+## NativeNVENC 无 FFmpeg 发布路径
+
+NativeNVENC 是独立的音视频发布后端，禁止创建 FFmpeg 子进程，也不使用 FFmpeg 的
+demux、编码或 mux 能力。数据流固定为：
+
+```text
+CUDAARRAY SurfaceKernel
+        ↓
+NVIDIA NVENC CUDAARRAY bridge
+        ↓ H.264 Annex-B + PTS/DTS
+原生 RTSP ANNOUNCE/SETUP/RECORD
+        ↓ RTP over interleaved TCP
+MediaMTX :8554/live
+        ↓ WebRTC
+头显浏览器
+```
+
+音频由既有 WASAPI loopback 采集器产生 localhost PCM；NativeNVENC 发布器接收 PCM
+UDP，不把它交给 FFmpeg，而是使用随功能目录发布的 `opus.dll` 调用 libopus，按
+48 kHz、双声道、20 ms 帧编码后以 RTP/Opus 发送。视频使用 90 kHz RTP 时钟，音频
+使用 48 kHz RTP 时钟；两路均在原生发布器内维护单调序列号和时间戳。
+
+MediaMTX 的 RTSP 握手始终使用 TCP，NativeNVENC 选择 interleaved RTP/TCP，避免为
+发布者再开放动态 UDP 端口。MediaMTX 必须运行 RTSP listener，并将路径保持为
+`source: publisher`。该方案不等同于“NVENC 自己完成网络协议”：NVENC 只负责视频
+压缩，RTSP/RTP、Opus 和 A/V 时间轴由 NativeNVENC 发布器完成。
+
+严格边界：
+
+- NativeNVENC 分支不得访问 `ffmpeg_path`、`PyNvSrtVideoOutput` 或
+  `FfmpegDirectSbsOutput`。
+- NativeNVENC 初始化或运行失败时不能隐式切换到 FFmpeg；应报告失败并由上层明确选择
+  其它后端。
+- `zero_copy=True` 仅表示 CUDAARRAY 到 NVENC 输入表面无 CPU 往返；RTSP/RTP 发送
+  的压缩包和 Opus 包本来就是小型 CPU 网络数据，不计为原始图像拷贝。
+- 当前首期实现以 H.264 为验收基线；HEVC/full-SBS 需要单独完成 H.265 RTP
+  packetization 和浏览器能力验收后才能打开。
 
 ## 能力探测与回退
 

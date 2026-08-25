@@ -2,6 +2,8 @@
 
 ## 2026-08-25
 
+- NativeNVENC 路径改为不启动 FFmpeg：CUDAARRAY NVENC 输出的带时间戳 H.264 Annex-B 包由原生 RTSP/RTP 发布器直接发送到 MediaMTX，WASAPI PCM 由原生 Opus 编码器编码为 RTP 音频；新增 `native_rtsp_output.py` 与远程构建、发布的 `opus.dll`。NativeNVENC 运行失败时不再偷偷切换 FFmpeg，避免“NativeNVENC”路径与 FFmpeg 复用混用。当前仍需 GitHub Windows 构建产物和实机浏览器回归验证 H.264/Opus 两轨道。
+
 - 扩展 NativeNVENC CUDAARRAY bridge ABI 3：编码提交继续使用 NVIDIA `NV_ENC_PIC_PARAMS.inputTimeStamp`，同时读取 `NV_ENC_LOCK_BITSTREAM.outputTimeStamp/outputDuration`，通过 `d2s_nvenc_cudaarray_read_packet_timed` 将 H.264 包的 PTS/DTS/duration 传回 Python；旧的无时间戳读包接口保留兼容。该时间戳元数据为后续原生 MPEG-TS/RTSP mux 接入准备，未完成 mux 接入前不标记音频 NativeNVENC 路径为稳定。
 
 - 关闭 WASAPI 正常运行期间周期性的 `WASAPI PCM: packets=... peak=...` 日志，保留启动状态和实际 recording discontinuity 异常告警，减少高级网络推流日志刷屏。

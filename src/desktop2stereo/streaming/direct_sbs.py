@@ -23,6 +23,7 @@ from streaming.encoder_profile import EncoderProfile
 from streaming.mjpeg_streamer import MJPEGStreamer
 from streaming.runtime_manager import ensure_runtime
 from streaming.nvidia_encoder import PyNvSrtVideoOutput, PyNvVideoCodecEncoder
+from streaming.native_rtsp_output import NativeRtspAvOutput
 from streaming.nvenc_cudaarray_bridge import NvencCudaArrayEncoder
 from streaming.stream_calibration import StreamCalibrationController
 from streaming.wasapi_audio import SoundcardLoopbackSender
@@ -361,6 +362,7 @@ class _PyNvDirectSbsOutputMixin:
         self._pynv_encoder: Any | None = None
         self._fallback_output: FfmpegDirectSbsOutput | None = None
         self._pynv_gpu_id = 0
+        self._native_nvenc_active = False
 
     def _start_pynv_audio(self) -> str | None:
         if not self.stereo_mix_device:
@@ -410,6 +412,7 @@ class _PyNvDirectSbsOutputMixin:
             except Exception:
                 pass
         self._pynv_encoder = None
+        self._native_nvenc_active = False
         if self._soundcard_audio is not None:
             self._soundcard_audio.close()
             self._soundcard_audio = None
@@ -500,9 +503,13 @@ class _PyNvDirectSbsOutputMixin:
     def _start_cudaarray_encoder(
         self, width: int, height: int, cuda_array: int
     ) -> None:
-        """Start native NVENC on one persistently mapped OpenGL CUDA array."""
-        audio_url = self._start_pynv_audio()
-        codec = "hevc" if self.use_hevc else "h264"
+        """Start NativeNVENC and publish timestamped H264/Opus over RTSP/RTP."""
+        if self.use_hevc:
+            raise RuntimeError(
+                "NativeNVENC RTSP/RTP baseline currently supports H.264 only; "
+                "HEVC requires the H.265 RTP packetizer"
+            )
+        self._start_pynv_audio()
         bitrate = max(
             1,
             int(
@@ -510,6 +517,7 @@ class _PyNvDirectSbsOutputMixin:
                 * 1_000_000
             ),
         )
+        self._native_nvenc_active = True
         self._pynv_encoder = NvencCudaArrayEncoder(
             width,
             height,
@@ -518,30 +526,25 @@ class _PyNvDirectSbsOutputMixin:
             bitrate=bitrate,
             cuda_array=cuda_array,
         )
-        self._pynv_output = PyNvSrtVideoOutput(
+        self._pynv_output = NativeRtspAvOutput(
             self._pynv_encoder,
-            str(self.ffmpeg_path),
-            codec=codec,
+            host="127.0.0.1",
+            port=self.publish_rtsp_port,
+            stream_key=self.stream_key,
             fps=self.fps,
-            audio_url=audio_url,
-            audio_delay=self.audio_delay,
-            audio_codec="libopus" if self.protocol == "WEBRTC" else "aac",
-            output_args=self._pynv_output_args(),
-            creationflags=(
-                getattr(subprocess, "CREATE_NO_WINDOW", 0)
-                if self.os_name == "Windows"
-                else 0
-            ),
+            audio_sender=self._soundcard_audio,
         )
-        time.sleep(0.05)
-        if self._pynv_output.process.poll() is not None:
-            raise RuntimeError(
-                "native NVENC CUDAARRAY muxer exited during startup with code "
-                f"{self._pynv_output.process.returncode}"
-            )
+        self._pynv_output.start()
         self._frame_size = (width, height)
 
     def _fallback_to_ffmpeg(self, frame: Any, reason: Exception) -> None:
+        if self._native_nvenc_active:
+            print(
+                f"[DirectSbsStream] NativeNVENC runtime failure: {reason}; "
+                "FFmpeg fallback is disabled for the NativeNVENC path",
+                flush=True,
+            )
+            raise RuntimeError("NativeNVENC path failed without FFmpeg fallback") from reason
         print(
             f"[DirectSbsStream] PyNvVideoCodec runtime failure: {reason}; "
             "falling back to FFmpeg video/audio encoding",
