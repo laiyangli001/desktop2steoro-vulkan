@@ -122,13 +122,13 @@ class NativeRtspAvOutput:
         self._request("ANNOUNCE", self._url, {"Content-Type": "application/sdp"}, sdp)
         response = self._request(
             "SETUP", self._url + "/trackID=0",
-            {"Transport": "RTP/AVP/TCP;unicast;interleaved=0-1"},
+            {"Transport": "RTP/AVP/TCP;unicast;interleaved=0-1;mode=record"},
         )
         self._session = response["headers"].get("session", "").split(";", 1)[0]
         self._request(
             "SETUP", self._url + "/trackID=1",
             {
-                "Transport": "RTP/AVP/TCP;unicast;interleaved=2-3",
+                "Transport": "RTP/AVP/TCP;unicast;interleaved=2-3;mode=record",
                 "Session": self._session,
             },
         )
