@@ -4,6 +4,7 @@ import pytest
 
 from streaming.native_rtsp_output import (
     NativeRtspAvOutput,
+    _audio_pacing_step,
     _opus_library_candidates,
     _pack_rtp_header,
 )
@@ -42,6 +43,20 @@ def test_native_rtp_headers_use_announced_payload_types():
     assert opus[1] == 111
 
 
+def test_native_audio_pacing_uses_20ms_opus_clock():
+    delay, deadline = _audio_pacing_step(None, 10.0)
+    assert delay == 0.0
+    assert deadline == pytest.approx(10.02)
+
+    delay, deadline = _audio_pacing_step(deadline, 10.005)
+    assert delay == pytest.approx(0.015)
+    assert deadline == pytest.approx(10.04)
+
+    delay, deadline = _audio_pacing_step(deadline, 10.2)
+    assert delay == 0.0
+    assert deadline == pytest.approx(10.22)
+
+
 def test_native_annexb_parser_handles_three_and_four_byte_start_codes():
     data = (
         b"\x00\x00\x00\x01\x65first"
@@ -69,7 +84,7 @@ def test_native_h264_rtp_is_batched_without_losing_packet_boundaries():
     output._socket = recording_socket
     output._send_h264(b"\x00\x00\x00\x01\x65" + b"x" * 200_000, 9000)
 
-    assert 1 < len(recording_socket.calls) < 10
+    assert 1 < len(recording_socket.calls) < 20
     packet_count = 0
     for batch in recording_socket.calls:
         cursor = 0

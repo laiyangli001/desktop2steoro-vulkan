@@ -35,6 +35,14 @@ def _pack_rtp_header(
     )
 
 
+def _audio_pacing_step(deadline: float | None, now: float) -> tuple[float, float]:
+    packet_seconds = 960 / 48000
+    if deadline is None or now - deadline > packet_seconds * 2:
+        deadline = now
+    delay = max(0.0, deadline - now)
+    return delay, deadline + packet_seconds
+
+
 class _Opus:
     OPUS_APPLICATION_AUDIO = 2049
 
@@ -107,6 +115,10 @@ class NativeRtspAvOutput:
         self.stream_key = str(stream_key).strip("/") or "live"
         self.fps = max(1, int(fps))
         self.audio_sender = audio_sender
+        self._video_batch_bytes = max(
+            4 * 1024,
+            int(os.environ.get("D2S_NATIVE_RTP_BATCH_BYTES", str(16 * 1024))),
+        )
         self._socket: socket.socket | None = None
         self._socket_write_lock = threading.Lock()
         self._session = ""
@@ -169,7 +181,8 @@ class NativeRtspAvOutput:
         print(
             "[DirectSbsStream] NativeNVENC RTSP/RTP active: "
             f"video=H264/90000 audio={'Opus/48000' if self._opus else 'none'} "
-            "ffmpeg=disabled",
+            f"video_batch={self._video_batch_bytes} audio_packet=960frames/20ms "
+            "audio_pacing=realtime ffmpeg=disabled",
             flush=True,
         )
 
@@ -258,7 +271,7 @@ class NativeRtspAvOutput:
                 ) + payload
                 self._video_seq = (self._video_seq + 1) & 0xFFFF
                 batch.extend(self._interleaved_frame(0, packet))
-                if len(batch) >= 64 * 1024:
+                if len(batch) >= self._video_batch_bytes:
                     self._interleaved_batch(batch)
                     batch.clear()
                 continue
@@ -279,7 +292,7 @@ class NativeRtspAvOutput:
                 ) + payload
                 self._video_seq = (self._video_seq + 1) & 0xFFFF
                 batch.extend(self._interleaved_frame(0, packet))
-                if len(batch) >= 64 * 1024:
+                if len(batch) >= self._video_batch_bytes:
                     self._interleaved_batch(batch)
                     batch.clear()
                 first = False
@@ -287,6 +300,7 @@ class NativeRtspAvOutput:
 
     def _audio_loop(self) -> None:
         assert self._audio_socket is not None and self._opus is not None
+        next_send_at: float | None = None
         while not self._audio_stop.is_set():
             try:
                 self._audio_buffer.extend(self._audio_socket.recv(65536))
@@ -297,6 +311,11 @@ class NativeRtspAvOutput:
                 pcm = bytes(self._audio_buffer[:frame_size])
                 del self._audio_buffer[:frame_size]
                 encoded = self._opus.encode(pcm)
+                delay, next_send_at = _audio_pacing_step(
+                    next_send_at, time.monotonic()
+                )
+                if delay > 0.0 and self._audio_stop.wait(delay):
+                    return
                 header = _pack_rtp_header(
                     payload_type=111,
                     marker=False,
