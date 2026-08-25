@@ -45,7 +45,8 @@ jobs:
           git clone --depth 1 --branch v1.5.2 https://github.com/xiph/opus.git "$env:RUNNER_TEMP\opus"
           cmake -S "$env:RUNNER_TEMP\opus" -B "$env:RUNNER_TEMP\opus-build" `
             -G 'Visual Studio 17 2022' -A x64 `
-            -DOPUS_BUILD_PROGRAMS=OFF -DOPUS_BUILD_TESTING=OFF
+            -DOPUS_BUILD_PROGRAMS=OFF -DOPUS_BUILD_TESTING=OFF `
+            -DOPUS_BUILD_SHARED_LIBRARY=ON
           cmake --build "$env:RUNNER_TEMP\opus-build" --config Release --parallel 2
 
       - name: Configure CMake
