@@ -26,10 +26,10 @@ def resolve_network_video_backend(
 ) -> NetworkVideoBackendDecision:
     """Resolve the encoder for the unified advanced network stream.
 
-    Explicit choices always win.  ``auto`` uses the stable FFmpeg/MediaMTX
-    path; FFmpeg may still select NVENC/QSV/AMF internally.  The PyNv/AMF/
-    Intel direct paths remain available through explicit backend selection so
-    an unvalidated GPU frame path cannot become the default display path.
+    Explicit choices always win.  ``auto`` enters the capability chain at
+    Vulkan; ``VulkanDirectSbsOutput`` then falls back to OpenGL/vendor GPU
+    paths and finally stable FFmpeg/MediaMTX.  Direct vendor backends remain
+    available as explicit overrides.
     """
 
     requested = str(requested_backend or "auto").strip().casefold()
@@ -54,11 +54,10 @@ def resolve_network_video_backend(
             reason="non-advanced mode fallback",
         )
 
-    del device_info
     return NetworkVideoBackendDecision(
-        "ffmpeg",
+        "vulkan",
         requested,
-        "stable FFmpeg/MediaMTX auto path",
+        "Auto capability chain: Vulkan -> OpenGL/vendor GPU -> FFmpeg",
     )
 
 

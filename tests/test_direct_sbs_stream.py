@@ -989,6 +989,7 @@ def test_pynv_encoder_uses_live_low_latency_nvenc_settings():
     assert captured["kwargs"]["idrperiod"] == 25
     assert captured["kwargs"]["bf"] == 0
     assert captured["kwargs"]["repeatspspps"] == 1
+    assert captured["kwargs"]["gpu_id"] == 0
 
 
 def test_pynv_muxer_copies_video_and_encodes_soundcard_pcm_as_opus(monkeypatch):

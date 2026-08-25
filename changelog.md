@@ -3,6 +3,8 @@
 ## 2026-08-25
 
 - 修正高级网络推流 `Auto` 默认进入 PyNvVideoCodec 后出现花屏的问题：恢复稳定 FFmpeg/MediaMTX 默认路径，PyNvVideoCodec、Vulkan、Intel 等直接 GPU 后端改为显式选择，避免初始化成功但帧格式未经画面验证的路径成为默认输出。
+- 校正高级推流 `Auto` 策略：恢复从 Vulkan 入口开始的能力链，由 Vulkan 输出对象负责 OpenGL/厂商 GPU、FFmpeg 硬件和 CPU 回退；PyNvVideoCodec 仍可通过编码器下拉框显式覆盖。
+- 修复 PyNvVideoCodec GPU 推流的 CUDA stream 交接：RGB→NV12 完成后等待 PyTorch 当前 stream，再提交给独立的 NVENC 队列；同时使用输入 CUDA tensor 的设备索引创建编码器，避免异步读取未完成 plane 或跨 GPU 读取导致花屏。
 
 - 高级推流自动校准指纹新增当前选择显示器的输入分辨率档位（`1K`/`2K`/`4K`）；点击运行时重新读取显示器分辨率，档位变化会强制进入自动校准。
 

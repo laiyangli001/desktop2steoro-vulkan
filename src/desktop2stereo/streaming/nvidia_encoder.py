@@ -44,6 +44,11 @@ def rgb_cuda_to_nv12(frame: Any) -> tuple[Any, Any]:
     uv_plane = nv12[height:].reshape(height // 2, width // 2, 2)
     y_plane.copy_(y.unsqueeze(-1))
     uv_plane.copy_(uv.reshape(height // 2, width // 2, 2))
+    # PyNvVideoCodec owns a separate CUDA/NVENC submission queue and cannot
+    # infer a dependency on PyTorch's current stream. Without this hand-off
+    # wait it may read the NV12 planes while conversion is still in flight,
+    # producing an initialized encoder with corrupted frames.
+    torch.cuda.current_stream(device=image.device).synchronize()
     return y_plane, uv_plane
 
 
@@ -70,6 +75,7 @@ class PyNvVideoCodecEncoder:
         hevc: bool,
         fps: int,
         bitrate: int,
+        gpu_id: int = 0,
     ):
         codec = "hevc" if hevc else "h264"
         frame_rate = max(1, int(fps))
@@ -83,7 +89,7 @@ class PyNvVideoCodecEncoder:
             fps=frame_rate,
             bitrate=target_bitrate,
             maxbitrate=max(target_bitrate, int(target_bitrate * 1.2)),
-            gpu_id=0,
+            gpu_id=max(0, int(gpu_id)),
             tuning_info="ultra_low_latency",
             preset="P1",
             rc="cbr",

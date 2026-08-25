@@ -349,6 +349,7 @@ class _PyNvDirectSbsOutputMixin:
         self._pynv_output: PyNvSrtVideoOutput | None = None
         self._pynv_encoder: PyNvVideoCodecEncoder | None = None
         self._fallback_output: FfmpegDirectSbsOutput | None = None
+        self._pynv_gpu_id = 0
 
     def _start_pynv_audio(self) -> str | None:
         if not self.stereo_mix_device:
@@ -420,6 +421,7 @@ class _PyNvDirectSbsOutputMixin:
                     * 1_000_000
                 ),
             ),
+            gpu_id=self._pynv_gpu_id,
         )
         self._pynv_output = PyNvSrtVideoOutput(
             self._pynv_encoder,
@@ -447,7 +449,8 @@ class _PyNvDirectSbsOutputMixin:
         audio_label = f" + SoundCard/{audio_codec_label}" if audio_url else ""
         print(
             f"[DirectSbsStream] PyNvVideoCodec {codec} GPU path active"
-            f"{audio_label}: {width}x{height}@{self.fps}",
+            f"{audio_label}: {width}x{height}@{self.fps} gpu_id={self._pynv_gpu_id} "
+            "cuda_stream_handoff=synchronized",
             flush=True,
         )
 
@@ -480,6 +483,10 @@ class _PyNvDirectSbsOutputMixin:
             return
         try:
             if self._pynv_output is None:
+                device = getattr(frame, "device", None)
+                device_index = getattr(device, "index", None)
+                if device_index is not None:
+                    self._pynv_gpu_id = max(0, int(device_index))
                 height, width = int(frame.shape[-2]), int(frame.shape[-1])
                 if int(frame.shape[0]) not in (1, 3, 4):
                     height, width = int(frame.shape[0]), int(frame.shape[1])
