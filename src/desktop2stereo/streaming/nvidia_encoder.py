@@ -155,6 +155,10 @@ class PyNvSrtVideoOutput:
             "nobuffer",
             "-flags",
             "low_delay",
+            "-probesize",
+            "64",
+            "-analyzeduration",
+            "0",
             "-f",
             "hevc" if codec.casefold() in {"hevc", "h265"} else "h264",
             "-r",
@@ -165,6 +169,8 @@ class PyNvSrtVideoOutput:
         if audio_url:
             command.extend(
                 [
+                    "-thread_queue_size",
+                    "1024",
                     "-itsoffset",
                     str(float(audio_delay)),
                     "-f",
@@ -203,6 +209,10 @@ class PyNvSrtVideoOutput:
             command.append("-an")
         command.extend(
             [
+                "-muxdelay",
+                "0",
+                "-muxpreload",
+                "0",
                 "-flush_packets",
                 "1",
                 "-max_interleave_delta",

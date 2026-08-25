@@ -57,6 +57,13 @@ class SoundcardLoopbackSender:
             1024,
             int(os.environ.get("D2S_WASAPI_BLOCKSIZE", "4096")),
         )
+        # Keep each localhost UDP datagram below the normal Ethernet MTU.
+        # A 4096-frame stereo s16le block is about 16 KiB and can fragment;
+        # fragmentation is especially harmful when the video muxer bursts.
+        self.udp_frames = max(
+            256,
+            int(os.environ.get("D2S_WASAPI_UDP_FRAMES", "1024")),
+        )
         self._soundcard = sc
         self._loopback = self._resolve_loopback(device_name)
         self.device_name = str(getattr(self._loopback, "name", "") or device_name or "default")
@@ -118,7 +125,7 @@ class SoundcardLoopbackSender:
             "[DirectSbsStream] WASAPI loopback active: "
             f"speaker={self.device_name!r} samplerate={self.samplerate} "
             f"channels={self.channels} blocksize={self.blocksize} "
-            f"udp={self.port}",
+            f"udp_frames={self.udp_frames} udp={self.port}",
             flush=True,
         )
 
@@ -150,10 +157,13 @@ class SoundcardLoopbackSender:
                     peak = float(np.max(np.abs(pcm))) if pcm.size else 0.0
                     if peak < 1e-5:
                         self._silent_packet_count += 1
-                    self._socket.sendto(
-                        (pcm * 32767.0).astype(np.int16).tobytes(),
-                        ("127.0.0.1", self.port),
-                    )
+                    pcm_bytes = (pcm * 32767.0).astype(np.int16).tobytes()
+                    packet_bytes = self.udp_frames * self.channels * 2
+                    for offset in range(0, len(pcm_bytes), packet_bytes):
+                        self._socket.sendto(
+                            pcm_bytes[offset : offset + packet_bytes],
+                            ("127.0.0.1", self.port),
+                        )
                     self._packet_count += 1
                     if self._packet_count == 1 or self._packet_count % 100 == 0:
                         print(
@@ -192,7 +202,12 @@ class SoundcardLoopbackSender:
         deadline = time.monotonic()
         while not self._stop.is_set():
             try:
-                self._socket.sendto(packet, ("127.0.0.1", self.port))
+                packet_bytes = self.udp_frames * self.channels * 2
+                for offset in range(0, len(packet), packet_bytes):
+                    self._socket.sendto(
+                        packet[offset : offset + packet_bytes],
+                        ("127.0.0.1", self.port),
+                    )
             except OSError:
                 if not self._stop.is_set():
                     raise

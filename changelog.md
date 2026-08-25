@@ -2,6 +2,8 @@
 
 ## 2026-08-25
 
+- 修复 NativeNVENC 音频复用与 Vulkan 稳定路径不一致的问题：WASAPI PCM 按 1024 帧拆分为 MTU 友好的 localhost UDP 数据报，避免 4096 帧/约 16 KiB 数据报分片；NativeNVENC 的 FFmpeg muxer 增加音频线程队列、快速探测和 `muxdelay/muxpreload=0`，降低视频包突发时音频输入被饿死或丢包的概率。
+
 - 修复 Windows 网络推流音频回环在 GPU 高负载下容易出现 `data discontinuity in recording` 的问题：WASAPI/SoundCard 采集块默认从 1024 增大到 4096 帧（可通过 `D2S_WASAPI_BLOCKSIZE` 调整），并新增实际扬声器、PCM 包数、峰值、静音包数和断续次数日志；MediaMTX 仍必须确认最终有 `Opus` 音频轨道。
 
 - 补齐 Intel 网络推流合规边界：新增 `src/tools/intel_vulkan_onevpl_smoke.py`，可在真实 Windows Intel 目标机连续验证 Vulkan producer readiness、D3D11/oneVPL Adapter LUID、NV12 提交、oneVPL 出包，并可将 H.264 包送入已运行的 MediaMTX；在目标机验收完成前仍严格记录 `zero_copy=False`。
