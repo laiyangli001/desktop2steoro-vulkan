@@ -367,9 +367,9 @@ class VulkanNativeBridge:
                 if directory.is_dir():
                     _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(str(directory)))
         elif platform.system() in {"Linux", "Darwin"}:
-            # Prefer dependencies published beside the feature bridge. The
-            # shared FFmpeg runtime remains a compatibility fallback.
-            library_dirs = (candidate.parent, ffmpeg_root / "lib")
+            # Resolve the shared FFmpeg runtime first. The feature directory
+            # is retained only as a compatibility fallback for older bundles.
+            library_dirs = (ffmpeg_root / "lib", candidate.parent)
             patterns = (
                 ("libavutil.so*", "libavcodec.so*")
                 if platform.system() == "Linux"

@@ -2,6 +2,8 @@
 
 ## 2026-08-25
 
+- Vulkan ABI 5 bridge 改为复用公共 FFmpeg 运行时：Windows 功能目录只保留 bridge DLL，公共 FFmpeg/MinGW DLL 统一从 `streaming/rtmp/ffmpeg/bin` 加载，Vulkan Loader 使用显卡驱动的系统版本；Linux bridge 只保留 so，依赖统一发布到 `streaming/rtmp/ffmpeg/lib`。CI 新增 Windows 固定版本哈希校验与 Linux `ldd` 闭包校验，移除功能目录中约 50 MB 的重复依赖。
+
 - 将开发、诊断和合规工具统一迁移到 `src/tools`，删除可发布应用包内原有的工具重复命名空间；pytest 同时加入 `src` 与应用源码根目录后，Intel、Vulkan、合规和 shader 测试可在同一次全量收集中稳定导入。
 
 - 调整高级网络推流 `Auto` 实现顺序为“厂商原生 GPU → Vulkan → 通用 OpenGL/FFmpeg 硬件 → CPU”：NVIDIA 会先尝试 NativeNVENC/CUDAARRAY SurfaceKernel，成功时不再加载 Vulkan；厂商路径失败后才懒加载 ABI 5 Vulkan bridge。Vulkan Windows/Linux 产物及递归解析出的动态依赖改由 GitHub Actions 一并发布到对应 `streaming/vulkan_ffmpeg_bridge/<platform>` 功能目录，运行时自动查找并加载，无需手工设置 DLL 路径；GitHub Actions run `32842009091` 已构建并由提交 `fbf396a` 回写两平台产物，本机移除环境变量后已从功能目录自动加载 ABI 5 并通过原生探针；同时消除同一 fallback 状态被 GUI 日志重复输出的问题。

@@ -50,9 +50,12 @@ src/desktop2stereo/streaming/vulkan_ffmpeg_bridge/windows/d2s_vulkan_ffmpeg_brid
 src/desktop2stereo/streaming/vulkan_ffmpeg_bridge/linux/d2s_vulkan_ffmpeg_bridge.so
 ```
 
-The workflow resolves each bridge's dynamic dependency closure and publishes
-those FFmpeg/MinGW DLLs or FFmpeg shared objects beside the bridge. The runtime
-loads the packaged feature path and its co-located dependencies automatically;
-the existing `streaming/rtmp/ffmpeg` package remains a compatibility fallback.
+The feature directories contain only the ABI 5 bridge binaries. Windows loads
+FFmpeg and MinGW dependencies from the shared `streaming/rtmp/ffmpeg/bin`
+runtime and uses the Vulkan Loader installed by the target GPU driver. Linux
+publishes the resolved FFmpeg shared-object closure once under
+`streaming/rtmp/ffmpeg/lib`; the bridge RPATH and runtime preloader both resolve
+that shared directory. CI verifies that the Windows shared DLLs match the pinned
+FFmpeg build and that the Linux dependency closure has no unresolved entries.
 An explicit `D2S_VULKAN_FFMPEG_BRIDGE` value is only an override for development
 and diagnostics. Native compilation remains GitHub Actions-only.

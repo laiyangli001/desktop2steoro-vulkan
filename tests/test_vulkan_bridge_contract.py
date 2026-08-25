@@ -84,3 +84,16 @@ def test_native_bridge_declares_low_latency_gpu_path_and_diagnostic_log():
     ).read_text(encoding="utf-8")
     assert "d2s_vulkan_ffmpeg_encoder_device_identity" in header
     assert "result == AVERROR(EAGAIN) || result == AVERROR_EOF" in source
+
+
+def test_vulkan_bridge_workflow_uses_shared_ffmpeg_runtime() -> None:
+    workflow = (
+        APP_ROOT.parents[1] / ".github/workflows/vulkan-ffmpeg-bridge.yml"
+    ).read_text(encoding="utf-8")
+
+    assert "D2S_SHARED_FFMPEG_RUNTIME" in workflow
+    assert "Shared FFmpeg runtime dependency version mismatch" in workflow
+    assert "shared_linux=src/desktop2stereo/streaming/rtmp/ffmpeg/lib" in workflow
+    assert "! -name d2s_vulkan_ffmpeg_bridge.dll -delete" in workflow
+    assert "! -name d2s_vulkan_ffmpeg_bridge.so -delete" in workflow
+    assert "cp artifact/windows/*" not in workflow
