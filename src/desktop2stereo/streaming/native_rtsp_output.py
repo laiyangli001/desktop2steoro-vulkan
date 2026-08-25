@@ -19,6 +19,22 @@ def _opus_library_candidates() -> list[str]:
     ]
 
 
+def _pack_rtp_header(
+    *, payload_type: int, marker: bool, sequence: int, timestamp: int, ssrc: int
+) -> bytes:
+    if not 0 <= payload_type <= 127:
+        raise ValueError(f"RTP payload type must be 0..127, got {payload_type}")
+    marker_payload = (0x80 if marker else 0) | payload_type
+    return struct.pack(
+        ">BBHII",
+        0x80,
+        marker_payload,
+        sequence & 0xFFFF,
+        timestamp & 0xFFFFFFFF,
+        ssrc & 0xFFFFFFFF,
+    )
+
+
 class _Opus:
     OPUS_APPLICATION_AUDIO = 2049
 
@@ -92,6 +108,7 @@ class NativeRtspAvOutput:
         self.fps = max(1, int(fps))
         self.audio_sender = audio_sender
         self._socket: socket.socket | None = None
+        self._socket_write_lock = threading.Lock()
         self._session = ""
         self._cseq = 0
         self._video_seq = 0
@@ -209,7 +226,9 @@ class NativeRtspAvOutput:
     def _interleaved(self, channel: int, packet: bytes) -> None:
         if self._socket is None:
             raise RuntimeError("Native RTSP socket is closed")
-        self._socket.sendall(b"$" + bytes([channel]) + struct.pack(">H", len(packet)) + packet)
+        frame = b"$" + bytes([channel]) + struct.pack(">H", len(packet)) + packet
+        with self._socket_write_lock:
+            self._socket.sendall(frame)
 
     def _send_h264(self, data: bytes, timestamp: int) -> None:
         nals = list(self._annexb_nals(data))
@@ -219,7 +238,13 @@ class NativeRtspAvOutput:
             marker = nal_index == len(nals) - 1
             if len(nal) <= 1400:
                 payload = nal
-                packet = struct.pack(">BBHII", 0x80, 0x80 | (0x80 if marker else 0), self._video_seq, timestamp, self._video_ssrc) + payload
+                packet = _pack_rtp_header(
+                    payload_type=96,
+                    marker=marker,
+                    sequence=self._video_seq,
+                    timestamp=timestamp,
+                    ssrc=self._video_ssrc,
+                ) + payload
                 self._video_seq = (self._video_seq + 1) & 0xFFFF
                 self._interleaved(0, packet)
                 continue
@@ -231,7 +256,13 @@ class NativeRtspAvOutput:
                 last = offset >= len(nal)
                 fu_header = (0x80 if first else 0) | (0x40 if last else 0) | (nal[0] & 0x1F)
                 payload = bytes([(nal[0] & 0xE0) | 28, fu_header]) + piece
-                packet = struct.pack(">BBHII", 0x80, 0x80 | (0x80 if marker and last else 0), self._video_seq, timestamp, self._video_ssrc) + payload
+                packet = _pack_rtp_header(
+                    payload_type=96,
+                    marker=marker and last,
+                    sequence=self._video_seq,
+                    timestamp=timestamp,
+                    ssrc=self._video_ssrc,
+                ) + payload
                 self._video_seq = (self._video_seq + 1) & 0xFFFF
                 self._interleaved(0, packet)
                 first = False
@@ -248,7 +279,13 @@ class NativeRtspAvOutput:
                 pcm = bytes(self._audio_buffer[:frame_size])
                 del self._audio_buffer[:frame_size]
                 encoded = self._opus.encode(pcm)
-                header = struct.pack(">BBHII", 0x80, 0x80, self._audio_seq, self._audio_timestamp, self._audio_ssrc)
+                header = _pack_rtp_header(
+                    payload_type=111,
+                    marker=False,
+                    sequence=self._audio_seq,
+                    timestamp=self._audio_timestamp,
+                    ssrc=self._audio_ssrc,
+                )
                 self._audio_seq = (self._audio_seq + 1) & 0xFFFF
                 self._audio_timestamp += 960
                 self._interleaved(2, header + encoded)

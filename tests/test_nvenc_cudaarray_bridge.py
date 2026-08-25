@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from streaming.native_rtsp_output import _opus_library_candidates
+from streaming.native_rtsp_output import _opus_library_candidates, _pack_rtp_header
 from streaming.nvenc_cudaarray_bridge import (
     CudaTensorSurfaceView,
     NvencCudaArrayEncoder,
@@ -23,6 +23,19 @@ def test_native_opus_binary_lives_in_feature_folder():
     assert packaged.name == "opus.dll"
     assert packaged.parent.name == "native_rtsp_output"
     assert packaged.is_absolute()
+
+
+def test_native_rtp_headers_use_announced_payload_types():
+    h264 = _pack_rtp_header(
+        payload_type=96, marker=True, sequence=7, timestamp=9000, ssrc=11
+    )
+    opus = _pack_rtp_header(
+        payload_type=111, marker=False, sequence=8, timestamp=960, ssrc=12
+    )
+    assert h264[0] == 0x80
+    assert h264[1] == 0x80 | 96
+    assert opus[0] == 0x80
+    assert opus[1] == 111
 
 
 def test_nvenc_cudaarray_encoder_rejects_surface_switch():

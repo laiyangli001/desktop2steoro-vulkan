@@ -5,6 +5,7 @@
 - 修复 NativeNVENC 原生 RTSP 发布器的握手失败：RTSP 请求曾把 `\\r\\n` 作为字面量发送，MediaMTX 因无法识别请求行结束而报 `buffer length exceeds 64`；现已恢复真实 CRLF，NativeNVENC 可进入 ANNOUNCE/SETUP/RECORD 阶段。该问题发生在编码前，不是 CUDA surface 或 NVENC 花屏问题。
 - 修复 NativeNVENC 原生 RTSP 发布器的 SETUP 失败：视频和音频 RTP over TCP 的 `Transport` 请求补充 `mode=record`，避免 MediaMTX 报 `transport header contains a invalid mode (null)` 并返回 400；该问题发生在 RTSP 会话协商阶段，不是 NVENC 编码或音频采集故障。
 - 修复 NativeNVENC 原生 Opus 运行库路径错误：发布产物位于 `streaming/native_rtsp_output/opus.dll`，加载器此前却查找 `streaming/opus.dll`，导致存在 DLL 仍报 `Could not find module 'opus.dll'`；现改为优先使用功能目录绝对路径，并保留 `D2S_OPUS_PATH` 覆盖。
+- 修复 NativeNVENC 原生 RTP 包头错误：H.264 和 Opus 包此前只设置 Marker 位、未写入 SDP 声明的动态 payload type，MediaMTX 因而持续报 `received RTP packet with unknown payload type: 0`；现分别写入 H.264 PT 96 与 Opus PT 111，并串行化音视频 RTSP interleaved socket 写入，避免并发包边界互相穿插。
 
 ## 2026-08-25
 
