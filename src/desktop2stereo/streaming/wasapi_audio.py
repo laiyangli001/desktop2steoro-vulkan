@@ -61,8 +61,8 @@ class SoundcardLoopbackSender:
         # A 4096-frame stereo s16le block is about 16 KiB and can fragment;
         # fragmentation is especially harmful when the video muxer bursts.
         self.udp_frames = max(
-            256,
-            int(os.environ.get("D2S_WASAPI_UDP_FRAMES", "1024")),
+            240,
+            int(os.environ.get("D2S_WASAPI_UDP_FRAMES", "240")),
         )
         self._soundcard = sc
         self._loopback = self._resolve_loopback(device_name)
