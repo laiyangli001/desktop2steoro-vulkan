@@ -566,7 +566,7 @@ CUDA Device 0 不一定对应 Vulkan 枚举中的 Physical Device 0。必须通�
 
 Windows/Linux ABI 5 bridge 由同一 workflow 自动发布到 `src/desktop2stereo/streaming/vulkan_ffmpeg_bridge/<platform>/`，功能目录只保留 bridge 本体。Windows 公共 FFmpeg/MinGW DLL 和 FFmpeg/ffprobe 程序由 CI 从固定 FFmpeg 发布包统一安装到 `streaming/rtmp/ffmpeg/bin`，并递归验证 bridge 的所有非系统 PE 依赖均可从该公共目录解析；`vulkan-1.dll` 使用目标显卡驱动安装的系统 Vulkan Loader。Linux 的 FFmpeg shared-object 依赖闭包统一发布到 `streaming/rtmp/ffmpeg/lib`，bridge 通过 RPATH 和运行时预加载访问，CI 要求 `ldd` 无缺失项。运行时优先使用显式 `D2S_VULKAN_FFMPEG_BRIDGE` 覆盖路径，否则自动加载平台 bridge 和上述公共运行时，不再重复发布约 50 MB Windows DLL。
 
-GitHub Actions run `32842009091` 已完成旧自包含布局的 Windows/Linux ABI 5 构建；Windows RTX 3090 本机在移除 `D2S_VULKAN_FFMPEG_BRIDGE` 后直接调用 `VulkanNativeBridge.load()`，已自动加载并通过 ABI 5 原生探针。共享运行时布局由后续远程 run 重新验收并记录。
+GitHub Actions run `32844878204` 已完成共享运行时布局的 Windows/Linux ABI 5 远程构建与依赖闭包验证，并由机器人提交 `e2c34fb` 回写可发布产物。Windows RTX 3090 本机在移除 `D2S_VULKAN_FFMPEG_BRIDGE` 后直接调用 `VulkanNativeBridge.load()`，已从仅含 bridge DLL 的功能目录自动加载，通过系统 Vulkan Loader 和公共 FFmpeg 运行时完成 ABI 5 原生探针；相关运行时契约回归为 `41 passed`。
 
 新增 `src/tools/vulkan_ffmpeg_rtsp_soak.py` 用于验证压缩包进入发布端：工具启动 MediaMTX，启动 FFmpeg `-c:v copy` mux-only RTSP/TCP 发布，只向 stdin 写 H.264 压缩包，不写入 4K rawvideo。RTX 3090 本机使用 run `32534594122` DLL 实测 640×360@30 运行 5 秒（150/150 帧）和 3840×2160@30 运行 10 秒（300/300 帧）均通过，FFmpeg 与 MediaMTX 未中途退出。
 
