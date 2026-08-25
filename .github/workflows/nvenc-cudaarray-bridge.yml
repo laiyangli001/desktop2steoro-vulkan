@@ -28,7 +28,8 @@ jobs:
       - name: Install CUDA compiler and runtime
         uses: Jimver/cuda-toolkit@v0.2.36
         with:
-          cuda: "12.2.2"
+          # MSVC 14.44 in windows-2022 requires CUDA 12.4+ (STL1002).
+          cuda: "12.4.1"
           method: network
           sub-packages: '["nvcc", "cudart", "visual_studio_integration"]'
 
