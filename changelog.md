@@ -2,6 +2,10 @@
 
 ## 2026-08-25
 
+- 补齐 Intel 网络推流合规边界：新增 `src/tools/intel_vulkan_onevpl_smoke.py`，可在真实 Windows Intel 目标机连续验证 Vulkan producer readiness、D3D11/oneVPL Adapter LUID、NV12 提交、oneVPL 出包，并可将 H.264 包送入已运行的 MediaMTX；在目标机验收完成前仍严格记录 `zero_copy=False`。
+
+- Intel oneVPL 的视频-only native surface 在启用桌面音频时自动关闭 native gate，当前帧回到共享 Intel QSV/FFmpeg 音视频路径，避免无声推流或误终止会话；运行时清单升级为 schema 2，记录 FFmpeg 官方源码 ref、构建元数据和包 SHA-256，并在解包前校验。
+
 - Intel Vulkan→D3D11→VideoProcessor→oneVPL 路径收紧零拷贝状态：Vulkan producer timeline 必须完成，D3D11/oneVPL 必须匹配同一设备和 Adapter LUID，oneVPL 提交新增 NV12 texture 同设备校验；当前如实记录 `gpu_to_cpu=False zero_copy=False gpu_copy_count=1`，等待真实 Intel 目标机连续帧和画面验收后再开放 `zero_copy=True`。
 
 - Vulkan ABI 5 bridge 改为复用公共 FFmpeg 运行时：Windows 功能目录只保留 bridge DLL，公共 FFmpeg/MinGW DLL 统一从 `streaming/rtmp/ffmpeg/bin` 加载，Vulkan Loader 使用显卡驱动的系统版本；Linux bridge 只保留 so，依赖统一发布到 `streaming/rtmp/ffmpeg/lib`。CI 新增 Windows 固定版本依赖闭包校验与 Linux `ldd` 闭包校验，移除功能目录中约 50 MB 的重复依赖。GitHub Actions run `32844878204` 已通过并由机器人提交 `e2c34fb` 回写两平台产物；本机在未设置桥接覆盖变量时自动加载 ABI 5 成功，相关回归 `41 passed`。

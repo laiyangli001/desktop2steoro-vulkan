@@ -304,7 +304,17 @@ class DirectSbsOutputConsumer:
                     self.output, "submit_native_d3d11_surface", None
                 )
                 if native_surface is not None and callable(submit_native_surface):
-                    submit_native_surface(native_surface)
+                    handled = submit_native_surface(native_surface)
+                    if handled is False:
+                        # The native surface may be video-only (for example Intel
+                        # oneVPL). Preserve configured audio by sending this frame
+                        # through the shared QSV/FFmpeg path instead of dropping it.
+                        convert_started = self._clock()
+                        frame = self._frame_converter.convert(runtime_result)
+                        self._fps_convert_seconds += self._clock() - convert_started
+                        submit_started = self._clock()
+                        self.output.submit_frame(frame)
+                        self._fps_submit_seconds += self._clock() - submit_started
                     self._fps_submitted_frames += 1
                     self.source_stat_inc("runtime_output_frames")
                     self.source_stat_inc("network_stream_frames")
@@ -2743,8 +2753,24 @@ class IntelD3D11DirectSbsOutput(IntelQsvDirectSbsOutput):
             self._native_onevpl_mux.stdin.write(packet)
             self._native_onevpl_mux.stdin.flush()
 
-    def submit_native_d3d11_surface(self, frame: Any) -> None:
+    def _disable_native_onevpl_for_audio(self) -> None:
+        """Keep audio enabled by falling back from video-only oneVPL output."""
+        if self.stereo_mix_device:
+            print(
+                "[IntelStream] native oneVPL surface path is video-only while "
+                "audio is enabled; falling back to shared Intel QSV/FFmpeg "
+                "audio+video path",
+                flush=True,
+            )
+            os.environ["D2S_ONEVPL_FINAL_SBS"] = "0"
+            os.environ["D2S_INTEL_VULKAN_SBS"] = "0"
+            self._stop_native_onevpl()
+
+    def submit_native_d3d11_surface(self, frame: Any) -> bool:
         """Encode a same-device final BGRA8 texture without CPU upload."""
+        if self.stereo_mix_device:
+            self._disable_native_onevpl_for_audio()
+            return False
         enabled = os.environ.get("D2S_ONEVPL_FINAL_SBS", "0").strip().casefold()
         if enabled not in {"1", "true", "yes", "on"}:
             raise RuntimeError("native final SBS surface path is disabled")
@@ -2817,9 +2843,13 @@ class IntelD3D11DirectSbsOutput(IntelQsvDirectSbsOutput):
                 raise RuntimeError("Intel oneVPL packet muxer stdin is unavailable")
             self._native_onevpl_mux.stdin.write(packet)
             self._native_onevpl_mux.stdin.flush()
+        return True
 
     def submit_vulkan_stereo_frame(self, runtime_result: Any) -> bool:
         """Compose Vulkan eye resources into the Intel D3D11 encoder surface."""
+        if self.stereo_mix_device:
+            self._disable_native_onevpl_for_audio()
+            return False
         enabled = os.environ.get("D2S_ONEVPL_FINAL_SBS", "0").strip().casefold()
         if enabled not in {"1", "true", "yes", "on"}:
             raise RuntimeError("native final SBS surface path is disabled")

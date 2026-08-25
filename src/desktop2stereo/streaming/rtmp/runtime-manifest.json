@@ -1,8 +1,17 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
+  "provenance": {
+    "ffmpeg_source_repository": "https://git.ffmpeg.org/ffmpeg.git",
+    "ffmpeg_source_ref": "n9.0.1",
+    "ffmpeg_build_id": "d2s.2",
+    "ffmpeg_configuration": "project-pinned Vulkan-enabled FFmpeg release; see .github/workflows/vulkan-ffmpeg-bridge.yml",
+    "compiler": "GitHub Actions platform toolchain",
+    "verification": "sha256 applies to the pinned FFmpeg archive; native executable capability is checked at startup"
+  },
   "runtimes": {
     "Windows-amd64": {
       "ffmpeg_archive": "d2s-ffmpeg-9.0.1-d2s.2-windows-amd64.zip",
+      "ffmpeg_archive_sha256": "47f706fd958642e41ef0ddf98693bf9817f76f25819db3e7f02f956227b0301d",
       "mediamtx_archive": "mediamtx_v1.20.1_windows_amd64.zip",
       "ffmpeg_executable": "ffmpeg/bin/ffmpeg.exe",
       "mediamtx_executable": "mediamtx/mediamtx.exe",
@@ -11,6 +20,7 @@
     },
     "Linux-amd64": {
       "ffmpeg_archive": "d2s-ffmpeg-9.0.1-d2s.2-linux-amd64.tar.xz",
+      "ffmpeg_archive_sha256": "9a846ff6dfdecd93b9d32595ac3d3b47f875faffe665270f606c25ae46f35099",
       "mediamtx_archive": "mediamtx_v1.20.1_linux_amd64.tar.gz",
       "ffmpeg_executable": "ffmpeg/bin/ffmpeg",
       "mediamtx_executable": "mediamtx/mediamtx",
@@ -19,6 +29,7 @@
     },
     "Linux-arm64": {
       "ffmpeg_archive": "d2s-ffmpeg-9.0.1-d2s.2-linux-arm64.tar.xz",
+      "ffmpeg_archive_sha256": "46ad957b315ce7392a6b6be1c6e203cfaeefe0ddb85bc2a638d8bb206f2d176a",
       "mediamtx_archive": "mediamtx_v1.20.1_linux_arm64.tar.gz",
       "ffmpeg_executable": "ffmpeg/bin/ffmpeg",
       "mediamtx_executable": "mediamtx/mediamtx",
@@ -27,6 +38,7 @@
     },
     "Darwin-amd64": {
       "ffmpeg_archive": "d2s-ffmpeg-9.0.1-d2s.2-darwin-amd64.zip",
+      "ffmpeg_archive_sha256": "93c3994471c7424bafeee6232008a90685c188a0ce37027a931d26a00d39a239",
       "mediamtx_archive": "mediamtx_v1.20.1_darwin_amd64.tar.gz",
       "ffmpeg_executable": "ffmpeg/bin/ffmpeg",
       "mediamtx_executable": "mediamtx/mediamtx",
@@ -35,6 +47,7 @@
     },
     "Darwin-arm64": {
       "ffmpeg_archive": "d2s-ffmpeg-9.0.1-d2s.2-darwin-arm64.zip",
+      "ffmpeg_archive_sha256": "b47ebcda8ed3620e4b5c0c53e3c85d4ffb86b2ca9226211394ab894bc50bbae6",
       "mediamtx_archive": "mediamtx_v1.20.1_darwin_arm64.tar.gz",
       "ffmpeg_executable": "ffmpeg/bin/ffmpeg",
       "mediamtx_executable": "mediamtx/mediamtx",

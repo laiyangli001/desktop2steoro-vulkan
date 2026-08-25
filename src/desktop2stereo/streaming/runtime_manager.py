@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import platform
@@ -36,12 +37,55 @@ def _safe_extract(archive: Path, destination: Path) -> None:
         bundle.extractall(destination)
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _validate_manifest(manifest: dict, entry: dict, runtime_key: str) -> None:
+    """Reject an unprovenanced runtime before it can be published."""
+    if int(manifest.get("schema_version", 1)) < 2:
+        return
+    provenance = manifest.get("provenance")
+    required_provenance = {
+        "ffmpeg_source_repository",
+        "ffmpeg_source_ref",
+        "ffmpeg_build_id",
+        "ffmpeg_configuration",
+        "compiler",
+    }
+    if not isinstance(provenance, dict) or not required_provenance.issubset(provenance):
+        missing = sorted(required_provenance - set(provenance or {}))
+        raise RuntimeError(
+            f"streaming runtime manifest provenance is incomplete for {runtime_key}: {missing}"
+        )
+    archive_hash = str(entry.get("ffmpeg_archive_sha256", "")).strip().casefold()
+    if len(archive_hash) != 64 or any(char not in "0123456789abcdef" for char in archive_hash):
+        raise RuntimeError(
+            f"streaming runtime manifest has no valid FFmpeg archive SHA-256 for {runtime_key}"
+        )
+
+
+def _verify_archive(path: Path, expected_hash: str) -> None:
+    actual_hash = _sha256(path)
+    if actual_hash.casefold() != expected_hash.casefold():
+        raise RuntimeError(
+            f"streaming runtime archive SHA-256 mismatch: {path.name}; "
+            f"expected={expected_hash} actual={actual_hash}"
+        )
+
+
 def ensure_runtime(runtime_root: Path) -> tuple[Path, Path, Path]:
     manifest_path = runtime_root / "runtime-manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    entry = manifest["runtimes"].get(_runtime_key())
+    runtime_key = _runtime_key()
+    entry = manifest["runtimes"].get(runtime_key)
     if entry is None:
-        raise RuntimeError(f"no streaming runtime registered for {_runtime_key()}")
+        raise RuntimeError(f"no streaming runtime registered for {runtime_key}")
+    _validate_manifest(manifest, entry, runtime_key)
     ffmpeg = runtime_root / entry["ffmpeg_executable"]
     mediamtx = runtime_root / entry["mediamtx_executable"]
     config = runtime_root / entry.get("mediamtx_config", "mediamtx.yml")
@@ -58,6 +102,8 @@ def ensure_runtime(runtime_root: Path) -> tuple[Path, Path, Path]:
         return ffmpeg, mediamtx, config
     archives = [runtime_root / entry["ffmpeg_archive"], runtime_root / entry["mediamtx_archive"]]
     missing = [str(path) for path in archives if not path.is_file()]
+    if not missing and int(manifest.get("schema_version", 1)) >= 2:
+        _verify_archive(archives[0], entry["ffmpeg_archive_sha256"])
     if missing:
         raise FileNotFoundError("missing streaming runtime archive(s): " + ", ".join(missing))
     with tempfile.TemporaryDirectory(prefix="d2s-runtime-", dir=runtime_root) as temp_name:

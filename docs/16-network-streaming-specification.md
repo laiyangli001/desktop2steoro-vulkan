@@ -1072,7 +1072,7 @@ GUI 检查校准指纹
 
 - NVIDIA 原生 ABI 2 bridge 可由 CUDA surface kernel 将最终 SBS tensor 直接写入 NVENC 注册的 OpenGL `cudaArray_t`；本机 RTX 3090 已完成真实 H.264 出包验证，该路径记录 `gpu_to_cpu=False zero_copy=True gpu_copy_count=0`。PyNvVideoCodec Python API 仍不能直接接收 `cudaArray_t`，因此作为后续回退时记录 `zero_copy=False`。
 - 当前 RTX 3090 Vulkan 驱动对编码 NV12 `STORAGE_IMAGE` 能力不满足，native Vulkan 选择固定槽位 device-local copy；该路径不下载 CPU，但不是严格 zero-copy。
-- Intel Windows 已完成 Vulkan packed SBS → D3D11 shared BGRA → VideoProcessor NV12 → oneVPL/QSV 的代码接线和契约校验；当前真实状态为 `gpu_to_cpu=False gpu_copy_count=1 zero_copy=False`。尚未在 Intel 目标机完成连续帧和最终画面验收，不能宣称严格零拷贝；失败时回退 QSV/VAAPI 或 host-upload。
+- Intel Windows 已完成 Vulkan packed SBS → D3D11 shared BGRA → VideoProcessor NV12 → oneVPL/QSV 的代码接线和契约校验；`src/tools/intel_vulkan_onevpl_smoke.py` 可在目标机验证连续帧、LUID、producer readiness、oneVPL 出包，并可把 H.264 包送入已运行的 MediaMTX。当前真实状态仍为 `gpu_to_cpu=False gpu_copy_count=1 zero_copy=False`；完成目标机验收前不能宣称严格零拷贝，失败时回退 QSV/VAAPI 或 host-upload。
 - macOS 和无可用 GPU interop 的平台仍必须明确进入平台原生硬件路径或 host-upload，不能套用 Intel Windows 的 D3D11 契约。
 
 ### 9. 可观测性与故障分类
@@ -1126,7 +1126,7 @@ GUI 检查校准指纹
 - [x] 本项目 FFmpeg 构建包含 `h264_vulkan` 和 `hevc_vulkan`（当前 Windows d2s.2 本机验证）。
 - [x] 本项目 FFmpeg 构建包含原生桥需要的 shared libraries、headers 和 pkg-config 文件。
 - [x] 未启用 `--enable-nonfree`；公开构建配置已移除该选项。
-- [x] Windows/Linux 构建均完成静态能力验证；GitHub Actions 已完成官方 FFmpeg 源码构建、CMake bridge 编译和 ABI 导出检查，构建 commit、配置和 SHA-256 写入 manifest。
+- [x] Windows/Linux 构建均完成静态能力验证；GitHub Actions 产物来自固定的官方 FFmpeg 源码 ref，CMake bridge 编译和 ABI 导出检查已完成；构建 ID、配置、工具链和 FFmpeg 包 SHA-256 写入 manifest，并在运行时校验。
 
 ### GPU 通路
 
@@ -1143,8 +1143,8 @@ GUI 检查校准指纹
 - [x] 正常路径没有 CPU 原始帧下载（运行日志 `gpu_to_cpu=False`）。
 - [x] 使用 ready/release semaphore 管理槽位。
 - [x] 没有逐帧 device-wide synchronize；RGB→NV12 转换使用按 NV12 输出槽分配的 command/fence 环，只有同一槽再次复用时等待该槽 fence。
-- [x] Intel Windows Vulkan packed SBS 直接写入 D3D11-owned BGRA8，并通过 VideoProcessor/oneVPL 消费同一适配器资源；不经过 CPU RGB stdin。
-- [x] Intel Windows 校验 Vulkan/D3D11/oneVPL Adapter LUID、共享句柄、producer 同步和资源生命周期；失败时只回退一次并记录真实后端。
+- [ ] Intel Windows Vulkan packed SBS 已接入 D3D11-owned BGRA8、VideoProcessor 和 oneVPL，但仍需真实 Intel 目标机的连续帧/句柄/画面验收后才能标记完成。
+- [x] Intel Windows 代码校验 Vulkan/D3D11/oneVPL Adapter LUID、共享句柄、producer 同步和资源生命周期；真实目标机验收失败时只回退一次并记录真实后端。
 
 ### 编码与发布
 
@@ -1154,7 +1154,9 @@ GUI 检查校准指纹
 - [x] RTSP 本机发布使用稳定传输设置（TCP、`pkt_size=1452`）。
 - [x] MediaMTX 输出 WebRTC H.264 + Opus（本机 MediaMTX 日志确认 `2 tracks (H264, Opus)`）。
 - [x] 音频短暂异常不会终止视频；SoundCard/WASAPI 捕获线程异常后持续发送静音 PCM，视频 mux/编码链路继续运行。
-- [ ] Intel Windows native final-SBS surface 在真实 Intel 目标机连续进入 oneVPL/QSV 并发布到 MediaMTX/WebRTC；代码已具备 LUID、共享句柄、producer timeline 和 D3D11 device 校验，但尚未完成目标机验收。日志区分 `native_depth_input_zero_copy` 与 `native_depth_zero_copy`，不把 CPU 深度输出误报为完整推理零拷贝。
+- [ ] Intel Windows native final-SBS surface 在真实 Intel 目标机连续进入 oneVPL/QSV 并发布到 MediaMTX/WebRTC；`src/tools/intel_vulkan_onevpl_smoke.py` 已提供目标机烟测，但尚未完成目标机验收。日志区分 `native_depth_input_zero_copy` 与 `native_depth_zero_copy`，不把 CPU 深度输出误报为完整推理零拷贝。
+- [x] Intel oneVPL 视频-only 分支在启用桌面音频时自动关闭 native gate，并回到共享 Intel QSV/FFmpeg 音视频路径，不静默丢音频。
+- [x] `runtime-manifest.json` schema 2 已记录 FFmpeg 官方源码 ref、构建 ID、构建工具链和 FFmpeg 包 SHA-256；运行时在解包前校验哈希，并在缺失 provenance 时拒绝启动。
 
 ### 回退与闭环
 
