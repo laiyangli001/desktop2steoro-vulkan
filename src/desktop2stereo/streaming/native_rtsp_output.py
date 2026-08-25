@@ -37,7 +37,7 @@ def _pack_rtp_header(
 
 def _audio_pacing_step(deadline: float | None, now: float) -> tuple[float, float]:
     packet_seconds = 960 / 48000
-    if deadline is None or now - deadline > packet_seconds * 2:
+    if deadline is None or now - deadline > packet_seconds / 4:
         deadline = now
     delay = max(0.0, deadline - now)
     return delay, deadline + packet_seconds
@@ -119,6 +119,10 @@ class NativeRtspAvOutput:
             4 * 1024,
             int(os.environ.get("D2S_NATIVE_RTP_BATCH_BYTES", str(16 * 1024))),
         )
+        self._audio_prebuffer_frames = max(
+            2 * 960,
+            int(os.environ.get("D2S_NATIVE_AUDIO_PREBUFFER_FRAMES", str(6 * 960))),
+        )
         self._socket: socket.socket | None = None
         self._socket_write_lock = threading.Lock()
         self._session = ""
@@ -182,7 +186,8 @@ class NativeRtspAvOutput:
             "[DirectSbsStream] NativeNVENC RTSP/RTP active: "
             f"video=H264/90000 audio={'Opus/48000' if self._opus else 'none'} "
             f"video_batch={self._video_batch_bytes} audio_packet=960frames/20ms "
-            "audio_pacing=realtime ffmpeg=disabled",
+            f"audio_prebuffer={self._audio_prebuffer_frames * 1000 // 48000}ms "
+            "audio_pacing=clocked-jitter-buffer ffmpeg=disabled",
             flush=True,
         )
 
@@ -300,32 +305,75 @@ class NativeRtspAvOutput:
 
     def _audio_loop(self) -> None:
         assert self._audio_socket is not None and self._opus is not None
+        frame_size = 960 * 2 * 2
+        prebuffer_size = self._audio_prebuffer_frames * 2 * 2
+        packet_seconds = 960 / 48000
         next_send_at: float | None = None
+        underruns = 0
+
         while not self._audio_stop.is_set():
-            try:
-                self._audio_buffer.extend(self._audio_socket.recv(65536))
-            except socket.timeout:
-                continue
-            frame_size = 960 * 2 * 2
-            while len(self._audio_buffer) >= frame_size:
+            if next_send_at is None:
+                self._audio_socket.settimeout(0.2)
+                try:
+                    self._audio_buffer.extend(self._audio_socket.recv(65536))
+                except socket.timeout:
+                    continue
+                if len(self._audio_buffer) < prebuffer_size:
+                    continue
+                # WASAPI returns 4096-frame blocks about every 85 ms. Starting
+                # only after six Opus packets are buffered prevents those block
+                # boundaries from becoming alternating 25/15 ms RTP intervals.
+                next_send_at = time.monotonic()
+
+            now = time.monotonic()
+            if now < next_send_at:
+                self._audio_socket.settimeout(
+                    max(0.001, min(packet_seconds, next_send_at - now))
+                )
+                try:
+                    self._audio_buffer.extend(self._audio_socket.recv(65536))
+                    continue
+                except socket.timeout:
+                    pass
+                now = time.monotonic()
+                if now < next_send_at:
+                    continue
+
+            # Do not emit catch-up bursts after Python scheduling or a video
+            # socket write stalls this thread. A packet more than 5 ms late
+            # restarts the wall clock; the RTP timestamp still advances by
+            # exactly 960 samples.
+            _delay, following_send_at = _audio_pacing_step(next_send_at, now)
+
+            if len(self._audio_buffer) >= frame_size:
                 pcm = bytes(self._audio_buffer[:frame_size])
                 del self._audio_buffer[:frame_size]
-                encoded = self._opus.encode(pcm)
-                delay, next_send_at = _audio_pacing_step(
-                    next_send_at, time.monotonic()
-                )
-                if delay > 0.0 and self._audio_stop.wait(delay):
-                    return
-                header = _pack_rtp_header(
-                    payload_type=111,
-                    marker=False,
-                    sequence=self._audio_seq,
-                    timestamp=self._audio_timestamp,
-                    ssrc=self._audio_ssrc,
-                )
-                self._audio_seq = (self._audio_seq + 1) & 0xFFFF
-                self._audio_timestamp += 960
-                self._interleaved(2, header + encoded)
+            else:
+                # Keep RTP continuous during a rare capture underrun. Preserve
+                # temporal order by padding the available PCM with silence.
+                pcm = bytes(self._audio_buffer)
+                self._audio_buffer.clear()
+                pcm += bytes(frame_size - len(pcm))
+                underruns += 1
+                if underruns == 1 or underruns % 50 == 0:
+                    print(
+                        "[DirectSbsStream] Native Opus jitter buffer underrun: "
+                        f"count={underruns} buffered={len(self._audio_buffer) // 4}frames",
+                        flush=True,
+                    )
+
+            encoded = self._opus.encode(pcm)
+            header = _pack_rtp_header(
+                payload_type=111,
+                marker=False,
+                sequence=self._audio_seq,
+                timestamp=self._audio_timestamp,
+                ssrc=self._audio_ssrc,
+            )
+            self._audio_seq = (self._audio_seq + 1) & 0xFFFF
+            self._audio_timestamp += 960
+            self._interleaved(2, header + encoded)
+            next_send_at = following_send_at
 
     def submit_cuda_frame(self, frame: Any) -> None:
         for packet in self.encoder.encode_timed(frame):

@@ -9,6 +9,7 @@
 - 优化 NativeNVENC 原生推流的音频连续性：4K H.264 RTP 不再对每个约 1400 字节分片单独调用 `sendall`，改为保持 RTP/RTSP 包边界的约 64 KiB 批量写入，显著减少每秒 Python/GIL 和 socket 争用；本地 PCM UDP 接收缓冲扩大到 1 MiB，降低视频突发期间 WASAPI 采集线程饥饿和 Opus 音频丢包导致的卡顿。
 - 修复 NativeNVENC 4K 推流仍持续触发 WASAPI discontinuity 的核心瓶颈：Annex-B 解析器此前逐字节用 Python 扫描整帧，200 KB 测试帧单次约需 52 ms，超过 25 FPS 的 40 ms 帧周期并持续占用 GIL；现改用底层 `bytes.find` 按 NAL 起始码定位，同时兼容三字节与四字节 start code，避免视频解析饿死音频采集线程。
 - 对齐 Vulkan/FFmpeg 音频时间轴行为：Native Opus 不再把每个 4096 帧 WASAPI 采集块拆出的多个 960 帧包瞬间连发，而是按 48 kHz RTP 时钟严格每 20 ms 发送一包，调度严重落后时重置节拍以避免追赶式突发；视频 RTSP/TCP 聚合批量由 64 KiB 降至默认 16 KiB（可用 `D2S_NATIVE_RTP_BATCH_BYTES` 调整），降低共享 socket 锁对音频包的最长等待。
+- 修复 Native Opus 在无 discontinuity 日志时仍周期性卡顿：WASAPI 的 4096 帧输入约每 85 ms 成块到达，旧实现仍会把采集块边界映射成 RTP 发包抖动；现新增默认 5760 帧（120 ms）的时钟化抖动缓冲，接收 UDP 与每 20 ms Opus 发包解耦，并在调度晚于 5 ms 时放弃追赶式连发。罕见欠载会用静音补齐当前包并保留连续 RTP 时间轴，可通过 `D2S_NATIVE_AUDIO_PREBUFFER_FRAMES` 调整预缓冲。
 
 ## 2026-08-25
 

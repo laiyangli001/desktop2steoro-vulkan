@@ -52,9 +52,21 @@ def test_native_audio_pacing_uses_20ms_opus_clock():
     assert delay == pytest.approx(0.015)
     assert deadline == pytest.approx(10.04)
 
+    delay, deadline = _audio_pacing_step(deadline, 10.048)
+    assert delay == 0.0
+    assert deadline == pytest.approx(10.068)
+
     delay, deadline = _audio_pacing_step(deadline, 10.2)
     assert delay == 0.0
     assert deadline == pytest.approx(10.22)
+
+
+def test_native_audio_prebuffers_six_opus_packets(monkeypatch):
+    monkeypatch.delenv("D2S_NATIVE_AUDIO_PREBUFFER_FRAMES", raising=False)
+    output = NativeRtspAvOutput(
+        object(), host="127.0.0.1", port=8554, stream_key="live", fps=25
+    )
+    assert output._audio_prebuffer_frames == 6 * 960
 
 
 def test_native_annexb_parser_handles_three_and_four_byte_start_codes():
