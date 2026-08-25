@@ -643,6 +643,7 @@ class FfmpegDirectSbsOutput:
         calibration_port: int | None = None,
         on_calibration_fps: Callable[[int], Any] | None = None,
         calibration_fingerprint: dict[str, str] | None = None,
+        on_stream_fps_selected: Callable[[int], Any] | None = None,
     ) -> None:
         self.base_dir = Path(base_dir)
         self.protocol = str(protocol or "RTMP").strip().upper()
@@ -663,6 +664,7 @@ class FfmpegDirectSbsOutput:
         self.auto_calibration = bool(auto_calibration and self.protocol == "WEBRTC")
         self.calibration_port = int(calibration_port or min(65535, self.port + 1))
         self._on_calibration_fps = on_calibration_fps
+        self._on_stream_fps_selected = on_stream_fps_selected
         self._calibration_controller: StreamCalibrationController | None = None
         self.video_encoder = "libx265" if self.use_hevc else "libx264"
         self._active_rate_budget: tuple[int, int, int] | None = None
@@ -985,7 +987,10 @@ class FfmpegDirectSbsOutput:
         measured_fps: float, maximum_fps: int
     ) -> int:
         maximum = max(1, int(maximum_fps))
-        safe_limit = min(float(maximum), max(1.0, float(measured_fps)) * 0.90)
+        measured = max(1.0, float(measured_fps))
+        if measured >= float(maximum):
+            return maximum
+        safe_limit = min(float(maximum), measured * 0.90)
         for candidate in (60, 50, 48, 40, 30, 25, 24, 20, 15, 12, 10):
             if candidate <= maximum and candidate <= safe_limit:
                 return candidate
@@ -1044,6 +1049,8 @@ class FfmpegDirectSbsOutput:
             )
             self._stream_rate_calibrated = True
             self._next_submit_at = timestamp + 1.0 / float(self.fps)
+            if self._on_stream_fps_selected is not None:
+                self._on_stream_fps_selected(self.fps)
             print(
                 f"[DirectSbsStream] Stable stream rate selected: "
                 f"measured={measured_fps:.1f} target={self.fps} FPS "

@@ -10,6 +10,7 @@
 - 修复 NativeNVENC 4K 推流仍持续触发 WASAPI discontinuity 的核心瓶颈：Annex-B 解析器此前逐字节用 Python 扫描整帧，200 KB 测试帧单次约需 52 ms，超过 25 FPS 的 40 ms 帧周期并持续占用 GIL；现改用底层 `bytes.find` 按 NAL 起始码定位，同时兼容三字节与四字节 start code，避免视频解析饿死音频采集线程。
 - 对齐 Vulkan/FFmpeg 音频时间轴行为：Native Opus 不再把每个 4096 帧 WASAPI 采集块拆出的多个 960 帧包瞬间连发，而是按 48 kHz RTP 时钟严格每 20 ms 发送一包，调度严重落后时重置节拍以避免追赶式突发；视频 RTSP/TCP 聚合批量由 64 KiB 降至默认 16 KiB（可用 `D2S_NATIVE_RTP_BATCH_BYTES` 调整），降低共享 socket 锁对音频包的最长等待。
 - 修复 Native Opus 在无 discontinuity 日志时仍周期性卡顿：WASAPI 的 4096 帧输入约每 85 ms 成块到达，旧实现仍会把采集块边界映射成 RTP 发包抖动；现新增默认 5760 帧（120 ms）的时钟化抖动缓冲，接收 UDP 与每 20 ms Opus 发包解耦，并在调度晚于 5 ms 时放弃追赶式连发。罕见欠载会用静音补齐当前包并保留连续 RTP 时间轴，可通过 `D2S_NATIVE_AUDIO_PREBUFFER_FRAMES` 调整预缓冲。
+- 修复网络推流测速被请求捕获帧率封顶后错误降档：例如捕获固定 30 FPS 时，旧逻辑只能测得约 30 FPS，再应用 90% 安全系数后长期选择 25 FPS。网络测速阶段现在临时将捕获提高到“请求值 + 5 FPS”（30→35），测速结束后恢复手动捕获值或保留自动模式的 +5 FPS 余量；实测 SBS 生产率达到请求上限时，编码目标直接使用请求上限，使浏览器可获得完整 30 FPS。
 
 ## 2026-08-25
 

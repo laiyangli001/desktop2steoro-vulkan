@@ -92,6 +92,21 @@ def test_manual_capture_rate_is_not_adapted() -> None:
         assert rate.observe_sbs_fps(20.0, frame_count=100, now=float(now)) == 60
 
 
+def test_manual_network_probe_temporarily_adds_five_fps_headroom() -> None:
+    rate = AdaptiveCaptureRate(30, enabled=False)
+
+    assert rate.begin_stream_probe(30) == 35
+    assert rate.observe_sbs_fps(34.0, frame_count=100, now=1.0) == 35
+    assert rate.finish_stream_probe(30) == 30
+
+
+def test_auto_network_probe_retains_selected_rate_headroom() -> None:
+    rate = AdaptiveCaptureRate(60, enabled=True)
+
+    assert rate.begin_stream_probe(30) == 35
+    assert rate.finish_stream_probe(30) == 35
+
+
 def test_calibration_limit_caps_capture_during_tier_test() -> None:
     rate = AdaptiveCaptureRate(60, enabled=True, evaluation_interval_s=1.0)
 

@@ -378,6 +378,7 @@ def test_non_webrtc_start_recommends_webrtc(monkeypatch, capsys):
 
 
 def test_stream_rate_uses_stable_windows_and_fixed_pacing():
+    selected_fps = []
     output = FfmpegDirectSbsOutput(
         base_dir=str(APP_ROOT),
         protocol="RTMP",
@@ -386,6 +387,7 @@ def test_stream_rate_uses_stable_windows_and_fixed_pacing():
         fps=60,
         crf=20,
         os_name="Windows",
+        on_stream_fps_selected=selected_fps.append,
     )
 
     first_submit_at = None
@@ -398,6 +400,7 @@ def test_stream_rate_uses_stable_windows_and_fixed_pacing():
     assert first_submit_at is not None
     assert first_submit_at >= 5.0
     assert output.fps == 30
+    assert selected_fps == [30]
     assert not output.should_submit_frame(first_submit_at + 0.01)
     assert output.should_submit_frame(first_submit_at + 0.04)
 
@@ -406,6 +409,8 @@ def test_stream_rate_selector_keeps_headroom_across_gpu_speeds():
     select = FfmpegDirectSbsOutput._select_sustainable_stream_fps
 
     assert select(40.0, 60) == 30
+    assert select(30.1, 30) == 30
+    assert select(29.9, 30) == 25
     assert select(28.0, 60) == 25
     assert select(20.0, 60) == 15
 

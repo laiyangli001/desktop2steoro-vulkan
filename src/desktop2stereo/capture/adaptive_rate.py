@@ -36,12 +36,36 @@ class AdaptiveCaptureRate:
         self.minimum_sample_frames = max(1, int(minimum_sample_frames))
         self._target_fps = self.base_fps
         self._calibration_limit: int | None = None
+        self._stream_probe_active = False
         self._window_started: float | None = None
         self._window_samples: list[float] = []
         self._lock = threading.Lock()
 
     def current_fps(self) -> int:
         with self._lock:
+            return int(self._target_fps)
+
+    def begin_stream_probe(self, requested_fps: int, *, headroom: int = 5) -> int:
+        """Temporarily capture above the requested network output rate."""
+        with self._lock:
+            requested = max(1, min(240, int(requested_fps)))
+            self._stream_probe_active = True
+            self._target_fps = min(240, requested + max(0, int(headroom)))
+            self._window_started = None
+            self._window_samples.clear()
+            return int(self._target_fps)
+
+    def finish_stream_probe(self, selected_fps: int) -> int:
+        """Restore manual capture or retain +5 FPS headroom in auto mode."""
+        with self._lock:
+            self._stream_probe_active = False
+            if self.enabled:
+                self._target_fps = min(
+                    self.base_fps,
+                    max(1, int(selected_fps)) + 5,
+                )
+            else:
+                self._target_fps = self.base_fps
             return int(self._target_fps)
 
     def set_calibration_limit(self, fps: int | None) -> int:
@@ -67,6 +91,8 @@ class AdaptiveCaptureRate:
             return self.current_fps()
         timestamp = time.monotonic() if now is None else float(now)
         with self._lock:
+            if self._stream_probe_active:
+                return int(self._target_fps)
             if not self.enabled or measured <= 0.0:
                 return int(self._target_fps)
             if self.activity_guard_enabled:

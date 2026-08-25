@@ -388,6 +388,13 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
             configured_run_mode, configured_target_fps
         ),
     )
+    if is_network_stream_mode(configured_run_mode):
+        probe_capture_fps = adaptive_capture_rate.begin_stream_probe(int(FPS))
+        print(
+            "[DirectSbsStream] Stream-rate probe capture headroom: "
+            f"requested={int(FPS)} capture={probe_capture_fps} FPS",
+            flush=True,
+        )
     context = create_runtime_context(
         file_path=str(Path(__file__).resolve().parents[1] / "main.py"),
         settings=settings,
@@ -602,6 +609,7 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
                     ),
                     on_calibration_fps=adaptive_capture_rate.set_calibration_limit,
                     calibration_fingerprint=build_calibration_fingerprint(settings),
+                    on_stream_fps_selected=adaptive_capture_rate.finish_stream_probe,
                 )
                 backend_decision = resolve_network_video_backend(
                     configured_run_mode,
