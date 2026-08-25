@@ -73,14 +73,22 @@ def test_network_stream_session_policy_uses_gpu_backends_in_advanced_mode() -> N
     assert config.port == 1122
     assert config.fps == 30
 
-    # Advanced Auto enters the shared capability chain at Vulkan; the Vulkan
-    # output owns OpenGL/vendor-GPU and FFmpeg fallback.
-    assert resolve_network_video_backend(
+    # Advanced Auto keeps a distinct lazy chain so vendor-native GPU encoding
+    # is attempted before Vulkan. Explicit Vulkan remains unchanged.
+    nvidia_auto = resolve_network_video_backend(
         "RTMP Streamer", "auto", device_info="NVIDIA RTX 3090"
-    ).backend == "vulkan"
-    assert resolve_network_video_backend(
+    )
+    assert nvidia_auto.backend == "auto"
+    assert nvidia_auto.reason.startswith(
+        "Auto capability chain: NVIDIA -> Vulkan"
+    )
+    intel_auto = resolve_network_video_backend(
         "RTMP Streamer", "auto", device_info="Intel Arc"
-    ).backend == "vulkan"
+    )
+    assert intel_auto.backend == "auto"
+    assert intel_auto.reason.startswith(
+        "Auto capability chain: Intel -> Vulkan"
+    )
     assert resolve_network_video_backend(
         "RTMP Streamer", "vulkan", device_info="NVIDIA RTX 3090"
     ).backend == "vulkan"

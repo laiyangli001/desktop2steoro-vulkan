@@ -4,7 +4,7 @@
 
 目标是消除当前 4K SBS 推流中的 CUDA/ROCm → CPU RGB24 → FFmpeg stdin 路径，让图像在 GPU 内完成 SBS 整理、颜色转换和硬件编码。编码后的 H.264/H.265 小数据包仍通过 FFmpeg/MediaMTX 发布，并由局域网头显浏览器通过 WebRTC 播放。
 
-> 本文同时记录实施设计和当前验收状态。native Vulkan 编码桥已完成独立 4K 编码烟测并接入高级网络推流；本机已完成连续 600 帧 3840×2160@30 发布和 ffprobe 媒体参数验证；SoundCard/WASAPI 连续运行 10.12 秒无 runtime error，MediaMTX 确认 `2 tracks (H264, Opus)`。Vulkan 失败后的 OpenGL NVIDIA CUDA interop 现在优先进入原生 NVENC CUDAARRAY bridge，GitHub Actions run `32828611676` 已完成 CUDA 12.4.1 Windows x64 ABI 2 DLL 编译与功能目录发布；本机 RTX 3090 已通过 CUDA SBS tensor → surface kernel → NVENC 的 640×360 H.264 实帧出包验证（198 bytes，Annex-B 起始码 `00000001`），头显画面仍待真机验收，失败时保留已完成 640×360 RTSP 闭环的 PyNvVideoCodec/NVENC 分支；头显端持续 4K/30 FPS 实机验收仍需继续完成；Khronos validation 层会触发 FFmpeg 内部 NV12 frame-pool 的已知 VUID 与 flush/idle 阻塞，程序检测到该层后主动进入 OpenGL 探测并按能力回退。
+> 本文同时记录实施设计和当前验收状态。native Vulkan 编码桥已完成独立 4K 编码烟测并接入高级网络推流；本机已完成连续 600 帧 3840×2160@30 发布和 ffprobe 媒体参数验证；SoundCard/WASAPI 连续运行 10.12 秒无 runtime error，MediaMTX 确认 `2 tracks (H264, Opus)`。Auto 现在先尝试厂商原生 GPU 路径：NVIDIA 原生 NVENC CUDAARRAY bridge 的 GitHub Actions run `32828611676` 已完成 CUDA 12.4.1 Windows x64 ABI 2 DLL 编译与功能目录发布；本机 RTX 3090 已通过 CUDA SBS tensor → surface kernel → NVENC 的 640×360 H.264 实帧出包验证（198 bytes，Annex-B 起始码 `00000001`）。厂商路径失败后才懒加载 Vulkan ABI 5 bridge，再进入通用 OpenGL/FFmpeg/CPU 回退；头显画面及持续 4K/30 FPS 仍待真机验收。Khronos validation 层会触发 FFmpeg 内部 NV12 frame-pool 的已知 VUID 与 flush/idle 阻塞，显式 Vulkan 模式检测到该层后按能力回退。
 
 ## 目录
 
@@ -169,28 +169,28 @@ Vulkan packed SBS image pass
 推荐回退顺序：
 
 ```text
-高级推流 Auto
-├─ Windows/Linux：h264_vulkan / hevc_vulkan
-├─ OpenGL GPU fallback：CUDA–OpenGL → NVENC；PBO → 厂商/CPU
-├─ Windows：NVENC → QSV → AMF
-├─ Windows + Intel：Vulkan packed SBS → D3D11 shared BGRA/NV12 → oneVPL/QSV
-├─ Linux：QSV → VAAPI
-├─ macOS：VideoToolbox
-└─ libx264 / libx265
-
 高级网络推流 Auto
-├─ NVIDIA：PyNvVideoCodec/NVENC 或 Vulkan/OpenGL fallback
-├─ AMD：HIP → D3D11 → AMF 或 Vulkan/OpenGL fallback
-├─ Intel：D3D11/oneVPL/QSV 或 Vulkan/FFmpeg fallback
-└─ CPU：libx264 / libx265
+├─ 厂商原生 GPU
+│  ├─ NVIDIA：NativeNVENC/CUDAARRAY SurfaceKernel → CUDAARRAY device-copy → PyNvVideoCodec
+│  ├─ AMD：HIP/D3D11 → AMF
+│  ├─ Intel Windows：Vulkan packed SBS → D3D11 shared BGRA/NV12 → oneVPL/QSV
+│  └─ macOS：VideoToolbox
+├─ Vulkan Video：h264_vulkan / hevc_vulkan
+├─ 通用 OpenGL/FFmpeg 硬件回退
+└─ libx264 / libx265
 ```
 
-### OpenGL 备用图像路径
+NVIDIA 原生 NVENC 使用 OpenGL texture/CUDAARRAY 作为跨 API 的持久 GPU
+表面，但它在策略层属于“厂商原生 GPU”首选阶段，不代表必须先失败一次 Vulkan。
+只有厂商原生路径未通过能力探测或运行时初始化，Auto 才加载并探测 Vulkan ABI 5
+bridge；显式选择 `Vulkan Video` 时则直接从 Vulkan 开始。
 
-OpenGL 只作为 Vulkan 图像路径的备用后端，不是网络协议，也不是通用视频编码器。浏览器端仍然接收 `H.264/Opus → MediaMTX → WebRTC`。OpenGL 负责提供 RGBA texture/FBO，最终必须交给厂商编码器或现有 host-upload FFmpeg 路径：
+### OpenGL/CUDAARRAY 共享表面路径
+
+OpenGL 不是网络协议，也不是通用视频编码器；它在这里提供可被 CUDA/HIP 和厂商编码器复用的 RGBA texture/FBO。Auto 的 NVIDIA 厂商首选阶段会先把该表面交给 NativeNVENC CUDAARRAY，因此不依赖 Vulkan 先失败；显式 Vulkan 或 Vulkan 回退阶段也复用同一表面能力层。浏览器端仍然只接收 `H.264/Opus → MediaMTX → WebRTC`，没有厂商互操作时才进入现有 host-upload FFmpeg 路径：
 
 ```text
-Vulkan 失败
+Auto 厂商原生 GPU 首选，或 Vulkan 失败后的共享回退
     ↓
 OpenGL headless context（WGL/EGL/GLX）
     ↓
@@ -524,16 +524,16 @@ SRT 适合服务间或原生客户端传输，但浏览器不能直接播放 SRT
 
 ### 启动探测顺序
 
-1. 检查 FFmpeg 共享库版本与构建清单一致。
-2. 检查 `h264_vulkan`/`hevc_vulkan` 是否存在。
-3. 枚举 Vulkan physical device，并与计算 Tensor 所在 GPU 的 UUID/LUID 匹配。
-4. 检查 H.264/H.265 encode 扩展。
-5. 查找带 `VK_QUEUE_VIDEO_ENCODE_BIT_KHR` 的 queue family。
-6. 查询目标 Profile、Level、分辨率和 NV12/P010 格式。
-7. 创建 1 秒合成图编码探针。
-8. 探针成功后才选择 Vulkan 路径。
-9. Vulkan 初始化或探针失败时，探测 OpenGL headless context、RGBA8 texture、PBO/fence 和厂商编码器。
-10. 只有 OpenGL 图像提交与编码探针都成功，才选择 OpenGL fallback；否则进入现有 host-upload 路径。
+1. Auto 先识别 NVIDIA、AMD、Intel 或 macOS 厂商原生编码能力。
+2. 对当前厂商路径执行真实表面注册、同适配器和最小编码探针；成功后直接使用，不加载 Vulkan bridge。
+3. 厂商路径失败时，检查 FFmpeg 共享库版本与构建清单一致。
+4. 自动查找对应平台功能目录中的 ABI 5 Vulkan bridge；显式环境变量只作为覆盖。
+5. 检查 `h264_vulkan`/`hevc_vulkan` 是否存在。
+6. 枚举 Vulkan physical device，并与计算 Tensor 所在 GPU 的 UUID/LUID 匹配。
+7. 检查 H.264/H.265 encode 扩展和 `VK_QUEUE_VIDEO_ENCODE_BIT_KHR` queue family。
+8. 查询目标 Profile、Level、分辨率和 NV12/P010 格式，并创建 1 秒合成图编码探针。
+9. 探针成功后才选择 Vulkan 路径。
+10. Vulkan 初始化或探针失败时，复用已建立的 OpenGL/FFmpeg 回退边界；仍不可用才进入 host-upload/CPU。
 
 只运行 `ffmpeg -encoders` 不够，它只能证明编译能力，不能证明当前驱动和设备能运行。
 
@@ -563,6 +563,8 @@ CUDA Device 0 不一定对应 Vulkan 枚举中的 Physical Device 0。必须通�
 直接 NV12 storage 分支已在远程 MinGW 构建和本机 RTX 3090 实测：GitHub Actions run `32532407231` 构建成功；NVIDIA 驱动对 `VK_FORMAT_G8_B8R8_2PLANE_420_UNORM` 与 `STORAGE_IMAGE | VIDEO_ENCODE_SRC | TRANSFER_DST` 的查询返回 `VK_ERROR_FORMAT_NOT_SUPPORTED (-11)`，程序因此明确选择 `gpu_copy=True zero_copy=False` 的固定槽位路径；3 次 3840×2160 H.264 RGBA→NV12→压缩包烟测均通过。该结果说明当前 NVIDIA 目标驱动不能对编码 NV12 直接执行 storage image 写入，不能把本机路径误报为严格 zero-copy。
 
 原生桥通过 `.github/workflows/vulkan-ffmpeg-bridge.yml` 在 GitHub Actions Windows Runner 远程构建；本地不要求安装 C++ 工具链、Vulkan SDK 或 FFmpeg 开发包。
+
+Windows/Linux ABI 5 产物由同一 workflow 自动发布到 `src/desktop2stereo/streaming/vulkan_ffmpeg_bridge/<platform>/`。CI 递归解析 bridge 的动态依赖闭包，把实际需要的 FFmpeg/MinGW DLL 或 FFmpeg shared objects 一并放入对应功能目录并执行独立加载探针。运行时优先使用显式 `D2S_VULKAN_FFMPEG_BRIDGE` 覆盖路径，否则自动加载该功能目录及同目录依赖；现有 `streaming/rtmp/ffmpeg` 仅作为兼容回退，不再要求用户手工设置 DLL 路径。
 
 新增 `src/desktop2stereo/tools/vulkan_ffmpeg_rtsp_soak.py` 用于验证压缩包进入发布端：工具启动 MediaMTX，启动 FFmpeg `-c:v copy` mux-only RTSP/TCP 发布，只向 stdin 写 H.264 压缩包，不写入 4K rawvideo。RTX 3090 本机使用 run `32534594122` DLL 实测 640×360@30 运行 5 秒（150/150 帧）和 3840×2160@30 运行 10 秒（300/300 帧）均通过，FFmpeg 与 MediaMTX 未中途退出。
 
@@ -611,7 +613,7 @@ Vulkan Probe Timeout Seconds: 8
 
 行为要求：
 
-- `Auto`：探测 Vulkan，失败时自动回退并继续推流。
+- `Auto`：先探测厂商原生 GPU 路径，失败后依次尝试 Vulkan、通用 OpenGL/FFmpeg 硬件和 CPU，并继续推流。
 - `Vulkan Video`：探测失败时向 GUI 显示明确错误，但仍提供“一键回退到 Auto”。
 - `Vulkan Allow Host Fallback` 默认关闭；否则“Vulkan 已启用”可能实际仍在 CPU 上传，掩盖性能问题。
 - GUI 状态栏显示真实活动路径，不只显示用户选择值。
@@ -641,10 +643,11 @@ Vulkan Probe Timeout Seconds: 8
 5. 在 RTX 3090 上持续编码 4K 30 FPS，并完成 queue-family ownership validation 修复。
 6. 用 ffprobe 检查时间戳、关键帧和码流，并验证创建、flush、重建和关闭不泄漏资源。
 
-在接入任何 CUDA 帧之前，先用以下独立测试验证远程构建 DLL 与目标驱动：
+在接入任何 CUDA 帧之前，可用以下独立测试验证远程构建 DLL 与目标驱动。
+正式发布包会从 streaming 功能目录自动加载 ABI 5 bridge，不要求设置环境变量；
+`D2S_VULKAN_FFMPEG_BRIDGE` 仅用于覆盖测试：
 
 ```text
-set D2S_VULKAN_FFMPEG_BRIDGE=<d2s_vulkan_ffmpeg_bridge.dll>
 src/python3/python.exe src/desktop2stereo/tools/vulkan_ffmpeg_bridge_smoke.py --ffmpeg-bin <ffmpeg/bin>
 ```
 
@@ -726,7 +729,7 @@ tests/test_vulkan_stream_fallback.py
 
 必须覆盖：
 
-- Auto 后端选择顺序：Vulkan → OpenGL GPU fallback → 厂商硬件/host-upload → 软件编码。
+- Auto 后端选择顺序：厂商原生 GPU → Vulkan → 通用 OpenGL/FFmpeg 硬件 → host-upload/软件编码。
 - Vulkan 编译存在但设备不支持时回退。
 - OpenGL context、纹理、PBO/fence 或 interop 不支持时回退。
 - OpenGL 运行中断后只回退一次，不在 Vulkan/OpenGL 之间循环重启。
@@ -914,16 +917,17 @@ DirectSbsOutputConsumer
 可插拔视频编码器
 ```
 
-高级网络推流使用 `resolve_network_video_backend()` 决策层。`Auto` 从 Vulkan
-入口开始，由 `VulkanDirectSbsOutput` 按能力依次尝试 Vulkan、OpenGL/厂商 GPU、
-FFmpeg 硬件和 CPU 稳定路径。Intel QSV/D3D11、PyNvVideoCodec 等也可通过下拉
-框显式覆盖；运行模式不再决定独立的网络会话或编码生命周期。
+高级网络推流使用 `resolve_network_video_backend()` 决策层。`Auto` 先进入
+厂商原生 GPU 阶段，由统一输出对象按当前硬件尝试 NVIDIA NativeNVENC/CUDAARRAY、
+AMD AMF、Intel D3D11/oneVPL 或 macOS VideoToolbox；失败后才懒加载并探测 Vulkan
+ABI 5 bridge，再进入通用 OpenGL/FFmpeg 硬件和 CPU 稳定路径。显式选择 Vulkan、
+Intel 或 FFmpeg 时从对应后端开始；运行模式不再决定独立的网络会话或编码生命周期。
 
 默认策略如下：
 
 | 配置 | 高级网络推流 |
 | --- | --- |
-| `Auto` + 任意平台 | Vulkan → OpenGL/厂商 GPU → FFmpeg 硬件 → CPU 回退 |
+| `Auto` + 任意平台 | 厂商原生 GPU → Vulkan → 通用 OpenGL/FFmpeg 硬件 → CPU 回退 |
 | 显式 `Vulkan`、`Intel` 或 `FFmpeg` | 使用所选后端，失败时进入稳定回退 |
 
 无论选择哪一种编码器，音频采集、MediaMTX 发布、WebRTC 校准、最新帧消费、

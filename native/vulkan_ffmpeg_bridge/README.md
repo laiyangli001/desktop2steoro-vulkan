@@ -37,11 +37,22 @@ the bounded device-local RGBA/R8/RG8-to-NV12 copy and log
 Build remotely with:
 
 ```text
-GitHub Actions → Build Vulkan FFmpeg Bridge → Windows x86_64
+GitHub Actions → Build Vulkan FFmpeg Bridge
 ```
 
 The workflow downloads the pinned FFmpeg package from
-`laiyangli001/desktop2stereo-ffmpeg-builds`, builds with MinGW and Vulkan
-headers, and verifies the exported ABI. The resulting DLL is an artifact only;
-it must not be copied into the application until image import, semaphore
-synchronization, packet output, and 4K WebRTC acceptance are complete.
+`laiyangli001/desktop2stereo-ffmpeg-builds`, builds the Windows and Linux ABI 5
+bridges, verifies exports and the Windows runtime dependency probe, and publishes
+the resulting binaries into the matching streaming feature directories:
+
+```text
+src/desktop2stereo/streaming/vulkan_ffmpeg_bridge/windows/d2s_vulkan_ffmpeg_bridge.dll
+src/desktop2stereo/streaming/vulkan_ffmpeg_bridge/linux/d2s_vulkan_ffmpeg_bridge.so
+```
+
+The workflow resolves each bridge's dynamic dependency closure and publishes
+those FFmpeg/MinGW DLLs or FFmpeg shared objects beside the bridge. The runtime
+loads the packaged feature path and its co-located dependencies automatically;
+the existing `streaming/rtmp/ffmpeg` package remains a compatibility fallback.
+An explicit `D2S_VULKAN_FFMPEG_BRIDGE` value is only an override for development
+and diagnostics. Native compilation remains GitHub Actions-only.

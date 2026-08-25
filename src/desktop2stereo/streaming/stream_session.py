@@ -26,10 +26,10 @@ def resolve_network_video_backend(
 ) -> NetworkVideoBackendDecision:
     """Resolve the encoder for the unified advanced network stream.
 
-    Explicit choices always win.  ``auto`` enters the capability chain at
-    Vulkan; ``VulkanDirectSbsOutput`` then falls back to OpenGL/vendor GPU
-    paths and finally stable FFmpeg/MediaMTX.  Direct vendor backends remain
-    available as explicit overrides.
+    Explicit choices always win. ``auto`` uses one lazy capability chain that
+    tries the native vendor GPU encoder before Vulkan, then the portable
+    OpenGL/FFmpeg fallbacks. Direct vendor backends remain available as
+    explicit overrides.
     """
 
     requested = str(requested_backend or "auto").strip().casefold()
@@ -54,10 +54,19 @@ def resolve_network_video_backend(
             reason="non-advanced mode fallback",
         )
 
+    vendor = (
+        "NVIDIA"
+        if "NVIDIA" in str(device_info).upper()
+        else "AMD"
+        if any(token in str(device_info).upper() for token in ("AMD", "RADEON"))
+        else "Intel"
+        if "INTEL" in str(device_info).upper()
+        else "vendor GPU"
+    )
     return NetworkVideoBackendDecision(
-        "vulkan",
+        "auto",
         requested,
-        "Auto capability chain: Vulkan -> OpenGL/vendor GPU -> FFmpeg",
+        f"Auto capability chain: {vendor} -> Vulkan -> OpenGL/FFmpeg -> CPU",
     )
 
 

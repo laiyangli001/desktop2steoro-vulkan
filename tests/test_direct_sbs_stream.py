@@ -226,6 +226,26 @@ def test_cuda_converter_reuses_pinned_host_buffer():
     assert converter._host_rgb.is_pinned()
 
 
+def test_auto_stream_attempts_vendor_gpu_before_loading_vulkan():
+    output = object.__new__(VulkanDirectSbsOutput)
+    output._vendor_gpu_first = True
+    output._opengl_fallback_attempted = False
+    output._native_active = False
+    output._host_fallback = None
+    calls = []
+
+    def activate(frame, reason, *, vendor_first=False):
+        calls.append((frame, str(reason), vendor_first))
+        return True
+
+    output._fallback_to_opengl = activate
+    frame = object()
+
+    output.submit_cuda_frame(frame)
+
+    assert calls == [(frame, "Auto vendor-native GPU stage", True)]
+
+
 def test_vulkan_output_disables_native_bridge_under_validation(monkeypatch, capsys):
     monkeypatch.setenv("VK_INSTANCE_LAYERS", "VK_LAYER_KHRONOS_validation")
     output = VulkanDirectSbsOutput(

@@ -10,9 +10,13 @@ from __future__ import annotations
 import ctypes
 import os
 from pathlib import Path
+import platform
+from typing import Any
 
 
 EXPECTED_ABI_VERSION = 5
+_DLL_DIRECTORY_HANDLES: list[Any] = []
+_PRELOADED_DEPENDENCIES: list[Any] = []
 REQUIRED_SYMBOLS = (
     "d2s_vulkan_ffmpeg_bridge_abi_version",
     "d2s_vulkan_ffmpeg_bridge_probe",
@@ -337,12 +341,64 @@ class VulkanNativeBridge:
         )
         return VulkanNativeEncoder(self, int(handle or 0))
 
+    @staticmethod
+    def _bundled_candidate() -> Path:
+        feature_dir = Path(__file__).with_name("vulkan_ffmpeg_bridge")
+        system = platform.system()
+        if system == "Windows":
+            return feature_dir / "windows" / "d2s_vulkan_ffmpeg_bridge.dll"
+        if system == "Linux":
+            return feature_dir / "linux" / "d2s_vulkan_ffmpeg_bridge.so"
+        if system == "Darwin":
+            return feature_dir / "macos" / "d2s_vulkan_ffmpeg_bridge.dylib"
+        return feature_dir / "d2s_vulkan_ffmpeg_bridge"
+
+    @staticmethod
+    def _prepare_runtime_dependencies(candidate: Path) -> None:
+        streaming_dir = Path(__file__).resolve().parent
+        ffmpeg_root = Path(
+            os.environ.get(
+                "D2S_STREAMING_RUNTIME_DIR",
+                streaming_dir / "rtmp",
+            )
+        ) / "ffmpeg"
+        if platform.system() == "Windows" and hasattr(os, "add_dll_directory"):
+            for directory in (candidate.parent, ffmpeg_root / "bin"):
+                if directory.is_dir():
+                    _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(str(directory)))
+        elif platform.system() in {"Linux", "Darwin"}:
+            # Prefer dependencies published beside the feature bridge. The
+            # shared FFmpeg runtime remains a compatibility fallback.
+            library_dirs = (candidate.parent, ffmpeg_root / "lib")
+            patterns = (
+                ("libavutil.so*", "libavcodec.so*")
+                if platform.system() == "Linux"
+                else ("libavutil*.dylib", "libavcodec*.dylib")
+            )
+            for pattern in patterns:
+                for library_dir in library_dirs:
+                    matches = sorted(library_dir.glob(pattern))
+                    if matches:
+                        _PRELOADED_DEPENDENCIES.append(
+                            ctypes.CDLL(
+                                str(matches[0]),
+                                mode=getattr(ctypes, "RTLD_GLOBAL", 0),
+                            )
+                        )
+                        break
+
     @classmethod
     def load(cls, path: str | Path | None = None) -> "VulkanNativeBridge":
         configured = path or os.environ.get("D2S_VULKAN_FFMPEG_BRIDGE")
-        if not configured:
-            raise FileNotFoundError("D2S_VULKAN_FFMPEG_BRIDGE is not configured")
-        candidate = Path(configured)
+        candidate = Path(configured) if configured else cls._bundled_candidate()
         if not candidate.is_file():
-            raise FileNotFoundError(f"Vulkan FFmpeg bridge not found: {candidate}")
+            source = (
+                "configured path"
+                if configured
+                else "bundled streaming feature directory"
+            )
+            raise FileNotFoundError(
+                f"Vulkan FFmpeg bridge not found in {source}: {candidate}"
+            )
+        cls._prepare_runtime_dependencies(candidate)
         return cls(ctypes.CDLL(str(candidate)))

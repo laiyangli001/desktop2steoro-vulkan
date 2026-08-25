@@ -1278,7 +1278,8 @@ class GUIProcessMixin:
         mediamtx_level = _MEDIAMTX_LEVEL_RE.match(text)
         if text.startswith(_STATUS_PREFIX):
             status_message = text[len(_STATUS_PREFIX):].strip()
-            status_logger.info(status_message)
+            # set_status() owns both GUI mutation and status logging. Logging
+            # here as well produced duplicate consecutive status records.
             self.set_status(status_message)
         elif text.startswith("[FPSBreakdown]"):
             child_logger.debug(text)

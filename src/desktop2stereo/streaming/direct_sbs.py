@@ -1835,6 +1835,7 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
     synchronous_submit = False
 
     def __init__(self, *args, **kwargs) -> None:
+        self._vendor_gpu_first = bool(kwargs.pop("vendor_gpu_first", False))
         super().__init__(*args, **kwargs)
         self._native_vulkan_bridge = None
         self._native_vulkan_dll_dir = None
@@ -1849,12 +1850,20 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
         self._opengl_amd_fallback: AmdAmfDirectSbsOutput | None = None
         self._opengl_fallback_active = False
         self._opengl_fallback_attempted = False
+        self._native_vulkan_load_attempted = False
+        if not self._vendor_gpu_first:
+            self._load_native_vulkan_bridge()
+
+    def _load_native_vulkan_bridge(self) -> None:
+        if self._native_vulkan_load_attempted:
+            return
+        self._native_vulkan_load_attempted = True
         try:
             validation_layers = os.environ.get("VK_INSTANCE_LAYERS", "")
             if "VK_LAYER_KHRONOS_validation" in validation_layers:
                 print(
                     "[VulkanStream] native bridge disabled under "
-                    "VK_LAYER_KHRONOS_validation; using stable host-upload path",
+                    "VK_LAYER_KHRONOS_validation",
                     flush=True,
                 )
                 return
@@ -1869,8 +1878,7 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
             )
         except Exception as exc:
             print(
-                f"[VulkanStream] native bridge unavailable: {exc}; "
-                "using stable host-upload path",
+                f"[VulkanStream] native bridge unavailable: {exc}",
                 flush=True,
             )
 
@@ -2083,6 +2091,7 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
         )
 
     def _start_native(self, width: int, height: int, *, cuda_device: Any = None) -> None:
+        self._load_native_vulkan_bridge()
         if self._native_vulkan_bridge is None:
             raise RuntimeError("native Vulkan FFmpeg bridge is unavailable")
         if (
@@ -2261,15 +2270,23 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
         except Exception:
             pass
 
-    def _fallback_to_opengl(self, frame: Any, reason: Exception) -> None:
+    def _fallback_to_opengl(
+        self,
+        frame: Any,
+        reason: Exception,
+        *,
+        vendor_first: bool = False,
+    ) -> bool:
         if self._opengl_fallback_attempted:
-            self._fallback_to_host(frame, reason)
-            return
+            if not vendor_first:
+                self._fallback_to_host(frame, reason)
+            return False
         self._opengl_fallback_attempted = True
         enabled = os.environ.get("D2S_OPENGL_FALLBACK", "1").strip().casefold()
         if enabled in {"0", "false", "off", "no"}:
-            self._fallback_to_host(frame, reason)
-            return
+            if not vendor_first:
+                self._fallback_to_host(frame, reason)
+            return False
         try:
             image = getattr(frame, "sbs", frame)
             is_cuda = bool(getattr(image, "is_cuda", False))
@@ -2387,6 +2404,11 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
                     f"resolution={width}x{height} fps={self.fps}",
                     flush=True,
                 )
+            elif vendor_first:
+                raise RuntimeError(
+                    "no native CUDA/OpenGL/NVENC or HIP/OpenGL/AMF interop "
+                    "is available for the vendor-first stage"
+                )
             else:
                 # OpenGL has no portable resource-sharing ABI with QSV,
                 # VAAPI, or VideoToolbox. Once the context/PBO/fence probe
@@ -2405,11 +2427,16 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
                     f"resolution={width}x{height} fps={self.fps}",
                     flush=True,
                 )
-            print("[D2S_STATUS] Vulkan unavailable; using OpenGL fallback", flush=True)
+            if vendor_first:
+                print("[D2S_STATUS] Native vendor GPU streaming active", flush=True)
+            else:
+                print("[D2S_STATUS] Vulkan unavailable; using OpenGL fallback", flush=True)
+            return True
         except Exception as exc:
+            next_stage = "Vulkan" if vendor_first else "stable advanced FFmpeg path"
             print(
                 f"[OpenGLStream] unavailable: {type(exc).__name__}: {exc}; "
-                "fallback=stable advanced FFmpeg path",
+                f"fallback={next_stage}",
                 flush=True,
             )
             self._close_secondary_output(self._opengl_pynv_fallback)
@@ -2420,7 +2447,14 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
                 self._opengl_fallback.close()
             self._opengl_fallback = None
             self._opengl_fallback_active = False
+            if vendor_first:
+                print(
+                    "[D2S_STATUS] Native vendor GPU unavailable; trying Vulkan",
+                    flush=True,
+                )
+                return False
             self._fallback_to_host(frame, exc)
+            return False
 
     def _fallback_to_host(self, frame: Any, reason: Exception) -> None:
         print(
@@ -2461,6 +2495,19 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
         )
 
     def submit_cuda_frame(self, frame: Any) -> None:
+        if (
+            getattr(self, "_vendor_gpu_first", False)
+            and not self._opengl_fallback_attempted
+            and not self._native_active
+            and getattr(self, "_host_fallback", None) is None
+        ):
+            if self._fallback_to_opengl(
+                frame,
+                RuntimeError("Auto vendor-native GPU stage"),
+                vendor_first=True,
+            ):
+                return
+
         opengl = self._opengl_fallback
         pynv_fallback = self._opengl_pynv_fallback
         amd_fallback = self._opengl_amd_fallback

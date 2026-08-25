@@ -31,3 +31,11 @@ target_link_libraries(d2s_vulkan_ffmpeg_bridge PRIVATE
 set_target_properties(d2s_vulkan_ffmpeg_bridge PROPERTIES
     OUTPUT_NAME d2s_vulkan_ffmpeg_bridge
     PREFIX "")
+
+if(UNIX AND NOT APPLE)
+    # The released bridge lives under streaming/vulkan_ffmpeg_bridge/linux;
+    # reuse the already packaged FFmpeg runtime without LD_LIBRARY_PATH.
+    set_target_properties(d2s_vulkan_ffmpeg_bridge PROPERTIES
+        BUILD_WITH_INSTALL_RPATH TRUE
+        INSTALL_RPATH "$ORIGIN;$ORIGIN/../../rtmp/ffmpeg/lib")
+endif()

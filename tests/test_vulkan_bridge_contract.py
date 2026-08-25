@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from path_config import APP_ROOT
@@ -39,6 +41,17 @@ def test_native_bridge_accepts_only_versioned_contract() -> None:
 def test_native_bridge_missing_library_is_explicit(tmp_path) -> None:
     with pytest.raises(FileNotFoundError):
         VulkanNativeBridge.load(tmp_path / "missing.dll")
+
+
+def test_native_bridge_has_platform_feature_directory_candidate(monkeypatch) -> None:
+    monkeypatch.setattr("streaming.vulkan_bridge.platform.system", lambda: "Windows")
+
+    candidate = VulkanNativeBridge._bundled_candidate()
+
+    assert candidate == Path(__file__).resolve().parents[1] / (
+        "src/desktop2stereo/streaming/vulkan_ffmpeg_bridge/windows/"
+        "d2s_vulkan_ffmpeg_bridge.dll"
+    )
 
 
 def test_native_bridge_declares_low_latency_gpu_path_and_diagnostic_log():

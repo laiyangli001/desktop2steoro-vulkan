@@ -614,13 +614,28 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
                     token in str(DEVICE_INFO).upper()
                     for token in ("AMD", "RADEON")
                 )
+                has_intel_gpu = "INTEL" in str(DEVICE_INFO).upper()
                 print(
                     f"[DirectSbsStream] mode={configured_run_mode} "
                     f"encoder={video_backend} ({backend_decision.reason})",
                     flush=True,
                 )
                 network_output = FfmpegDirectSbsOutput(**output_kwargs)
-                if video_backend in {"intel", "qsv"}:
+                if video_backend == "auto":
+                    network_output.close()
+                    if has_intel_gpu:
+                        # Intel owns its D3D11/oneVPL vendor path first; its
+                        # native sink already reuses the Vulkan packed-SBS
+                        # bridge when the shared-surface contract is available.
+                        network_output = IntelD3D11DirectSbsOutput(**output_kwargs)
+                    else:
+                        # NVIDIA/AMD Auto enters the same lazy output at the
+                        # vendor-native stage, then proceeds to Vulkan and the
+                        # portable OpenGL/FFmpeg fallbacks.
+                        network_output = VulkanDirectSbsOutput(
+                            **output_kwargs, vendor_gpu_first=True
+                        )
+                elif video_backend in {"intel", "qsv"}:
                     network_output.close()
                     network_output = (
                         IntelD3D11DirectSbsOutput(**output_kwargs)
