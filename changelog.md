@@ -2,7 +2,7 @@
 
 ## 2026-08-25
 
-- 高级网络推流新增原生 NVENC CUDAARRAY 优先路径：OpenGL 映射纹理以 `NV_ENC_INPUT_RESOURCE_TYPE_CUDAARRAY` 直接注册到 NVENC，删除 array→线性 CUDA tensor 的一次设备内拷贝；当前如实记录 `gpu_to_cpu=False zero_copy=False gpu_copy_count=1`，DLL 缺失或能力失败时自动回退 PyNvVideoCodec，原生二进制由 GitHub Actions 编译并发布到对应 streaming 功能目录。
+- 高级网络推流新增原生 NVENC CUDAARRAY 优先路径：OpenGL 映射纹理以 `NV_ENC_INPUT_RESOURCE_TYPE_CUDAARRAY` 直接注册到 NVENC，删除 array→线性 CUDA tensor 的一次设备内拷贝；当前如实记录 `gpu_to_cpu=False zero_copy=False gpu_copy_count=1`，DLL 缺失或能力失败时自动回退 PyNvVideoCodec。GitHub Actions run `32825850824` 已完成 Windows x64 DLL 编译并提交到对应 streaming 功能目录，本机 ABI 1 与 NVENC/CUDA 驱动探针加载通过。
 
 - 修正高级网络推流 `Auto` 默认进入 PyNvVideoCodec 后出现花屏的问题：恢复稳定 FFmpeg/MediaMTX 默认路径，PyNvVideoCodec、Vulkan、Intel 等直接 GPU 后端改为显式选择，避免初始化成功但帧格式未经画面验证的路径成为默认输出。
 - 校正高级推流 `Auto` 策略：恢复从 Vulkan 入口开始的能力链，由 Vulkan 输出对象负责 OpenGL/厂商 GPU、FFmpeg 硬件和 CPU 回退；PyNvVideoCodec 仍可通过编码器下拉框显式覆盖。
