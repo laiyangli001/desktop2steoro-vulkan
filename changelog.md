@@ -2,7 +2,11 @@
 
 ## 2026-08-25
 
-- 修复高级网络推流无声音：NativeNVENC 的 PyNvVideoCodec Annex-B 输出不携带 PTS/DTS，带音频时不再强行 stream-copy 复用，而是自动切换到与 Vulkan 相同的 FFmpeg 音视频公共路径；无音频视频-only 会话仍保留 NativeNVENC。
+- 扩展 NativeNVENC CUDAARRAY bridge ABI 3：编码提交继续使用 NVIDIA `NV_ENC_PIC_PARAMS.inputTimeStamp`，同时读取 `NV_ENC_LOCK_BITSTREAM.outputTimeStamp/outputDuration`，通过 `d2s_nvenc_cudaarray_read_packet_timed` 将 H.264 包的 PTS/DTS/duration 传回 Python；旧的无时间戳读包接口保留兼容。该时间戳元数据为后续原生 MPEG-TS/RTSP mux 接入准备，未完成 mux 接入前不标记音频 NativeNVENC 路径为稳定。
+
+- 关闭 WASAPI 正常运行期间周期性的 `WASAPI PCM: packets=... peak=...` 日志，保留启动状态和实际 recording discontinuity 异常告警，减少高级网络推流日志刷屏。
+
+- 记录并修复高级网络推流无声音问题：实机日志确认 WASAPI 回环采集正常（`peak` 非零、`silent_packets=0`，MediaMTX 也发布了 `H264 + Opus` 两条轨道），真正原因是 NativeNVENC/PyNvVideoCodec 只向 FFmpeg 传递没有 PTS/DTS 的 H.264 Annex-B 裸包；`-genpts`、`-fps_mode cfr` 和音频 UDP 分片无法可靠修复 stream-copy 输入的时间戳，RTSP 复用器因此持续报警 `Timestamps are unset in a packet for stream 0`，浏览器虽能看到 Opus 轨道但无法正常播放声音。对策是：启用桌面音频时停止 NativeNVENC 裸包复用，自动切换到与 Vulkan 相同的 FFmpeg 音视频公共路径，由 FFmpeg 为 rawvideo/PCM 建立统一时间轴，同时仍优先使用 `h264_nvenc` 硬件编码；无音频 video-only 会话继续保留 NativeNVENC 零拷贝路径。
 
 - 修复 NativeNVENC H.264 裸包进入 FFmpeg RTSP muxer 时没有 PTS/DTS 的问题：启用 `genpts` 并固定 CFR 视频时间轴，避免视频时间戳未定义导致 Opus 已存在但浏览器无法正常播放音频。
 

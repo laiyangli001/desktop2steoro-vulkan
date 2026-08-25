@@ -11,9 +11,17 @@ from typing import Any
 from dataclasses import dataclass
 
 
-_ABI_VERSION = 2
+_ABI_VERSION = 3
 _DLL_NAME = "d2s_nvenc_cudaarray_bridge.dll"
 _DLL_DIRECTORY_HANDLES: list[Any] = []
+
+
+@dataclass(frozen=True)
+class EncodedNvencPacket:
+    data: bytes
+    pts: int
+    dts: int
+    duration: int
 
 
 @dataclass(frozen=True)
@@ -66,11 +74,18 @@ def _configure_api(library: Any) -> None:
         ctypes.c_int64,
     ]
     library.d2s_nvenc_cudaarray_read_packet.restype = ctypes.c_int32
+    library.d2s_nvenc_cudaarray_read_packet_timed.restype = ctypes.c_int32
     library.d2s_nvenc_cudaarray_read_packet.argtypes = [
         ctypes.c_void_p,
         ctypes.POINTER(ctypes.c_uint8),
         ctypes.c_size_t,
         ctypes.POINTER(ctypes.c_size_t),
+    ]
+    library.d2s_nvenc_cudaarray_read_packet_timed.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_uint8),
+        ctypes.c_size_t,
+        ctypes.c_void_p,
     ]
     library.d2s_nvenc_cudaarray_flush.restype = ctypes.c_int32
     library.d2s_nvenc_cudaarray_flush.argtypes = [ctypes.c_void_p]
@@ -123,6 +138,15 @@ def load_nvenc_cudaarray_bridge() -> Any:
             errors.append(f"{candidate}: {exc}")
     detail = "; ".join(errors) if errors else "no candidate library"
     raise RuntimeError(f"{_DLL_NAME} unavailable: {detail}")
+
+
+class _NativePacket(ctypes.Structure):
+    _fields_ = [
+        ("packet_size", ctypes.c_size_t),
+        ("pts", ctypes.c_int64),
+        ("dts", ctypes.c_int64),
+        ("duration", ctypes.c_int64),
+    ]
 
 
 class NvencCudaArrayEncoder:
@@ -188,33 +212,43 @@ class NvencCudaArrayEncoder:
         self._timestamp += 1
         return self._drain_packets()
 
-    def _drain_packets(self) -> bytes:
-        output = bytearray()
+    def _drain_timed_packets(self) -> list[EncodedNvencPacket]:
+        output: list[EncodedNvencPacket] = []
         while True:
-            size = ctypes.c_size_t()
+            metadata = _NativePacket()
             status = int(
-                self._library.d2s_nvenc_cudaarray_read_packet(
-                    self._handle, None, 0, ctypes.byref(size)
+                self._library.d2s_nvenc_cudaarray_read_packet_timed(
+                    self._handle, None, 0, ctypes.byref(metadata)
                 )
             )
             if status < 0:
                 raise RuntimeError(_last_error(self._library))
-            if status == 0 or size.value == 0:
+            if status == 0 or metadata.packet_size == 0:
                 break
-            buffer = (ctypes.c_uint8 * size.value)()
-            copied = ctypes.c_size_t()
+            buffer = (ctypes.c_uint8 * metadata.packet_size)()
+            copied = _NativePacket()
             status = int(
-                self._library.d2s_nvenc_cudaarray_read_packet(
+                self._library.d2s_nvenc_cudaarray_read_packet_timed(
                     self._handle,
                     buffer,
-                    size.value,
+                    metadata.packet_size,
                     ctypes.byref(copied),
                 )
             )
             if status < 0:
                 raise RuntimeError(_last_error(self._library))
-            output.extend(bytes(buffer[: copied.value]))
-        return bytes(output)
+            output.append(
+                EncodedNvencPacket(
+                    data=bytes(buffer[: copied.packet_size]),
+                    pts=int(copied.pts),
+                    dts=int(copied.dts),
+                    duration=int(copied.duration),
+                )
+            )
+        return output
+
+    def _drain_packets(self) -> bytes:
+        return b"".join(packet.data for packet in self._drain_timed_packets())
 
     def flush(self) -> bytes:
         if self._closed or not self._handle:

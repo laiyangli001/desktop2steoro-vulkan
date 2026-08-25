@@ -191,19 +191,36 @@ public:
         if (!packet_size) {
             throw NvencError("packet_size pointer is null");
         }
+        d2s_nvenc_cudaarray_packet_t metadata{};
+        const int status = read_packet_timed(destination, capacity, &metadata);
+        *packet_size = metadata.packet_size;
+        return status;
+    }
+
+    int read_packet_timed(
+        uint8_t* destination,
+        size_t capacity,
+        d2s_nvenc_cudaarray_packet_t* metadata
+    ) {
+        if (!metadata) {
+            throw NvencError("packet metadata pointer is null");
+        }
+        *metadata = {};
         if (packets_.empty()) {
-            *packet_size = 0;
             return 0;
         }
         const auto& packet = packets_.front();
-        *packet_size = packet.size();
+        metadata->packet_size = packet.data.size();
+        metadata->pts = packet.pts;
+        metadata->dts = packet.dts;
+        metadata->duration = packet.duration;
         if (!destination || capacity == 0) {
             return 1;
         }
-        if (capacity < packet.size()) {
+        if (capacity < packet.data.size()) {
             return 2;
         }
-        std::memcpy(destination, packet.data(), packet.size());
+        std::memcpy(destination, packet.data.data(), packet.data.size());
         packets_.pop_front();
         return 1;
     }
@@ -368,7 +385,12 @@ private:
         );
         try {
             const auto* begin = static_cast<const uint8_t*>(lock.bitstreamBufferPtr);
-            packets_.emplace_back(begin, begin + lock.bitstreamSizeInBytes);
+            EncodedPacket packet;
+            packet.data.assign(begin, begin + lock.bitstreamSizeInBytes);
+            packet.pts = static_cast<int64_t>(lock.outputTimeStamp);
+            packet.dts = packet.pts;
+            packet.duration = static_cast<int64_t>(lock.outputDuration);
+            packets_.push_back(std::move(packet));
         } catch (...) {
             api_.nvEncUnlockBitstream(encoder_, bitstream_);
             throw;
@@ -424,7 +446,13 @@ private:
     NV_ENC_OUTPUT_PTR bitstream_ = nullptr;
     bool flushed_ = false;
     uint64_t surface_ = 0;
-    std::deque<std::vector<uint8_t>> packets_;
+    struct EncodedPacket {
+        std::vector<uint8_t> data;
+        int64_t pts = 0;
+        int64_t dts = 0;
+        int64_t duration = 0;
+    };
+    std::deque<EncodedPacket> packets_;
 };
 
 template <typename Fn>
@@ -447,7 +475,7 @@ int32_t protect(Fn&& fn) {
 extern "C" {
 
 uint32_t d2s_nvenc_cudaarray_abi_version(void) {
-    return 2;
+    return 3;
 }
 
 int32_t d2s_nvenc_cudaarray_probe(void) {
@@ -555,6 +583,32 @@ int32_t d2s_nvenc_cudaarray_read_packet(
         return -1;
     } catch (...) {
         g_last_error = "unknown native NVENC CUDAARRAY packet error";
+        return -1;
+    }
+}
+
+int32_t d2s_nvenc_cudaarray_read_packet_timed(
+    d2s_nvenc_cudaarray_handle handle,
+    uint8_t* destination,
+    size_t capacity,
+    d2s_nvenc_cudaarray_packet_t* packet
+) {
+    try {
+        if (!handle) {
+            throw NvencError("NVENC CUDAARRAY handle is null");
+        }
+        const int result = static_cast<NvencCudaArrayEncoder*>(handle)->read_packet_timed(
+            destination,
+            capacity,
+            packet
+        );
+        g_last_error.clear();
+        return result;
+    } catch (const std::exception& exc) {
+        g_last_error = exc.what();
+        return -1;
+    } catch (...) {
+        g_last_error = "unknown native NVENC timed packet error";
         return -1;
     }
 }

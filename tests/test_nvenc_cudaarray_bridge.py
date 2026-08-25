@@ -61,6 +61,9 @@ def test_native_bridge_registers_cudaarray_and_abgr():
     assert "nvEncRegisterResource(CUDAARRAY)" in source
     assert "NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY" in source
     assert "d2s_nvenc_cudaarray_submit_tensor" in source
+    assert "d2s_nvenc_cudaarray_read_packet_timed" in source
+    assert "outputTimeStamp" in source
+    assert "outputDuration" in source
     assert "surf2Dwrite" in kernel
     assert "cudaStreamSynchronize" in kernel
     assert "cudaMemcpy" not in kernel

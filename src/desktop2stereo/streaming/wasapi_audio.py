@@ -165,14 +165,8 @@ class SoundcardLoopbackSender:
                             ("127.0.0.1", self.port),
                         )
                     self._packet_count += 1
-                    if self._packet_count == 1 or self._packet_count % 100 == 0:
-                        print(
-                            "[DirectSbsStream] WASAPI PCM: "
-                            f"packets={self._packet_count} peak={peak:.5f} "
-                            f"silent_packets={self._silent_packet_count} "
-                            f"discontinuities={self._discontinuity_count}",
-                            flush=True,
-                        )
+                    # Keep periodic PCM level counters out of normal logs.
+                    # Startup and discontinuity diagnostics remain visible.
                     produced_pcm = True
                     self._startup_done.set()
         except Exception as exc:

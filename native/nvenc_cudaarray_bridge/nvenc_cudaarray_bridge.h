@@ -19,6 +19,13 @@ extern "C" {
 
 typedef void* d2s_nvenc_cudaarray_handle;
 
+typedef struct d2s_nvenc_cudaarray_packet_t {
+    size_t packet_size;
+    int64_t pts;
+    int64_t dts;
+    int64_t duration;
+} d2s_nvenc_cudaarray_packet_t;
+
 D2S_NVENC_API uint32_t d2s_nvenc_cudaarray_abi_version(void);
 D2S_NVENC_API int32_t d2s_nvenc_cudaarray_probe(void);
 
@@ -58,6 +65,13 @@ D2S_NVENC_API int32_t d2s_nvenc_cudaarray_read_packet(
     uint8_t* destination,
     size_t capacity,
     size_t* packet_size
+);
+
+D2S_NVENC_API int32_t d2s_nvenc_cudaarray_read_packet_timed(
+    d2s_nvenc_cudaarray_handle handle,
+    uint8_t* destination,
+    size_t capacity,
+    d2s_nvenc_cudaarray_packet_t* packet
 );
 
 D2S_NVENC_API int32_t d2s_nvenc_cudaarray_flush(
