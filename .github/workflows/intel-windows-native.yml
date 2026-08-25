@@ -316,5 +316,17 @@ jobs:
           # Rebase the generated binary commit before pushing so a successful
           # remote build is not lost to a non-fast-forward race.
           git fetch origin main
-          git rebase origin/main
+          if ! git rebase origin/main; then
+            # Generated bridge metadata is the artifact from this build. If a
+            # newer source push changed the same generated metadata file, keep
+            # the freshly built artifact and continue the rebase explicitly.
+            if git ls-files -u --error-unmatch src/desktop2stereo/stereo_runtime/providers/intel/native/sha256.json >/dev/null 2>&1; then
+              git checkout --theirs -- src/desktop2stereo/stereo_runtime/providers/intel/native/sha256.json
+              git add src/desktop2stereo/stereo_runtime/providers/intel/native/sha256.json
+              GIT_EDITOR=true git rebase --continue
+            else
+              git rebase --abort
+              exit 1
+            fi
+          fi
           git push origin HEAD:main
