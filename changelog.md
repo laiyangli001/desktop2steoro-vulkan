@@ -2,6 +2,8 @@
 
 ## 2026-08-25
 
+- 修复高级网络推流无声音：NativeNVENC 的 PyNvVideoCodec Annex-B 输出不携带 PTS/DTS，带音频时不再强行 stream-copy 复用，而是自动切换到与 Vulkan 相同的 FFmpeg 音视频公共路径；无音频视频-only 会话仍保留 NativeNVENC。
+
 - 修复 NativeNVENC H.264 裸包进入 FFmpeg RTSP muxer 时没有 PTS/DTS 的问题：启用 `genpts` 并固定 CFR 视频时间轴，避免视频时间戳未定义导致 Opus 已存在但浏览器无法正常播放音频。
 
 - NativeNVENC muxer 不再丢弃 FFmpeg stderr：新增音频启用状态、输入 UDP 地址和实时 mux 警告/错误日志，用于确认 Opus 输入是否因时间戳、队列或 RTSP 复用失败。

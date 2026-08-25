@@ -420,6 +420,32 @@ class _PyNvDirectSbsOutputMixin:
         # base implementation instead of starting the vendor encoder.
         if self._calibration_controller is not None:
             return FfmpegDirectSbsOutput._start_ffmpeg(self, width, height)
+        # PyNvVideoCodec exposes encoded Annex-B bytes without packet PTS/DTS.
+        # FFmpeg cannot reliably repair that metadata during stream-copy RTSP
+        # muxing. With audio enabled, use the shared Vulkan/FFmpeg A/V path,
+        # which timestamps rawvideo and PCM in one muxer and keeps browser audio
+        # reliable. Native NVENC remains available for video-only sessions.
+        if self.stereo_mix_device and not self.stereo_mix_device.casefold().startswith(("no ", "none", "null")):
+            self._fallback_output = FfmpegDirectSbsOutput(
+                base_dir=self.base_dir,
+                protocol=self.protocol,
+                port=self.port,
+                stream_key=self.stream_key,
+                fps=self.fps,
+                crf=self.crf,
+                stereo_mix_device=self.stereo_mix_device,
+                audio_delay=self.audio_delay,
+                os_name=self.os_name,
+                prefer_nvenc=self.prefer_nvenc,
+                display_mode=self.display_mode,
+            )
+            self._fallback_output.server_process = self.server_process
+            print(
+                "[DirectSbsStream] NativeNVENC audio mux disabled: "
+                "PyNv Annex-B packets have no PTS/DTS; using shared FFmpeg A/V path",
+                flush=True,
+            )
+            return
         nvc = _load_pynvvideo_codec()
         if nvc is None:
             raise RuntimeError(f"PyNvVideoCodec unavailable: {_PYNVVIDEO_CODEC_ERROR}")
@@ -552,6 +578,9 @@ class _PyNvDirectSbsOutputMixin:
                 if int(frame.shape[0]) not in (1, 3, 4):
                     height, width = int(frame.shape[0]), int(frame.shape[1])
                 self._start_ffmpeg(width, height)
+            if self._fallback_output is not None:
+                self._fallback_output.submit_frame(runtime_sbs_to_rgb(frame))
+                return
             assert self._pynv_output is not None
             self._pynv_output.submit_cuda_frame(frame)
         except Exception as exc:

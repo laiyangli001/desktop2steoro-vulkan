@@ -164,6 +164,11 @@ class PyNvSrtVideoOutput:
             "64",
             "-analyzeduration",
             "0",
+            # The PyNv pipe carries Annex-B bytes only; bind each demuxed
+            # video packet to the live clock so RTSP never receives stream 0
+            # packets without PTS/DTS.
+            "-use_wallclock_as_timestamps",
+            "1",
             "-f",
             "hevc" if codec.casefold() in {"hevc", "h265"} else "h264",
             "-r",
