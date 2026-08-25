@@ -129,7 +129,7 @@ class PyNvSrtVideoOutput:
 
     def __init__(
         self,
-        encoder: PyNvVideoCodecEncoder,
+        encoder: Any,
         ffmpeg_path: str,
         srt_url: str | None = None,
         *,
@@ -222,10 +222,10 @@ class PyNvSrtVideoOutput:
     def submit_cuda_frame(self, frame: Any) -> None:
         if self.process.poll() is not None:
             raise RuntimeError(
-                f"PyNvVideoCodec muxer exited with code {self.process.returncode}"
+                f"NVENC packet muxer exited with code {self.process.returncode}"
             )
         if self.process.stdin is None:
-            raise RuntimeError("PyNvVideoCodec muxer stdin is unavailable")
+            raise RuntimeError("NVENC packet muxer stdin is unavailable")
         packet = self.encoder.encode(frame)
         if packet:
             self.process.stdin.write(packet)
@@ -250,3 +250,6 @@ class PyNvSrtVideoOutput:
                 except subprocess.TimeoutExpired:
                     self.process.terminate()
                     self.process.wait(timeout=3.0)
+            close_encoder = getattr(self.encoder, "close", None)
+            if callable(close_encoder):
+                close_encoder()

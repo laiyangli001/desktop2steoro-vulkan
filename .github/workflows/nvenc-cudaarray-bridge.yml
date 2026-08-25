@@ -1,0 +1,86 @@
+name: Build Windows NVENC CUDAARRAY Bridge
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "native/nvenc_cudaarray_bridge/**"
+      - "src/desktop2stereo/streaming/nvenc_cudaarray_bridge.py"
+      - ".github/workflows/nvenc-cudaarray-bridge.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows-nvenc-cudaarray:
+    name: Windows x64 NVENC CUDAARRAY bridge
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download pinned NVENC headers
+        shell: pwsh
+        run: |
+          git clone --depth 1 --branch n12.2.72.0 https://github.com/FFmpeg/nv-codec-headers.git "$env:RUNNER_TEMP\nv-codec-headers"
+
+      - name: Configure CMake
+        shell: pwsh
+        run: |
+          cmake -S native/nvenc_cudaarray_bridge -B native/nvenc_cudaarray_bridge/build `
+            -G 'Visual Studio 17 2022' -A x64 `
+            -DD2S_NV_CODEC_HEADERS="$env:RUNNER_TEMP\nv-codec-headers"
+
+      - name: Build DLL
+        shell: pwsh
+        run: |
+          cmake --build native/nvenc_cudaarray_bridge/build --config Release --parallel 2
+          $dll = 'native/nvenc_cudaarray_bridge/build/Release/d2s_nvenc_cudaarray_bridge.dll'
+          if (-not (Test-Path -LiteralPath $dll)) {
+            throw "NVENC CUDAARRAY bridge was not produced: $dll"
+          }
+
+      - name: Upload bridge artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: d2s-nvenc-cudaarray-windows-x64
+          path: native/nvenc_cudaarray_bridge/build/Release/d2s_nvenc_cudaarray_bridge.dll
+          if-no-files-found: error
+
+  commit-native-binary:
+    name: Commit feature DLL
+    needs: build-windows-nvenc-cudaarray
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: d2s-nvenc-cudaarray-windows-x64
+          path: artifact
+
+      - name: Install DLL in the streaming feature folder
+        shell: bash
+        run: |
+          mkdir -p src/desktop2stereo/streaming/nvenc_cudaarray_bridge
+          cp artifact/d2s_nvenc_cudaarray_bridge.dll \
+            src/desktop2stereo/streaming/nvenc_cudaarray_bridge/d2s_nvenc_cudaarray_bridge.dll
+
+      - name: Commit generated DLL
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/desktop2stereo/streaming/nvenc_cudaarray_bridge/d2s_nvenc_cudaarray_bridge.dll
+          if git diff --cached --quiet; then
+            echo "Native DLL is unchanged"
+            exit 0
+          fi
+          git commit -m "build: update NVENC CUDAARRAY bridge"
+          git fetch origin main
+          git rebase origin/main
+          git push origin HEAD:main

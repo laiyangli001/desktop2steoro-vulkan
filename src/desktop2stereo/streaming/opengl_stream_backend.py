@@ -56,12 +56,19 @@ class _CudaOpenGLInterop:
 
     _CUDA_SUCCESS = 0
     _CUDA_MEMCPY_DEVICE_TO_DEVICE = 3
+    # CUDA arrays passed to NV_ENC_INPUT_RESOURCE_TYPE_CUDAARRAY must expose
+    # surface load/store capability. This is the runtime equivalent of
+    # cudaGraphicsRegisterFlagsSurfaceLoadStore.
+    _CUDA_GRAPHICS_REGISTER_FLAGS_SURFACE_LDST = 4
 
     def __init__(self, *, texture: int, width: int, height: int, gl_target: int) -> None:
         self.width = int(width)
         self.height = int(height)
         self._texture = int(texture)
         self._resource = ctypes.c_void_p()
+        self._mapped_resources = None
+        self._mapped_array = ctypes.c_void_p()
+        self._mapped_stream = 0
         self._cudart = self._load_cudart()
         self._configure_api()
         self._check(
@@ -69,7 +76,7 @@ class _CudaOpenGLInterop:
                 ctypes.byref(self._resource),
                 ctypes.c_uint(self._texture),
                 ctypes.c_uint(int(gl_target)),
-                ctypes.c_uint(0),
+                ctypes.c_uint(self._CUDA_GRAPHICS_REGISTER_FLAGS_SURFACE_LDST),
             ),
             "cudaGraphicsGLRegisterImage",
         )
@@ -221,6 +228,52 @@ class _CudaOpenGLInterop:
             "cudaGraphicsUnmapResources",
         )
 
+    def copy_to_array(self, rgba: Any) -> int:
+        """Copy RGBA8 into a persistently mapped CUDA array for native NVENC."""
+        import torch
+
+        if not bool(getattr(rgba, "is_cuda", False)):
+            raise ValueError("CUDA/OpenGL interop requires a CUDA tensor")
+        if tuple(rgba.shape) != (self.height, self.width, 4) or rgba.dtype != torch.uint8:
+            raise ValueError(
+                f"CUDA/OpenGL interop requires CUDA RGBA8 {self.width}x{self.height}, "
+                f"got shape={tuple(rgba.shape)!r} dtype={rgba.dtype}"
+            )
+        stream_object = torch.cuda.current_stream(device=rgba.device)
+        stream = int(stream_object.cuda_stream)
+        if self._mapped_resources is None:
+            self._mapped_resources, self._mapped_array = self._resource_array(stream)
+            self._mapped_stream = stream
+        width_bytes = self.width * 4
+        self._check(
+            self._cudart.cudaMemcpy2DToArrayAsync(
+                self._mapped_array,
+                ctypes.c_size_t(0),
+                ctypes.c_size_t(0),
+                ctypes.c_void_p(int(rgba.data_ptr())),
+                ctypes.c_size_t(width_bytes),
+                ctypes.c_size_t(width_bytes),
+                ctypes.c_size_t(self.height),
+                ctypes.c_int(self._CUDA_MEMCPY_DEVICE_TO_DEVICE),
+                ctypes.c_void_p(stream),
+            ),
+            "cudaMemcpy2DToArrayAsync",
+        )
+        # NVENC submits through its own queue. It cannot infer the dependency
+        # from PyTorch's current stream, so make the hand-off explicit.
+        stream_object.synchronize()
+        return int(self._mapped_array.value or 0)
+
+    def release_persistent_array(self) -> None:
+        if self._mapped_resources is None:
+            return
+        resources = self._mapped_resources
+        stream = self._mapped_stream
+        self._mapped_resources = None
+        self._mapped_array = ctypes.c_void_p()
+        self._mapped_stream = 0
+        self._unmap(resources, stream)
+
     def roundtrip(self, rgba: Any) -> Any:
         import torch
 
@@ -231,6 +284,9 @@ class _CudaOpenGLInterop:
                 f"CUDA/OpenGL interop requires CUDA RGBA8 {self.width}x{self.height}, "
                 f"got shape={tuple(rgba.shape)!r} dtype={rgba.dtype}"
             )
+        # PyNvVideoCodec needs the historical mapped-array -> linear
+        # tensor path. Release a persistent native-NVENC mapping before using it.
+        self.release_persistent_array()
         stream = int(torch.cuda.current_stream(device=rgba.device).cuda_stream)
         width_bytes = self.width * 4
         resources, array = self._resource_array(stream)
@@ -274,6 +330,11 @@ class _CudaOpenGLInterop:
         return output
 
     def close(self) -> None:
+        if self._mapped_resources is not None:
+            try:
+                self.release_persistent_array()
+            except Exception:
+                pass
         if self._resource and self._resource.value:
             status = self._cudart.cudaGraphicsUnregisterResource(self._resource)
             if int(status) != self._CUDA_SUCCESS:
@@ -608,6 +669,30 @@ class OpenGLFallbackBackend:
         self._rgba_staging[..., :3].copy_(image)
         self._rgba_staging[..., 3].fill_(255)
         return self._rgba_staging
+
+    def submit_cuda_array(self, image: Any) -> int:
+        """Upload one CUDA frame and return the persistent mapped CUarray."""
+        if self._closed:
+            raise RuntimeError("OpenGL fallback backend is closed")
+        if self._cuda_interop is None:
+            raise RuntimeError("CUDA/OpenGL interop is unavailable")
+        rgba = self._cuda_rgba_tensor(image)
+        previous = self._glfw.get_current_context()
+        self._glfw.make_context_current(self._window)
+        try:
+            return self._cuda_interop.copy_to_array(rgba)
+        finally:
+            self._glfw.make_context_current(previous)
+
+    def release_cuda_array(self) -> None:
+        if self._cuda_interop is None or self._window is None:
+            return
+        previous = self._glfw.get_current_context()
+        self._glfw.make_context_current(self._window)
+        try:
+            self._cuda_interop.release_persistent_array()
+        finally:
+            self._glfw.make_context_current(previous)
 
     def submit_cuda(self, image: Any) -> Any:
         if self._closed:

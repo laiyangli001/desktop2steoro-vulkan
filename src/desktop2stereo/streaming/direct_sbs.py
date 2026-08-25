@@ -23,6 +23,7 @@ from streaming.encoder_profile import EncoderProfile
 from streaming.mjpeg_streamer import MJPEGStreamer
 from streaming.runtime_manager import ensure_runtime
 from streaming.nvidia_encoder import PyNvSrtVideoOutput, PyNvVideoCodecEncoder
+from streaming.nvenc_cudaarray_bridge import NvencCudaArrayEncoder
 from streaming.stream_calibration import StreamCalibrationController
 from streaming.wasapi_audio import SoundcardLoopbackSender
 from streaming.vulkan_capabilities import probe_vulkan_video
@@ -347,7 +348,7 @@ class _PyNvDirectSbsOutputMixin:
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._pynv_output: PyNvSrtVideoOutput | None = None
-        self._pynv_encoder: PyNvVideoCodecEncoder | None = None
+        self._pynv_encoder: Any | None = None
         self._fallback_output: FfmpegDirectSbsOutput | None = None
         self._pynv_gpu_id = 0
 
@@ -392,6 +393,12 @@ class _PyNvDirectSbsOutputMixin:
             except Exception:
                 pass
             self._pynv_output = None
+        close_encoder = getattr(self._pynv_encoder, "close", None)
+        if callable(close_encoder):
+            try:
+                close_encoder()
+            except Exception:
+                pass
         self._pynv_encoder = None
         if self._soundcard_audio is not None:
             self._soundcard_audio.close()
@@ -453,6 +460,50 @@ class _PyNvDirectSbsOutputMixin:
             "cuda_stream_handoff=synchronized",
             flush=True,
         )
+
+    def _start_cudaarray_encoder(
+        self, width: int, height: int, cuda_array: int
+    ) -> None:
+        """Start native NVENC on one persistently mapped OpenGL CUDA array."""
+        audio_url = self._start_pynv_audio()
+        codec = "hevc" if self.use_hevc else "h264"
+        bitrate = max(
+            1,
+            int(
+                (self._dynamic_stream_rate_budget(width, height) or (10,))[0]
+                * 1_000_000
+            ),
+        )
+        self._pynv_encoder = NvencCudaArrayEncoder(
+            width,
+            height,
+            hevc=self.use_hevc,
+            fps=self.fps,
+            bitrate=bitrate,
+            cuda_array=cuda_array,
+        )
+        self._pynv_output = PyNvSrtVideoOutput(
+            self._pynv_encoder,
+            str(self.ffmpeg_path),
+            codec=codec,
+            fps=self.fps,
+            audio_url=audio_url,
+            audio_delay=self.audio_delay,
+            audio_codec="libopus" if self.protocol == "WEBRTC" else "aac",
+            output_args=self._pynv_output_args(),
+            creationflags=(
+                getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                if self.os_name == "Windows"
+                else 0
+            ),
+        )
+        time.sleep(0.05)
+        if self._pynv_output.process.poll() is not None:
+            raise RuntimeError(
+                "native NVENC CUDAARRAY muxer exited during startup with code "
+                f"{self._pynv_output.process.returncode}"
+            )
+        self._frame_size = (width, height)
 
     def _fallback_to_ffmpeg(self, frame: Any, reason: Exception) -> None:
         print(
@@ -1794,6 +1845,7 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
         self._native_pts = 0
         self._opengl_fallback: OpenGLFallbackBackend | None = None
         self._opengl_pynv_fallback: PyNvDirectSbsOutput | None = None
+        self._opengl_nvenc_cudaarray_active = False
         self._opengl_amd_fallback: AmdAmfDirectSbsOutput | None = None
         self._opengl_fallback_active = False
         self._opengl_fallback_attempted = False
@@ -2255,16 +2307,39 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
             if is_cuda and caps.cuda_gl_interop:
                 fallback = self._new_opengl_pynv_fallback()
                 self._opengl_pynv_fallback = fallback
-                fallback._start_ffmpeg(width, height)
-                assert fallback._pynv_output is not None
-                fallback._pynv_output.submit_cuda_frame(backend.submit_cuda(frame))
-                print(
-                    "[OpenGLStream] active: encoder=PyNvVideoCodec/NVENC "
-                    f"gpu_to_cpu={caps.gpu_to_cpu} zero_copy={caps.zero_copy} "
-                    f"gpu_copy_count={getattr(caps, 'gpu_copy_count', 0)} "
-                    f"resolution={width}x{height} fps={self.fps}",
-                    flush=True,
-                )
+                try:
+                    cuda_array = backend.submit_cuda_array(frame)
+                    fallback._start_cudaarray_encoder(width, height, cuda_array)
+                    assert fallback._pynv_output is not None
+                    fallback._pynv_output.submit_cuda_frame(cuda_array)
+                    self._opengl_nvenc_cudaarray_active = True
+                    print(
+                        "[OpenGLStream] active: "
+                        "encoder=NativeNVENC/CUDAARRAY "
+                        "gpu_to_cpu=False zero_copy=False gpu_copy_count=1 "
+                        f"resolution={width}x{height} fps={self.fps}",
+                        flush=True,
+                    )
+                except Exception as native_exc:
+                    fallback._release_pynv_pipeline()
+                    backend.release_cuda_array()
+                    print(
+                        "[OpenGLStream] native NVENC CUDAARRAY unavailable: "
+                        f"{type(native_exc).__name__}: {native_exc}; "
+                        "fallback=PyNvVideoCodec",
+                        flush=True,
+                    )
+                    fallback._start_ffmpeg(width, height)
+                    assert fallback._pynv_output is not None
+                    fallback._pynv_output.submit_cuda_frame(backend.submit_cuda(frame))
+                    self._opengl_nvenc_cudaarray_active = False
+                    print(
+                        "[OpenGLStream] active: encoder=PyNvVideoCodec/NVENC "
+                        f"gpu_to_cpu={caps.gpu_to_cpu} zero_copy={caps.zero_copy} "
+                        f"gpu_copy_count={getattr(caps, 'gpu_copy_count', 0)} "
+                        f"resolution={width}x{height} fps={self.fps}",
+                        flush=True,
+                    )
             elif is_cuda and caps.hip_gl_interop:
                 if self.stereo_mix_device:
                     raise RuntimeError(
@@ -2365,9 +2440,14 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
             try:
                 if pynv_fallback is not None:
                     assert pynv_fallback._pynv_output is not None
-                    pynv_fallback._pynv_output.submit_cuda_frame(
-                        opengl.submit_cuda(frame)
-                    )
+                    if self._opengl_nvenc_cudaarray_active:
+                        pynv_fallback._pynv_output.submit_cuda_frame(
+                            opengl.submit_cuda_array(frame)
+                        )
+                    else:
+                        pynv_fallback._pynv_output.submit_cuda_frame(
+                            opengl.submit_cuda(frame)
+                        )
                 elif amd_fallback is not None:
                     amd_fallback._submit_amd_packet(opengl.submit_cuda(frame))
                 elif fallback is not None:
@@ -2417,6 +2497,7 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
             self._opengl_fallback.close()
             self._opengl_fallback = None
         self._opengl_fallback_active = False
+        self._opengl_nvenc_cudaarray_active = False
         fallback = getattr(self, "_host_fallback", None)
         if fallback is not None:
             self._close_secondary_output(fallback)

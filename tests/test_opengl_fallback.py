@@ -102,6 +102,13 @@ def test_vulkan_failure_selects_cuda_opengl_nvenc_branch(monkeypatch):
             zero_copy=False,
         )
 
+        def submit_cuda_array(self, frame):
+            assert frame is fake_frame
+            return 12345
+
+        def release_cuda_array(self):
+            pass
+
         def submit_cuda(self, frame):
             assert frame is fake_frame
             return "cuda-rgba"
@@ -118,6 +125,13 @@ def test_vulkan_failure_selects_cuda_opengl_nvenc_branch(monkeypatch):
             self._pynv_output = FakePacketOutput()
             self.server_process = None
 
+        def _start_cudaarray_encoder(self, width, height, cuda_array):
+            assert (width, height, cuda_array) == (64, 36, 12345)
+            raise RuntimeError("native DLL unavailable in unit test")
+
+        def _release_pynv_pipeline(self):
+            pass
+
         def _start_ffmpeg(self, width, height):
             assert (width, height) == (64, 36)
 
@@ -129,6 +143,8 @@ def test_vulkan_failure_selects_cuda_opengl_nvenc_branch(monkeypatch):
     output._opengl_fallback_attempted = False
     output._opengl_fallback = None
     output._opengl_pynv_fallback = None
+    output._opengl_nvenc_cudaarray_active = False
+    output._opengl_amd_fallback = None
     output._opengl_fallback_active = False
     output._host_fallback = None
     output.fps = 30
@@ -187,6 +203,7 @@ def test_no_interop_uses_host_encoder_without_cpu_gl_roundtrip(monkeypatch):
     output._opengl_fallback_attempted = False
     output._opengl_fallback = None
     output._opengl_pynv_fallback = None
+    output._opengl_nvenc_cudaarray_active = False
     output._opengl_amd_fallback = None
     output._opengl_fallback_active = False
     output._host_fallback = None
@@ -252,6 +269,7 @@ def test_opengl_runtime_submit_failure_switches_to_stable_host_path(monkeypatch)
     output._opengl_fallback_attempted = True
     output._opengl_fallback = backend
     output._opengl_pynv_fallback = None
+    output._opengl_nvenc_cudaarray_active = False
     output._opengl_amd_fallback = None
     output._opengl_fallback_active = True
     output._host_fallback = None
@@ -300,6 +318,8 @@ def test_opengl_fallback_contract_is_documented_and_wired():
     assert "self._glfw_initialized = False" in backend_source
     assert "except Exception:\n            self.close()\n            raise" in backend_source
     assert "cudaGraphicsGLRegisterImage" in backend_source
+    assert "_CUDA_GRAPHICS_REGISTER_FLAGS_SURFACE_LDST = 4" in backend_source
+    assert "submit_cuda_array" in backend_source
     assert "cudaMemcpy2DFromArrayAsync" in backend_source
     assert "_HipOpenGLInterop" in backend_source
     assert 'name = "hip" + name[4:]' in backend_source
@@ -311,6 +331,8 @@ def test_opengl_fallback_contract_is_documented_and_wired():
     assert "framebuffer_supported=True" in backend_source
     assert "gpu_copy_count=2 if gpu_interop else 0" in backend_source
     assert "gpu_copy_count" in source
+    assert "encoder=NativeNVENC/CUDAARRAY" in source
+    assert "gpu_to_cpu=False zero_copy=False gpu_copy_count=1" in source
 
 
 def test_opengl_smoke_tool_contract_is_present():
