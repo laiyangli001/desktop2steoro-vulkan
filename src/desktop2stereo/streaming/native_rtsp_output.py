@@ -6,18 +6,24 @@ import socket
 import struct
 import threading
 import time
+from pathlib import Path
 from typing import Any
+
+
+def _opus_library_candidates() -> list[str]:
+    packaged = Path(__file__).resolve().with_name("native_rtsp_output") / "opus.dll"
+    return [
+        os.environ.get("D2S_OPUS_PATH", ""),
+        str(packaged),
+        "opus.dll",
+    ]
 
 
 class _Opus:
     OPUS_APPLICATION_AUDIO = 2049
 
     def __init__(self) -> None:
-        candidates = [
-            os.environ.get("D2S_OPUS_PATH", ""),
-            str(os.path.dirname(__file__) + "/opus.dll"),
-            "opus.dll",
-        ]
+        candidates = _opus_library_candidates()
         error = None
         for candidate in candidates:
             if not candidate:

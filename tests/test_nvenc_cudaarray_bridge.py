@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from streaming.native_rtsp_output import _opus_library_candidates
 from streaming.nvenc_cudaarray_bridge import (
     CudaTensorSurfaceView,
     NvencCudaArrayEncoder,
@@ -14,6 +15,14 @@ def test_nvenc_cudaarray_binary_lives_in_feature_folder():
     assert candidates
     assert candidates[0].name == "d2s_nvenc_cudaarray_bridge.dll"
     assert candidates[0].parent.name == "nvenc_cudaarray_bridge"
+
+
+def test_native_opus_binary_lives_in_feature_folder():
+    candidates = _opus_library_candidates()
+    packaged = Path(candidates[1])
+    assert packaged.name == "opus.dll"
+    assert packaged.parent.name == "native_rtsp_output"
+    assert packaged.is_absolute()
 
 
 def test_nvenc_cudaarray_encoder_rejects_surface_switch():
