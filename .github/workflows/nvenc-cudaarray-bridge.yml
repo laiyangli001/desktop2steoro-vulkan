@@ -34,10 +34,10 @@ jobs:
           method: network
           sub-packages: '["nvcc", "cudart", "visual_studio_integration"]'
 
-      - name: Download NVIDIA Video Codec SDK headers
+      - name: Download NVENC API headers
         shell: pwsh
         run: |
-          git clone --depth 1 https://github.com/NVIDIA/video-sdk-samples.git "$env:RUNNER_TEMP\video-sdk-samples"
+          git clone --depth 1 --branch n12.2.72.0 https://github.com/FFmpeg/nv-codec-headers.git "$env:RUNNER_TEMP\nv-codec-headers"
 
       - name: Build pinned native Opus library
         shell: pwsh
@@ -53,7 +53,7 @@ jobs:
         run: |
           cmake -S native/nvenc_cudaarray_bridge -B native/nvenc_cudaarray_bridge/build `
             -G 'Visual Studio 17 2022' -A x64 `
-            -DD2S_NVENC_SDK_HEADERS="$env:RUNNER_TEMP\video-sdk-samples"
+            -DD2S_NV_CODEC_HEADERS="$env:RUNNER_TEMP\nv-codec-headers"
 
       - name: Build DLL
         shell: pwsh

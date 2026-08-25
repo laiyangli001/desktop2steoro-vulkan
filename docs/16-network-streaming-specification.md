@@ -522,7 +522,7 @@ SRT 适合服务间或原生客户端传输，但浏览器不能直接播放 SRT
 
 ## NativeNVENC 无 FFmpeg 发布路径
 
-NativeNVENC 是独立的音视频发布后端，禁止创建 FFmpeg 子进程，也不使用 FFmpeg 的
+NativeNVENC 是独立的音视频发布后端，禁止创建 FFmpeg 子进程，也不链接或调用 FFmpeg 运行库；构建时仅使用 NVENC API 头文件声明，不使用 FFmpeg 的
 demux、编码或 mux 能力。数据流固定为：
 
 ```text
