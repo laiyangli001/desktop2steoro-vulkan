@@ -36,6 +36,23 @@ D2S_NVENC_API int32_t d2s_nvenc_cudaarray_submit(
     int64_t timestamp
 );
 
+/*
+ * Launch a CUDA kernel on cuda_stream that reads the final SBS tensor and
+ * writes RGBA pixels directly into the NVENC-registered CUDA array.
+ * scalar_type: 0=uint8, 1=float32 normalized, 2=float16 normalized.
+ */
+D2S_NVENC_API int32_t d2s_nvenc_cudaarray_submit_tensor(
+    d2s_nvenc_cudaarray_handle handle,
+    uint64_t device_pointer,
+    uint32_t channels,
+    size_t stride_y,
+    size_t stride_x,
+    size_t stride_c,
+    int32_t scalar_type,
+    uint64_t cuda_stream,
+    int64_t timestamp
+);
+
 D2S_NVENC_API int32_t d2s_nvenc_cudaarray_read_packet(
     d2s_nvenc_cudaarray_handle handle,
     uint8_t* destination,

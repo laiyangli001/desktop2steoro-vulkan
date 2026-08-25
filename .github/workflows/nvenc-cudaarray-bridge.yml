@@ -13,12 +13,24 @@ on:
 permissions:
   contents: write
 
+env:
+  # GitHub-hosted runners are retiring Node.js 20. Force JavaScript actions
+  # onto Node.js 24 now so this native build does not emit the deprecation warning.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build-windows-nvenc-cudaarray:
     name: Windows x64 NVENC CUDAARRAY bridge
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v5
+
+      - name: Install CUDA compiler and runtime
+        uses: Jimver/cuda-toolkit@v0.2.36
+        with:
+          cuda: "12.2.2"
+          method: network
+          sub-packages: '["nvcc", "cudart", "visual_studio_integration"]'
 
       - name: Download pinned NVENC headers
         shell: pwsh

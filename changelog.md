@@ -2,6 +2,8 @@
 
 ## 2026-08-25
 
+- NVENC CUDAARRAY 进入严格零拷贝阶段：新增原生 CUDA surface kernel，直接读取最终 SBS tensor 的 device pointer、stride 和 dtype 并写入 NVENC 注册表面，不再创建 RGBA staging 或调用图像复制；成功路径记录 `gpu_to_cpu=False zero_copy=True gpu_copy_count=0`，运行时失败依次降级到 CUDAARRAY 单次设备拷贝、PyNvVideoCodec 和 FFmpeg。
+
 - 高级网络推流新增原生 NVENC CUDAARRAY 优先路径：OpenGL 映射纹理以 `NV_ENC_INPUT_RESOURCE_TYPE_CUDAARRAY` 直接注册到 NVENC，删除 array→线性 CUDA tensor 的一次设备内拷贝；当前如实记录 `gpu_to_cpu=False zero_copy=False gpu_copy_count=1`，DLL 缺失或能力失败时自动回退 PyNvVideoCodec。GitHub Actions run `32825850824` 已完成 Windows x64 DLL 编译并提交到对应 streaming 功能目录，本机 ABI 1 与 NVENC/CUDA 驱动探针加载通过。
 
 - 修正高级网络推流 `Auto` 默认进入 PyNvVideoCodec 后出现花屏的问题：恢复稳定 FFmpeg/MediaMTX 默认路径，PyNvVideoCodec、Vulkan、Intel 等直接 GPU 后端改为显式选择，避免初始化成功但帧格式未经画面验证的路径成为默认输出。

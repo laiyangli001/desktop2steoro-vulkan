@@ -1845,7 +1845,7 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
         self._native_pts = 0
         self._opengl_fallback: OpenGLFallbackBackend | None = None
         self._opengl_pynv_fallback: PyNvDirectSbsOutput | None = None
-        self._opengl_nvenc_cudaarray_active = False
+        self._opengl_nvenc_mode = "none"
         self._opengl_amd_fallback: AmdAmfDirectSbsOutput | None = None
         self._opengl_fallback_active = False
         self._opengl_fallback_attempted = False
@@ -2308,38 +2308,67 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
                 fallback = self._new_opengl_pynv_fallback()
                 self._opengl_pynv_fallback = fallback
                 try:
-                    cuda_array = backend.submit_cuda_array(frame)
-                    fallback._start_cudaarray_encoder(width, height, cuda_array)
+                    surface_view = backend.submit_cuda_tensor_surface(frame)
+                    fallback._start_cudaarray_encoder(
+                        width, height, surface_view.cuda_array
+                    )
                     assert fallback._pynv_output is not None
-                    fallback._pynv_output.submit_cuda_frame(cuda_array)
-                    self._opengl_nvenc_cudaarray_active = True
+                    fallback._pynv_output.submit_cuda_frame(surface_view)
+                    self._opengl_nvenc_mode = "direct"
                     print(
                         "[OpenGLStream] active: "
-                        "encoder=NativeNVENC/CUDAARRAY "
-                        "gpu_to_cpu=False zero_copy=False gpu_copy_count=1 "
+                        "encoder=NativeNVENC/CUDAARRAY-SurfaceKernel "
+                        "gpu_to_cpu=False zero_copy=True gpu_copy_count=0 "
                         f"resolution={width}x{height} fps={self.fps}",
                         flush=True,
                     )
-                except Exception as native_exc:
+                except Exception as direct_exc:
                     fallback._release_pynv_pipeline()
                     backend.release_cuda_array()
                     print(
-                        "[OpenGLStream] native NVENC CUDAARRAY unavailable: "
-                        f"{type(native_exc).__name__}: {native_exc}; "
-                        "fallback=PyNvVideoCodec",
+                        "[OpenGLStream] direct CUDA surface write unavailable: "
+                        f"{type(direct_exc).__name__}: {direct_exc}; "
+                        "fallback=CUDAARRAY device copy",
                         flush=True,
                     )
-                    fallback._start_ffmpeg(width, height)
-                    assert fallback._pynv_output is not None
-                    fallback._pynv_output.submit_cuda_frame(backend.submit_cuda(frame))
-                    self._opengl_nvenc_cudaarray_active = False
-                    print(
-                        "[OpenGLStream] active: encoder=PyNvVideoCodec/NVENC "
-                        f"gpu_to_cpu={caps.gpu_to_cpu} zero_copy={caps.zero_copy} "
-                        f"gpu_copy_count={getattr(caps, 'gpu_copy_count', 0)} "
-                        f"resolution={width}x{height} fps={self.fps}",
-                        flush=True,
-                    )
+                    try:
+                        cuda_array = backend.submit_cuda_array(frame)
+                        fallback._start_cudaarray_encoder(
+                            width, height, cuda_array
+                        )
+                        assert fallback._pynv_output is not None
+                        fallback._pynv_output.submit_cuda_frame(cuda_array)
+                        self._opengl_nvenc_mode = "array-copy"
+                        print(
+                            "[OpenGLStream] active: "
+                            "encoder=NativeNVENC/CUDAARRAY "
+                            "gpu_to_cpu=False zero_copy=False gpu_copy_count=1 "
+                            f"resolution={width}x{height} fps={self.fps}",
+                            flush=True,
+                        )
+                    except Exception as native_exc:
+                        fallback._release_pynv_pipeline()
+                        backend.release_cuda_array()
+                        print(
+                            "[OpenGLStream] native NVENC CUDAARRAY unavailable: "
+                            f"{type(native_exc).__name__}: {native_exc}; "
+                            "fallback=PyNvVideoCodec",
+                            flush=True,
+                        )
+                        fallback._start_ffmpeg(width, height)
+                        assert fallback._pynv_output is not None
+                        fallback._pynv_output.submit_cuda_frame(
+                            backend.submit_cuda(frame)
+                        )
+                        self._opengl_nvenc_mode = "pynv"
+                        print(
+                            "[OpenGLStream] active: encoder=PyNvVideoCodec/NVENC "
+                            f"gpu_to_cpu={caps.gpu_to_cpu} "
+                            f"zero_copy={caps.zero_copy} "
+                            f"gpu_copy_count={getattr(caps, 'gpu_copy_count', 0)} "
+                            f"resolution={width}x{height} fps={self.fps}",
+                            flush=True,
+                        )
             elif is_cuda and caps.hip_gl_interop:
                 if self.stereo_mix_device:
                     raise RuntimeError(
@@ -2440,7 +2469,24 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
             try:
                 if pynv_fallback is not None:
                     assert pynv_fallback._pynv_output is not None
-                    if self._opengl_nvenc_cudaarray_active:
+                    if self._opengl_nvenc_mode == "direct":
+                        try:
+                            pynv_fallback._pynv_output.submit_cuda_frame(
+                                opengl.submit_cuda_tensor_surface(frame)
+                            )
+                        except Exception as direct_exc:
+                            self._opengl_nvenc_mode = "array-copy"
+                            print(
+                                "[OpenGLStream] direct CUDA surface write failed: "
+                                f"{type(direct_exc).__name__}: {direct_exc}; "
+                                "downgrade=CUDAARRAY device copy "
+                                "zero_copy=False gpu_copy_count=1",
+                                flush=True,
+                            )
+                            pynv_fallback._pynv_output.submit_cuda_frame(
+                                opengl.submit_cuda_array(frame)
+                            )
+                    elif self._opengl_nvenc_mode == "array-copy":
                         pynv_fallback._pynv_output.submit_cuda_frame(
                             opengl.submit_cuda_array(frame)
                         )
@@ -2497,7 +2543,7 @@ class VulkanDirectSbsOutput(FfmpegDirectSbsOutput):
             self._opengl_fallback.close()
             self._opengl_fallback = None
         self._opengl_fallback_active = False
-        self._opengl_nvenc_cudaarray_active = False
+        self._opengl_nvenc_mode = "none"
         fallback = getattr(self, "_host_fallback", None)
         if fallback is not None:
             self._close_secondary_output(fallback)

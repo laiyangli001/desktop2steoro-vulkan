@@ -6,11 +6,26 @@ import ctypes
 import os
 from pathlib import Path
 import platform
+import sys
 from typing import Any
+from dataclasses import dataclass
 
 
-_ABI_VERSION = 1
+_ABI_VERSION = 2
 _DLL_NAME = "d2s_nvenc_cudaarray_bridge.dll"
+_DLL_DIRECTORY_HANDLES: list[Any] = []
+
+
+@dataclass(frozen=True)
+class CudaTensorSurfaceView:
+    cuda_array: int
+    device_pointer: int
+    channels: int
+    stride_y: int
+    stride_x: int
+    stride_c: int
+    scalar_type: int
+    cuda_stream: int
 
 
 def _candidate_libraries() -> list[Path]:
@@ -38,6 +53,18 @@ def _configure_api(library: Any) -> None:
     ]
     library.d2s_nvenc_cudaarray_submit.restype = ctypes.c_int32
     library.d2s_nvenc_cudaarray_submit.argtypes = [ctypes.c_void_p, ctypes.c_int64]
+    library.d2s_nvenc_cudaarray_submit_tensor.restype = ctypes.c_int32
+    library.d2s_nvenc_cudaarray_submit_tensor.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_uint64,
+        ctypes.c_uint32,
+        ctypes.c_size_t,
+        ctypes.c_size_t,
+        ctypes.c_size_t,
+        ctypes.c_int32,
+        ctypes.c_uint64,
+        ctypes.c_int64,
+    ]
     library.d2s_nvenc_cudaarray_read_packet.restype = ctypes.c_int32
     library.d2s_nvenc_cudaarray_read_packet.argtypes = [
         ctypes.c_void_p,
@@ -62,6 +89,23 @@ def _last_error(library: Any) -> str:
 def load_nvenc_cudaarray_bridge() -> Any:
     if platform.system() != "Windows":
         raise RuntimeError("native NVENC CUDAARRAY bridge is Windows-only")
+    if hasattr(os, "add_dll_directory"):
+        runtime_dirs = [
+            Path(sys.prefix) / "Lib" / "site-packages" / "nvidia" / "cuda_runtime" / "bin",
+            Path(__file__).resolve().parents[2]
+            / "python3" / "Lib" / "site-packages" / "nvidia" / "cuda_runtime" / "bin",
+        ]
+        cuda_path = os.environ.get("CUDA_PATH", "").strip()
+        if cuda_path:
+            runtime_dirs.insert(0, Path(cuda_path) / "bin")
+        for runtime_dir in runtime_dirs:
+            if runtime_dir.is_dir():
+                try:
+                    _DLL_DIRECTORY_HANDLES.append(
+                        os.add_dll_directory(str(runtime_dir))
+                    )
+                except OSError:
+                    pass
     errors: list[str] = []
     for candidate in _candidate_libraries():
         try:
@@ -110,19 +154,35 @@ class NvencCudaArrayEncoder:
         self._timestamp = 0
         self._closed = False
 
-    def encode(self, cuda_array: int) -> bytes:
+    def encode(self, frame: int | CudaTensorSurfaceView) -> bytes:
         if self._closed or not self._handle:
             raise RuntimeError("native NVENC CUDAARRAY encoder is closed")
-        # A bridge instance owns one registered array for its entire lifetime.
-        # The argument is retained so it can share the packet-output adapter
-        # used by PyNvVideoCodec while validating accidental surface changes.
-        if int(cuda_array) != self._cuda_array:
-            raise ValueError("native NVENC encoder cannot switch CUDA arrays")
-        status = int(
-            self._library.d2s_nvenc_cudaarray_submit(
-                self._handle, ctypes.c_int64(self._timestamp)
+        if isinstance(frame, CudaTensorSurfaceView):
+            if int(frame.cuda_array) != self._cuda_array:
+                raise ValueError("native NVENC encoder cannot switch CUDA arrays")
+            status = int(
+                self._library.d2s_nvenc_cudaarray_submit_tensor(
+                    self._handle,
+                    int(frame.device_pointer),
+                    int(frame.channels),
+                    int(frame.stride_y),
+                    int(frame.stride_x),
+                    int(frame.stride_c),
+                    int(frame.scalar_type),
+                    int(frame.cuda_stream),
+                    ctypes.c_int64(self._timestamp),
+                )
             )
-        )
+        else:
+            # Phase-one compatibility path: Python copied RGBA into the same
+            # array with cudaMemcpy2DToArrayAsync before this call.
+            if int(frame) != self._cuda_array:
+                raise ValueError("native NVENC encoder cannot switch CUDA arrays")
+            status = int(
+                self._library.d2s_nvenc_cudaarray_submit(
+                    self._handle, ctypes.c_int64(self._timestamp)
+                )
+            )
         if status != 0:
             raise RuntimeError(_last_error(self._library))
         self._timestamp += 1

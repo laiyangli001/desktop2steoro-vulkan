@@ -228,6 +228,16 @@ class _CudaOpenGLInterop:
             "cudaGraphicsUnmapResources",
         )
 
+    def mapped_array(self, device: Any) -> int:
+        """Return the persistent mapped CUarray without copying pixels."""
+        import torch
+
+        stream = int(torch.cuda.current_stream(device=device).cuda_stream)
+        if self._mapped_resources is None:
+            self._mapped_resources, self._mapped_array = self._resource_array(stream)
+            self._mapped_stream = stream
+        return int(self._mapped_array.value or 0)
+
     def copy_to_array(self, rgba: Any) -> int:
         """Copy RGBA8 into a persistently mapped CUDA array for native NVENC."""
         import torch
@@ -241,9 +251,7 @@ class _CudaOpenGLInterop:
             )
         stream_object = torch.cuda.current_stream(device=rgba.device)
         stream = int(stream_object.cuda_stream)
-        if self._mapped_resources is None:
-            self._mapped_resources, self._mapped_array = self._resource_array(stream)
-            self._mapped_stream = stream
+        self.mapped_array(rgba.device)
         width_bytes = self.width * 4
         self._check(
             self._cudart.cudaMemcpy2DToArrayAsync(
@@ -669,6 +677,73 @@ class OpenGLFallbackBackend:
         self._rgba_staging[..., :3].copy_(image)
         self._rgba_staging[..., 3].fill_(255)
         return self._rgba_staging
+
+    def submit_cuda_tensor_surface(self, image: Any) -> Any:
+        """Describe a final SBS tensor for direct CUDA surface writes."""
+        import torch
+        from streaming.nvenc_cudaarray_bridge import CudaTensorSurfaceView
+
+        if self._closed:
+            raise RuntimeError("OpenGL fallback backend is closed")
+        if self._cuda_interop is None:
+            raise RuntimeError("CUDA/OpenGL interop is unavailable")
+        tensor = getattr(image, "sbs", image)
+        if not isinstance(tensor, torch.Tensor) or not bool(tensor.is_cuda):
+            raise ValueError("direct CUDA surface write requires a CUDA tensor")
+        tensor = tensor.detach()
+        if tensor.ndim == 4:
+            if int(tensor.shape[0]) != 1:
+                raise ValueError(f"expected one frame, got {tuple(tensor.shape)!r}")
+            tensor = tensor[0]
+        if tensor.ndim != 3:
+            raise ValueError(f"unsupported CUDA SBS shape: {tuple(tensor.shape)!r}")
+
+        if int(tensor.shape[0]) in (1, 3, 4):
+            channels = int(tensor.shape[0])
+            height, width = int(tensor.shape[1]), int(tensor.shape[2])
+            stride_c, stride_y, stride_x = tensor.stride()
+        elif int(tensor.shape[-1]) in (1, 3, 4):
+            height, width, channels = (
+                int(tensor.shape[0]),
+                int(tensor.shape[1]),
+                int(tensor.shape[2]),
+            )
+            stride_y, stride_x, stride_c = tensor.stride()
+        else:
+            raise ValueError(f"unsupported CUDA SBS channels: {tuple(tensor.shape)!r}")
+        if (height, width) != (self.height, self.width):
+            raise ValueError(
+                f"direct CUDA surface requires {self.width}x{self.height}, "
+                f"got {width}x{height}"
+            )
+        scalar_types = {
+            torch.uint8: 0,
+            torch.float32: 1,
+            torch.float16: 2,
+        }
+        scalar_type = scalar_types.get(tensor.dtype)
+        if scalar_type is None:
+            raise ValueError(
+                "direct CUDA surface supports uint8, float32 or float16 tensors"
+            )
+        element_size = int(tensor.element_size())
+        stream = int(torch.cuda.current_stream(device=tensor.device).cuda_stream)
+        previous = self._glfw.get_current_context()
+        self._glfw.make_context_current(self._window)
+        try:
+            cuda_array = self._cuda_interop.mapped_array(tensor.device)
+        finally:
+            self._glfw.make_context_current(previous)
+        return CudaTensorSurfaceView(
+            cuda_array=cuda_array,
+            device_pointer=int(tensor.data_ptr()),
+            channels=channels,
+            stride_y=int(stride_y) * element_size,
+            stride_x=int(stride_x) * element_size,
+            stride_c=int(stride_c) * element_size,
+            scalar_type=scalar_type,
+            cuda_stream=stream,
+        )
 
     def submit_cuda_array(self, image: Any) -> int:
         """Upload one CUDA frame and return the persistent mapped CUarray."""

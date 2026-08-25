@@ -11,6 +11,25 @@
 #include <string>
 #include <vector>
 
+extern "C" int32_t d2s_cudaarray_surface_create(
+    void* cuda_array,
+    uint64_t* surface
+);
+extern "C" int32_t d2s_cudaarray_surface_write(
+    uint64_t surface,
+    uint64_t device_pointer,
+    uint32_t width,
+    uint32_t height,
+    uint32_t channels,
+    size_t stride_y,
+    size_t stride_x,
+    size_t stride_c,
+    int32_t scalar_type,
+    uint64_t cuda_stream
+);
+extern "C" int32_t d2s_cudaarray_surface_destroy(uint64_t surface);
+extern "C" const char* d2s_cudaarray_surface_error(int32_t status);
+
 namespace {
 
 thread_local std::string g_last_error;
@@ -105,6 +124,50 @@ public:
             api_.nvEncUnmapInputResource(encoder_, map.mappedResource),
             "nvEncUnmapInputResource"
         );
+    }
+
+    void submit_tensor(
+        uint64_t device_pointer,
+        uint32_t channels,
+        size_t stride_y,
+        size_t stride_x,
+        size_t stride_c,
+        int32_t scalar_type,
+        uint64_t cuda_stream,
+        int64_t timestamp
+    ) {
+        if (surface_ == 0) {
+            const int32_t create_status = d2s_cudaarray_surface_create(
+                cuda_array_, &surface_
+            );
+            if (create_status != 0) {
+                const char* detail = d2s_cudaarray_surface_error(create_status);
+                throw NvencError(
+                    std::string("cudaCreateSurfaceObject failed: ") +
+                    (detail ? detail : "unknown CUDA error")
+                );
+            }
+        }
+        const int32_t write_status = d2s_cudaarray_surface_write(
+            surface_,
+            device_pointer,
+            width_,
+            height_,
+            channels,
+            stride_y,
+            stride_x,
+            stride_c,
+            scalar_type,
+            cuda_stream
+        );
+        if (write_status != 0) {
+            const char* detail = d2s_cudaarray_surface_error(write_status);
+            throw NvencError(
+                std::string("direct CUDA surface write failed: ") +
+                (detail ? detail : "unknown CUDA error")
+            );
+        }
+        submit(timestamp);
     }
 
     void flush() {
@@ -321,6 +384,10 @@ private:
             flush();
         } catch (...) {
         }
+        if (surface_ != 0) {
+            d2s_cudaarray_surface_destroy(surface_);
+            surface_ = 0;
+        }
         if (encoder_ && registered_) {
             api_.nvEncUnregisterResource(encoder_, registered_);
             registered_ = nullptr;
@@ -356,6 +423,7 @@ private:
     NV_ENC_REGISTERED_PTR registered_ = nullptr;
     NV_ENC_OUTPUT_PTR bitstream_ = nullptr;
     bool flushed_ = false;
+    uint64_t surface_ = 0;
     std::deque<std::vector<uint8_t>> packets_;
 };
 
@@ -379,7 +447,7 @@ int32_t protect(Fn&& fn) {
 extern "C" {
 
 uint32_t d2s_nvenc_cudaarray_abi_version(void) {
-    return 1;
+    return 2;
 }
 
 int32_t d2s_nvenc_cudaarray_probe(void) {
@@ -434,6 +502,34 @@ int32_t d2s_nvenc_cudaarray_submit(
             throw NvencError("NVENC CUDAARRAY handle is null");
         }
         static_cast<NvencCudaArrayEncoder*>(handle)->submit(timestamp);
+    });
+}
+
+int32_t d2s_nvenc_cudaarray_submit_tensor(
+    d2s_nvenc_cudaarray_handle handle,
+    uint64_t device_pointer,
+    uint32_t channels,
+    size_t stride_y,
+    size_t stride_x,
+    size_t stride_c,
+    int32_t scalar_type,
+    uint64_t cuda_stream,
+    int64_t timestamp
+) {
+    return protect([&] {
+        if (!handle) {
+            throw NvencError("NVENC CUDAARRAY handle is null");
+        }
+        static_cast<NvencCudaArrayEncoder*>(handle)->submit_tensor(
+            device_pointer,
+            channels,
+            stride_y,
+            stride_x,
+            stride_c,
+            scalar_type,
+            cuda_stream,
+            timestamp
+        );
     });
 }
 

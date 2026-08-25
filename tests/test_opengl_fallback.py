@@ -69,6 +69,14 @@ def test_opengl_cuda_interop_roundtrip_stays_on_gpu():
             pytest.skip(backend.capabilities.detail)
         source = torch.zeros((3, 36, 64), device="cuda", dtype=torch.uint8)
         source[0, 0, 0] = 19
+        surface_view = backend.submit_cuda_tensor_surface(source)
+        assert surface_view.cuda_array > 0
+        assert surface_view.device_pointer == source.data_ptr()
+        assert surface_view.channels == 3
+        assert surface_view.scalar_type == 0
+        assert surface_view.stride_x == 1
+        assert surface_view.cuda_stream >= 0
+        backend.release_cuda_array()
         roundtrip = backend.submit_cuda(source)
         staging = backend._rgba_staging
         assert staging is not None
@@ -101,6 +109,10 @@ def test_vulkan_failure_selects_cuda_opengl_nvenc_branch(monkeypatch):
             gpu_to_cpu=False,
             zero_copy=False,
         )
+
+        def submit_cuda_tensor_surface(self, frame):
+            assert frame is fake_frame
+            raise RuntimeError("direct CUDA kernel unavailable in unit test")
 
         def submit_cuda_array(self, frame):
             assert frame is fake_frame
@@ -143,7 +155,7 @@ def test_vulkan_failure_selects_cuda_opengl_nvenc_branch(monkeypatch):
     output._opengl_fallback_attempted = False
     output._opengl_fallback = None
     output._opengl_pynv_fallback = None
-    output._opengl_nvenc_cudaarray_active = False
+    output._opengl_nvenc_mode = "none"
     output._opengl_amd_fallback = None
     output._opengl_fallback_active = False
     output._host_fallback = None
@@ -203,7 +215,7 @@ def test_no_interop_uses_host_encoder_without_cpu_gl_roundtrip(monkeypatch):
     output._opengl_fallback_attempted = False
     output._opengl_fallback = None
     output._opengl_pynv_fallback = None
-    output._opengl_nvenc_cudaarray_active = False
+    output._opengl_nvenc_mode = "none"
     output._opengl_amd_fallback = None
     output._opengl_fallback_active = False
     output._host_fallback = None
@@ -269,7 +281,7 @@ def test_opengl_runtime_submit_failure_switches_to_stable_host_path(monkeypatch)
     output._opengl_fallback_attempted = True
     output._opengl_fallback = backend
     output._opengl_pynv_fallback = None
-    output._opengl_nvenc_cudaarray_active = False
+    output._opengl_nvenc_mode = "none"
     output._opengl_amd_fallback = None
     output._opengl_fallback_active = True
     output._host_fallback = None
@@ -331,7 +343,8 @@ def test_opengl_fallback_contract_is_documented_and_wired():
     assert "framebuffer_supported=True" in backend_source
     assert "gpu_copy_count=2 if gpu_interop else 0" in backend_source
     assert "gpu_copy_count" in source
-    assert "encoder=NativeNVENC/CUDAARRAY" in source
+    assert "encoder=NativeNVENC/CUDAARRAY-SurfaceKernel" in source
+    assert "gpu_to_cpu=False zero_copy=True gpu_copy_count=0" in source
     assert "gpu_to_cpu=False zero_copy=False gpu_copy_count=1" in source
 
 
