@@ -2,7 +2,11 @@ from pathlib import Path
 
 import pytest
 
-from streaming.native_rtsp_output import _opus_library_candidates, _pack_rtp_header
+from streaming.native_rtsp_output import (
+    NativeRtspAvOutput,
+    _opus_library_candidates,
+    _pack_rtp_header,
+)
 from streaming.nvenc_cudaarray_bridge import (
     CudaTensorSurfaceView,
     NvencCudaArrayEncoder,
@@ -36,6 +40,38 @@ def test_native_rtp_headers_use_announced_payload_types():
     assert h264[1] == 0x80 | 96
     assert opus[0] == 0x80
     assert opus[1] == 111
+
+
+def test_native_h264_rtp_is_batched_without_losing_packet_boundaries():
+    class RecordingSocket:
+        def __init__(self):
+            self.calls = []
+
+        def sendall(self, data):
+            self.calls.append(bytes(data))
+
+    output = NativeRtspAvOutput(
+        object(), host="127.0.0.1", port=8554, stream_key="live", fps=25
+    )
+    recording_socket = RecordingSocket()
+    output._socket = recording_socket
+    output._send_h264(b"\x00\x00\x00\x01\x65" + b"x" * 200_000, 9000)
+
+    assert 1 < len(recording_socket.calls) < 10
+    packet_count = 0
+    for batch in recording_socket.calls:
+        cursor = 0
+        while cursor < len(batch):
+            assert batch[cursor] == ord("$")
+            assert batch[cursor + 1] == 0
+            size = int.from_bytes(batch[cursor + 2 : cursor + 4], "big")
+            packet = batch[cursor + 4 : cursor + 4 + size]
+            assert len(packet) == size
+            assert packet[1] & 0x7F == 96
+            packet_count += 1
+            cursor += 4 + size
+        assert cursor == len(batch)
+    assert packet_count > len(recording_socket.calls)
 
 
 def test_nvenc_cudaarray_encoder_rejects_surface_switch():

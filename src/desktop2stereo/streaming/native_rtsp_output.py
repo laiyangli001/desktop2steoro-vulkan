@@ -159,6 +159,7 @@ class NativeRtspAvOutput:
         if self.audio_sender is not None:
             self._opus = _Opus()
             self._audio_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self._audio_socket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1 << 20)
             self._audio_socket.bind(("127.0.0.1", int(self.audio_sender.port)))
             self._audio_socket.settimeout(0.2)
             self._audio_thread = threading.Thread(
@@ -223,14 +224,23 @@ class NativeRtspAvOutput:
             if end > start:
                 yield data[start:end]
 
+    @staticmethod
+    def _interleaved_frame(channel: int, packet: bytes) -> bytes:
+        return b"$" + bytes([channel]) + struct.pack(">H", len(packet)) + packet
+
     def _interleaved(self, channel: int, packet: bytes) -> None:
+        self._interleaved_batch(self._interleaved_frame(channel, packet))
+
+    def _interleaved_batch(self, frames: bytes | bytearray) -> None:
         if self._socket is None:
             raise RuntimeError("Native RTSP socket is closed")
-        frame = b"$" + bytes([channel]) + struct.pack(">H", len(packet)) + packet
+        if not frames:
+            return
         with self._socket_write_lock:
-            self._socket.sendall(frame)
+            self._socket.sendall(frames)
 
     def _send_h264(self, data: bytes, timestamp: int) -> None:
+        batch = bytearray()
         nals = list(self._annexb_nals(data))
         for nal_index, nal in enumerate(nals):
             if not nal:
@@ -246,7 +256,10 @@ class NativeRtspAvOutput:
                     ssrc=self._video_ssrc,
                 ) + payload
                 self._video_seq = (self._video_seq + 1) & 0xFFFF
-                self._interleaved(0, packet)
+                batch.extend(self._interleaved_frame(0, packet))
+                if len(batch) >= 64 * 1024:
+                    self._interleaved_batch(batch)
+                    batch.clear()
                 continue
             first = True
             offset = 1
@@ -264,8 +277,12 @@ class NativeRtspAvOutput:
                     ssrc=self._video_ssrc,
                 ) + payload
                 self._video_seq = (self._video_seq + 1) & 0xFFFF
-                self._interleaved(0, packet)
+                batch.extend(self._interleaved_frame(0, packet))
+                if len(batch) >= 64 * 1024:
+                    self._interleaved_batch(batch)
+                    batch.clear()
                 first = False
+        self._interleaved_batch(batch)
 
     def _audio_loop(self) -> None:
         assert self._audio_socket is not None and self._opus is not None
