@@ -2,6 +2,8 @@
 
 ## 2026-08-25
 
+- 修复 NativeNVENC H.264 裸包进入 FFmpeg RTSP muxer 时没有 PTS/DTS 的问题：启用 `genpts` 并固定 CFR 视频时间轴，避免视频时间戳未定义导致 Opus 已存在但浏览器无法正常播放音频。
+
 - NativeNVENC muxer 不再丢弃 FFmpeg stderr：新增音频启用状态、输入 UDP 地址和实时 mux 警告/错误日志，用于确认 Opus 输入是否因时间戳、队列或 RTSP 复用失败。
 
 - 修复 NativeNVENC 音频复用与 Vulkan 稳定路径不一致的问题：WASAPI PCM 按 240 帧拆分为 MTU 友好的 localhost UDP 数据报，避免 4096 帧/约 16 KiB 数据报分片；NativeNVENC 的 FFmpeg muxer 增加音频线程队列、快速探测和 `muxdelay/muxpreload=0`，降低视频包突发时音频输入被饿死或丢包的概率。

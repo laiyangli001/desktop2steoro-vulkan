@@ -153,8 +153,11 @@ class PyNvSrtVideoOutput:
             "-hide_banner",
             "-loglevel",
             "warning",
+            # PyNv packets are Annex-B bytes without AVPacket PTS/DTS.
+            # Generate a monotonic video timeline before RTSP interleaving
+            # with the live Opus input.
             "-fflags",
-            "nobuffer",
+            "+nobuffer+genpts",
             "-flags",
             "low_delay",
             "-probesize",
@@ -188,7 +191,7 @@ class PyNvSrtVideoOutput:
         command.extend(["-map", "0:v:0"])
         if audio_url:
             command.extend(["-map", "1:a:0"])
-        command.extend(["-c:v", "copy"])
+        command.extend(["-c:v", "copy", "-fps_mode", "cfr"])
         if audio_url:
             if audio_codec == "libopus":
                 command.extend(

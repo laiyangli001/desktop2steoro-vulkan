@@ -1054,6 +1054,8 @@ def test_pynv_muxer_copies_video_and_encodes_soundcard_pcm_as_opus(monkeypatch):
     assert command[command.index("-thread_queue_size") + 1] == "1024"
     assert command[command.index("-probesize") + 1] == "64"
     assert command[command.index("-muxdelay") + 1] == "0"
+    assert command[command.index("-fflags") + 1] == "+nobuffer+genpts"
+    assert command[command.index("-fps_mode") + 1] == "cfr"
     assert "udp://127.0.0.1:54321" in command
     assert command[-1] == "rtsp://127.0.0.1:8554/live"
     assert captured["kwargs"]["creationflags"] == 0
