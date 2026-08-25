@@ -1,5 +1,9 @@
 # Desktop2Stereo Vulkan 项目日志
 
+## 2026-08-26
+
+- 修复 NativeNVENC 原生 RTSP 发布器的握手失败：RTSP 请求曾把 `\\r\\n` 作为字面量发送，MediaMTX 因无法识别请求行结束而报 `buffer length exceeds 64`；现已恢复真实 CRLF，NativeNVENC 可进入 ANNOUNCE/SETUP/RECORD 阶段。该问题发生在编码前，不是 CUDA surface 或 NVENC 花屏问题。
+
 ## 2026-08-25
 
 - NativeNVENC 路径改为不启动 FFmpeg：CUDAARRAY NVENC 输出的带时间戳 H.264 Annex-B 包由原生 RTSP/RTP 发布器直接发送到 MediaMTX，WASAPI PCM 由原生 Opus 编码器编码为 RTP 音频；新增 `native_rtsp_output.py` 与远程构建、发布的 `opus.dll`。NativeNVENC 运行失败时不再偷偷切换 FFmpeg，避免“NativeNVENC”路径与 FFmpeg 复用混用。当前仍需 GitHub Windows 构建产物和实机浏览器回归验证 H.264/Opus 两轨道。

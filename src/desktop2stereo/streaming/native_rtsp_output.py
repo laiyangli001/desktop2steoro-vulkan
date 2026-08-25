@@ -105,19 +105,19 @@ class NativeRtspAvOutput:
         self._socket = socket.create_connection((self.host, self.port), timeout=5.0)
         self._socket.settimeout(5.0)
         sdp = (
-            "v=0\\r\\n"
-            "o=- 0 0 IN IP4 127.0.0.1\\r\\n"
-            "s=Desktop2Stereo NativeNVENC\\r\\n"
-            "t=0 0\\r\\n"
-            "a=control:*\\r\\n"
-            "m=video 0 RTP/AVP/TCP 96\\r\\n"
-            "a=rtpmap:96 H264/90000\\r\\n"
-            "a=fmtp:96 packetization-mode=1\\r\\n"
-            "a=control:trackID=0\\r\\n"
-            "m=audio 0 RTP/AVP/TCP 111\\r\\n"
-            "a=rtpmap:111 opus/48000/2\\r\\n"
-            "a=fmtp:111 useinbandfec=1\\r\\n"
-            "a=control:trackID=1\\r\\n"
+            "v=0\r\n"
+            "o=- 0 0 IN IP4 127.0.0.1\r\n"
+            "s=Desktop2Stereo NativeNVENC\r\n"
+            "t=0 0\r\n"
+            "a=control:*\r\n"
+            "m=video 0 RTP/AVP/TCP 96\r\n"
+            "a=rtpmap:96 H264/90000\r\n"
+            "a=fmtp:96 packetization-mode=1\r\n"
+            "a=control:trackID=0\r\n"
+            "m=audio 0 RTP/AVP/TCP 111\r\n"
+            "a=rtpmap:111 opus/48000/2\r\n"
+            "a=fmtp:111 useinbandfec=1\r\n"
+            "a=control:trackID=1\r\n"
         ).encode()
         self._request("ANNOUNCE", self._url, {"Content-Type": "application/sdp"}, sdp)
         response = self._request(
@@ -157,15 +157,15 @@ class NativeRtspAvOutput:
         if body:
             lines.append(f"Content-Length: {len(body)}")
         lines.extend(f"{key}: {value}" for key, value in headers.items())
-        self._socket.sendall(("\\r\\n".join(lines) + "\\r\\n\\r\\n").encode() + body)
+        self._socket.sendall(("\r\n".join(lines) + "\r\n\r\n").encode() + body)
         raw = bytearray()
-        while b"\\r\\n\\r\\n" not in raw:
+        while b"\r\n\r\n" not in raw:
             chunk = self._socket.recv(4096)
             if not chunk:
                 raise RuntimeError("MediaMTX closed native RTSP connection")
             raw.extend(chunk)
-        header, _, remainder = bytes(raw).partition(b"\\r\\n\\r\\n")
-        lines = header.decode("latin1").split("\\r\\n")
+        header, _, remainder = bytes(raw).partition(b"\r\n\r\n")
+        lines = header.decode("latin1").split("\r\n")
         status = int(lines[0].split()[1])
         response_headers = {}
         for line in lines[1:]:
