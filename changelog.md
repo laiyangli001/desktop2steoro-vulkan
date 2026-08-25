@@ -2,6 +2,8 @@
 
 ## 2026-08-25
 
+- 修复 Windows 网络推流音频回环在 GPU 高负载下容易出现 `data discontinuity in recording` 的问题：WASAPI/SoundCard 采集块默认从 1024 增大到 4096 帧（可通过 `D2S_WASAPI_BLOCKSIZE` 调整），并新增实际扬声器、PCM 包数、峰值、静音包数和断续次数日志；MediaMTX 仍必须确认最终有 `Opus` 音频轨道。
+
 - 补齐 Intel 网络推流合规边界：新增 `src/tools/intel_vulkan_onevpl_smoke.py`，可在真实 Windows Intel 目标机连续验证 Vulkan producer readiness、D3D11/oneVPL Adapter LUID、NV12 提交、oneVPL 出包，并可将 H.264 包送入已运行的 MediaMTX；在目标机验收完成前仍严格记录 `zero_copy=False`。
 
 - Intel oneVPL 的视频-only native surface 在启用桌面音频时自动关闭 native gate，当前帧回到共享 Intel QSV/FFmpeg 音视频路径，避免无声推流或误终止会话；运行时清单升级为 schema 2，记录 FFmpeg 官方源码 ref、构建元数据和包 SHA-256，并在解包前校验。

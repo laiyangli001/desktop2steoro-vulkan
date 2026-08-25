@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
 import socket
 import threading
 import time
+import warnings
 from typing import Any
 
 import numpy as np
@@ -48,8 +50,19 @@ class SoundcardLoopbackSender:
 
         self.samplerate = int(samplerate)
         self.channels = 2
+        # 1024 frames is only 21.3 ms at 48 kHz and is easily overrun while
+        # the GPU stream is starting. Keep the block size configurable, with a
+        # safer default that still stays below 100 ms of audio latency.
+        self.blocksize = max(
+            1024,
+            int(os.environ.get("D2S_WASAPI_BLOCKSIZE", "4096")),
+        )
         self._soundcard = sc
         self._loopback = self._resolve_loopback(device_name)
+        self.device_name = str(getattr(self._loopback, "name", "") or device_name or "default")
+        self._packet_count = 0
+        self._discontinuity_count = 0
+        self._silent_packet_count = 0
         reservation = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         reservation.bind(("127.0.0.1", 0))
         self.port = int(reservation.getsockname()[1])
@@ -101,6 +114,13 @@ class SoundcardLoopbackSender:
             raise RuntimeError(
                 f"Windows loopback capture failed: {type(error).__name__}: {error}"
             ) from error
+        print(
+            "[DirectSbsStream] WASAPI loopback active: "
+            f"speaker={self.device_name!r} samplerate={self.samplerate} "
+            f"channels={self.channels} blocksize={self.blocksize} "
+            f"udp={self.port}",
+            flush=True,
+        )
 
     def _run(self) -> None:
         produced_pcm = False
@@ -108,16 +128,41 @@ class SoundcardLoopbackSender:
             with self._loopback.recorder(
                 samplerate=self.samplerate,
                 channels=self.channels,
-                blocksize=1024,
+                blocksize=self.blocksize,
             ) as recorder:
                 while not self._stop.is_set():
-                    samples = recorder.record(numframes=1024)
+                    with warnings.catch_warnings(record=True) as captured:
+                        warnings.simplefilter("always")
+                        samples = recorder.record(numframes=self.blocksize)
+                    for warning in captured:
+                        if "discontinuity" not in str(warning.message).casefold():
+                            continue
+                        self._discontinuity_count += 1
+                        if self._discontinuity_count == 1 or self._discontinuity_count % 10 == 0:
+                            print(
+                                "[DirectSbsStream] WASAPI recording discontinuity: "
+                                f"count={self._discontinuity_count} "
+                                f"blocksize={self.blocksize}; continuing capture",
+                                flush=True,
+                            )
                     pcm = np.asarray(samples, dtype=np.float32)
                     pcm = np.clip(pcm, -1.0, 1.0)
+                    peak = float(np.max(np.abs(pcm))) if pcm.size else 0.0
+                    if peak < 1e-5:
+                        self._silent_packet_count += 1
                     self._socket.sendto(
                         (pcm * 32767.0).astype(np.int16).tobytes(),
                         ("127.0.0.1", self.port),
                     )
+                    self._packet_count += 1
+                    if self._packet_count == 1 or self._packet_count % 100 == 0:
+                        print(
+                            "[DirectSbsStream] WASAPI PCM: "
+                            f"packets={self._packet_count} peak={peak:.5f} "
+                            f"silent_packets={self._silent_packet_count} "
+                            f"discontinuities={self._discontinuity_count}",
+                            flush=True,
+                        )
                     produced_pcm = True
                     self._startup_done.set()
         except Exception as exc:

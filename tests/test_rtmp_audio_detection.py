@@ -342,7 +342,7 @@ def test_soundcard_sender_rejects_failure_before_first_pcm(monkeypatch) -> None:
 
     sender = SoundcardLoopbackSender()
     try:
-        with pytest.raises(RuntimeError, match="failed before 1024 frames"):
+        with pytest.raises(RuntimeError, match="failed before 4096 frames"):
             sender.start()
         assert isinstance(sender._startup_error, RuntimeError)
         assert sender._runtime_error is None
