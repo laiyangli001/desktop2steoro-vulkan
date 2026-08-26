@@ -117,7 +117,8 @@ def hardware_regression_matrix() -> list[dict[str, object]]:
     common = {
         "test_entry": (
             "src/python3/python.exe -m pytest tests/test_backend_capabilities.py "
-            "tests/test_compute_backend.py -q"
+            "tests/test_windows_capture_event.py "
+            "tests/test_openvino_native_depth.py tests/test_compute_backend.py -q"
         ),
         "runtime_log_prefix": "[D2S_BACKEND_STATUS]",
         "diagnostic_log_keys": [
@@ -125,6 +126,11 @@ def hardware_regression_matrix() -> list[dict[str, object]]:
             "stereo_backend",
             "fallback_reasons",
             "capture_adapter_luid",
+            "capture_adapter_uuid",
+            "capture_pci_bdf",
+            "resource_kind",
+            "resource_format",
+            "directml_resource_mode",
             "gpu_to_cpu",
             "gpu_copy_count",
             "zero_copy",

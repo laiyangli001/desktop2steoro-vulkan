@@ -9,6 +9,7 @@ from .types import (
     CaptureSource,
     FrameCopyMode,
     capture_frame_from_native_texture,
+    compatibility_frame,
     native_resource_contract,
     release_native_resource,
 )
@@ -27,6 +28,7 @@ __all__ = [
     "prepare_rgb_for_depth_runtime",
     "prepare_rgb_for_stereo_runtime",
     "capture_frame_from_native_texture",
+    "compatibility_frame",
     "native_resource_contract",
     "release_native_resource",
 ]

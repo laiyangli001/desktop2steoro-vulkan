@@ -505,14 +505,20 @@ class GUIProcessMixin:
         gpu_to_cpu = "是" if payload.get("gpu_to_cpu") else "否"
         zero_copy = "是" if payload.get("zero_copy") else "否"
         copies = payload.get("gpu_copy_count", 0)
+        resource_kind = payload.get("resource_kind") or "unknown"
+        resource_format = payload.get("resource_format") or "unknown"
+        directml_mode = payload.get("directml_resource_mode")
         reasons = payload.get("fallback_reasons") or []
         reason_text = "; ".join(str(item) for item in reasons if item)
         if len(reason_text) > 220:
             reason_text = reason_text[:217] + "..."
         text = (
             f"深度={depth} | 合成={stereo} | 回退={fallback} | "
-            f"CPU回读={gpu_to_cpu} | GPU复制={copies} | 零回读={zero_copy}"
+            f"CPU回读={gpu_to_cpu} | GPU复制={copies} | 零回读={zero_copy} | "
+            f"资源={resource_kind}/{resource_format}"
         )
+        if directml_mode:
+            text += f" | DirectML资源={directml_mode}"
         if reason_text:
             text += f" | 原因={reason_text}"
         control.value = text

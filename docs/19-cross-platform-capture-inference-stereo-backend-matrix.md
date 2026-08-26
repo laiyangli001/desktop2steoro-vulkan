@@ -64,7 +64,7 @@ Desktop Duplication / Windows Graphics Capture
 约束如下：
 
 - Desktop Duplication 只负责显示器捕获；窗口捕获必须使用 Windows Graphics Capture。
-- 当前 `WindowsCapture` 会把帧复制为 CPU NumPy，所以上述路径尚未闭环。
+- 当前 `WindowsCapture` 若未暴露原生资源仍使用 CPU 兼容帧；暴露原生资源时原生帧是主输出，DirectML 输入准备器只有在共享句柄和同 Adapter LUID 的桥接方法实际返回输入后才允许 GPU 路径。
 - DirectML 是推理后端，不是捕获工具。
 - D3D11 到 D3D12 应优先使用同 Adapter 共享资源；驱动或格式不支持时允许一次 GPU 内复制。
 - DirectML 输出到 Vulkan 还需要可验证的共享句柄、格式转换和同步；未验证前不得记录 `zero_copy=true`。
@@ -164,6 +164,7 @@ GUI只显示以下只读状态：
 - 是否发生回退。
 - 回退前后端名称及失败原因。
 - 当前是否存在 CPU回读，以及 `gpu_copy_count`、`zero_copy` 状态。
+- 当前捕获资源的类型、像素格式和 DirectML 资源决策（shared、gpu_copy 或 cpu_compat）。
 
 规划中、未打包或能力探测未通过的后端不能进入自动候选链。用户显式选择捕获工具时，只固定捕获工具，不应同时强制指定推理或立体合成后端。
 
@@ -232,7 +233,7 @@ zero_copy = false
 | 缺口 | 当前状态 | 已交付证据 | 未完成/验证边界 |
 |---|---|---|---|
 | Windows DirectML闭环 | 部分实现 | 设备创建、代表性算子探针、自动回退接入 | D3D11/D3D12共享输入、模型级算子覆盖、输出到 Vulkan 的同步与真机验证 |
-| WGC 原生资源契约 | 部分实现 | 借用资源元数据、Adapter LUID/格式/尺寸校验、显式 CPU 回退决策 | `windows_capture` 原生对象暴露、DirectML消费者桥和跨 API 同步待验证 |
+| WGC 原生资源契约 | 部分实现 | 原生资源作为 `CapturedFrame.frame`，CPU 兼容帧单独保留；Adapter LUID/格式/尺寸校验与显式 CPU 回退决策 | `windows_capture` 原生对象暴露、DirectML消费者桥和跨 API 同步待验证 |
 | 立体合成自动顺序 | 已调整；OpenGL缺口 | 自动顺序 Vulkan → OpenGL → Torch/CPU；OpenGL 能力探针与回退日志 | 项目现有 OpenGL 仅输出/流媒体兼容，不是立体合成实现 |
 | Intel 跨 API 闭环 | 部分实现 | D3D11/OpenVINO/Vulkan/oneVPL 入口与 LUID 校验 | Intel 真机句柄、格式、同步、长跑和零回读待验证 |
 | macOS 原生链路 | 本轮排除 | 文档明确不实现、不把目标写成现状 | 由其他项目处理；本项目不修改文档 17 |
@@ -240,16 +241,16 @@ zero_copy = false
 | 其他/国产 GPU | 探针部分实现 | DirectML 设备与代表性算子探针、资源契约报告 | 模型覆盖、驱动白名单、共享句柄和性能仍待逐卡验证 |
 | 统一可观测性 | 部分实现 | `[D2S_BACKEND_STATUS]` 日志、GUI 只读状态、资源计数 | 真机端到端计数一致性待验证 |
 | GUI 与自动路由 | 代码侧已保持 | 未新增推理/合成下拉框，显示实际后端和回退原因 | 仅允许展示已实际选择的后端，不能据此证明后端闭环 |
-| 硬件回归矩阵 | 测试骨架已增加 | `hardware_regression_matrix()` 与单元测试入口 | NVIDIA/AMD/Intel/国产 GPU、Linux 和 macOS 原生链路仍需真机回归 |
+| 硬件回归矩阵 | 测试骨架已增加 | `hardware_regression_matrix()`、WGC 原生帧/DirectML 输入/Intel LUID 单元测试入口 | NVIDIA/AMD/Intel/国产 GPU、Linux 和 macOS 原生链路仍需真机回归 |
 
-1. **Windows DirectML闭环（部分实现）**：已增加 DirectML 设备创建、基础张量算子探针，并纳入 Windows 自动推理回退；探针会报告设备、基础算子、隐式 CPU fallback 和未知能力。尚未实现 D3D11/D3D12 共享纹理输入、模型级算子覆盖验证、DirectML 输出到 Vulkan 的外部内存与同步，因此不得宣称端到端零 CPU 回读。
-2. **Windows Graphics Capture资源契约（部分实现）**：`WindowsCapture` 回调现在可借用并传递可识别的 D3D11 原生资源元数据（格式、尺寸、Adapter LUID/身份、生命周期），并在兼容消费者需要 CPU 图像时显式记录 `gpu_to_cpu`、`gpu_copy_count` 和回退原因；`D2S_WGC_NATIVE_RESOURCE_REQUIRED=1` 可用于资源缺失时快速失败。当前 `windows_capture` 包的实际原生对象暴露、DirectML 消费者桥接、跨 API 同步和真机资源导入仍待验证。
+1. **Windows DirectML闭环（部分实现）**：已增加 DirectML 设备创建、代表性张量算子探针、模型输出设备检查并纳入 Windows 自动推理回退；WGC 原生帧通过 DirectML 输入准备器按共享句柄/同 LUID/桥接方法实际结果选择 shared、gpu_copy 或显式 CPU compatibility。尚未实现通用 D3D11/D3D12 纹理到 DirectML 的生产桥、模型级完整算子覆盖、DirectML 输出到 Vulkan 的外部内存与同步，因此不得宣称端到端零 CPU 回读。
+2. **Windows Graphics Capture资源契约（部分实现）**：`WindowsCapture` 回调在暴露 D3D11 资源时将原生资源作为 `CapturedFrame.frame`，CPU 兼容帧单独放在 `cpu_compat_frame`，并传递格式、尺寸、Adapter LUID/UUID/PCI BDF 和生命周期；DirectML 输入准备器只在共享句柄/桥接方法完成后采用 GPU 资源，否则显式选择兼容帧并记录 `gpu_to_cpu`、`gpu_copy_count` 和回退原因；`D2S_WGC_NATIVE_RESOURCE_REQUIRED=1` 可用于资源缺失时快速失败。`windows_capture` 包的实际原生对象暴露、跨 API 同步和真机资源导入仍待验证。
 3. **立体合成自动顺序（已调整但 OpenGL 仍是缺口）**：自动解析器已按 Vulkan → OpenGL → Torch/CPU 传递可用性；NVIDIA/AMD 不再在自动模式优先 Triton，Triton 保留为显式/兼容优化路径。当前 OpenGL 探针只识别“立体合成后端”能力；项目已有的 OpenGL 代码是输出/流媒体 fallback，不能当作 GPU 立体合成实现，因此实际自动链仍通常为 Vulkan → Torch/CPU。
 4. **Intel真机闭环（部分实现/待验证）**：Desktop Duplication、OpenVINO D3D11、Vulkan/D3D11 资源入口、oneVPL 和 Adapter LUID 校验已具备代码基础；新增通用资源共享决策与遥测字段，但尚未完成 Intel 真机的跨 API 句柄、格式、同步、严格零回读和 4K 长时间稳定性验证。
 5. **macOS原生链路（本轮明确排除）**：CoreML depth provider、MPSGraph/CVMetalTextureCache 输入桥和 Metal 立体合成仍由其他项目处理；本项目继续把现有 macOS 路径标记为待验证/兼容回退，不把设计目标写成已实现。
-6. **Linux原生GPU捕获（探针已补齐，原生路径仍缺失）**：新增 Linux 能力探针，明确当前只有 MSS + Xlib CPU 捕获；X11 窗口仅按坐标裁剪，不是窗口 surface 零拷贝。Wayland、PipeWire、DMA-BUF、显式同步、DRM/Vulkan 设备身份和厂商原生捕获均仍未实现，自动模式保留 CPU 兼容回退。
+6. **Linux原生GPU捕获（探针已补齐，原生路径仍缺失）**：新增 Linux 能力探针，明确当前只有 MSS + Xlib CPU 捕获；X11 窗口仅按坐标裁剪，不是窗口 surface 零拷贝。Wayland、PipeWire、DMA-BUF、显式同步、DRM/Vulkan 设备身份和厂商原生捕获均仍未实现，自动模式保留 CPU 兼容回退。后续实施入口应先增加 PipeWire screen-capture consumer，再将 DMA-BUF fd、DRM render node、PCI BDF、Vulkan device UUID 和 fence ownership 纳入同一 `CapturedFrame` 资源契约，完成真实 X11/Wayland 硬件回归后才允许进入自动链。
 7. **其他及国产GPU能力验证（探针部分实现）**：Windows DirectML 探针可验证运行时、设备创建和基础算子，但模型算子覆盖、D3D11 共享资源、Vulkan 外部内存、Adapter 匹配和性能白名单/黑名单仍分别标记为未探测或待验证，不能仅凭“支持 DX12”推断可用。
-8. **统一可观测性（部分实现）**：运行时报告已纳入实际深度后端、合成后端及选择原因、provider 尝试记录；捕获调试字段已纳入资源类型/格式、设备身份、生命周期、`gpu_to_cpu`、`gpu_copy_count`、`zero_copy_ready` 和回退原因。真实硬件的跨 API 计数和端到端帧级一致性仍需验证。
+8. **统一可观测性（部分实现）**：运行时报告已纳入实际深度后端、合成后端及选择原因、provider 尝试记录；捕获调试字段已纳入资源类型/格式/分辨率、Adapter LUID/UUID/PCI BDF、生命周期、`gpu_to_cpu`、`gpu_copy_count`、DirectML 资源模式、`zero_copy_ready` 和每级回退原因，并由 `[D2S_BACKEND_STATUS]` 与 GUI 只读状态输出。真实硬件的跨 API 计数和端到端帧级一致性仍需验证。
 9. **GUI简化与内部自动路由（代码侧已保持）**：本轮没有新增推理或立体合成下拉框；这些后端由能力探测和自动链内部选择，GUI 只应展示只读实际后端、回退原因和资源遥测。若现有界面尚未展示全部只读字段，属于显示层缺口，不得作为后端已实现的证明。
 10. **硬件回归矩阵（测试骨架已增加）**：已增加 LUID/资源契约、队列借用资源释放、Linux 能力探针、DirectML 安全探针和 OpenGL 自动选择的单元测试；NVIDIA、AMD、Intel、其他 DX12/国产 GPU、Linux 原生捕获及 macOS 原生链路仍缺对应真机/驱动回归，不应以单一开发机结果推断全平台支持。
 

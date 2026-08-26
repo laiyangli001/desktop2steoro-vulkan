@@ -8,8 +8,11 @@ from path_config import APP_ROOT
 
 from path_config import APP_ROOT
 
+from capture.types import CapturedFrame
+
 from stereo_runtime.pipeline import (
     _ParallelDepthScheduler,
+    _prepare_frame_input,
     RuntimePipelineLoop,
     _enable_openxr_depth_cuda_graph_if_needed,
     _motion_sample,
@@ -424,6 +427,38 @@ def test_pipeline_does_not_rebuild_before_threshold(monkeypatch):
 
     assert calls == []
     assert loop._consecutive_runtime_errors == 2
+
+
+def test_prepare_frame_input_uses_directml_native_bridge_and_records_decision():
+    class SharedResource:
+        adapter_luid = 0x10
+        format = "BGRA8"
+        width = 16
+        height = 8
+        shared_handle = 1
+
+        def to_directml_tensor(self):
+            return "dml-tensor"
+
+    resource = SharedResource()
+    captured = CapturedFrame(
+        resource,
+        8,
+        1.0,
+        native_resource=resource,
+        cpu_compat_frame="cpu-frame",
+    )
+    runtime = SimpleNamespace(
+        provider_report=lambda: {"depth_backend": "directml"},
+        config=SimpleNamespace(adapter_luid=0x10),
+        _vulkan_stereo_backend=None,
+        _vulkan_context=None,
+    )
+    ctx = SimpleNamespace(stereo_runtime=runtime)
+
+    assert _prepare_frame_input(ctx, captured, "cpu-frame") == "dml-tensor"
+    assert captured.metadata["directml_resource_mode"] == "shared"
+    assert captured.metadata["directml_zero_copy_ready"] is True
 
 
 def test_backend_status_log_reports_explicit_resource_fallback(capsys):

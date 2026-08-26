@@ -7,7 +7,7 @@ ownership, and an import/copy operation are all established.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 from app_runtime.interop import validate_resource_share
@@ -150,6 +150,91 @@ def assess_directml_resource(
     )
 
 
+def prepare_directml_input(
+    captured_frame: Any,
+    *,
+    consumer_adapter_luid: int | None,
+    expected_width: int | None = None,
+    expected_height: int | None = None,
+    allow_cpu_fallback: bool = True,
+) -> tuple[Any, DirectMLResourceDecision | None]:
+    """Materialize a DirectML input from a captured frame explicitly.
+
+    A native bridge must return a tensor/resource from one of the supported
+    methods. If no bridge is exposed, only the retained CPU compatibility frame
+    may be used, and that decision is returned to telemetry.
+    """
+    resource = getattr(captured_frame, "native_resource", None)
+    if resource is None:
+        from capture.types import compatibility_frame
+
+        return compatibility_frame(captured_frame), None
+
+    decision = assess_directml_resource(
+        resource,
+        consumer_adapter_luid=consumer_adapter_luid,
+        expected_width=expected_width,
+        expected_height=expected_height,
+        allow_cpu_fallback=allow_cpu_fallback,
+    )
+    if decision.mode in {"shared", "gpu_copy"}:
+        for method_name in (
+            "to_directml_tensor",
+            "import_to_directml",
+            "to_torch",
+            "to_tensor",
+        ):
+            method = getattr(resource, method_name, None)
+            if not callable(method):
+                continue
+            try:
+                value = method()
+            except Exception as exc:
+                decision = replace(
+                    decision,
+                    reason=(
+                        f"{decision.reason}; {method_name} failed: "
+                        f"{type(exc).__name__}: {exc}"
+                    ),
+                )
+                continue
+            if value is not None:
+                if decision.mode == "shared":
+                    decision = replace(
+                        decision,
+                        reason=f"{decision.reason}; native import completed",
+                        zero_copy=True,
+                        zero_copy_ready=True,
+                    )
+                return value, decision
+
+        if not allow_cpu_fallback:
+            raise RuntimeError(
+                f"DirectML resource bridge unavailable: {decision.reason}"
+            )
+
+    from capture.types import compatibility_frame
+
+    compat = getattr(captured_frame, "cpu_compat_frame", None)
+    if compat is None:
+        compat = compatibility_frame(captured_frame)
+    if compat is None or compat is resource:
+        raise RuntimeError(
+            "DirectML resource cannot be consumed: no native bridge or CPU "
+            "compatibility frame is available"
+        )
+    return compat, replace(
+        decision,
+        mode="cpu_compat",
+        allowed=True,
+        reason=f"{decision.reason}; explicit CPU compatibility input selected",
+        gpu_to_cpu=True,
+        gpu_copy_count=max(1, decision.gpu_copy_count),
+        zero_copy=False,
+        zero_copy_ready=False,
+    )
+
+
 def probe_directml_resource_capabilities() -> dict[str, Any]:
     """Report implementation presence without claiming hardware validation."""
     try:
@@ -192,5 +277,6 @@ __all__ = [
     "DirectMLResourceDecision",
     "DirectMLResourceMode",
     "assess_directml_resource",
+    "prepare_directml_input",
     "probe_directml_resource_capabilities",
 ]

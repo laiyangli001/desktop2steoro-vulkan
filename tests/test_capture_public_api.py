@@ -45,4 +45,4 @@ def test_capture_select_prefers_desktop_duplication_without_cuda(monkeypatch):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
 
-    assert module.resolve_capture_tool("none", os_name="Windows") == "DesktopDuplication"
+    assert module.resolve_capture_tool("none", os_name="Windows") == "WindowsCapture"

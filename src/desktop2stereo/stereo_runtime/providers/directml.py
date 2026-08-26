@@ -101,8 +101,14 @@ def probe_directml_capabilities(index: int = 0) -> dict[str, Any]:
         "model_operator_support": "not_probed",
         "representative_operator_support": {},
         "d3d11_shared_resource": "not_implemented",
-        "vulkan_external_memory": "not_probed",
         "adapter_match": "not_probed",
+        "adapter_identity": {
+            "producer_luid": None,
+            "consumer_luid": None,
+            "status": "requires_matching_adapter_luid",
+        },
+        "shared_resource_capability": "not_probed",
+        "vulkan_external_memory": "not_probed",
         "gpu_copy_count": None,
         "zero_copy": False,
     }
@@ -152,6 +158,29 @@ class _DirectMLInfoMixin:
             ),
             output_device=str(self.device),
         )
+
+    def predict_profile(self, rgb: torch.Tensor):
+        """Reject implicit CPU model output so AutoDepthProvider can fall back."""
+        try:
+            result = super().predict_profile(rgb)
+        except Exception as exc:
+            self.info = replace(
+                self.info,
+                fallback_reason=(
+                    f"DirectML inference failed: {type(exc).__name__}: {exc}"
+                ),
+            )
+            raise
+        depth = getattr(result, "depth", None)
+        observed = str(getattr(depth, "device", "") or "")
+        if not observed.lower().startswith("privateuseone"):
+            reason = (
+                "DirectML inference returned a non-DirectML tensor "
+                f"({observed or 'unknown device'}); implicit CPU fallback rejected"
+            )
+            self.info = replace(self.info, fallback_reason=reason)
+            raise RuntimeError(reason)
+        return result
 
 
 class DistillAnyDepthBaseDirectML(_DirectMLInfoMixin, DistillAnyDepthBase518):

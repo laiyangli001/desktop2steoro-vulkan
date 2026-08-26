@@ -539,22 +539,22 @@ Stream Protocol: WebRTC
 Streamer Port: 1122
 Stream Quality: 100
 Use Stream Calibration: true
-Stream Target Bitrate Mbps: 57
-Stream Peak Bitrate Mbps: 64
+Stream Target Bitrate Mbps: 23
+Stream Peak Bitrate Mbps: 26
 Stream Calibration Port: 1123
 Stream Key: live
-Stereo Mix: null
 Audio Capture Backend: auto
 Video Encoder Backend: auto
-CRF: 23
+CRF: 26
 Audio Delay: -0.1
 Controller Model: PICO
 Environment Model: Default
 Lossless Scaling Support: false
-Capture Tool: WindowsCaptureCUDA
+Capture Tool: DesktopDuplication
 Fill 16:9: true
 Fix Viewer Aspect: false
-Stereo Output: 3
+Stereo Output: 2
 Show Log Panel: true
 OpenVINO: null
 Synthetic View: quality_4k
+Input Display Resolution Tier: 4K

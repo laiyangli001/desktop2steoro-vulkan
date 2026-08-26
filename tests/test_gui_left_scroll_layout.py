@@ -242,7 +242,7 @@ def test_window_height_reserves_the_complete_action_footer() -> None:
     estimator_end = source.index("# ── label alignment", estimator_start)
     estimator_source = source[estimator_start:estimator_end]
 
-    assert "footer_height = S(84)" in estimator_source
+    assert "footer_height = S(104)" in estimator_source
     assert "safety_margin = S(0)" in estimator_source
     assert "max_height = S(1040)" in estimator_source
 

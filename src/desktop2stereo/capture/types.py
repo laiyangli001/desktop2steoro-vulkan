@@ -46,6 +46,8 @@ class CapturedFrame:
     metadata: dict[str, Any] = field(default_factory=dict)
     # Optional borrowed producer resource retained for a GPU-native consumer.
     native_resource: Any | None = None
+    # Optional CPU compatibility frame kept separate from the native output.
+    cpu_compat_frame: Any | None = None
 
 
 def _frame_raw_type(frame: Any) -> str:
@@ -97,6 +99,7 @@ def capture_frame_from_raw(
     frame_raw_device: str | None = None,
     frame_raw_dtype: str | None = None,
     native_resource: Any | None = None,
+    cpu_compat_frame: Any | None = None,
 ) -> CapturedFrame:
     return CapturedFrame(
         frame=frame,
@@ -114,14 +117,26 @@ def capture_frame_from_raw(
         original_format=original_format,
         metadata=dict(metadata or {}),
         native_resource=native_resource,
+        cpu_compat_frame=cpu_compat_frame,
     )
 
 
 def native_resource_contract(resource: Any) -> dict[str, Any]:
     """Return conservative metadata for a borrowed producer resource."""
     adapter_luid = int(getattr(resource, "adapter_luid", 0) or 0)
+    adapter_uuid = getattr(resource, "adapter_uuid", None) or getattr(resource, "device_uuid", None)
+    pci_bdf = getattr(resource, "pci_bdf", None) or getattr(resource, "drm_pci_bdf", None)
     width = getattr(resource, "width", None)
     height = getattr(resource, "height", None)
+    adapter_identity = (
+        f"luid:{adapter_luid:016x}"
+        if adapter_luid
+        else f"uuid:{adapter_uuid}"
+        if adapter_uuid
+        else f"pci:{pci_bdf}"
+        if pci_bdf
+        else None
+    )
     return {
         "resource_kind": str(
             getattr(resource, "resource_kind", "")
@@ -132,9 +147,20 @@ def native_resource_contract(resource: Any) -> dict[str, Any]:
         "resource_width": int(width) if width is not None else None,
         "resource_height": int(height) if height is not None else None,
         "adapter_luid": adapter_luid,
-        "adapter_identity": f"luid:{adapter_luid:016x}" if adapter_luid else None,
+        "adapter_uuid": str(adapter_uuid) if adapter_uuid else None,
+        "pci_bdf": str(pci_bdf) if pci_bdf else None,
+        "adapter_identity": adapter_identity,
         "resource_lifecycle": "borrowed_until_frame_release",
     }
+
+
+def compatibility_frame(item: Any) -> Any:
+    """Return the explicit CPU compatibility frame, if one was retained."""
+    if isinstance(item, CapturedFrame):
+        if item.cpu_compat_frame is not None:
+            return item.cpu_compat_frame
+        return item.frame
+    return item
 
 
 def release_native_resource(item: Any) -> bool:

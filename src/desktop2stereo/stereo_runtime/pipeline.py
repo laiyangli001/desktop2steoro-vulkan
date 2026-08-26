@@ -10,7 +10,7 @@ from dataclasses import dataclass, is_dataclass, replace
 from pathlib import Path
 from typing import Callable
 
-from capture.types import CapturedFrame
+from capture.types import CapturedFrame, compatibility_frame
 
 from .render_size import RenderSizeConfig, resolve_render_size, runtime_output_size_text
 from .settings_snapshot import RuntimeSettingsPipelineRebuildRequired, RuntimeSettingsRestartRequired, RuntimeSettingsSnapshot
@@ -399,9 +399,62 @@ def _enable_openxr_depth_cuda_graph_if_needed(
 
 def _unpack_raw_queue_item(item):
     if isinstance(item, CapturedFrame):
-        return item.frame, item.target_height, item.timestamp, item
+        return compatibility_frame(item), item.target_height, item.timestamp, item
     frame_raw, size, capture_start_time = item
     return frame_raw, size, capture_start_time, None
+
+def _runtime_depth_backend(runtime) -> str:
+    try:
+        report = runtime.provider_report()
+    except Exception:
+        report = {}
+    backend = report.get("depth_backend") if isinstance(report, dict) else None
+    if not backend:
+        backend = getattr(getattr(runtime, "config", None), "depth_backend", "")
+    return str(backend or "").strip().lower()
+
+
+def _runtime_consumer_adapter_luid(runtime) -> int:
+    candidates = (
+        getattr(runtime, "_vulkan_stereo_backend", None),
+        getattr(runtime, "_vulkan_context", None),
+        getattr(getattr(runtime, "config", None), "adapter_luid", None),
+    )
+    for candidate in candidates:
+        value = getattr(candidate, "adapter_luid", candidate)
+        try:
+            value = int(value or 0)
+        except (TypeError, ValueError):
+            value = 0
+        if value:
+            return value
+    return 0
+
+
+def _prepare_frame_input(ctx, captured_frame, frame_raw):
+    if captured_frame is None or _runtime_depth_backend(ctx.stereo_runtime) != "directml":
+        return frame_raw
+    from .providers.directml_resource import prepare_directml_input
+
+    prepared, decision = prepare_directml_input(
+        captured_frame,
+        consumer_adapter_luid=_runtime_consumer_adapter_luid(ctx.stereo_runtime),
+        allow_cpu_fallback=True,
+    )
+    if decision is not None:
+        captured_frame.metadata.update({
+            "directml_resource_mode": decision.mode,
+            "directml_resource_reason": decision.reason,
+            "directml_consumer_adapter_luid": decision.consumer_adapter_luid,
+            "directml_gpu_to_cpu": decision.gpu_to_cpu,
+            "directml_gpu_copy_count": decision.gpu_copy_count,
+            "directml_zero_copy_ready": decision.zero_copy_ready,
+            "directml_fallback_reason": (
+                decision.reason if decision.mode == "cpu_compat" else None
+            ),
+        })
+    return prepared
+
 
 def _resolve_pipeline_render_size(size, config: RenderSizeConfig | None):
     if config is None:
@@ -469,6 +522,9 @@ def _capture_zero_copy(captured_frame: CapturedFrame | None):
 def _capture_copy_mode(captured_frame: CapturedFrame | None):
     if captured_frame is None:
         return None
+    metadata = captured_frame.metadata if isinstance(captured_frame.metadata, dict) else {}
+    if captured_frame.cpu_compat_frame is not None:
+        return str(metadata.get("compatibility_copy_mode") or "cpu_compat")
     return captured_frame.copy_mode.value
 
 
@@ -489,14 +545,35 @@ def _capture_debug_fields(captured_frame: CapturedFrame | None, frame_rgb) -> di
             capture_frame_raw_device=captured_frame.frame_raw_device,
             capture_frame_raw_type=captured_frame.frame_raw_type,
             capture_frame_raw_dtype=captured_frame.frame_raw_dtype,
+            capture_size=captured_frame.capture_size or (
+                (
+                    metadata.get("resource_width"),
+                    metadata.get("resource_height"),
+                )
+                if metadata.get("resource_width") is not None
+                or metadata.get("resource_height") is not None
+                else None
+            ),
             capture_resource_kind=metadata.get("resource_kind"),
             capture_resource_format=metadata.get("resource_format"),
             capture_adapter_luid=metadata.get("adapter_luid"),
+            capture_adapter_uuid=metadata.get("adapter_uuid"),
+            capture_pci_bdf=metadata.get("pci_bdf"),
             capture_adapter_identity=metadata.get("adapter_identity"),
             capture_gpu_to_cpu=metadata.get("gpu_to_cpu"),
             capture_gpu_copy_count=metadata.get("gpu_copy_count"),
             capture_zero_copy_ready=metadata.get("zero_copy_ready"),
             capture_resource_lifecycle=metadata.get("resource_lifecycle"),
+            capture_native_resource_output=metadata.get("native_resource_output"),
+            capture_compatibility_frame_retained=metadata.get("compatibility_frame_retained"),
+            capture_compatibility_copy_mode=metadata.get("compatibility_copy_mode"),
+            directml_resource_mode=metadata.get("directml_resource_mode"),
+            directml_resource_reason=metadata.get("directml_resource_reason"),
+            directml_consumer_adapter_luid=metadata.get("directml_consumer_adapter_luid"),
+            directml_gpu_to_cpu=metadata.get("directml_gpu_to_cpu"),
+            directml_gpu_copy_count=metadata.get("directml_gpu_copy_count"),
+            directml_zero_copy_ready=metadata.get("directml_zero_copy_ready"),
+            directml_fallback_reason=metadata.get("directml_fallback_reason"),
             capture_fallback_reason=metadata.get("fallback_reason"),
         )
     return {key: value for key, value in fields.items() if value is not None}
@@ -892,6 +969,9 @@ class RuntimePipelineLoop:
             provider_report = {"fallback_reason": f"provider_report_failed: {type(exc).__name__}: {exc}"}
         attempts = provider_report.get("attempts") or []
         capture_reason = debug_info.get("capture_fallback_reason")
+        directml_reason = debug_info.get("directml_fallback_reason") or debug_info.get(
+            "directml_resource_reason"
+        )
         stereo_reason = str(
             getattr(runtime, "_stereo_compute_backend_reason", "") or ""
         )
@@ -900,6 +980,8 @@ class RuntimePipelineLoop:
             fallback_reasons.append(str(provider_report["fallback_reason"]))
         if capture_reason:
             fallback_reasons.append(str(capture_reason))
+        if directml_reason and str(directml_reason) not in fallback_reasons:
+            fallback_reasons.append(str(directml_reason))
         if stereo_reason and stereo_reason not in {"selected_by_priority", "explicit_request"}:
             fallback_reasons.append(stereo_reason)
         gpu_copy_count = debug_info.get("capture_gpu_copy_count")
@@ -908,6 +990,7 @@ class RuntimePipelineLoop:
         except (TypeError, ValueError):
             gpu_copy_count = 0
         gpu_to_cpu = bool(debug_info.get("capture_gpu_to_cpu", False))
+        directml_gpu_to_cpu = bool(debug_info.get("directml_gpu_to_cpu", False))
         zero_copy = bool(
             debug_info.get("capture_zero_copy", False)
             and debug_info.get("capture_zero_copy_ready", False)
@@ -930,14 +1013,28 @@ class RuntimePipelineLoop:
             "fallback": bool(attempts or fallback_reasons),
             "fallback_reasons": fallback_reasons,
             "adapter_luid": debug_info.get("capture_adapter_luid"),
+            "adapter_uuid": debug_info.get("capture_adapter_uuid"),
+            "pci_bdf": debug_info.get("capture_pci_bdf"),
             "adapter_identity": debug_info.get("capture_adapter_identity"),
+            "gpu_vendor": debug_info.get("gpu_vendor")
+            or provider_report.get("gpu_vendor")
+            or getattr(getattr(runtime, "config", None), "gpu_vendor", "unknown"),
             "resource_kind": debug_info.get("capture_resource_kind"),
             "resource_format": debug_info.get("capture_resource_format"),
             "capture_size": debug_info.get("capture_size"),
-            "gpu_to_cpu": gpu_to_cpu,
+            "gpu_to_cpu": gpu_to_cpu or directml_gpu_to_cpu,
             "gpu_copy_count": gpu_copy_count,
-            "zero_copy": zero_copy,
+            "directml_gpu_copy_count": debug_info.get("directml_gpu_copy_count", 0),
+            "directml_resource_mode": debug_info.get("directml_resource_mode"),
+            "directml_zero_copy_ready": debug_info.get("directml_zero_copy_ready"),
+            "zero_copy": zero_copy and bool(
+                debug_info.get("directml_zero_copy_ready", True)
+            ),
             "zero_copy_ready": bool(debug_info.get("capture_zero_copy_ready", False)),
+            "directml_zero_copy_ready": bool(
+                debug_info.get("directml_zero_copy_ready", False)
+            ),
+            "directml_resource_mode": debug_info.get("directml_resource_mode"),
         }
         try:
             print(
@@ -1280,8 +1377,9 @@ class RuntimePipelineLoop:
                 self._last_render_size = render_size
                 self._last_source_target_key = source_target_key
                 self._has_source_target_key = True
+                frame_input = _prepare_frame_input(ctx, captured_frame, frame_raw)
                 frame_rgb = ctx.capture_frame_to_rgb(
-                    frame_raw,
+                    frame_input,
                     render_size,
                     device=ctx.device,
                     use_torch=ctx.use_cudart,

@@ -449,13 +449,16 @@ class WindowsCaptureEventRunner:
                 self._log_capture_gap(capture_start_time, capture_kwargs)
                 self._log_capture_fps(capture_start_time)
                 copy_start_time = time.perf_counter()
-                raw, copy_mode, frame_raw_device = _copy_frame_buffer(frame.frame_buffer, self.capture_tool)
                 native_resource = _borrow_native_resource(frame.frame_buffer)
                 if _env_bool("D2S_WGC_NATIVE_RESOURCE_REQUIRED") and native_resource is None:
                     raise RuntimeError(
                         "WindowsCapture did not expose a D3D11 resource while "
                         "D2S_WGC_NATIVE_RESOURCE_REQUIRED is enabled"
                     )
+                raw, copy_mode, frame_raw_device = _copy_frame_buffer(
+                    frame.frame_buffer,
+                    self.capture_tool,
+                )
                 enqueue_start_time = time.perf_counter()
                 resource_contract = native_resource_contract(native_resource) if native_resource is not None else {
                     "resource_kind": "cpu_frame_buffer",
@@ -466,33 +469,46 @@ class WindowsCaptureEventRunner:
                     "adapter_identity": None,
                     "resource_lifecycle": "owned_copy",
                 }
-                native_to_cpu = bool(native_resource is not None and raw is not native_resource)
+                native_output = native_resource is not None
+                native_to_cpu = bool(native_output and raw is not native_resource)
+                output_frame = native_resource if native_output else raw
+                output_copy_mode = FrameCopyMode.NONE if native_output else copy_mode
+                output_device = "d3d11" if native_output else frame_raw_device
                 captured_frame = capture_frame_from_raw(
-                    raw,
+                    output_frame,
                     self.config.output_resolution,
                     capture_start_time,
                     config=self.config,
-                    copy_mode=copy_mode,
-                    original_format=type(frame.frame_buffer).__name__,
-                    frame_raw_device=frame_raw_device,
+                    copy_mode=output_copy_mode,
+                    original_format=(
+                        str(resource_contract.get("resource_format"))
+                        if native_output else type(frame.frame_buffer).__name__
+                    ),
+                    frame_raw_device=output_device,
                     native_resource=native_resource,
+                    cpu_compat_frame=raw if native_to_cpu else None,
                     metadata={
                         "backend": "windows_capture_event",
+                        "native_resource_output": native_output,
                         "capture_gpu": bool(
                             copy_mode is FrameCopyMode.GPU_TENSOR
-                            or native_resource is not None
+                            or native_output
                         ),
                         **resource_contract,
                         "gpu_to_cpu": native_to_cpu,
                         "gpu_copy_count": 1 if native_to_cpu else 0,
+                        "compatibility_copy_mode": (
+                            copy_mode.value if native_to_cpu else None
+                        ),
+                        "compatibility_frame_retained": bool(native_to_cpu),
                         "zero_copy": bool(
                             copy_mode is FrameCopyMode.GPU_TENSOR
-                            and native_resource is None
+                            and not native_output
                         ),
                         "zero_copy_ready": False,
                         "fallback_reason": (
-                            "WGC native resource was retained but CPU compatibility "
-                            "copy was required"
+                            "WGC native resource retained as primary frame; "
+                            "CPU compatibility copy is available"
                             if native_to_cpu else None
                         ),
                     },

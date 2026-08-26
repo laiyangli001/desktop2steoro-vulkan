@@ -59,10 +59,20 @@ class OpenVINOD3D11DepthProvider:
             raise TypeError("native OpenVINO provider requires a borrowed D3D11 texture frame")
         resource_luid = int(getattr(resource, "adapter_luid", 0))
         session_luid = int(getattr(self.session, "adapter_luid", 0))
-        if resource_luid and session_luid and resource_luid != session_luid:
+        if not resource_luid or not session_luid:
+            raise RuntimeError(
+                "D3D11 adapter LUID is required for OpenVINO RemoteTensor sharing"
+            )
+        if resource_luid != session_luid:
             raise RuntimeError(
                 "D3D11 adapter LUID mismatch: "
                 f"capture=0x{resource_luid:016x}, provider=0x{session_luid:016x}"
+            )
+        resource_format = str(getattr(resource, "format", "BGRA8") or "BGRA8").upper()
+        if resource_format not in {"BGRA8", "B8G8R8A8_UNORM"}:
+            raise RuntimeError(
+                "OpenVINO D3D11 RemoteTensor requires BGRA8 input, "
+                f"got {resource_format}"
             )
         start = time.perf_counter()
         self.session.set_texture(

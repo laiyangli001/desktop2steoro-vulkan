@@ -39,6 +39,28 @@ class CloneBuffer:
         return "cloned-buffer"
 
 
+class NativeTexture:
+    resource_kind = "d3d11_texture"
+    format = "BGRA8"
+    width = 16
+    height = 8
+    adapter_luid = 0x1234
+
+    def __init__(self):
+        self.released = False
+
+    def release(self):
+        self.released = True
+
+
+class NativeBuffer:
+    def __init__(self):
+        self.d3d11_texture = NativeTexture()
+
+    def copy(self):
+        return "cpu-compat-copy"
+
+
 def _install_capture_module(monkeypatch, module_name):
     module = types.ModuleType(module_name)
 
@@ -129,6 +151,54 @@ def test_windows_capture_runner_uses_copy_or_clone_buffers(monkeypatch):
     assert clone_buffer.cloned is False
     assert received[-1].frame is clone_buffer
     assert received[-1].copy_mode is FrameCopyMode.GPU_TENSOR
+
+
+def test_windows_capture_native_resource_is_primary_with_explicit_cpu_compat_copy(monkeypatch):
+    module = _install_capture_module(monkeypatch, "windows_capture")
+    monkeypatch.setenv("D2S_WGC_SOFTWARE_THROTTLE", "0")
+    monkeypatch.setattr(windows_capture_event, "_setup_dpi_awareness", lambda: None)
+    monkeypatch.setattr(
+        windows_capture_event.WindowsCaptureEventRunner,
+        "_start_keyboard_worker",
+        lambda self, event: None,
+    )
+
+    runner = windows_capture_event.WindowsCaptureEventRunner(
+        CaptureConfig(
+            os_name="Windows",
+            capture_tool="WindowsCapture",
+            capture_mode="Monitor",
+            monitor_index=1,
+            output_resolution=(16, 8),
+        )
+    )
+    received = []
+    shutdown_event = threading.Event()
+    runner.run(
+        shutdown_event=shutdown_event,
+        on_frame=received.append,
+        on_error=lambda exc: shutdown_event.set(),
+    )
+
+    shutdown_event.clear()
+    native_buffer = NativeBuffer()
+    module.WindowsCapture.last_instance.handlers[0](
+        FakeFrame(native_buffer),
+        FakeControl(),
+    )
+
+    captured = received[-1]
+    assert captured.frame is native_buffer.d3d11_texture
+    assert captured.cpu_compat_frame == "cpu-compat-copy"
+    assert captured.native_resource is captured.frame
+    assert captured.copy_mode is FrameCopyMode.NONE
+    assert captured.frame_raw_device == "d3d11"
+    assert captured.metadata["native_resource_output"] is True
+    assert captured.metadata["gpu_to_cpu"] is True
+    assert captured.metadata["gpu_copy_count"] == 1
+    assert captured.metadata["compatibility_copy_mode"] == "copy"
+    assert captured.metadata["compatibility_frame_retained"] is True
+    assert captured.metadata["zero_copy"] is False
 
 
 def test_windows_capture_cuda_software_limiter_maps_120hz_callbacks_to_60fps(monkeypatch):

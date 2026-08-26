@@ -3,14 +3,23 @@ from __future__ import annotations
 import queue
 import types
 
+import pytest
+
 from app_runtime.interop import validate_adapter_luid, validate_resource_share
 from capture.capabilities import (
     probe_linux_capture_capabilities,
     probe_windows_capture_capabilities,
 )
 from capture.types import CapturedFrame, release_native_resource
-from stereo_runtime.providers.directml import probe_directml_capabilities
-from stereo_runtime.providers.directml_resource import assess_directml_resource
+from stereo_runtime.providers.directml import (
+    _DirectMLInfoMixin,
+    probe_directml_capabilities,
+)
+from stereo_runtime.depth_provider import DepthProviderInfo
+from stereo_runtime.providers.directml_resource import (
+    assess_directml_resource,
+    prepare_directml_input,
+)
 from utils.queue_utils import clear_nonblocking, put_latest
 
 
@@ -135,3 +144,102 @@ def test_directml_resource_decision_accepts_shared_handle_only_after_luid_match(
     assert decision.mode == "shared"
     assert decision.gpu_to_cpu is False
     assert decision.zero_copy is False
+
+
+def test_directml_input_uses_native_bridge_only_after_luid_match():
+    class SharedResource:
+        adapter_luid = 0x10
+        format = "BGRA8"
+        width = 16
+        height = 8
+        shared_handle = 123
+
+        def to_directml_tensor(self):
+            return "directml-tensor"
+
+    resource = SharedResource()
+    captured = CapturedFrame(
+        resource,
+        8,
+        1.0,
+        native_resource=resource,
+        cpu_compat_frame="cpu-frame",
+    )
+    value, decision = prepare_directml_input(
+        captured,
+        consumer_adapter_luid=0x10,
+        expected_width=16,
+        expected_height=8,
+    )
+    assert value == "directml-tensor"
+    assert decision is not None
+    assert decision.mode == "shared"
+    assert decision.zero_copy is True
+    assert decision.zero_copy_ready is True
+
+
+def test_directml_input_reports_cpu_compat_when_native_bridge_is_missing():
+    resource = types.SimpleNamespace(
+        adapter_luid=0x10,
+        format="BGRA8",
+        width=16,
+        height=8,
+        shared_handle=123,
+    )
+    captured = CapturedFrame(
+        resource,
+        8,
+        1.0,
+        native_resource=resource,
+        cpu_compat_frame="cpu-frame",
+    )
+    value, decision = prepare_directml_input(
+        captured,
+        consumer_adapter_luid=0x10,
+        expected_width=16,
+        expected_height=8,
+    )
+    assert value == "cpu-frame"
+    assert decision.mode == "cpu_compat"
+    assert decision.gpu_to_cpu is True
+    assert decision.zero_copy is False
+
+
+def test_directml_input_rejects_missing_compatibility_frame_when_disabled():
+    resource = types.SimpleNamespace(
+        adapter_luid=0x10,
+        format="BGRA8",
+        width=16,
+        height=8,
+        shared_handle=123,
+    )
+    captured = CapturedFrame(resource, 8, 1.0, native_resource=resource)
+    with pytest.raises(RuntimeError, match="bridge unavailable"):
+        prepare_directml_input(
+            captured,
+            consumer_adapter_luid=0x10,
+            allow_cpu_fallback=False,
+        )
+
+
+def test_directml_provider_rejects_implicit_cpu_model_output():
+    class BaseProvider:
+        def predict_profile(self, _rgb):
+            return types.SimpleNamespace(
+                depth=types.SimpleNamespace(device="cpu"),
+            )
+
+    class Provider(_DirectMLInfoMixin, BaseProvider):
+        device = "privateuseone:0"
+
+    provider = Provider()
+    provider.info = provider._mark_directml_info(DepthProviderInfo(
+        provider="fake",
+        model_name="fake",
+        model_id="fake",
+        depth_resolution=8,
+        cache_dir=".",
+    ))
+    with pytest.raises(RuntimeError, match="implicit CPU fallback rejected"):
+        provider.predict_profile("rgb")
+    assert "implicit CPU fallback rejected" in provider.info.fallback_reason
