@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import collections
 import ctypes
 import os
-import queue
 import socket
 import struct
 import threading
@@ -161,8 +161,16 @@ class NativeRtspAvOutput:
         self._network_rate_bytes = 0
         self._network_rate_time = self._network_rate_started
         self._network_bitrate_mbps = 0.0
-        self._write_queue: queue.PriorityQueue = queue.PriorityQueue()
-        self._write_sequence = 0
+        # Keep the network writer bounded.  Video is disposable under
+        # downstream backpressure; audio and RTCP must remain real-time.
+        self._max_video_queue = max(
+            2,
+            int(os.environ.get("D2S_NATIVE_VIDEO_QUEUE_DEPTH", "3")),
+        )
+        self._audio_write_queue: collections.deque[bytes] = collections.deque()
+        self._video_write_queue: collections.deque[tuple[float | None, bytes]] = collections.deque()
+        self._write_condition = threading.Condition()
+        self._dropped_video_batches = 0
         self._writer_stop = threading.Event()
         self._writer_thread: threading.Thread | None = None
         self._video_rtp_packets = 0
@@ -290,45 +298,88 @@ class NativeRtspAvOutput:
         self._writer_thread.start()
 
     def _media_writer_loop(self) -> None:
-        while not self._writer_stop.is_set() or not self._write_queue.empty():
-            try:
-                _priority, _sequence, payload = self._write_queue.get(timeout=0.1)
-            except queue.Empty:
+        while True:
+            with self._write_condition:
+                while not self._writer_stop.is_set() and not (
+                    self._audio_write_queue or self._video_write_queue
+                ):
+                    self._write_condition.wait(timeout=0.1)
+                if not self._audio_write_queue and not self._video_write_queue:
+                    if self._writer_stop.is_set():
+                        return
+                    continue
+                # Audio and RTCP are latency-sensitive.  They may jump ahead
+                # of video, but video itself remains timestamp paced.
+                if self._audio_write_queue:
+                    payload = self._audio_write_queue.popleft()
+                else:
+                    due_at, payload = self._video_write_queue[0]
+                    now = time.monotonic()
+                    if not self._writer_stop.is_set() and due_at is not None and due_at > now:
+                        self._write_condition.wait(timeout=due_at - now)
+                        continue
+                    self._video_write_queue.popleft()
+            if self._socket is None:
                 continue
-            try:
-                if payload is None:
-                    return
-                if self._socket is None:
-                    return
-                with self._socket_write_lock:
-                    self._socket.sendall(payload)
-                now = time.monotonic()
-                self._network_bytes_sent += len(payload)
-                elapsed = now - self._network_rate_time
-                if elapsed >= 0.5:
-                    self._network_bitrate_mbps = (
-                        (self._network_bytes_sent - self._network_rate_bytes)
-                        * 8.0 / elapsed / 1_000_000.0
-                    )
-                    self._network_rate_bytes = self._network_bytes_sent
-                    self._network_rate_time = now
-            finally:
-                self._write_queue.task_done()
+            with self._socket_write_lock:
+                self._socket.sendall(payload)
+            now = time.monotonic()
+            self._network_bytes_sent += len(payload)
+            elapsed = now - self._network_rate_time
+            if elapsed >= 0.5:
+                self._network_bitrate_mbps = (
+                    (self._network_bytes_sent - self._network_rate_bytes)
+                    * 8.0 / elapsed / 1_000_000.0
+                )
+                self._network_rate_bytes = self._network_bytes_sent
+                self._network_rate_time = now
 
     @staticmethod
     def _interleaved_frame(channel: int, packet: bytes) -> bytes:
         return b"$" + bytes([channel]) + struct.pack(">H", len(packet)) + packet
 
-    def _interleaved(self, channel: int, packet: bytes, *, priority: int = 1) -> None:
-        self._interleaved_batch(self._interleaved_frame(channel, packet), priority=priority)
+    def _interleaved(
+        self,
+        channel: int,
+        packet: bytes,
+        *,
+        priority: int = 1,
+        due_at: float | None = None,
+    ) -> None:
+        self._interleaved_batch(
+            self._interleaved_frame(channel, packet),
+            priority=priority,
+            due_at=due_at,
+        )
 
-    def _interleaved_batch(self, frames: bytes | bytearray, *, priority: int = 1) -> None:
+    def _interleaved_batch(
+        self,
+        frames: bytes | bytearray,
+        *,
+        priority: int = 1,
+        due_at: float | None = None,
+    ) -> None:
         if self._socket is None:
             raise RuntimeError("Native RTSP socket is closed")
         if not frames:
             return
-        self._write_sequence += 1
-        self._write_queue.put((int(priority), self._write_sequence, bytes(frames)))
+        payload = bytes(frames)
+        with self._write_condition:
+            if int(priority) == 0:
+                self._audio_write_queue.append(payload)
+            else:
+                if len(self._video_write_queue) >= self._max_video_queue:
+                    self._video_write_queue.popleft()
+                    self._dropped_video_batches += 1
+                    if self._dropped_video_batches == 1 or self._dropped_video_batches % 30 == 0:
+                        print(
+                            "[DirectSbsStream] Native RTP video queue drop: "
+                            f"count={self._dropped_video_batches} "
+                            f"depth={self._max_video_queue}",
+                            flush=True,
+                        )
+                self._video_write_queue.append((due_at, payload))
+            self._write_condition.notify()
 
     def _send_rtcp_sender_report(self, kind: str, rtp_timestamp: int, *, force: bool = False) -> None:
         now = time.monotonic()
@@ -370,6 +421,7 @@ class NativeRtspAvOutput:
 
     def _send_h264(self, data: bytes, timestamp: int) -> None:
         batch = bytearray()
+        due_at = self._media_clock_started + (timestamp / 90000.0)
         nals = list(self._annexb_nals(data))
         for nal_index, nal in enumerate(nals):
             if not nal:
@@ -389,7 +441,7 @@ class NativeRtspAvOutput:
                 self._video_rtp_octets += len(payload)
                 batch.extend(self._interleaved_frame(0, packet))
                 if len(batch) >= self._video_batch_bytes:
-                    self._interleaved_batch(batch)
+                    self._interleaved_batch(batch, priority=1, due_at=due_at)
                     batch.clear()
                 continue
             first = True
@@ -412,10 +464,10 @@ class NativeRtspAvOutput:
                 self._video_rtp_octets += len(payload)
                 batch.extend(self._interleaved_frame(0, packet))
                 if len(batch) >= self._video_batch_bytes:
-                    self._interleaved_batch(batch)
+                    self._interleaved_batch(batch, priority=1, due_at=due_at)
                     batch.clear()
                 first = False
-        self._interleaved_batch(batch, priority=1)
+        self._interleaved_batch(batch, priority=1, due_at=due_at)
         self._send_rtcp_sender_report("video", self._video_timestamp)
 
     def _audio_loop(self) -> None:
@@ -522,10 +574,9 @@ class NativeRtspAvOutput:
         if self._audio_thread is not None:
             self._audio_thread.join(timeout=1.0)
         if self._writer_thread is not None:
-            self._writer_stop.set()
-            self._write_sequence += 1
-            self._write_queue.put((99, self._write_sequence, None))
-            self._write_queue.join()
+            with self._write_condition:
+                self._writer_stop.set()
+                self._write_condition.notify_all()
             self._writer_thread.join(timeout=2.0)
             self._writer_thread = None
         if self._audio_socket is not None:
