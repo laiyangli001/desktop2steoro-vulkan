@@ -10,6 +10,7 @@ VIRTUAL_ENV="$PROJECT_ROOT/python3"
 PYTHON_EXE="python3"
 export PIP_RETRIES=10
 export PIP_TIMEOUT=180
+PIP_CACHE_DIR="$VIRTUAL_ENV/.pip-cache"
 
 # Check if Python is available
 if ! command -v "$PYTHON_EXE" &> /dev/null
@@ -42,7 +43,7 @@ fi
 
 # Update pip
 echo "- Updating the pip package"
-"$PYTHON_EXE" -m pip install --upgrade pip -r "$SCRIPT_DIR/requirements-pip-options.txt" --no-cache-dir --retries 5 --timeout 120
+"$PYTHON_EXE" -m pip install --upgrade pip -r "$SCRIPT_DIR/requirements-pip-options.txt" --cache-dir "$PIP_CACHE_DIR" --prefer-binary --retries "$PIP_RETRIES" --timeout "$PIP_TIMEOUT"
 if [ $? -ne 0 ]; then
     echo "Failed to update pip"
     read -p "Press enter to exit..."
@@ -53,12 +54,12 @@ fi
 echo
 echo "- Installing the requirements"
 
-if ! "$PYTHON_EXE" -m pip install -r "$SCRIPT_DIR/requirements-mps.txt" --no-cache-dir --retries 5 --timeout 120; then
+if ! "$PYTHON_EXE" -m pip install -r "$SCRIPT_DIR/requirements-mps.txt" --cache-dir "$PIP_CACHE_DIR" --prefer-binary --retries "$PIP_RETRIES" --timeout "$PIP_TIMEOUT"; then
     echo "Failed to install MPS requirements"
     read -p "Press enter to exit..."
     exit 1
 fi
-if ! "$PYTHON_EXE" -m pip install -r "$SCRIPT_DIR/requirements.txt" --no-cache-dir --retries 5 --timeout 120; then
+if ! "$PYTHON_EXE" -m pip install -r "$SCRIPT_DIR/requirements.txt" --cache-dir "$PIP_CACHE_DIR" --prefer-binary --retries "$PIP_RETRIES" --timeout "$PIP_TIMEOUT"; then
     echo "Failed to install requirements"
     read -p "Press enter to exit..."
     exit 1

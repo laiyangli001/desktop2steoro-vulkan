@@ -9,6 +9,11 @@ set "PYTHONPATH=%PYTHON_ROOT%;%PYTHONPATH%"
 set "PYTHON_EXE=%PYTHON_ROOT%\python.exe"
 set "PIP_RETRIES=10"
 set "PIP_TIMEOUT=180"
+if defined LOCALAPPDATA (
+    set "D2S_PIP_CACHE=%LOCALAPPDATA%\Desktop2Stereo\pip-cache"
+) else (
+    set "D2S_PIP_CACHE=%TEMP%\Desktop2Stereo-pip-cache"
+)
 
 if not exist "%PYTHON_EXE%" (
     echo ERROR: Project-local Python was not found at "%PYTHON_EXE%".
@@ -48,13 +53,13 @@ set "REQUIREMENTS_FILE=%SCRIPT_DIR%requirements-rocm7.txt"
 
 echo.
 echo Installing requirements from: %REQUIREMENTS_FILE%
-"%PYTHON_EXE%" -m pip install -r "%REQUIREMENTS_FILE%" --no-cache-dir --no-warn-script-location --retries 5 --timeout 120
+"%PYTHON_EXE%" -m pip install -r "%REQUIREMENTS_FILE%" --cache-dir "%D2S_PIP_CACHE%" --prefer-binary --no-warn-script-location --retries %PIP_RETRIES% --timeout %PIP_TIMEOUT%
 if errorlevel 1 (
     echo Failed to install ROCm requirements
     pause
     exit /b 1
 )
-"%PYTHON_EXE%" -m pip install -r "%SCRIPT_DIR%requirements.txt" --no-cache-dir --no-warn-script-location --retries 5 --timeout 120
+"%PYTHON_EXE%" -m pip install -r "%SCRIPT_DIR%requirements.txt" --cache-dir "%D2S_PIP_CACHE%" --prefer-binary --no-warn-script-location --retries %PIP_RETRIES% --timeout %PIP_TIMEOUT%
 if errorlevel 1 (
     echo Failed to install requirements
     pause

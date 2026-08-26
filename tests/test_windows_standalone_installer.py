@@ -62,6 +62,9 @@ def test_rocm_installer_uses_and_validates_project_local_python() -> None:
     assert '"%PYTHON_EXE%" -m pip install -r "%REQUIREMENTS_FILE%"' in script
     assert "Failed to install ROCm requirements" in script
     assert "Failed to initialize the ROCm SDK" in script
+    assert 'set "D2S_PIP_CACHE=%LOCALAPPDATA%\\Desktop2Stereo\\pip-cache"' in script
+    assert '--cache-dir "%D2S_PIP_CACHE%" --prefer-binary' in script
+    assert "--no-cache-dir" not in script
 
 
 def test_posix_installers_use_the_virtualenv_python_and_current_layout() -> None:
@@ -70,6 +73,16 @@ def test_posix_installers_use_the_virtualenv_python_and_current_layout() -> None
         assert 'PYTHON_EXE="$VIRTUAL_ENV/bin/python"' in script
         assert "export PIP_RETRIES=10" in script
         assert "export PIP_TIMEOUT=180" in script
+        assert 'PIP_CACHE_DIR="$VIRTUAL_ENV/.pip-cache"' in script
+        assert '--cache-dir "$PIP_CACHE_DIR" --prefer-binary' in script
+        assert "--no-cache-dir" not in script
+
+    cuda_script = (ENV_INSTALL_ROOT / "install-cuda.bash").read_text(encoding="utf-8")
+    assert cuda_script.count("install_build_requirements") == 4
+    assert '"wheel>=0.45,<1"' in cuda_script
+    assert "--no-build-isolation" in cuda_script
+    assert "import tensorrt as trt" in cuda_script
+    assert "trt.__version__ == '10.14.1.48.post1'" in cuda_script
 
     for name in ("install-mps", "install-mps0"):
         script = (ENV_INSTALL_ROOT / name).read_text(encoding="utf-8")
