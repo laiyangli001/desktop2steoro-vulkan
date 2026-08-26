@@ -168,7 +168,7 @@ class NativeRtspAvOutput:
             int(os.environ.get("D2S_NATIVE_VIDEO_QUEUE_DEPTH", "3")),
         )
         self._audio_write_queue: collections.deque[bytes] = collections.deque()
-        self._video_write_queue: collections.deque[tuple[float | None, bytes]] = collections.deque()
+        self._video_write_queue: collections.deque[tuple[float | None, list[bytes]]] = collections.deque()
         self._write_condition = threading.Condition()
         self._dropped_video_batches = 0
         self._writer_stop = threading.Event()
@@ -313,26 +313,30 @@ class NativeRtspAvOutput:
                 if self._audio_write_queue:
                     payload = self._audio_write_queue.popleft()
                 else:
-                    due_at, payload = self._video_write_queue[0]
+                    due_at, payloads = self._video_write_queue[0]
                     now = time.monotonic()
                     if not self._writer_stop.is_set() and due_at is not None and due_at > now:
                         self._write_condition.wait(timeout=due_at - now)
                         continue
                     self._video_write_queue.popleft()
+                    payload = None
             if self._socket is None:
                 continue
-            with self._socket_write_lock:
-                self._socket.sendall(payload)
-            now = time.monotonic()
-            self._network_bytes_sent += len(payload)
-            elapsed = now - self._network_rate_time
-            if elapsed >= 0.5:
-                self._network_bitrate_mbps = (
-                    (self._network_bytes_sent - self._network_rate_bytes)
-                    * 8.0 / elapsed / 1_000_000.0
-                )
-                self._network_rate_bytes = self._network_bytes_sent
-                self._network_rate_time = now
+            if payload is not None:
+                payloads = [payload]
+            for video_payload in payloads:
+                with self._socket_write_lock:
+                    self._socket.sendall(video_payload)
+                now = time.monotonic()
+                self._network_bytes_sent += len(video_payload)
+                elapsed = now - self._network_rate_time
+                if elapsed >= 0.5:
+                    self._network_bitrate_mbps = (
+                        (self._network_bytes_sent - self._network_rate_bytes)
+                        * 8.0 / elapsed / 1_000_000.0
+                    )
+                    self._network_rate_bytes = self._network_bytes_sent
+                    self._network_rate_time = now
 
     @staticmethod
     def _interleaved_frame(channel: int, packet: bytes) -> bytes:
@@ -378,7 +382,23 @@ class NativeRtspAvOutput:
                             f"depth={self._max_video_queue}",
                             flush=True,
                         )
-                self._video_write_queue.append((due_at, payload))
+                self._video_write_queue.append((due_at, [payload]))
+            self._write_condition.notify()
+
+    def _enqueue_video_frame(self, batches: list[bytes], due_at: float) -> None:
+        if not batches:
+            return
+        with self._write_condition:
+            if len(self._video_write_queue) >= self._max_video_queue:
+                self._video_write_queue.popleft()
+                self._dropped_video_batches += 1
+                if self._dropped_video_batches == 1 or self._dropped_video_batches % 30 == 0:
+                    print(
+                        "[DirectSbsStream] Native RTP video frame drop: "
+                        f"count={self._dropped_video_batches} depth={self._max_video_queue}",
+                        flush=True,
+                    )
+            self._video_write_queue.append((due_at, batches))
             self._write_condition.notify()
 
     def _send_rtcp_sender_report(self, kind: str, rtp_timestamp: int, *, force: bool = False) -> None:
@@ -421,6 +441,7 @@ class NativeRtspAvOutput:
 
     def _send_h264(self, data: bytes, timestamp: int) -> None:
         batch = bytearray()
+        frame_batches: list[bytes] = []
         due_at = self._media_clock_started + (timestamp / 90000.0)
         nals = list(self._annexb_nals(data))
         for nal_index, nal in enumerate(nals):
@@ -441,7 +462,7 @@ class NativeRtspAvOutput:
                 self._video_rtp_octets += len(payload)
                 batch.extend(self._interleaved_frame(0, packet))
                 if len(batch) >= self._video_batch_bytes:
-                    self._interleaved_batch(batch, priority=1, due_at=due_at)
+                    frame_batches.append(bytes(batch))
                     batch.clear()
                 continue
             first = True
@@ -464,10 +485,12 @@ class NativeRtspAvOutput:
                 self._video_rtp_octets += len(payload)
                 batch.extend(self._interleaved_frame(0, packet))
                 if len(batch) >= self._video_batch_bytes:
-                    self._interleaved_batch(batch, priority=1, due_at=due_at)
+                    frame_batches.append(bytes(batch))
                     batch.clear()
                 first = False
-        self._interleaved_batch(batch, priority=1, due_at=due_at)
+        if batch:
+            frame_batches.append(bytes(batch))
+        self._enqueue_video_frame(frame_batches, due_at)
         self._send_rtcp_sender_report("video", self._video_timestamp)
 
     def _audio_loop(self) -> None:

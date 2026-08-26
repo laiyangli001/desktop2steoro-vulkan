@@ -3,7 +3,7 @@
 ## 2026-08-27
 
 - 修复 NativeNVENC 带音频推流的卡顿和音画不同步：按 RFC 3550 使用同一媒体时钟关联音频/视频 RTP 时间戳，新增每轨 RTCP Sender Report（NTP↔RTP 映射）及同一同步上下文的 SDES CNAME，并通过独立优先级写队列让 Opus/RTCP 不再同步阻塞于 4K 视频批量发送；RTSP interleaved 通道按 RFC 7826 保持视频/RTCP 与音频/RTCP 配对。另修正 SDES RTCP `length` 字段漏计 4 字节 SSRC 的错误，避免 MediaMTX 报 `rtcp: packet too short`。
-- 修复 NativeNVENC 异步视频发送造成的 WebRTC 读取端积压：视频 RTP 队列改为有界最新帧策略（默认深度 3），队列满时丢弃旧视频批次，并按 RTP 时间戳对应的统一媒体时钟节流；音频和 RTCP 仍优先发送，避免 MediaMTX 报 `reader is too slow` 时继续无限堆积视频。
+- 修复 NativeNVENC 异步视频发送造成的 WebRTC 读取端积压：视频 RTP 队列改为有界最新帧策略（默认深度 3），队列满时丢弃旧完整视频帧（保留帧内 RTP 分片完整性），并按 RTP 时间戳对应的统一媒体时钟节流；音频和 RTCP 仍优先发送，避免 MediaMTX 报 `reader is too slow` 时继续无限堆积视频。
 - 修复进入高级网络推流后仍显示旧 CRF/码率的问题：切换到 RTMP Streamer 时立即应用当前匹配且稳定的自动校准 profile；同时兼容旧 profile 中已废弃的 `Stereo Output` 等指纹字段。安全目标码率为 38 Mbps 时现在同步使用 CRF 20，不再沿用旧配置的 CRF 26。
 - 修复切换高级网络推流时 `CompactDropdown` 报 `Control must be added to the page first`：下拉控件在页面挂载前修改 `value`、`options` 或 tooltip，或被旧流程直接调用 `update()` 时，都不会再把 Flet 的 `AssertionError` 抛出；页面挂载后仍正常刷新。
 - Local Viewer 新增输入显示器刷新率提醒：从 GLFW 映射后的实际输入显示器读取刷新率；当自动调节后的动态 `capture_target` 高于输入刷新率时，显示醒目的中英文弹窗和状态警告，但不停止运行。输入与 SBS 输出刷新率警告同时发生时按队列依次显示，避免后到警告被当前弹窗吞掉。
