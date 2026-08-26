@@ -19,7 +19,8 @@ from .paths import BASE_DIR
 from .localization import UI_MESSAGES
 from .capture_sources import (
     PRIMARY_MONITOR_SUFFIX, get_capture_tool_options,
-    get_primary_monitor_index, list_monitors, list_windows,
+    get_default_windows_capture_tool, get_primary_monitor_index,
+    list_monitors, list_windows,
 )
 from .devices import DEVICES
 
@@ -632,9 +633,18 @@ class GUIBuilderMixin:
 
         # Row 7: Capture tool
         self.capture_tool_label = ft.Text("Capture Tool:", size=FONT_SIZE, width=S(130))
-        ct_options = get_capture_tool_options("")
-        self.capture_tool_dd = CompactDropdown(options=[o for o in ct_options],
-            on_select=self.on_capture_tool_change, min_width=S(160))
+        if OS_NAME == "Windows":
+            default_capture_tool = get_default_windows_capture_tool()
+            ct_options = get_capture_tool_options(default_capture_tool)
+        else:
+            ct_options = get_capture_tool_options("")
+            default_capture_tool = ct_options[0] if ct_options else ""
+        self.capture_tool_dd = CompactDropdown(
+            options=[o for o in ct_options],
+            value=default_capture_tool,
+            on_select=self.on_capture_tool_change,
+            min_width=S(160),
+        )
         row6 = ft.Row([self.capture_tool_label, self.capture_tool_dd,
             ft.Container(width=S(15)), self.showfps_cb], spacing=1)
         self.row6b = ft.Row([self.target_fps_label, self.target_fps_dd,

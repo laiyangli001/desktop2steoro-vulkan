@@ -166,10 +166,29 @@ def test_direct_consumer_logs_fps_when_enabled(capsys):
     consumer.run()
 
     assert (
-        "[DirectSbsStream] SBS FPS: 0.2 submitted=0.2 "
+        "[DirectSbsStream] SBS FPS: 0.2 network_bitrate=0.0 Mbps submitted=0.2 "
         "convert_ms=100.0 submit_ms=100.0"
         in capsys.readouterr().out
     )
+
+
+def test_direct_consumer_logs_current_network_bitrate(capsys):
+    consumer = DirectSbsOutputConsumer(
+        runtime_q=queue.Queue(),
+        shutdown_event=threading.Event(),
+        output=SimpleNamespace(current_network_bitrate_mbps=42.5),
+        source_stat_inc=lambda *args, **kwargs: None,
+        show_fps_provider=lambda: True,
+        fps_report_interval=1.0,
+        clock=lambda: 0.0,
+    )
+    consumer._fps_sbs_frames = 30
+    consumer._fps_submitted_frames = 30
+    consumer._clock = lambda: 1.0
+
+    consumer._report_fps_if_due()
+
+    assert "SBS FPS: 30.0 network_bitrate=42.5 Mbps" in capsys.readouterr().out
 
 
 def test_direct_consumer_hides_fps_when_disabled(capsys):
@@ -311,7 +330,10 @@ def test_ffmpeg_output_finds_bundled_encoder_and_config():
     assert output.mediamtx_path.name == "mediamtx.exe"
     assert output.mediamtx_config.name == "mediamtx.yml"
     assert output.publish_rtsp_port == 8554
-    assert output._server_environment()["MTX_RTMPADDRESS"] == ":1935"
+    server_env = output._server_environment()
+    assert server_env["MTX_RTMPADDRESS"] == ":1935"
+    assert server_env["MTX_METRICS"] == "yes"
+    assert server_env["MTX_METRICSADDRESS"] == "127.0.0.1:9998"
 
 
 def test_mediamtx_startup_error_includes_server_output(monkeypatch):

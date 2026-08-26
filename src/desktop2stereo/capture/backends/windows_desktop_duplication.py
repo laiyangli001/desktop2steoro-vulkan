@@ -13,16 +13,16 @@ import os
 import platform
 
 from .desktop_duplication_native import NativeDesktopDuplication, probe as probe_native
-from desktop2stereo.stereo_runtime.providers.intel.openvino_native_depth import (
+from stereo_runtime.providers.intel.openvino_native_depth import (
     OpenVINOD3D11DepthProvider,
 )
-from desktop2stereo.stereo_runtime.providers.intel.onevpl_d3d11_encoder import (
+from stereo_runtime.providers.intel.onevpl_d3d11_encoder import (
     probe_onevpl_d3d11,
 )
-from desktop2stereo.stereo_runtime.providers.intel.d3d11_sbs_surface import (
+from stereo_runtime.providers.intel.d3d11_sbs_surface import (
     probe_d3d11_sbs_surface,
 )
-from desktop2stereo.stereo_runtime.providers.intel.openvino_remote import (
+from stereo_runtime.providers.intel.openvino_remote import (
     probe_openvino_remote_tensor,
 )
 from .windows_dxcamera import DesktopGrabber as _CompatDesktopGrabber

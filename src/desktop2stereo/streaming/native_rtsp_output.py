@@ -138,7 +138,16 @@ class NativeRtspAvOutput:
         self._audio_socket: socket.socket | None = None
         self._opus: _Opus | None = None
         self._audio_buffer = bytearray()
+        self._network_bytes_sent = 0
+        self._network_rate_started = time.monotonic()
+        self._network_rate_bytes = 0
+        self._network_rate_time = self._network_rate_started
+        self._network_bitrate_mbps = 0.0
         self._url = f"rtsp://{self.host}:{self.port}/{self.stream_key}"
+
+    @property
+    def current_network_bitrate_mbps(self) -> float:
+        return float(self._network_bitrate_mbps)
 
     def start(self) -> None:
         self._socket = socket.create_connection((self.host, self.port), timeout=5.0)
@@ -257,6 +266,16 @@ class NativeRtspAvOutput:
             return
         with self._socket_write_lock:
             self._socket.sendall(frames)
+        now = time.monotonic()
+        self._network_bytes_sent += len(frames)
+        elapsed = now - self._network_rate_time
+        if elapsed >= 0.5:
+            self._network_bitrate_mbps = (
+                (self._network_bytes_sent - self._network_rate_bytes)
+                * 8.0 / elapsed / 1_000_000.0
+            )
+            self._network_rate_bytes = self._network_bytes_sent
+            self._network_rate_time = now
 
     def _send_h264(self, data: bytes, timestamp: int) -> None:
         batch = bytearray()

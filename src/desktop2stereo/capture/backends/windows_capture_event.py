@@ -370,6 +370,7 @@ class WindowsCaptureEventRunner:
             is_paused=is_paused,
             is_hard_idle=is_hard_idle,
         )
+        on_closed_callback = on_closed
 
         while not shutdown_event.is_set():
             if on_tick is not None:
@@ -439,9 +440,9 @@ class WindowsCaptureEventRunner:
                 )
 
             @cap.event
-            def closed():
-                if on_closed is not None:
-                    on_closed()
+            def on_closed():
+                if on_closed_callback is not None:
+                    on_closed_callback()
 
             try:
                 cap.start()

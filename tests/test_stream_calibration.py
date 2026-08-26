@@ -10,6 +10,8 @@ from streaming.stream_calibration import (
     calibration_tiers,
     evaluate_calibration_window,
     build_calibration_fingerprint,
+    calibration_fingerprint_matches,
+    recommended_crf_for_bitrate,
 )
 
 
@@ -23,6 +25,17 @@ def test_calibration_fingerprint_tracks_input_display_resolution_tier():
 
     assert build_calibration_fingerprint(base)["Input Display Resolution Tier"] == "1K"
     assert build_calibration_fingerprint(base) != build_calibration_fingerprint(changed)
+
+
+def test_calibration_fingerprint_ignores_capture_monitor_index():
+    base = {
+        "Monitor Index": 1,
+        "Input Display Resolution Tier": "4K",
+        "Stream Protocol": "WebRTC",
+    }
+    changed = dict(base, **{"Monitor Index": 3})
+
+    assert build_calibration_fingerprint(base) == build_calibration_fingerprint(changed)
 
 
 @pytest.mark.parametrize(
@@ -76,6 +89,39 @@ def test_default_probe_window_allows_headset_to_stabilize(tmp_path):
 
     assert controller.stage_seconds == 15.0
     assert controller.stability_seconds == 30.0
+
+
+def test_probe_timer_starts_on_first_decoded_frame_after_bitrate_switch(tmp_path):
+    now = [100.0]
+    controller = StreamCalibrationController(
+        bind_port=12000,
+        stream_port=1122,
+        stream_key="live",
+        maximum_fps=30,
+        state_path=tmp_path / "state.json",
+        profile_path=tmp_path / "profile.json",
+        stage_seconds=15.0,
+        settle_seconds=2.0,
+        clock=lambda: now[0],
+    )
+
+    controller.take_pending_tier()
+    controller.observe_sender({"submitted_fps": 30.0})
+    controller.add_receiver_report(_receiver_report(0.0))
+    assert controller.state()["status"] == "waiting_receiver"
+    assert controller.state()["stage_progress"] == 0.0
+
+    now[0] = 109.0
+    controller.add_receiver_report(_receiver_report(30.0))
+    assert controller.state()["status"] == "testing"
+    assert controller.state()["stage_progress"] == 0.0
+
+    now[0] = 123.9
+    controller.add_receiver_report(_receiver_report(30.0))
+    assert controller.state()["status"] == "testing"
+    now[0] = 124.0
+    controller.add_receiver_report(_receiver_report(30.0))
+    assert controller.state()["status"] != "testing"
 
 
 def test_calibration_window_requires_sender_and_receiver_stability():
@@ -245,6 +291,9 @@ def test_headset_page_uses_whep_and_reports_browser_stats(tmp_path):
     assert "addTransceiver('audio'" not in page
     assert "WHEP ${response.status} ${await response.text()}" in page
     assert "new MediaStream([e.track])" in page
+    assert "pollCalibrationState" in page
+    assert "当前测试：目标" in page
+    assert "最终结果：稳定上限" in page
 
 
 def test_calibration_fingerprint_tracks_runtime_and_receiver_choices():
@@ -301,6 +350,33 @@ def test_calibration_fingerprint_ignores_stream_key_and_audio_settings():
     )
 
     assert build_calibration_fingerprint(base) == build_calibration_fingerprint(changed)
+
+
+def test_calibration_fingerprint_ignores_local_stereo_output_monitor():
+    base = {
+        "Run Mode": "RTMP Streamer",
+        "Stream Protocol": "WebRTC",
+        "Input Display Resolution Tier": "4K",
+        "Stereo Output": 2,
+    }
+    changed = dict(base, **{"Stereo Output": 3})
+
+    assert build_calibration_fingerprint(base) == build_calibration_fingerprint(changed)
+
+
+@pytest.mark.parametrize(
+    ("bitrate", "expected"),
+    [(35, 20), (30, 20), (29, 23), (25, 23), (24, 26), (21, 26), (20, 28), (19, 28), (18, 30)],
+)
+def test_recommended_crf_follows_calibrated_safe_bitrate(bitrate, expected):
+    assert recommended_crf_for_bitrate(bitrate) == expected
+
+
+def test_calibration_fingerprint_accepts_legacy_crf_field():
+    settings = {"Run Mode": "RTMP Streamer", "Stream Protocol": "WebRTC"}
+    saved = dict(build_calibration_fingerprint(settings), CRF="23")
+
+    assert calibration_fingerprint_matches(saved, settings)
 
 
 def test_feedback_http_server_serves_page_and_accepts_stats(tmp_path, capsys):

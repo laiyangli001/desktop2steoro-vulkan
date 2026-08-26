@@ -7,7 +7,7 @@ import os
 import platform
 from pathlib import Path
 
-from desktop2stereo.stereo_runtime.providers.intel.native_artifacts import (
+from stereo_runtime.providers.intel.native_artifacts import (
     native_dll_candidates,
 )
 
@@ -140,6 +140,15 @@ class NativeDesktopDuplication:
             ctypes.POINTER(ctypes.c_uint64),
         ]
         self._lib.d2s_desktop_duplication_acquire.restype = ctypes.c_int
+        self._lib.d2s_desktop_duplication_copy_frame.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_ubyte),
+            ctypes.c_int,
+            ctypes.POINTER(ctypes.c_int),
+            ctypes.POINTER(ctypes.c_int),
+            ctypes.POINTER(ctypes.c_int),
+        ]
+        self._lib.d2s_desktop_duplication_copy_frame.restype = ctypes.c_int
         self._lib.d2s_desktop_duplication_device.argtypes = [ctypes.c_void_p]
         self._lib.d2s_desktop_duplication_device.restype = ctypes.c_void_p
         self._lib.d2s_desktop_duplication_release_frame.argtypes = [ctypes.c_void_p]

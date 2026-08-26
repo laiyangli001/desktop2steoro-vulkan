@@ -236,8 +236,12 @@ class DirectSbsOutputConsumer:
             else False
         )
         if show_fps:
+            network_bitrate = float(
+                getattr(self.output, "current_network_bitrate_mbps", 0.0) or 0.0
+            )
             print(
                 f"[DirectSbsStream] SBS FPS: {sbs_fps:.1f} "
+                f"network_bitrate={network_bitrate:.1f} Mbps "
                 f"submitted={submitted_fps:.1f} "
                 f"convert_ms={convert_ms:.1f} submit_ms={submit_ms:.1f}",
                 flush=True,
@@ -734,6 +738,15 @@ class FfmpegDirectSbsOutput:
             )
             self._stream_rate_calibrated = True
 
+    @property
+    def current_network_bitrate_mbps(self) -> float:
+        """Return the latest measured bitrate at the network publish boundary."""
+        return float(
+            self._mediamtx_inbound_bitrate_mbps
+            or self._ffmpeg_bitrate_mbps
+            or 0.0
+        )
+
     def prepare_calibration_source(self, runtime_result: Any) -> bool:
         """Start or retune the independent probe without converting RGB frames."""
         if self._calibration_controller is None:
@@ -784,9 +797,11 @@ class FfmpegDirectSbsOutput:
 
     def _server_environment(self) -> dict[str, str]:
         env = os.environ.copy()
-        if self._calibration_controller is not None:
-            env["MTX_METRICS"] = "yes"
-            env["MTX_METRICSADDRESS"] = self._mediamtx_metrics_address
+        # Keep MediaMTX path byte counters enabled for normal streaming too;
+        # the GUI FPS overlay uses them as the network bitrate source after
+        # automatic calibration has finished.
+        env["MTX_METRICS"] = "yes"
+        env["MTX_METRICSADDRESS"] = self._mediamtx_metrics_address
         if self.protocol == "RTMP":
             env["MTX_RTMPADDRESS"] = f":{self.port}"
         elif self.protocol == "RTSP":
@@ -1201,14 +1216,14 @@ class FfmpegDirectSbsOutput:
             daemon=True,
         )
         self._server_log_thread.start()
+        self._mediamtx_metrics_stop.clear()
+        self._mediamtx_metrics_thread = threading.Thread(
+            target=self._sample_mediamtx_metrics,
+            name="MediaMTXMetrics",
+            daemon=True,
+        )
+        self._mediamtx_metrics_thread.start()
         if self._calibration_controller is not None:
-            self._mediamtx_metrics_stop.clear()
-            self._mediamtx_metrics_thread = threading.Thread(
-                target=self._sample_mediamtx_metrics,
-                name="MediaMTXMetrics",
-                daemon=True,
-            )
-            self._mediamtx_metrics_thread.start()
             self._calibration_controller.start()
         print(
             f"[DirectSbsStream] MediaMTX started for {self.protocol} on port {self.port}",

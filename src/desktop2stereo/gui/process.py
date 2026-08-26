@@ -30,7 +30,11 @@ from .capture_sources import get_primary_monitor_index, list_windows
 from .localization import UI_MESSAGES
 from .log_handler import GuiLogHandler
 from utils.logging_setup import _NoisyThirdPartyDebugFilter
-from streaming.stream_calibration import build_calibration_fingerprint
+from streaming.stream_calibration import (
+    build_calibration_fingerprint,
+    calibration_fingerprint_matches,
+    recommended_crf_for_bitrate,
+)
 from streaming.stream_session import supports_network_calibration
 
 # ── module-level console helpers ──
@@ -508,7 +512,7 @@ class GUIProcessMixin:
         try:
             with open(STREAM_CALIBRATION_PROFILE_FILE, "r", encoding="utf-8") as file:
                 profile = json.load(file)
-            if profile.get("fingerprint") != build_calibration_fingerprint(self._config):
+            if not calibration_fingerprint_matches(profile.get("fingerprint"), self._config):
                 return "stale"
             if profile.get("stability", "stable") != "stable":
                 return "missing"
@@ -523,10 +527,68 @@ class GUIProcessMixin:
     def _stream_calibration_profile_is_current(self) -> bool:
         return self._stream_calibration_profile_status() == "current"
 
+    def _persist_current_stream_calibration_profile(self) -> None:
+        """Restore a completed profile if shutdown raced GUI result handling."""
+        if getattr(self, "stream_calibration_mode_dd", None) is None:
+            return
+        if not self._stream_calibration_auto_enabled():
+            return
+        try:
+            with open(STREAM_CALIBRATION_PROFILE_FILE, "r", encoding="utf-8") as file:
+                profile = json.load(file)
+            if profile.get("stability", "stable") != "stable":
+                return
+            if not calibration_fingerprint_matches(profile.get("fingerprint"), self._config):
+                return
+            fps = int(profile["fps"])
+            target = int(profile["target_mbps"])
+            peak = int(profile["peak_mbps"])
+            crf = recommended_crf_for_bitrate(target)
+            if min(fps, target, peak) <= 0:
+                return
+        except (OSError, ValueError, TypeError, KeyError):
+            return
+
+        changed = (
+            int(self._config.get("Target FPS", 0) or 0) != fps
+            or int(self._config.get("Stream Target Bitrate Mbps", 0) or 0) != target
+            or int(self._config.get("Stream Peak Bitrate Mbps", 0) or 0) != peak
+            or int(self._config.get("CRF", 0) or 0) != crf
+            or not bool(self._config.get("Use Stream Calibration", False))
+        )
+        if not changed:
+            return
+        self._config.update({
+            "Target FPS": fps,
+            "Use Stream Calibration": True,
+            "Stream Target Bitrate Mbps": target,
+            "Stream Peak Bitrate Mbps": peak,
+            "CRF": crf,
+        })
+        target_control = getattr(self, "target_fps_dd", None)
+        if target_control is not None:
+            target_control.value = self._target_fps_to_display(fps)
+        crf_control = getattr(self, "crf_tf", None)
+        if crf_control is not None:
+            crf_control.value = str(crf)
+        ok, error = save_yaml(os.path.join(BASE_DIR, "settings.yaml"), self._config)
+        if not ok:
+            logger.warning("[StreamCalibration] Failed to restore saved profile: %s", error)
+
     def _refresh_stream_calibration_status(self) -> None:
         control = getattr(self, "stream_calibration_status", None)
         if control is None:
             return
+        # Controls such as the selected monitor resolution tier are derived
+        # during GUI startup and are not guaranteed to be present in the
+        # YAML loaded before the widgets are applied.  Refresh the effective
+        # config before comparing a persisted profile, otherwise a valid
+        # profile is incorrectly reported as needing recalibration after a
+        # restart.
+        collect_config = getattr(self, "_collect_config", None)
+        if callable(collect_config):
+            collect_config()
+        self._persist_current_stream_calibration_profile()
         warning = getattr(self, "stream_calibration_warning", None)
         warning_row = getattr(self, "stream_calibration_warning_row", None)
         result = getattr(self, "stream_calibration_result", None)
@@ -605,18 +667,6 @@ class GUIProcessMixin:
             with open(STREAM_CALIBRATION_PROFILE_FILE, "r", encoding="utf-8") as file:
                 profile = json.load(file)
             clear_result()
-            if profile.get("fingerprint") != build_calibration_fingerprint(self._config):
-                control.value = UI_MESSAGES[self.locale].get(
-                    "calibration_profile_stale",
-                    "Settings changed, please recalibrate",
-                )
-                control.color = ft.Colors.ORANGE
-                show_warning(control.value)
-                control.value = ""
-                self._safe_update(control)
-                self._safe_update(warning, warning_row, result, result_row)
-                refit_visible_rows()
-                return
             if profile.get("stability", "stable") != "stable":
                 control.value = UI_MESSAGES[self.locale].get("Not calibrated", "Not calibrated")
                 control.color = ft.Colors.ORANGE
@@ -960,6 +1010,7 @@ class GUIProcessMixin:
             fps = int(profile["fps"])
             target = int(profile["target_mbps"])
             peak = int(profile["peak_mbps"])
+            crf = recommended_crf_for_bitrate(target)
             network_max = int(
                 profile.get("network_max_mbps", 0)
                 or round(float(profile.get("measured_bitrate_mbps", 0.0) or 0.0))
@@ -999,6 +1050,10 @@ class GUIProcessMixin:
         self._config["Use Stream Calibration"] = True
         self._config["Stream Target Bitrate Mbps"] = target
         self._config["Stream Peak Bitrate Mbps"] = peak
+        self._config["CRF"] = crf
+        crf_control = getattr(self, "crf_tf", None)
+        if crf_control is not None:
+            crf_control.value = str(crf)
         self._collect_config()
         ok, error = save_yaml(os.path.join(BASE_DIR, "settings.yaml"), self._config)
         if not ok:
@@ -1347,6 +1402,18 @@ class GUIProcessMixin:
             self._esc_task.cancel()
         if hasattr(self, '_log_poll_task') and self._log_poll_task and not self._log_poll_task.done():
             self._log_poll_task.cancel()
+        # The browser can reach the completed state just before the user
+        # closes the GUI.  The polling task may not have applied the profile
+        # to settings.yaml yet, so finish that persistence step synchronously
+        # during shutdown instead of losing the selected FPS/bitrates.
+        if self._calibration_active:
+            try:
+                with open(STREAM_CALIBRATION_STATE_FILE, "r", encoding="utf-8") as file:
+                    calibration_complete = json.load(file).get("status") == "complete"
+            except (OSError, ValueError, TypeError):
+                calibration_complete = False
+            if calibration_complete:
+                await self._apply_stream_calibration_profile()
         if self._calibration_poll_task and not self._calibration_poll_task.done():
             self._calibration_poll_task.cancel()
         await self._async_stop()

@@ -30,6 +30,7 @@ _CALIBRATION_RESULT_KEYS = {
     "Use Stream Calibration",
     "Stream Target Bitrate Mbps",
     "Stream Peak Bitrate Mbps",
+    "CRF",
 }
 _CALIBRATION_UI_KEYS = {
     "Language",
@@ -37,6 +38,12 @@ _CALIBRATION_UI_KEYS = {
     "Stream Key",
     "Stereo Mix",
     "Audio Delay",
+    # Monitor enumeration indices are not stable across restart.  The
+    # effective capture resolution tier is fingerprinted separately.
+    "Monitor Index",
+    # The local preview/output monitor does not change the encoded network
+    # stream.  It can be re-enumerated with a different index after restart.
+    "Stereo Output",
 }
 
 
@@ -50,6 +57,39 @@ def build_calibration_fingerprint(settings: dict[str, Any]) -> dict[str, str]:
             value = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         fingerprint[key] = "" if value is None else str(value)
     return fingerprint
+
+
+def calibration_fingerprint_matches(
+    saved_fingerprint: Any,
+    settings: dict[str, Any],
+) -> bool:
+    """Compare profiles while accepting legacy fingerprints containing CRF."""
+    if not isinstance(saved_fingerprint, dict):
+        return False
+    current = build_calibration_fingerprint(settings)
+    if saved_fingerprint == current:
+        return True
+    # Older profiles included manually/physically derived fields.  CRF is now
+    # derived from the calibrated safe bitrate, and monitor indices can be
+    # re-enumerated after restart, so ignore those legacy fields.
+    legacy = dict(saved_fingerprint)
+    legacy.pop("CRF", None)
+    legacy.pop("Monitor Index", None)
+    return legacy == current
+
+
+def recommended_crf_for_bitrate(target_mbps: int | float) -> int:
+    """Choose the automatic constant-quality value for a safe bitrate."""
+    bitrate = float(target_mbps or 0.0)
+    if bitrate >= 30.0:
+        return 20
+    if bitrate >= 25.0:
+        return 23
+    if bitrate >= 21.0:
+        return 26
+    if bitrate >= 19.0:
+        return 28
+    return 30
 
 
 def calibration_tiers(
@@ -203,6 +243,8 @@ class StreamCalibrationController:
         self._latest_receiver_report: dict[str, Any] = {}
         self._sender_report: dict[str, Any] | None = None
         self._sender_reports: list[dict[str, Any]] = []
+        self._last_metrics: dict[str, Any] = {}
+        self._result: dict[str, Any] | None = None
         self._stage_started: float | None = None
         self._measurement_started: float | None = None
         self._lock = threading.Lock()
@@ -410,19 +452,31 @@ class StreamCalibrationController:
         with self._lock:
             if self._status == "complete":
                 return
-            if self._stage_started is None:
-                self._stage_started = self._clock()
             self._latest_receiver_report = dict(report)
+            decoded_fps = float(report.get("decoded_fps", 0.0) or 0.0)
+            if decoded_fps <= 0.0:
+                # A bitrate switch/reconnect can produce stats before the
+                # headset has decoded and displayed a frame. Do not start
+                # or advance the 15-second probe window in that state.
+                self._status = "waiting_receiver"
+                if self._measurement_started is not None:
+                    # A display interruption invalidates the current window;
+                    # the next decoded frame starts a fresh 15-second probe.
+                    self._stage_started = None
+                    self._measurement_started = None
+                    self._receiver_reports.clear()
+                    self._sender_reports.clear()
+                self._write_state_locked()
+                return
             if self._measurement_started is None:
-                if self._clock() - self._stage_started < self.settle_seconds:
-                    self._status = "settling"
-                    self._write_state_locked()
-                    return
-                self._measurement_started = self._clock()
+                # The first positive decoded FPS is the probe start event:
+                # the headset is now displaying the new test stream.
+                started = self._clock()
+                self._stage_started = started
+                self._measurement_started = started
                 self._status = "testing"
                 self._receiver_reports.clear()
-                if self.settle_seconds > 0:
-                    self._sender_reports.clear()
+                self._sender_reports.clear()
             self._receiver_reports.append(dict(report))
             self._receiver_reports = self._receiver_reports[-60:]
             self._maybe_finish_stage_locked()
@@ -450,6 +504,7 @@ class StreamCalibrationController:
                 "encoded_bitrates": self._sender_reports,
             },
         )
+        self._last_metrics = dict(metrics)
         if not passed:
             print(
                 f"[StreamCalibration] Probe failed target={self._active_tier.target_mbps}M "
@@ -644,6 +699,7 @@ class StreamCalibrationController:
             "metrics": metrics,
             "fingerprint": self.fingerprint,
         }
+        self._result = dict(profile)
         self._write_json(self.profile_path, profile)
         self._write_state_locked(extra={"result": profile})
         print(
@@ -670,13 +726,13 @@ class StreamCalibrationController:
             progress = min(
                 1.0,
                 (self._clock() - self._stage_started)
-                / max(0.001, self.settle_seconds + stage_seconds),
+                / max(0.001, stage_seconds),
             )
         else:
             progress = min(
                 1.0,
-                (self.settle_seconds + self._clock() - self._measurement_started)
-                / max(0.001, self.settle_seconds + stage_seconds),
+                (self._clock() - self._measurement_started)
+                / max(0.001, stage_seconds),
             )
         payload = {
             "status": self._status,
@@ -688,7 +744,20 @@ class StreamCalibrationController:
             "receiver_samples": len(self._receiver_reports),
             "receiver_latest": dict(self._latest_receiver_report),
             "sender": dict(self._sender_report or {}),
+            "current_test": {
+                "target_mbps": int(self._active_tier.target_mbps),
+                "peak_mbps": int(self._active_tier.peak_mbps),
+                "fps": int(self._active_tier.fps),
+                "phase": (
+                    "稳定性确认"
+                    if self._confirming_stability
+                    else "码率测试"
+                ),
+            },
+            "last_metrics": dict(self._last_metrics),
         }
+        if self._result is not None:
+            payload["result"] = dict(self._result)
         if extra:
             payload.update(extra)
         return payload
@@ -728,13 +797,27 @@ main{{max-width:1100px;margin:auto;padding:20px}}video{{width:100%;background:#0
 </head><body><main><h2>Desktop2Stereo 自动网络与性能校准</h2>
 <div id=\"state\">正在连接测试流…</div><video id=\"video\" autoplay playsinline controls></video>
 <p class=\"metrics\" id=\"metrics\"></p><pre id=\"debug\"></pre></main><script>
-const streamKey={stream_key}; let pc=null, timer=null, previous=null, reconnectTimer=null, sessionUrl=null;
-const video=document.getElementById('video'), state=document.getElementById('state'), debug=document.getElementById('debug');
+const streamKey={stream_key}; let pc=null, timer=null, stateTimer=null, previous=null, reconnectTimer=null, sessionUrl=null;
+const video=document.getElementById('video'), state=document.getElementById('state'), metrics=document.getElementById('metrics'), debug=document.getElementById('debug');
 function setState(message){{state.textContent=message;debug.textContent=`${{new Date().toLocaleTimeString()}} ${{message}}`;}}
+function mbps(value){{return Number.isFinite(Number(value))?`${{Number(value).toFixed(1)}} Mbps`:'--';}}
+function renderCalibration(payload){{
+ const current=payload.current_test||payload.tier||{{}}, last=payload.last_metrics||{{}}, result=payload.result;
+ if(payload.status==='complete'&&result){{
+  setState(`✅ 校准完成：稳定上限 ${{mbps(result.network_max_mbps)}} · 安全码率 ${{mbps(result.target_mbps)}} · 峰值 ${{mbps(result.peak_mbps)}} · ${{result.fps||0}} FPS`);
+  const m=result.metrics||last;
+  metrics.textContent=`最终结果：稳定上限 ${{mbps(result.network_max_mbps)}} · 安全目标 ${{mbps(result.target_mbps)}} · 峰值 ${{mbps(result.peak_mbps)}} · 实测接收 ${{mbps(result.measured_bitrate_mbps)}} · 解码 ${{Number(m.decoded_fps||0).toFixed(1)}} FPS`;
+ }} else {{
+  const progress=Math.round(Number(payload.stage_progress||0)*100);
+  if(['testing','settling','reconnecting','confirming'].includes(payload.status))setState(`正在${{current.phase||'码率测试'}}：目标 ${{mbps(current.target_mbps)}}，峰值 ${{mbps(current.peak_mbps)}}，${{current.fps||0}} FPS · 当前阶段 ${{progress}}%`);
+  metrics.textContent=`当前测试：目标 ${{mbps(current.target_mbps)}} / 峰值 ${{mbps(current.peak_mbps)}} · 浏览器接收 ${{mbps(last.received_bitrate_mbps)}} · 解码 ${{Number(last.decoded_fps||0).toFixed(1)}} FPS · 丢帧 ${{last.dropped_frames||0}} · 丢包 ${{last.packets_lost||0}}`;
+ }}
+}}
+async function pollCalibrationState(){{try{{const response=await fetch('/state',{{cache:'no-store'}});if(response.ok)renderCalibration(await response.json());}}catch(_err){{}}}}
 async function waitIce(p){{if(p.iceGatheringState==='complete')return;await new Promise(resolve=>{{
  const f=()=>{{if(p.iceGatheringState==='complete'){{p.removeEventListener('icegatheringstatechange',f);resolve();}}}};
  p.addEventListener('icegatheringstatechange',f);setTimeout(resolve,3000);}})}}
-function reconnect(){{clearInterval(timer);if(sessionUrl)fetch(sessionUrl,{{method:'DELETE'}}).catch(()=>{{}});sessionUrl=null;
+function reconnect(){{clearInterval(timer);clearInterval(stateTimer);if(sessionUrl)fetch(sessionUrl,{{method:'DELETE'}}).catch(()=>{{}});sessionUrl=null;
  if(pc)pc.close();pc=null;previous=null;clearTimeout(reconnectTimer);
  reconnectTimer=setTimeout(connect,1000);}}
 async function connect(){{try{{setState('正在连接测试流…');pc=new RTCPeerConnection();
@@ -742,14 +825,14 @@ async function connect(){{try{{setState('正在连接测试流…');pc=new RTCPe
  pc.ontrack=e=>{{video.srcObject=e.streams&&e.streams[0]?e.streams[0]:new MediaStream([e.track]);video.play().catch(()=>{{}});}};
  pc.oniceconnectionstatechange=()=>{{debug.textContent=`ICE: ${{pc.iceConnectionState}}`;}};
  pc.onconnectionstatechange=()=>{{
-  if(pc.connectionState==='connected')setState('已连接，正在进行极限传输测试，请保持页面开启');
+  if(pc.connectionState==='connected')setState('已连接，正在进行分档码率测试，请保持页面开启');
   if(['failed','closed','disconnected'].includes(pc.connectionState)){{setState(`WebRTC连接失败: ${{pc.connectionState}}`);reconnect();}}}};
  await pc.setLocalDescription(await pc.createOffer());await waitIce(pc);
  const url={whep_url};
  const response=await fetch(url,{{method:'POST',headers:{{'Content-Type':'application/sdp'}},body:pc.localDescription.sdp}});
  if(!response.ok)throw new Error(`WHEP ${{response.status}} ${{await response.text()}}`);
  const locationHeader=response.headers.get('Location');if(locationHeader)sessionUrl=new URL(locationHeader,url).href;
- await pc.setRemoteDescription({{type:'answer',sdp:await response.text()}});timer=setInterval(report,1000);
+ await pc.setRemoteDescription({{type:'answer',sdp:await response.text()}});timer=setInterval(report,1000);stateTimer=setInterval(pollCalibrationState,1000);pollCalibrationState();
  }}catch(err){{setState('等待测试流：'+err.message);reconnect();}}}}
 async function report(){{if(!pc)return;const stats=await pc.getStats();let inbound=null;
  stats.forEach(s=>{{if(s.type==='inbound-rtp'&&s.kind==='video')inbound=s;}});if(!inbound)return;
@@ -764,7 +847,7 @@ async function report(){{if(!pc)return;const stats=await pc.getStats();let inbou
    bitrate_mbps:(now.bytesReceived-previous.bytesReceived)*8/dt/1e6,
    jitter_buffer_ms:emitted>0?(now.jitterBufferDelay-previous.jitterBufferDelay)/emitted*1000:0,
    width:inbound.frameWidth||0,height:inbound.frameHeight||0}};
-  document.getElementById('metrics').textContent=`解码 ${{payload.decoded_fps.toFixed(1)}} FPS · ${{payload.bitrate_mbps.toFixed(1)}} Mbps · 丢帧 ${{payload.dropped_frames}}`;
+  metrics.textContent=`当前浏览器：解码 ${{payload.decoded_fps.toFixed(1)}} FPS · 接收 ${{payload.bitrate_mbps.toFixed(1)}} Mbps · 丢帧 ${{payload.dropped_frames}} · 丢包 ${{payload.packets_lost}}`;
   fetch('/stats',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(payload)}}).catch(()=>{{}});
  }}previous=now;}}connect();
 </script></body></html>"""

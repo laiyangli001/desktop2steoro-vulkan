@@ -162,7 +162,15 @@ class GUIHandlerMixin:
         if OS_NAME in ("Windows", "Darwin"):
             new_opts = get_capture_tool_options(device_label)
             self.capture_tool_dd.options = [o for o in new_opts]
-            if self.capture_tool_dd.value not in new_opts:
+            saved_capture_tool = self._config.get(
+                "Capture Tool", DEFAULTS["Capture Tool"]
+            )
+            if saved_capture_tool in new_opts:
+                self.capture_tool_dd.value = saved_capture_tool
+            elif saved_capture_tool in ("", "none", None):
+                # Auto selection follows the detected device-specific order.
+                self.capture_tool_dd.value = new_opts[0]
+            elif self.capture_tool_dd.value not in new_opts:
                 self.capture_tool_dd.value = new_opts[0]
             self.capture_tool_dd.update()
         self._update_accelerator_visibility(device_label)

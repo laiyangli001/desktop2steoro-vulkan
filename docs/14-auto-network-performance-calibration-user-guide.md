@@ -123,6 +123,7 @@ flowchart LR
 | `Use Stream Calibration` | 是否使用校准配置。 |
 | `Stream Target Bitrate Mbps` | FFmpeg 目标码率。 |
 | `Stream Peak Bitrate Mbps` | FFmpeg 峰值码率和缓冲预算。 |
+| `CRF` | 根据校准后的安全目标码率自动选择的恒定质量值：30 Mbps 及以上为 20，25-29 为 23，21-24 为 26，19-20 为 28，低于 19 为 30。 |
 | `Stream Calibration Port` | 头显校准页面端口。 |
 
 运行状态和最终结果保存在：

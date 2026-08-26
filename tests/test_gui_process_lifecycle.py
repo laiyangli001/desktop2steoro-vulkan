@@ -203,6 +203,74 @@ def test_calibration_stops_runtime_before_showing_result(monkeypatch, tmp_path):
     )
 
 
+def test_page_close_applies_completed_calibration_before_stopping(monkeypatch, tmp_path):
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps({"status": "complete"}), encoding="utf-8")
+    events = []
+
+    class Harness(gui_process.GUIProcessMixin):
+        async def _apply_stream_calibration_profile(self):
+            events.append("apply")
+            self._calibration_active = False
+
+        async def _async_stop(self):
+            events.append("stop")
+
+    gui = Harness()
+    gui._closed = False
+    gui._calibration_active = True
+    gui._calibration_poll_task = None
+    gui._esc_task = None
+    gui._log_poll_task = None
+    monkeypatch.setattr(gui_process, "STREAM_CALIBRATION_STATE_FILE", str(state_path))
+
+    asyncio.run(gui._on_page_close())
+
+    assert events == ["apply", "stop"]
+
+
+def test_startup_restores_profile_values_after_shutdown_race(monkeypatch, tmp_path):
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_text(json.dumps({
+        "fps": 30,
+        "target_mbps": 25,
+        "peak_mbps": 29,
+        "stability": "stable",
+        "fingerprint": {"Streamer Port": "1122"},
+    }), encoding="utf-8")
+    saved = []
+
+    class Harness(gui_process.GUIProcessMixin):
+        def _stream_calibration_auto_enabled(self):
+            return True
+
+        def _target_fps_to_display(self, fps):
+            return str(fps)
+
+    gui = Harness()
+    gui._config = {
+        "Streamer Port": 1122,
+        "Target FPS": 0,
+        "Use Stream Calibration": True,
+        "Stream Target Bitrate Mbps": 0,
+        "Stream Peak Bitrate Mbps": 0,
+    }
+    gui.stream_calibration_mode_dd = SimpleNamespace(value="Auto Calibration")
+    gui.target_fps_dd = SimpleNamespace(value="Auto")
+    monkeypatch.setattr(gui_process, "STREAM_CALIBRATION_PROFILE_FILE", str(profile_path))
+    monkeypatch.setattr(gui_process, "BASE_DIR", str(tmp_path))
+    monkeypatch.setattr(gui_process, "save_yaml", lambda path, config: saved.append((path, dict(config))) or (True, ""))
+
+    gui._persist_current_stream_calibration_profile()
+
+    assert gui._config["Target FPS"] == 30
+    assert gui._config["Stream Target Bitrate Mbps"] == 25
+    assert gui._config["Stream Peak Bitrate Mbps"] == 29
+    assert gui._config["CRF"] == 23
+    assert gui.target_fps_dd.value == "30"
+    assert saved
+
+
 def test_calibration_profile_status_distinguishes_stale_from_missing(monkeypatch, tmp_path):
     profile_path = tmp_path / "profile.json"
     profile_path.write_text(
@@ -229,7 +297,7 @@ def test_calibration_profile_status_distinguishes_stale_from_missing(monkeypatch
     assert gui._stream_calibration_profile_status() == "missing"
 
 
-def test_stale_calibration_profile_hides_expired_status_text(monkeypatch, tmp_path):
+def test_refresh_does_not_compare_profile_until_run(monkeypatch, tmp_path):
     profile_path = tmp_path / "profile.json"
     profile_path.write_text(
         json.dumps({
@@ -257,10 +325,8 @@ def test_stale_calibration_profile_hides_expired_status_text(monkeypatch, tmp_pa
 
     gui._refresh_stream_calibration_status()
 
-    assert gui.stream_calibration_status.value == ""
-    assert gui.stream_calibration_warning.value == "设置变化，请重新校准"
-    assert gui.stream_calibration_warning.visible is True
-    assert gui.stream_calibration_warning_row.visible is True
+    assert "30 FPS" in gui.stream_calibration_status.value
+    assert gui.stream_calibration_warning.visible is False
 
 
 def test_limited_calibration_profile_is_not_treated_as_current(monkeypatch, tmp_path):

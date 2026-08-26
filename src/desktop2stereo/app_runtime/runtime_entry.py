@@ -719,6 +719,12 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
                 on_sbs_fps=(
                     observe_sbs_fps if adaptive_capture_rate.enabled else None
                 ),
+                fps_report_interval=(
+                    1.0
+                    if str(getattr(network_output, "protocol", "")).strip().upper()
+                    != "MJPEG"
+                    else 5.0
+                ),
             )
             output_thread = threading.Thread(
                 target=output_consumer.run,
