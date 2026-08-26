@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from stereo_runtime.render_size import RenderSizeConfig, render_size_config_from_settings
 from utils.display import compute_output_resolution, get_fps
+from utils.run_mode import target_fps_for_run_mode
 from utils.xr_headset_presets import DEFAULT_XR_HEADSET_MODEL, resolve_xr_headset_preset
 from viewer.controller_help import get_controller_help_rows
 from viewer.upscaler import normalize_upscaler, normalize_upscaler_sharpness
@@ -60,7 +61,7 @@ def resolve_viewer_settings(settings: dict) -> ViewerSettings:
     render_size_config = render_size_config_from_settings(settings)
     capture_mode = settings["Capture Mode"]
     window_title = settings["Window Title"] if capture_mode == "Window" else None
-    target_fps = int(settings.get("Target FPS", 0) or 0)
+    target_fps = target_fps_for_run_mode(settings)
     fps = target_fps if 1 <= target_fps <= 240 else get_fps(window_title, monitor_index)
     language = settings["Language"]
     controller_help_rows, environment_help_rows = get_controller_help_rows(language)

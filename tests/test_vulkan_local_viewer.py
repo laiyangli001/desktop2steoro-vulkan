@@ -9,9 +9,12 @@ import numpy as np
 import viewer.vulkan_local_viewer as local_viewer_module
 from viewer.vulkan_local_viewer import (
     LOCAL_VIEWER_SOURCE_FORMAT,
+    choose_present_mode,
     choose_srgb_surface_format,
     configure_glfw_window_hints,
     direct_display_capability,
+    display_refresh_warning_needed,
+    full_screen_exclusive_capability,
     fit_rect,
     frame_to_cuda_rgba,
     frame_to_rgba_bytes,
@@ -62,11 +65,43 @@ class _VulkanFormats:
     VK_FORMAT_R8G8B8A8_SRGB = 43
 
 
+class _VulkanPresentModes:
+    VK_PRESENT_MODE_IMMEDIATE_KHR = 0
+    VK_PRESENT_MODE_MAILBOX_KHR = 1
+    VK_PRESENT_MODE_FIFO_KHR = 2
+
+
 class _GlfwKeys:
     KEY_ENTER = 257
     PRESS = 1
     RELEASE = 0
     MOD_ALT = 4
+
+
+def test_display_refresh_warning_detects_slow_output_display() -> None:
+    assert display_refresh_warning_needed(30, 58.0)
+    assert display_refresh_warning_needed(50, 40.0)
+    assert display_refresh_warning_needed(60, 90.0)
+    assert not display_refresh_warning_needed(60, 58.0)
+    assert not display_refresh_warning_needed(120, 58.0)
+    assert not display_refresh_warning_needed(0, 58.0)
+
+
+def test_display_refresh_warning_is_reported_only_once() -> None:
+    warnings = []
+    viewer = VulkanLocalViewer(
+        VulkanLocalViewerConfig(
+            fullscreen=True,
+            on_display_refresh_warning=lambda hz, fps: warnings.append((hz, fps)),
+        )
+    )
+    viewer._exclusive_fullscreen = True
+    viewer._output_refresh_hz = 30
+
+    viewer._report_present_fps(58.0, 300)
+    viewer._report_present_fps(57.0, 600)
+
+    assert warnings == [(30, 58.0)]
 
 
 def test_fit_rect_letterboxes_wide_sbs_frame() -> None:
@@ -140,16 +175,84 @@ def test_local_viewer_reports_unorm_surface_fallback() -> None:
     assert not is_srgb
 
 
-def test_direct_display_requires_surface_and_acquire_extensions() -> None:
+def test_present_mode_avoids_mailbox_for_win32_full_screen_exclusive() -> None:
+    modes = {
+        _VulkanPresentModes.VK_PRESENT_MODE_FIFO_KHR,
+        _VulkanPresentModes.VK_PRESENT_MODE_MAILBOX_KHR,
+        _VulkanPresentModes.VK_PRESENT_MODE_IMMEDIATE_KHR,
+    }
+    assert choose_present_mode(
+        modes,
+        _VulkanPresentModes,
+        vsync=False,
+        full_screen_exclusive=True,
+    ) == _VulkanPresentModes.VK_PRESENT_MODE_IMMEDIATE_KHR
+    assert choose_present_mode(
+        modes,
+        _VulkanPresentModes,
+        vsync=False,
+        full_screen_exclusive=False,
+    ) == _VulkanPresentModes.VK_PRESENT_MODE_MAILBOX_KHR
+    assert choose_present_mode(
+        modes,
+        _VulkanPresentModes,
+        vsync=True,
+        full_screen_exclusive=True,
+    ) == _VulkanPresentModes.VK_PRESENT_MODE_FIFO_KHR
+
+
+def test_direct_display_checks_instance_and_win32_device_scopes() -> None:
+    instance_extensions = {"VK_KHR_display", "VK_EXT_direct_mode_display"}
     assert direct_display_capability(
-        {"VK_KHR_display", "VK_EXT_direct_mode_display"}
+        instance_extensions,
+        {"VK_NV_acquire_winrt_display"},
+        platform="win32",
     ) == (True, ())
-    supported, missing = direct_display_capability({"VK_KHR_surface"})
+    supported, missing = direct_display_capability(
+        {"VK_KHR_surface"},
+        set(),
+        platform="win32",
+    )
     assert not supported
     assert missing == (
         "VK_KHR_display",
-        "VK_EXT_direct_mode_display/VK_NV_acquire_winrt_display",
+        "VK_EXT_direct_mode_display",
+        "VK_NV_acquire_winrt_display",
     )
+    assert direct_display_capability(
+        instance_extensions,
+        set(),
+        platform="linux",
+    ) == (True, ())
+
+
+def test_win32_full_screen_exclusive_requires_both_extension_scopes() -> None:
+    assert full_screen_exclusive_capability(
+        {"VK_KHR_get_surface_capabilities2"},
+        {"VK_EXT_full_screen_exclusive"},
+        platform="win32",
+    ) == (True, ())
+    assert full_screen_exclusive_capability(
+        set(),
+        {"VK_EXT_full_screen_exclusive"},
+        platform="win32",
+    ) == (False, ("VK_KHR_get_surface_capabilities2",))
+    assert full_screen_exclusive_capability(
+        {"VK_KHR_get_surface_capabilities2"},
+        {"VK_EXT_full_screen_exclusive"},
+        platform="linux",
+    ) == (False, ("Windows",))
+
+
+def test_full_screen_exclusive_loss_recreates_swapchain() -> None:
+    viewer = VulkanLocalViewer(VulkanLocalViewerConfig())
+    viewer.vk = SimpleNamespace(
+        VK_ERROR_OUT_OF_DATE_KHR=-1000001004,
+        VK_SUBOPTIMAL_KHR=1000001003,
+        VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT=-1000255000,
+    )
+
+    assert viewer.is_swapchain_recreate_result(-1000255000)
 
 
 def test_alt_enter_toggles_exclusive_fullscreen_once_per_press() -> None:

@@ -2,7 +2,7 @@
 import os
 import asyncio
 from utils import OS_NAME, DEFAULT_PORT, read_yaml
-from utils.run_mode import normalize_run_mode
+from utils.run_mode import normalize_run_mode, target_fps_setting_key
 from utils.xr_headset_presets import display_to_xr_headset, xr_headset_to_display
 from .config import (
     DEFAULTS, DEFAULT_FAMILIES, DEFAULT_MODEL_LIST, FAMILY_TO_SIZES,
@@ -80,7 +80,11 @@ class GUIConfigMixin:
         self.upscaler_dd.options = self._upscaler_display_options()
         self.upscaler_dd.value = self._upscaler_to_display("Off")
         self.upscaler_sharpness_dd.value = "0.00"
-        target_fps = self._parse_int(cfg.get("Target FPS", DEFAULTS["Target FPS"]), DEFAULTS["Target FPS"])
+        fps_key = target_fps_setting_key(cfg["Run Mode"])
+        fps_default = DEFAULTS.get(fps_key, DEFAULTS["Target FPS"])
+        target_fps = self._parse_int(
+            cfg.get(fps_key, cfg.get("Target FPS", fps_default)), fps_default
+        )
         self.target_fps_dd.value = self._target_fps_to_display(target_fps)
         self.render_policy_dd.value = self._render_policy_to_display(
             cfg.get("Render Size Policy", DEFAULTS["Render Size Policy"]))
@@ -273,6 +277,8 @@ class GUIConfigMixin:
             self.parallel_inference_dd.value
         )
         self._config.pop("Debug Mode", None)
+        fps_key = target_fps_setting_key(self.run_mode_key)
+        self._config[fps_key] = self._target_fps_from_display(self.target_fps_dd.value)
 
         self._config.update({
             "Capture Mode": self.capture_mode_key,
@@ -330,7 +336,6 @@ class GUIConfigMixin:
             "XR Preview Window": self.xr_preview_cb.value,
             "VSync": self.local_vsync_cb.value,
             "Window Preview": window_preview,
-            "Target FPS": self._target_fps_from_display(self.target_fps_dd.value),
             "Processing Resolution": self._config.get("Processing Resolution", DEFAULTS["Processing Resolution"]),
             "Render Size Policy": "scaled",
             "Render Scale": self._display_to_render_scale(self.render_scale_dd.value),

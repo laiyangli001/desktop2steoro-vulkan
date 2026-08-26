@@ -229,6 +229,73 @@ def test_page_close_applies_completed_calibration_before_stopping(monkeypatch, t
     assert events == ["apply", "stop"]
 
 
+def test_display_refresh_warning_uses_non_stopping_modal_dialog():
+    shown = []
+    popped = []
+
+    class Harness(gui_process.GUIProcessMixin):
+        pass
+
+    gui = Harness()
+    gui.locale = "CN"
+    gui.page = SimpleNamespace(
+        show_dialog=lambda dialog: shown.append(dialog),
+        pop_dialog=lambda: popped.append(True),
+    )
+    gui._display_refresh_warning_dialog = None
+
+    gui._show_display_refresh_warning({"refresh_hz": 30, "sbs_fps": 58.2})
+    gui._show_display_refresh_warning({"refresh_hz": 30, "sbs_fps": 58.2})
+
+    assert len(shown) == 1
+    assert shown[0].modal is True
+    assert "30 Hz" in shown[0].content.controls[0].value
+    assert "继续运行" in shown[0].content.controls[1].value
+
+    gui._close_display_refresh_warning()
+    assert popped == [True]
+    assert gui._display_refresh_warning_dialog is None
+
+
+def test_child_refresh_warning_payload_opens_dialog():
+    payloads = []
+
+    class Harness(gui_process.GUIProcessMixin):
+        def _show_display_refresh_warning(self, payload):
+            payloads.append(payload)
+
+    gui = Harness()
+    gui._log_child_line(
+        '[D2S_DISPLAY_REFRESH_WARNING] {"refresh_hz": 30, "sbs_fps": 58.2}'
+    )
+
+    assert payloads == [{"refresh_hz": 30, "sbs_fps": 58.2}]
+
+
+def test_running_ui_does_not_redraw_enabled_stop_button():
+    updates = []
+
+    class Harness(gui_process.GUIProcessMixin):
+        def _safe_update(self, *controls):
+            updates.extend(controls)
+
+    gui = Harness()
+    gui.run_btn = SimpleNamespace(disabled=False)
+    gui.stop_btn = SimpleNamespace(disabled=False)
+    gui.stream_calibration_btn = SimpleNamespace(disabled=False)
+
+    gui._set_running_ui(True)
+
+    assert gui.run_btn.disabled is True
+    assert gui.stop_btn.disabled is False
+    assert gui.stream_calibration_btn.disabled is True
+    assert gui.stop_btn not in updates
+
+    updates.clear()
+    gui._set_running_ui(True)
+    assert updates == []
+
+
 def test_startup_restores_profile_values_after_shutdown_race(monkeypatch, tmp_path):
     profile_path = tmp_path / "profile.json"
     profile_path.write_text(json.dumps({
@@ -251,10 +318,12 @@ def test_startup_restores_profile_values_after_shutdown_race(monkeypatch, tmp_pa
     gui._config = {
         "Streamer Port": 1122,
         "Target FPS": 0,
+        "Stream Target FPS": 0,
         "Use Stream Calibration": True,
         "Stream Target Bitrate Mbps": 0,
         "Stream Peak Bitrate Mbps": 0,
     }
+    gui.run_mode_key = "Local Viewer"
     gui.stream_calibration_mode_dd = SimpleNamespace(value="Auto Calibration")
     gui.target_fps_dd = SimpleNamespace(value="Auto")
     monkeypatch.setattr(gui_process, "STREAM_CALIBRATION_PROFILE_FILE", str(profile_path))
@@ -263,11 +332,12 @@ def test_startup_restores_profile_values_after_shutdown_race(monkeypatch, tmp_pa
 
     gui._persist_current_stream_calibration_profile()
 
-    assert gui._config["Target FPS"] == 30
+    assert gui._config["Target FPS"] == 0
+    assert gui._config["Stream Target FPS"] == 30
     assert gui._config["Stream Target Bitrate Mbps"] == 25
     assert gui._config["Stream Peak Bitrate Mbps"] == 29
     assert gui._config["CRF"] == 23
-    assert gui.target_fps_dd.value == "30"
+    assert gui.target_fps_dd.value == "Auto"
     assert saved
 
 

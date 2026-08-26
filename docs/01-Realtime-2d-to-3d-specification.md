@@ -227,6 +227,18 @@ OpenGL Fallback 的平台基线为：Windows/Linux 使用驱动可提供的原�
 7. 创建设备前必须通过 `vkGetPhysicalDeviceFeatures2` 查询 Timeline Semaphore；支持时将 `VkPhysicalDeviceTimelineSemaphoreFeatures.timelineSemaphore` 设为 `VK_TRUE` 并挂入 `VkDeviceCreateInfo.pNext`。
 8. Timeline Semaphore 不支持或无法启用时，Vulkan OpenXR 主路径必须在正式 Device/Session 建立前报告原因；允许 Fallback 时通过受控重启进入 OpenGL，不得在已运行会话中静默改用其他 API。
 
+#### 5.1.1 Windows 本地显示独占策略
+
+Windows Local Viewer 的输出优先级为：
+
+1. 仅在 Instance 暴露 `VK_KHR_display`、`VK_EXT_direct_mode_display`，且 Device 暴露 `VK_NV_acquire_winrt_display` 时，才可声明 WinRT/raw direct-display 能力。不得把 Device 扩展放入 Instance 扩展列表检测。
+2. 普通 Windows 显示器优先使用 `VK_EXT_full_screen_exclusive`：Instance 必须启用 `VK_KHR_get_surface_capabilities2`，Device 必须启用 `VK_EXT_full_screen_exclusive`。
+3. 以目标窗口对应的有效 `HMONITOR` 同时链接 `VkSurfaceFullScreenExclusiveInfoEXT` 和 `VkSurfaceFullScreenExclusiveWin32InfoEXT`；创建 Swapchain 前，必须通过 `vkGetPhysicalDeviceSurfaceCapabilities2KHR` 确认 `fullScreenExclusiveSupported`。
+4. 只有支持查询成功时才以 `VK_FULL_SCREEN_EXCLUSIVE_APPLICATION_CONTROLLED_EXT` 创建 Swapchain，并调用 `vkAcquireFullScreenExclusiveModeEXT`。申请失败不得终止 Local Viewer，应继续使用持久化 borderless fullscreen。
+5. 收到 `VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT`、`VK_ERROR_OUT_OF_DATE_KHR` 或 `VK_SUBOPTIMAL_KHR` 时，应等待设备空闲、释放旧独占状态并重建 Swapchain；退出或 Alt+Enter 离开全屏时显式 release。
+6. Windows/NVIDIA application-controlled 独占路径不得使用已知会阻塞 `vkQueuePresentKHR` 的 MAILBOX 组合。VSync 开启时使用 FIFO；VSync 关闭时优先 IMMEDIATE，不支持时回退 FIFO。普通窗口的非 VSync 路径仍可使用 MAILBOX。
+7. 驱动在窗口刚显示时若通过 capabilities2 短暂返回零 extent，可保留已确认的独占策略并使用同一 Surface 的传统 capabilities extent；CFFI 能力结构的底层存储必须保留到 Swapchain 创建完成，禁止返回悬空子结构。
+
 ### 5.2 队列模型
 
 系统至少申请一个 Graphics Queue。存在独立 Compute Queue 时必须启用异步光效；否则光效计算提交到 Graphics Queue，但仍维持独立依赖关系。

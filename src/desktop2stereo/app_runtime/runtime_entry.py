@@ -37,7 +37,7 @@ from utils import (
     _get_settings,
     shutdown_event,
 )
-from utils.run_mode import normalize_run_mode
+from utils.run_mode import normalize_run_mode, target_fps_for_run_mode
 from utils.xr_headset_presets import DEFAULT_XR_HEADSET_MODEL
 from streaming.stream_session import (
     CALIBRATABLE_STREAM_MODES,
@@ -378,10 +378,7 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
     direct_stream_mode = is_network_stream_mode(configured_run_mode) or configured_run_mode == "MJPEG Streamer"
     if direct_stream_mode:
         os.environ["D2S_RUNTIME_OUTPUT_UINT8"] = "1"
-    try:
-        configured_target_fps = int(settings.get("Target FPS", 0) or 0)
-    except (TypeError, ValueError):
-        configured_target_fps = 0
+    configured_target_fps = target_fps_for_run_mode(settings)
     adaptive_capture_rate = AdaptiveCaptureRate(
         FPS,
         enabled=adaptive_capture_enabled_for_mode(
@@ -421,6 +418,28 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
             sbs_fps,
             capture_fps=callbacks.capture_fps(),
             frame_count=frame_count,
+        )
+
+    def report_display_refresh_warning(refresh_hz: int, sbs_fps: float) -> None:
+        if str(settings.get("Language", "EN")).strip().upper() == "CN":
+            message = (
+                f"SBS 输出显示器当前仅 {refresh_hz} Hz，低于实测 {sbs_fps:.1f} FPS "
+                "或建议最低 60 Hz；请在 Windows 显示设置或显卡控制面板中提高刷新率。"
+            )
+        else:
+            message = (
+                f"The SBS output display is running at {refresh_hz} Hz, below the "
+                f"measured {sbs_fps:.1f} FPS or the recommended 60 Hz minimum; "
+                "increase its refresh rate in Windows or the GPU control panel."
+            )
+        print(f"[VulkanLocalViewer] WARNING: {message}", flush=True)
+        print(f"[D2S_STATUS] {message}", flush=True)
+        print(
+            "[D2S_DISPLAY_REFRESH_WARNING] "
+            + json.dumps(
+                {"refresh_hz": int(refresh_hz), "sbs_fps": round(float(sbs_fps), 1)}
+            ),
+            flush=True,
         )
 
     callbacks.breakdown_set_latest(
@@ -759,6 +778,7 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
                 show_fps=bool(SHOW_FPS),
                 show_fps_provider=callbacks.show_fps,
                 on_sbs_fps=observe_sbs_fps if adaptive_capture_rate.enabled else None,
+                on_display_refresh_warning=report_display_refresh_warning,
                 on_breakdown_inc=callbacks.breakdown_inc,
                 on_breakdown_add_time=callbacks.breakdown_add_time,
             )

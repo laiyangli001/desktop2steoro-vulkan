@@ -27,6 +27,7 @@ class CalibrationTier:
 
 _CALIBRATION_RESULT_KEYS = {
     "Target FPS",
+    "Stream Target FPS",
     "Use Stream Calibration",
     "Stream Target Bitrate Mbps",
     "Stream Peak Bitrate Mbps",

@@ -2,6 +2,10 @@
 
 ## 2026-08-26
 
+- Windows Local Viewer 新增 `VK_EXT_full_screen_exclusive` 主路径：修正 raw direct-display 将 `VK_NV_acquire_winrt_display` 错当 Instance 扩展的检测，按目标 `HMONITOR` 查询 Surface 独占能力，以 application-controlled Swapchain 完成 acquire/release，并在独占丢失、过期或次优状态时自动重建；申请失败继续使用持久 borderless，不中断运行。RTX 3090 实机已确认 `3840x2160` 独占 Swapchain 与 CUDA external-image Present 成功；同时规避 NVIDIA 独占模式下 MAILBOX 阻塞，VSync 关闭使用 IMMEDIATE、开启使用 FIFO。
+- Local Viewer 新增 SBS 输出显示器刷新率检查：首个稳定 FPS 统计窗口后，将实际输出显示器刷新率与 SBS 合成/提交帧率比较；输出刷新率低于实测 SBS FPS，或低于建议最低 60 Hz 时，只显示一次带醒目警告图标的本地化弹窗，并保留 GUI 状态提醒和警告日志。弹窗明确说明程序会继续运行，用户关闭提醒不会停止当前输出。
+- 修复鼠标长按停止按钮时被 GUI 刷新取消的问题：停止按钮不再随运行状态反复切换 `disabled` 或被无变化重绘，按压期间的 Flet 点击手势可持续到鼠标释放；按钮在闲置状态保持可点击但安全地不执行停止，避免启动状态切换再次打断长按。
+- 修复高级网络推流的 30 FPS 浏览器/校准上限扩散到本地模式：网络校准结果不再写入所有模式共用的 `Target FPS`，改用高级网络推流专属 `Stream Target FPS`；Local Viewer、3D Monitor 和 OpenXR 保持独立帧率配置，旧配置缺少新字段时仍兼容回退。默认本地帧率恢复为 Auto，RTX 3090 本地 SBS 不再被网络校准固定在 30 FPS。
 - 修复 NativeNVENC 原生 RTSP 发布器的握手失败：RTSP 请求曾把 `\\r\\n` 作为字面量发送，MediaMTX 因无法识别请求行结束而报 `buffer length exceeds 64`；现已恢复真实 CRLF，NativeNVENC 可进入 ANNOUNCE/SETUP/RECORD 阶段。该问题发生在编码前，不是 CUDA surface 或 NVENC 花屏问题。
 - 修复 NativeNVENC 原生 RTSP 发布器的 SETUP 失败：视频和音频 RTP over TCP 的 `Transport` 请求补充 `mode=record`，避免 MediaMTX 报 `transport header contains a invalid mode (null)` 并返回 400；该问题发生在 RTSP 会话协商阶段，不是 NVENC 编码或音频采集故障。
 - 修复 NativeNVENC 原生 Opus 运行库路径错误：发布产物位于 `streaming/native_rtsp_output/opus.dll`，加载器此前却查找 `streaming/opus.dll`，导致存在 DLL 仍报 `Could not find module 'opus.dll'`；现改为优先使用功能目录绝对路径，并保留 `D2S_OPUS_PATH` 覆盖。

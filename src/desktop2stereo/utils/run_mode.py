@@ -27,6 +27,25 @@ def normalize_run_mode(raw_run_mode: str) -> str:
     return run_mode
 
 
+def target_fps_setting_key(raw_run_mode: str) -> str:
+    """Return the FPS setting owned by the selected run mode."""
+    return (
+        "Stream Target FPS"
+        if normalize_run_mode(raw_run_mode) == "RTMP Streamer"
+        else "Target FPS"
+    )
+
+
+def target_fps_for_run_mode(settings: dict, default: int = 0) -> int:
+    """Resolve mode-scoped FPS while accepting configurations from before the split."""
+    key = target_fps_setting_key(settings.get("Run Mode", "Local Viewer"))
+    fallback = settings.get("Target FPS", default)
+    try:
+        return int(settings.get(key, fallback) or 0)
+    except (TypeError, ValueError):
+        return int(default)
+
+
 def resolve_run_mode(
     raw_run_mode: str,
     *,

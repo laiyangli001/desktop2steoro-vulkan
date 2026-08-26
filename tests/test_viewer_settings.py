@@ -3,6 +3,7 @@ from viewer.settings import resolve_viewer_settings
 
 
 BASE_SETTINGS = {
+    "Run Mode": "Local Viewer",
     "Monitor Index": 1,
     "Display Mode": "Half-SBS",
     "Stereo Output": None,
@@ -10,6 +11,7 @@ BASE_SETTINGS = {
     "Capture Mode": "Monitor",
     "Window Title": "",
     "Target FPS": 60,
+    "Stream Target FPS": 30,
     "Language": "EN",
     "Show FPS": False,
     "Depth Strength": 2.0,
@@ -21,6 +23,22 @@ BASE_SETTINGS = {
     "Environment Model": "None",
     "XR Preview Window": False,
 }
+
+
+def test_local_viewer_fps_is_not_limited_by_stream_calibration():
+    resolved = resolve_viewer_settings(dict(BASE_SETTINGS, VSync=False))
+
+    assert resolved.target_fps == 60
+    assert resolved.fps == 60
+
+
+def test_network_stream_uses_its_mode_scoped_target_fps():
+    settings = dict(BASE_SETTINGS, VSync=False, **{"Run Mode": "RTMP Streamer"})
+
+    resolved = resolve_viewer_settings(settings)
+
+    assert resolved.target_fps == 30
+    assert resolved.fps == 30
 
 
 def test_resolve_viewer_settings_reads_vsync_key():

@@ -23,20 +23,51 @@ LOCAL_VIEWER_SRGB_SURFACE_FORMATS = (
     "VK_FORMAT_B8G8R8A8_SRGB",
     "VK_FORMAT_R8G8B8A8_SRGB",
 )
-DIRECT_DISPLAY_SURFACE_EXTENSION = "VK_KHR_display"
-DIRECT_DISPLAY_ACQUIRE_EXTENSIONS = (
+DIRECT_DISPLAY_INSTANCE_EXTENSIONS = (
+    "VK_KHR_display",
     "VK_EXT_direct_mode_display",
-    "VK_NV_acquire_winrt_display",
 )
+DIRECT_DISPLAY_WIN32_DEVICE_EXTENSION = "VK_NV_acquire_winrt_display"
+FULL_SCREEN_EXCLUSIVE_INSTANCE_EXTENSION = "VK_KHR_get_surface_capabilities2"
+FULL_SCREEN_EXCLUSIVE_DEVICE_EXTENSION = "VK_EXT_full_screen_exclusive"
 
 
-def direct_display_capability(extensions: Any) -> tuple[bool, tuple[str, ...]]:
-    available = set(extensions)
+def direct_display_capability(
+    instance_extensions: Any,
+    device_extensions: Any = (),
+    *,
+    platform: str = sys.platform,
+) -> tuple[bool, tuple[str, ...]]:
+    """Check raw-display requirements in the correct Vulkan extension scopes."""
+    available_instance = set(instance_extensions)
+    available_device = set(device_extensions)
+    missing = [
+        name
+        for name in DIRECT_DISPLAY_INSTANCE_EXTENSIONS
+        if name not in available_instance
+    ]
+    if (
+        platform == "win32"
+        and DIRECT_DISPLAY_WIN32_DEVICE_EXTENSION not in available_device
+    ):
+        missing.append(DIRECT_DISPLAY_WIN32_DEVICE_EXTENSION)
+    return not missing, tuple(missing)
+
+
+def full_screen_exclusive_capability(
+    instance_extensions: Any,
+    device_extensions: Any,
+    *,
+    platform: str = sys.platform,
+) -> tuple[bool, tuple[str, ...]]:
+    """Check the Win32 swapchain-exclusive prerequisites."""
+    if platform != "win32":
+        return False, ("Windows",)
     missing = []
-    if DIRECT_DISPLAY_SURFACE_EXTENSION not in available:
-        missing.append(DIRECT_DISPLAY_SURFACE_EXTENSION)
-    if not any(name in available for name in DIRECT_DISPLAY_ACQUIRE_EXTENSIONS):
-        missing.append("/".join(DIRECT_DISPLAY_ACQUIRE_EXTENSIONS))
+    if FULL_SCREEN_EXCLUSIVE_INSTANCE_EXTENSION not in set(instance_extensions):
+        missing.append(FULL_SCREEN_EXCLUSIVE_INSTANCE_EXTENSION)
+    if FULL_SCREEN_EXCLUSIVE_DEVICE_EXTENSION not in set(device_extensions):
+        missing.append(FULL_SCREEN_EXCLUSIVE_DEVICE_EXTENSION)
     return not missing, tuple(missing)
 
 
@@ -48,6 +79,25 @@ def choose_srgb_surface_format(formats: Any, vk: Any) -> tuple[Any, bool]:
         if selected is not None:
             return selected, True
     return formats[0], False
+
+
+def choose_present_mode(
+    modes: Any,
+    vk: Any,
+    *,
+    vsync: bool,
+    full_screen_exclusive: bool,
+) -> Any:
+    """Choose a non-blocking Windows-exclusive mode without changing windowed WSI."""
+    available = set(modes)
+    if vsync:
+        return vk.VK_PRESENT_MODE_FIFO_KHR
+    preferred = (
+        vk.VK_PRESENT_MODE_IMMEDIATE_KHR
+        if full_screen_exclusive
+        else vk.VK_PRESENT_MODE_MAILBOX_KHR
+    )
+    return preferred if preferred in available else vk.VK_PRESENT_MODE_FIFO_KHR
 
 
 def is_exclusive_fullscreen_toggle(key: int, action: int, mods: int, glfw: Any) -> bool:
@@ -86,6 +136,19 @@ def present_fps_if_due(frames: int, elapsed: float, interval: float = 5.0) -> fl
     if frames <= 0 or elapsed < interval:
         return None
     return frames / max(elapsed, 1e-6)
+
+
+def display_refresh_warning_needed(
+    refresh_hz: float,
+    sbs_fps: float,
+    minimum_refresh_hz: float = 60.0,
+) -> bool:
+    """Return whether the selected SBS display cannot show the produced rate."""
+    refresh = float(refresh_hz)
+    produced = float(sbs_fps)
+    if refresh <= 0.0 or produced <= 0.0:
+        return False
+    return refresh + 0.5 < produced or refresh + 0.5 < minimum_refresh_hz
 
 
 def fit_rect(source: tuple[int, int], target: tuple[int, int]) -> tuple[int, int, int, int]:
@@ -238,6 +301,7 @@ class VulkanLocalViewerConfig:
     show_fps: bool = False
     show_fps_provider: Callable[[], bool] | None = None
     on_sbs_fps: Callable[[float, int], int] | None = None
+    on_display_refresh_warning: Callable[[int, float], None] | None = None
     on_breakdown_inc: Callable[[str, int | float], None] | None = None
     on_breakdown_add_time: Callable[[str, float], None] | None = None
     window_width: int = 1280
@@ -323,12 +387,20 @@ class VulkanLocalViewer:
         self._interop_extensions: tuple[str, ...] = ()
         self._target_monitor = None
         self._exclusive_fullscreen = False
+        self._full_screen_exclusive_enabled = False
+        self._full_screen_exclusive_requested = False
+        self._full_screen_exclusive_acquired = False
+        self._full_screen_exclusive_notice_reported = False
+        self._surface_capabilities_owner = None
         self._win32_hwnd = 0
+        self._win32_hmonitor = 0
         self._win32_user32 = None
         self._last_visibility_enforce = 0.0
         self._windowed_rect = (40, 40, config.window_width, config.window_height)
         self._fps_frames = 0
         self._fps_started = time.perf_counter()
+        self._output_refresh_hz = 0
+        self._display_refresh_warning_reported = False
 
     def initialize(self) -> None:
         import glfw
@@ -353,6 +425,7 @@ class VulkanLocalViewer:
             self._windowed_rect = (mx + 40, my + 40, width, height)
         if self.config.fullscreen and monitor is not None:
             mode = glfw.get_video_mode(monitor)
+            self._output_refresh_hz = int(mode.refresh_rate)
             width, height = int(mode.size.width), int(mode.size.height)
             x, y = int(mx), int(my)
             self._exclusive_fullscreen = True
@@ -366,9 +439,10 @@ class VulkanLocalViewer:
         )
         if not self.window:
             raise RuntimeError("could not create Vulkan local viewer window")
+        glfw.set_window_pos(self.window, x, y)
         if self._exclusive_fullscreen:
             self._configure_persistent_fullscreen()
-        glfw.set_window_pos(self.window, x, y)
+            glfw.poll_events()
         if self.config.exclude_from_capture:
             hide_window_from_capture(self.window)
         glfw.set_key_callback(self.window, self._on_key)
@@ -419,6 +493,11 @@ class VulkanLocalViewer:
             self._win32_user32.IsIconic.restype = wintypes.BOOL
             self._win32_user32.IsWindowVisible.argtypes = [wintypes.HWND]
             self._win32_user32.IsWindowVisible.restype = wintypes.BOOL
+            self._win32_user32.MonitorFromWindow.argtypes = [
+                wintypes.HWND,
+                wintypes.DWORD,
+            ]
+            self._win32_user32.MonitorFromWindow.restype = wintypes.HANDLE
             self._win32_user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
             self._win32_user32.GetWindowLongW.restype = ctypes.c_long
             self._win32_user32.SetWindowLongW.argtypes = [
@@ -438,15 +517,25 @@ class VulkanLocalViewer:
             self._win32_user32.SetWindowLongW(
                 self._win32_hwnd, -20, extended_style
             )
+            self._refresh_win32_monitor()
             self._set_win32_topmost(self._exclusive_fullscreen)
         except Exception as exc:
             self._win32_hwnd = 0
+            self._win32_hmonitor = 0
             self._win32_user32 = None
             print(
                 "[VulkanLocalViewer] Persistent fullscreen unavailable: "
                 f"{type(exc).__name__}",
                 flush=True,
             )
+
+    def _refresh_win32_monitor(self) -> int:
+        if not self._win32_hwnd or self._win32_user32 is None:
+            self._win32_hmonitor = 0
+            return 0
+        handle = self._win32_user32.MonitorFromWindow(self._win32_hwnd, 2)
+        self._win32_hmonitor = int(handle or 0)
+        return self._win32_hmonitor
 
     def _set_win32_topmost(self, enabled: bool) -> None:
         if not self._win32_hwnd or self._win32_user32 is None:
@@ -501,6 +590,9 @@ class VulkanLocalViewer:
                 self.window, int(mode.size.width), int(mode.size.height)
             )
             self._exclusive_fullscreen = True
+            if not self._win32_hwnd:
+                self._configure_persistent_fullscreen()
+            self._refresh_win32_monitor()
             self._set_win32_topmost(True)
         else:
             if not self._exclusive_fullscreen:
@@ -520,6 +612,15 @@ class VulkanLocalViewer:
         )
 
     def _report_present_fps(self, fps: float, frame_count: int) -> int | None:
+        if (
+            not self._display_refresh_warning_reported
+            and self._exclusive_fullscreen
+            and display_refresh_warning_needed(self._output_refresh_hz, fps)
+        ):
+            self._display_refresh_warning_reported = True
+            callback = self.config.on_display_refresh_warning
+            if callback is not None:
+                callback(self._output_refresh_hz, fps)
         capture_target = (
             self.config.on_sbs_fps(fps, frame_count)
             if self.config.on_sbs_fps is not None
@@ -551,20 +652,13 @@ class VulkanLocalViewer:
         available_instance_extensions = {
             prop.extensionName for prop in vk.vkEnumerateInstanceExtensionProperties(None)
         }
-        direct_display_supported, direct_display_missing = direct_display_capability(
-            available_instance_extensions
-        )
-        if not direct_display_supported:
-            fallback_mode = (
-                "persistent borderless Vulkan fullscreen"
-                if self.config.fullscreen
-                else "Vulkan window preview"
-            )
-            print(
-                "[VulkanLocalViewer] Vulkan direct-display unavailable: missing "
-                f"{', '.join(direct_display_missing)}; using {fallback_mode}",
-                flush=True,
-            )
+        if (
+            sys.platform == "win32"
+            and FULL_SCREEN_EXCLUSIVE_INSTANCE_EXTENSION
+            in available_instance_extensions
+            and FULL_SCREEN_EXCLUSIVE_INSTANCE_EXTENSION not in extensions
+        ):
+            extensions.append(FULL_SCREEN_EXCLUSIVE_INSTANCE_EXTENSION)
         app_info = vk.VkApplicationInfo(
             sType=vk.VK_STRUCTURE_TYPE_APPLICATION_INFO,
             pApplicationName=self.config.title,
@@ -605,7 +699,38 @@ class VulkanLocalViewer:
             *VulkanExportableSemaphore.required_device_extensions(),
         )
         self._interop_extensions = tuple(name for name in interop if name in available)
+        self._full_screen_exclusive_enabled, exclusive_missing = (
+            full_screen_exclusive_capability(
+                available_instance_extensions,
+                available,
+            )
+        )
+        direct_display_supported, direct_display_missing = direct_display_capability(
+            available_instance_extensions,
+            available,
+        )
+        if not direct_display_supported:
+            if self.config.fullscreen and self._full_screen_exclusive_enabled:
+                fallback_mode = "Win32 Vulkan full-screen exclusive"
+            elif self.config.fullscreen:
+                fallback_mode = "persistent borderless Vulkan fullscreen"
+            else:
+                fallback_mode = "Vulkan window preview"
+            print(
+                "[VulkanLocalViewer] Vulkan raw direct-display unavailable: missing "
+                f"{', '.join(direct_display_missing)}; using {fallback_mode}",
+                flush=True,
+            )
+        if self.config.fullscreen and not self._full_screen_exclusive_enabled:
+            print(
+                "[VulkanLocalViewer] Win32 Vulkan full-screen exclusive unavailable: "
+                f"missing {', '.join(exclusive_missing)}; using persistent borderless "
+                "fullscreen",
+                flush=True,
+            )
         enabled_extensions = ["VK_KHR_swapchain", *self._interop_extensions]
+        if self._full_screen_exclusive_enabled:
+            enabled_extensions.append(FULL_SCREEN_EXCLUSIVE_DEVICE_EXTENSION)
         queue_info = vk.VkDeviceQueueCreateInfo(
             sType=vk.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
             queueFamilyIndex=self.queue_family,
@@ -654,12 +779,112 @@ class VulkanLocalViewer:
             return False
         return bool(output[0])
 
+    def _full_screen_exclusive_chain(self) -> Any | None:
+        if (
+            not self._full_screen_exclusive_enabled
+            or not self._exclusive_fullscreen
+            or not self._refresh_win32_monitor()
+        ):
+            return None
+        vk = self.vk
+        win32_info = vk.VkSurfaceFullScreenExclusiveWin32InfoEXT(
+            hmonitor=vk.ffi.cast("HMONITOR", self._win32_hmonitor),
+        )
+        return vk.VkSurfaceFullScreenExclusiveInfoEXT(
+            pNext=win32_info,
+            fullScreenExclusive=vk.VK_FULL_SCREEN_EXCLUSIVE_APPLICATION_CONTROLLED_EXT,
+        )
+
+    def _query_surface_capabilities(self) -> tuple[Any, Any | None]:
+        vk = self.vk
+        exclusive_chain = self._full_screen_exclusive_chain()
+        if exclusive_chain is not None:
+            support = vk.VkSurfaceCapabilitiesFullScreenExclusiveEXT()
+            caps2 = vk.VkSurfaceCapabilities2KHR(pNext=support)
+            surface_info = vk.VkPhysicalDeviceSurfaceInfo2KHR(
+                pNext=exclusive_chain,
+                surface=self.surface,
+            )
+            try:
+                get_caps2 = self._instance_function(
+                    b"vkGetPhysicalDeviceSurfaceCapabilities2KHR",
+                    "VkResult(*)(VkPhysicalDevice, const VkPhysicalDeviceSurfaceInfo2KHR *, VkSurfaceCapabilities2KHR *)",
+                )
+                result = int(
+                    get_caps2(
+                        self.physical_device,
+                        vk.ffi.addressof(surface_info),
+                        vk.ffi.addressof(caps2),
+                    )
+                )
+                if result == int(vk.VK_SUCCESS) and bool(
+                    support.fullScreenExclusiveSupported
+                ):
+                    self._full_screen_exclusive_requested = True
+                    selected_caps = caps2.surfaceCapabilities
+                    if (
+                        int(selected_caps.currentExtent.width) > 0
+                        and int(selected_caps.currentExtent.height) > 0
+                    ):
+                        self._surface_capabilities_owner = (
+                            caps2,
+                            support,
+                            surface_info,
+                            exclusive_chain,
+                        )
+                        return selected_caps, exclusive_chain
+                    # Some Win32 drivers briefly return a zero extent while the
+                    # newly shown fullscreen window is settling. Keep the
+                    # exclusive policy but use the legacy surface extent.
+                    self.glfw.poll_events()
+                    caps = vk.ffi.new("VkSurfaceCapabilitiesKHR *")
+                    get_caps = self._instance_function(
+                        b"vkGetPhysicalDeviceSurfaceCapabilitiesKHR",
+                        "VkResult(*)(VkPhysicalDevice, VkSurfaceKHR, VkSurfaceCapabilitiesKHR *)",
+                    )
+                    if int(
+                        get_caps(self.physical_device, self.surface, caps)
+                    ) == int(vk.VK_SUCCESS):
+                        self._surface_capabilities_owner = (
+                            caps,
+                            caps2,
+                            support,
+                            surface_info,
+                            exclusive_chain,
+                        )
+                        return caps[0], exclusive_chain
+                reason = (
+                    f"surface query failed ({result})"
+                    if result != int(vk.VK_SUCCESS)
+                    else "selected display does not support exclusive access"
+                )
+            except Exception as exc:
+                reason = f"{type(exc).__name__}: {exc}"
+            if not self._full_screen_exclusive_notice_reported:
+                self._full_screen_exclusive_notice_reported = True
+                print(
+                    "[VulkanLocalViewer] Win32 Vulkan full-screen exclusive "
+                    f"unavailable for this surface: {reason}; using persistent "
+                    "borderless fullscreen",
+                    flush=True,
+                )
+
+        self._full_screen_exclusive_requested = False
+        caps = vk.ffi.new("VkSurfaceCapabilitiesKHR *")
+        get_caps = self._instance_function(
+            b"vkGetPhysicalDeviceSurfaceCapabilitiesKHR",
+            "VkResult(*)(VkPhysicalDevice, VkSurfaceKHR, VkSurfaceCapabilitiesKHR *)",
+        )
+        if int(get_caps(self.physical_device, self.surface, caps)) != int(
+            vk.VK_SUCCESS
+        ):
+            raise RuntimeError("could not query Vulkan surface capabilities")
+        self._surface_capabilities_owner = caps
+        return caps[0], None
+
     def _create_swapchain(self) -> None:
         vk = self.vk
-        caps = vk.ffi.new("VkSurfaceCapabilitiesKHR *")
-        get_caps = self._instance_function(b"vkGetPhysicalDeviceSurfaceCapabilitiesKHR", "VkResult(*)(VkPhysicalDevice, VkSurfaceKHR, VkSurfaceCapabilitiesKHR *)")
-        if int(get_caps(self.physical_device, self.surface, caps)) != int(vk.VK_SUCCESS):
-            raise RuntimeError("could not query Vulkan surface capabilities")
+        caps, exclusive_chain = self._query_surface_capabilities()
         get_formats = self._instance_function(b"vkGetPhysicalDeviceSurfaceFormatsKHR", "VkResult(*)(VkPhysicalDevice, VkSurfaceKHR, uint32_t *, VkSurfaceFormatKHR *)")
         format_count = vk.ffi.new("uint32_t *")
         get_formats(self.physical_device, self.surface, format_count, vk.ffi.NULL)
@@ -681,8 +906,12 @@ class VulkanLocalViewer:
                 "source fallback to preserve display-referred bytes",
                 flush=True,
             )
-        desired_mode = vk.VK_PRESENT_MODE_FIFO_KHR if self.config.vsync else vk.VK_PRESENT_MODE_MAILBOX_KHR
-        present_mode = desired_mode if desired_mode in modes else vk.VK_PRESENT_MODE_FIFO_KHR
+        present_mode = choose_present_mode(
+            modes,
+            vk,
+            vsync=self.config.vsync,
+            full_screen_exclusive=self._full_screen_exclusive_requested,
+        )
         if caps.currentExtent.width != 0xFFFFFFFF:
             extent = caps.currentExtent
         else:
@@ -696,6 +925,7 @@ class VulkanLocalViewer:
             count = min(count, caps.maxImageCount)
         info = vk.VkSwapchainCreateInfoKHR(
             sType=vk.VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+            pNext=exclusive_chain,
             surface=self.surface,
             minImageCount=count,
             imageFormat=fmt.format,
@@ -726,9 +956,64 @@ class VulkanLocalViewer:
         self.swap_images = list(images)
         self._swap_image_initialized = [False] * len(self.swap_images)
         self.extent = int(extent.width), int(extent.height)
+        self._acquire_full_screen_exclusive()
+
+    def _acquire_full_screen_exclusive(self) -> bool:
+        if not self._full_screen_exclusive_requested or self.swapchain is None:
+            self._full_screen_exclusive_acquired = False
+            return False
+        try:
+            acquire = self._device_function(
+                b"vkAcquireFullScreenExclusiveModeEXT",
+                "VkResult(*)(VkDevice, VkSwapchainKHR)",
+            )
+            result = int(acquire(self.device, self.swapchain))
+            if result == int(self.vk.VK_SUCCESS):
+                self._full_screen_exclusive_acquired = True
+                print(
+                    "[VulkanLocalViewer] Win32 Vulkan full-screen exclusive active",
+                    flush=True,
+                )
+                return True
+            reason = f"Vulkan result {result}"
+        except Exception as exc:
+            reason = f"{type(exc).__name__}: {exc}"
+        self._full_screen_exclusive_acquired = False
+        print(
+            "[VulkanLocalViewer] Win32 Vulkan full-screen exclusive acquisition "
+            f"failed: {reason}; continuing with persistent borderless fullscreen",
+            flush=True,
+        )
+        return False
+
+    def _release_full_screen_exclusive(self) -> None:
+        if not self._full_screen_exclusive_acquired or self.swapchain is None:
+            self._full_screen_exclusive_acquired = False
+            return
+        try:
+            release = self._device_function(
+                b"vkReleaseFullScreenExclusiveModeEXT",
+                "VkResult(*)(VkDevice, VkSwapchainKHR)",
+            )
+            result = int(release(self.device, self.swapchain))
+            if result != int(self.vk.VK_SUCCESS):
+                print(
+                    "[VulkanLocalViewer] Win32 Vulkan full-screen exclusive release "
+                    f"returned {result}",
+                    flush=True,
+                )
+        except Exception as exc:
+            print(
+                "[VulkanLocalViewer] Win32 Vulkan full-screen exclusive release "
+                f"failed: {type(exc).__name__}: {exc}",
+                flush=True,
+            )
+        finally:
+            self._full_screen_exclusive_acquired = False
 
     def _destroy_swapchain(self) -> None:
         if self.swapchain is not None:
+            self._release_full_screen_exclusive()
             self._device_function(
                 b"vkDestroySwapchainKHR",
                 "void(*)(VkDevice, VkSwapchainKHR, const VkAllocationCallbacks *)",
@@ -736,6 +1021,7 @@ class VulkanLocalViewer:
         self.swapchain = None
         self.swap_images = []
         self._swap_image_initialized = []
+        self._full_screen_exclusive_requested = False
 
     def recreate_swapchain(self) -> bool:
         """Rebuild an out-of-date window swapchain without touching CUDA images."""
@@ -755,6 +1041,13 @@ class VulkanLocalViewer:
         return int(result) in {
             int(getattr(self.vk, "VK_ERROR_OUT_OF_DATE_KHR", -1000001004)),
             int(getattr(self.vk, "VK_SUBOPTIMAL_KHR", 1000001003)),
+            int(
+                getattr(
+                    self.vk,
+                    "VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT",
+                    -1000255000,
+                )
+            ),
         }
 
     def is_swapchain_out_of_date(self, result: int) -> bool:

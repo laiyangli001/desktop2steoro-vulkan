@@ -314,7 +314,8 @@ def test_calibration_fingerprint_tracks_runtime_and_receiver_choices():
 
 def test_calibration_fingerprint_excludes_result_fields_but_tracks_other_changes():
     base = {
-        "Target FPS": 30,
+        "Target FPS": 60,
+        "Stream Target FPS": 30,
         "Use Stream Calibration": True,
         "Stream Target Bitrate Mbps": 30,
         "Stream Peak Bitrate Mbps": 34,
@@ -328,6 +329,7 @@ def test_calibration_fingerprint_excludes_result_fields_but_tracks_other_changes
     second = build_calibration_fingerprint(changed)
 
     assert "Target FPS" not in first
+    assert "Stream Target FPS" not in first
     assert "Stream Target Bitrate Mbps" not in first
     assert first["Streamer Port"] == "1122"
     assert first != second

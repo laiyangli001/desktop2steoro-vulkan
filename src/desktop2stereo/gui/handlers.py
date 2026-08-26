@@ -17,6 +17,7 @@ from streaming.audio import (
     query_ffmpeg_wasapi_audio_devices,
 )
 from streaming.wasapi_audio import query_soundcard_loopback_devices
+from utils.run_mode import target_fps_setting_key
 from utils.xr_headset_presets import display_to_xr_headset, xr_headset_options, xr_headset_to_display
 from . import devices as devices_module
 from .capture_sources import (
@@ -479,6 +480,11 @@ class GUIHandlerMixin:
         )
 
     def on_run_mode_change(self, e):
+        previous_mode = getattr(self, "run_mode_key", "Local Viewer")
+        previous_fps_key = target_fps_setting_key(previous_mode)
+        self._config[previous_fps_key] = self._target_fps_from_display(
+            self.target_fps_dd.value
+        )
         label = e.control.value
         texts = UI_MESSAGES[self.locale]
         mode_map = {
@@ -490,6 +496,10 @@ class GUIHandlerMixin:
         }
         self.run_mode_key = mode_map.get(label, "Local Viewer")
         self._config["Run Mode"] = self.run_mode_key
+        fps_key = target_fps_setting_key(self.run_mode_key)
+        fps_default = DEFAULTS.get(fps_key, DEFAULTS["Target FPS"])
+        fps = self._config.get(fps_key, self._config.get("Target FPS", fps_default))
+        self.target_fps_dd.value = self._target_fps_to_display(fps)
         if self.run_mode_key in {"MJPEG Streamer", "RTMP Streamer"}:
             self.stream_settings_cb.value = False
         self._sync_visibility()

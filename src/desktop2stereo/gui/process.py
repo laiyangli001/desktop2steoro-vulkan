@@ -30,6 +30,7 @@ from .capture_sources import get_primary_monitor_index, list_windows
 from .localization import UI_MESSAGES
 from .log_handler import GuiLogHandler
 from utils.logging_setup import _NoisyThirdPartyDebugFilter
+from utils.run_mode import target_fps_setting_key
 from streaming.stream_calibration import (
     build_calibration_fingerprint,
     calibration_fingerprint_matches,
@@ -72,6 +73,7 @@ _LEGACY_LOG_FILE_LINE_RE = re.compile(r"^\[(?P<asctime>\d\d:\d\d:\d\d)\] \[(?P<n
 _PROGRESS_PREFIX = "[D2S_PROGRESS] "
 _STATUS_PREFIX = "[D2S_STATUS] "
 _BACKEND_STATUS_PREFIX = "[D2S_BACKEND_STATUS] "
+_DISPLAY_REFRESH_WARNING_PREFIX = "[D2S_DISPLAY_REFRESH_WARNING] "
 _ASYNCIO_SHUTDOWN_UNRAISABLE_MODULES = (
     "asyncio.base_subprocess",
     "asyncio.proactor_events",
@@ -531,12 +533,81 @@ class GUIProcessMixin:
             self._safe_update(control)
 
     def _set_running_ui(self, running: bool):
-        self.run_btn.disabled = running
-        self.stop_btn.disabled = not running
+        # Keep Stop enabled and avoid updating it across startup/status refreshes.
+        # Re-sending its disabled state while the mouse is held cancels Flet's
+        # in-progress click gesture, so a long hold would never reach on_click.
+        changed_controls = []
+        if self.run_btn.disabled != running:
+            self.run_btn.disabled = running
+            changed_controls.append(self.run_btn)
+        if self.stop_btn.disabled:
+            self.stop_btn.disabled = False
+            changed_controls.append(self.stop_btn)
         calibration_button = getattr(self, "stream_calibration_btn", None)
-        if calibration_button is not None:
+        if (
+            calibration_button is not None
+            and calibration_button.disabled != running
+        ):
             calibration_button.disabled = running
-        self._safe_update(self.run_btn, self.stop_btn, calibration_button)
+            changed_controls.append(calibration_button)
+        self._safe_update(*changed_controls)
+
+    def _show_display_refresh_warning(self, payload: dict) -> None:
+        if getattr(self, "_display_refresh_warning_dialog", None) is not None:
+            return
+        try:
+            refresh_hz = int(payload.get("refresh_hz", 0) or 0)
+            sbs_fps = float(payload.get("sbs_fps", 0.0) or 0.0)
+        except (TypeError, ValueError, AttributeError):
+            return
+        if refresh_hz <= 0 or sbs_fps <= 0.0:
+            return
+        messages = UI_MESSAGES[self.locale]
+        body = messages.get(
+            "display_refresh_warning_body",
+            "The SBS output display is running at {refresh_hz} Hz, below the "
+            "measured {sbs_fps:.1f} FPS or the recommended 60 Hz minimum. "
+            "Increase the display refresh rate in Windows or the GPU control panel.",
+        ).format(refresh_hz=refresh_hz, sbs_fps=sbs_fps)
+        continuing = messages.get(
+            "display_refresh_warning_continuing",
+            "Desktop2Stereo will continue running; this warning does not stop output.",
+        )
+        self._display_refresh_warning_dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Row(
+                [
+                    ft.Icon(ft.Icons.WARNING_AMBER_ROUNDED, color=ft.Colors.ORANGE),
+                    ft.Text(messages.get("Display refresh warning", "Display refresh warning")),
+                ],
+                spacing=10,
+            ),
+            content=ft.Column(
+                [
+                    ft.Text(body, size=16, weight=ft.FontWeight.BOLD),
+                    ft.Text(continuing, color=ft.Colors.GREEN),
+                ],
+                width=520,
+                height=150,
+                spacing=16,
+            ),
+            actions=[
+                ft.Button(
+                    content=ft.Text(messages.get("Close", "Close")),
+                    on_click=self._close_display_refresh_warning,
+                )
+            ],
+        )
+        self.page.show_dialog(self._display_refresh_warning_dialog)
+
+    def _close_display_refresh_warning(self, _event=None) -> None:
+        if getattr(self, "_display_refresh_warning_dialog", None) is None:
+            return
+        try:
+            self.page.pop_dialog()
+        except Exception:
+            pass
+        self._display_refresh_warning_dialog = None
 
     def _stream_calibration_auto_enabled(self) -> bool:
         value = str(getattr(self.stream_calibration_mode_dd, "value", "") or "")
@@ -587,7 +658,7 @@ class GUIProcessMixin:
             return
 
         changed = (
-            int(self._config.get("Target FPS", 0) or 0) != fps
+            int(self._config.get("Stream Target FPS", 0) or 0) != fps
             or int(self._config.get("Stream Target Bitrate Mbps", 0) or 0) != target
             or int(self._config.get("Stream Peak Bitrate Mbps", 0) or 0) != peak
             or int(self._config.get("CRF", 0) or 0) != crf
@@ -596,14 +667,18 @@ class GUIProcessMixin:
         if not changed:
             return
         self._config.update({
-            "Target FPS": fps,
+            "Stream Target FPS": fps,
             "Use Stream Calibration": True,
             "Stream Target Bitrate Mbps": target,
             "Stream Peak Bitrate Mbps": peak,
             "CRF": crf,
         })
         target_control = getattr(self, "target_fps_dd", None)
-        if target_control is not None:
+        if (
+            target_control is not None
+            and target_fps_setting_key(getattr(self, "run_mode_key", "Local Viewer"))
+            == "Stream Target FPS"
+        ):
             target_control.value = self._target_fps_to_display(fps)
         crf_control = getattr(self, "crf_tf", None)
         if crf_control is not None:
@@ -741,7 +816,7 @@ class GUIProcessMixin:
             control.color = ft.Colors.GREEN
         except (OSError, ValueError, TypeError):
             saved = getattr(self, "_config", {}) or {}
-            saved_fps = int(saved.get("Target FPS", 0) or 0)
+            saved_fps = int(saved.get("Stream Target FPS", 0) or 0)
             saved_target = int(saved.get("Stream Target Bitrate Mbps", 0) or 0)
             if (
                 bool(saved.get("Use Stream Calibration", False))
@@ -1083,7 +1158,7 @@ class GUIProcessMixin:
         self.stream_calibration_mode_dd.value = UI_MESSAGES[self.locale].get(
             "Auto Calibration", "Auto Calibration"
         )
-        self._config["Target FPS"] = fps
+        self._config["Stream Target FPS"] = fps
         self._config["Use Stream Calibration"] = True
         self._config["Stream Target Bitrate Mbps"] = target
         self._config["Stream Peak Bitrate Mbps"] = peak
@@ -1368,7 +1443,13 @@ class GUIProcessMixin:
             return
         lower = text.lower()
         mediamtx_level = _MEDIAMTX_LEVEL_RE.match(text)
-        if text.startswith(_BACKEND_STATUS_PREFIX):
+        if text.startswith(_DISPLAY_REFRESH_WARNING_PREFIX):
+            payload_text = text[len(_DISPLAY_REFRESH_WARNING_PREFIX):].strip()
+            try:
+                self._show_display_refresh_warning(json.loads(payload_text))
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                child_logger.warning("Invalid display refresh warning payload: %s", exc)
+        elif text.startswith(_BACKEND_STATUS_PREFIX):
             payload_text = text[len(_BACKEND_STATUS_PREFIX):].strip()
             try:
                 self._set_backend_status(json.loads(payload_text))
@@ -1436,6 +1517,12 @@ class GUIProcessMixin:
     # ── stop ──
 
     def stop_process(self, e=None):
+        process = getattr(self, "process", None)
+        running = bool(getattr(self, "_starting", False)) or (
+            process is not None and getattr(process, "returncode", None) is None
+        )
+        if not running:
+            return
         future = asyncio.run_coroutine_threadsafe(self._async_stop(), self._loop)
         future.add_done_callback(lambda f: f.exception() if f.exception() else None)
 
