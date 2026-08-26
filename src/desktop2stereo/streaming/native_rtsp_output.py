@@ -324,9 +324,16 @@ class NativeRtspAvOutput:
                 continue
             if payload is not None:
                 payloads = [payload]
+            if payload is None:
+                payloads, packet_count, octet_count = self._assign_video_sequences(payloads)
+            else:
+                packet_count = octet_count = 0
             for video_payload in payloads:
                 with self._socket_write_lock:
                     self._socket.sendall(video_payload)
+                self._video_rtp_packets += packet_count
+                self._video_rtp_octets += octet_count
+                packet_count = octet_count = 0
                 now = time.monotonic()
                 self._network_bytes_sent += len(video_payload)
                 elapsed = now - self._network_rate_time
@@ -384,6 +391,29 @@ class NativeRtspAvOutput:
                         )
                 self._video_write_queue.append((due_at, [payload]))
             self._write_condition.notify()
+
+    def _assign_video_sequences(self, batches: list[bytes]) -> tuple[list[bytes], int, int]:
+        """Assign RTP sequence numbers only to a frame that is actually sent."""
+        assigned: list[bytes] = []
+        packet_count = 0
+        octet_count = 0
+        for batch in batches:
+            payload = bytearray(batch)
+            cursor = 0
+            while cursor < len(payload):
+                if len(payload) - cursor < 4 or payload[cursor] != 0x24:
+                    raise RuntimeError("invalid interleaved video batch")
+                size = int.from_bytes(payload[cursor + 2:cursor + 4], "big")
+                end = cursor + 4 + size
+                if size < 12 or end > len(payload):
+                    raise RuntimeError("invalid interleaved RTP video packet")
+                struct.pack_into(">H", payload, cursor + 6, self._video_seq)
+                self._video_seq = (self._video_seq + 1) & 0xFFFF
+                packet_count += 1
+                octet_count += size - 12
+                cursor = end
+            assigned.append(bytes(payload))
+        return assigned, packet_count, octet_count
 
     def _enqueue_video_frame(self, batches: list[bytes], due_at: float) -> None:
         if not batches:
@@ -453,13 +483,10 @@ class NativeRtspAvOutput:
                 packet = _pack_rtp_header(
                     payload_type=96,
                     marker=marker,
-                    sequence=self._video_seq,
+                    sequence=0,
                     timestamp=timestamp,
                     ssrc=self._video_ssrc,
                 ) + payload
-                self._video_seq = (self._video_seq + 1) & 0xFFFF
-                self._video_rtp_packets += 1
-                self._video_rtp_octets += len(payload)
                 batch.extend(self._interleaved_frame(0, packet))
                 if len(batch) >= self._video_batch_bytes:
                     frame_batches.append(bytes(batch))
@@ -476,13 +503,10 @@ class NativeRtspAvOutput:
                 packet = _pack_rtp_header(
                     payload_type=96,
                     marker=marker and last,
-                    sequence=self._video_seq,
+                    sequence=0,
                     timestamp=timestamp,
                     ssrc=self._video_ssrc,
                 ) + payload
-                self._video_seq = (self._video_seq + 1) & 0xFFFF
-                self._video_rtp_packets += 1
-                self._video_rtp_octets += len(payload)
                 batch.extend(self._interleaved_frame(0, packet))
                 if len(batch) >= self._video_batch_bytes:
                     frame_batches.append(bytes(batch))

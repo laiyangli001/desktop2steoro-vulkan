@@ -81,6 +81,39 @@ def test_native_annexb_parser_handles_three_and_four_byte_start_codes():
     assert list(NativeRtspAvOutput._annexb_nals(b"raw-nal")) == [b"raw-nal"]
 
 
+def test_native_video_sequences_are_assigned_only_when_sent():
+    output = NativeRtspAvOutput(
+        object(), host="127.0.0.1", port=8554, stream_key="live", fps=25
+    )
+    first = output._interleaved_frame(
+        0, _pack_rtp_header(payload_type=96, marker=True, sequence=0, timestamp=0, ssrc=1) + b"a"
+    )
+    second = output._interleaved_frame(
+        0, _pack_rtp_header(payload_type=96, marker=True, sequence=0, timestamp=3600, ssrc=1) + b"b"
+    )
+    assigned, count, octets = output._assign_video_sequences([first, second])
+    assert [int.from_bytes(batch[6:8], "big") for batch in assigned] == [0, 1]
+    assert count == 2
+    assert octets == 2
+
+
+def test_native_video_drop_does_not_consume_sequence_numbers():
+    output = NativeRtspAvOutput(
+        object(), host="127.0.0.1", port=8554, stream_key="live", fps=25
+    )
+    output._socket = object()
+    output._max_video_queue = 1
+    frame = output._interleaved_frame(
+        0, _pack_rtp_header(payload_type=96, marker=True, sequence=0, timestamp=0, ssrc=1) + b"x"
+    )
+    output._enqueue_video_frame([frame], 0.0)
+    output._enqueue_video_frame([frame], 0.0)
+    assert output._video_seq == 0
+    assigned, count, _ = output._assign_video_sequences(output._video_write_queue[0][1])
+    assert int.from_bytes(assigned[0][6:8], "big") == 0
+    assert count == 1
+
+
 def test_native_h264_rtp_is_batched_without_losing_packet_boundaries():
     class RecordingSocket:
         def __init__(self):
@@ -94,7 +127,15 @@ def test_native_h264_rtp_is_batched_without_losing_packet_boundaries():
     )
     recording_socket = RecordingSocket()
     output._socket = recording_socket
+    output._start_media_writer()
     output._send_h264(b"\x00\x00\x00\x01\x65" + b"x" * 200_000, 9000)
+    with output._write_condition:
+        while output._video_write_queue:
+            output._write_condition.wait(timeout=1.0)
+    output._writer_stop.set()
+    with output._write_condition:
+        output._write_condition.notify_all()
+    output._writer_thread.join(timeout=1.0)
 
     assert 1 < len(recording_socket.calls) < 20
     packet_count = 0
@@ -102,8 +143,11 @@ def test_native_h264_rtp_is_batched_without_losing_packet_boundaries():
         cursor = 0
         while cursor < len(batch):
             assert batch[cursor] == ord("$")
-            assert batch[cursor + 1] == 0
             size = int.from_bytes(batch[cursor + 2 : cursor + 4], "big")
+            if batch[cursor + 1] == 1:
+                cursor += 4 + size
+                continue
+            assert batch[cursor + 1] == 0
             packet = batch[cursor + 4 : cursor + 4 + size]
             assert len(packet) == size
             assert packet[1] & 0x7F == 96
