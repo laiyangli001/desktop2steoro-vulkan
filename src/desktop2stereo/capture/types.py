@@ -44,6 +44,8 @@ class CapturedFrame:
     copy_mode: FrameCopyMode = FrameCopyMode.COPY
     original_format: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Optional borrowed producer resource retained for a GPU-native consumer.
+    native_resource: Any | None = None
 
 
 def _frame_raw_type(frame: Any) -> str:
@@ -94,6 +96,7 @@ def capture_frame_from_raw(
     frame_raw_type: str | None = None,
     frame_raw_device: str | None = None,
     frame_raw_dtype: str | None = None,
+    native_resource: Any | None = None,
 ) -> CapturedFrame:
     return CapturedFrame(
         frame=frame,
@@ -110,6 +113,7 @@ def capture_frame_from_raw(
         copy_mode=copy_mode,
         original_format=original_format,
         metadata=dict(metadata or {}),
+        native_resource=native_resource,
     )
 
 
@@ -129,6 +133,7 @@ def capture_frame_from_native_texture(
         copy_mode=FrameCopyMode.NONE,
         original_format=str(getattr(resource, "format", "BGRA8")),
         frame_raw_device="d3d11",
+        native_resource=resource,
         metadata={
             "backend": "desktop_duplication",
             "resource_kind": str(getattr(resource, "resource_kind", "d3d11_texture")),

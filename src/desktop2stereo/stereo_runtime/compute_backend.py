@@ -11,11 +11,23 @@ class StereoComputeBackend(StrEnum):
     TRITON = "cuda_triton"
     CUDA_TRITON = "cuda_triton"
     VULKAN = "vulkan"
+    OPENGL = "opengl"
     TORCH_FALLBACK = "torch_fallback"
 
 
 class StereoComputeBackendUnavailable(RuntimeError):
     pass
+
+
+def probe_opengl_stereo_backend() -> tuple[bool, str]:
+    """Probe the distinct stereo-compute backend, not the stream upload fallback."""
+    try:
+        from streaming.opengl_stream_backend import OpenGLFallbackBackend
+    except Exception as exc:
+        return False, f"OpenGL module unavailable: {type(exc).__name__}: {exc}"
+    if OpenGLFallbackBackend is None:
+        return False, "OpenGL stream fallback class is unavailable"
+    return False, "OpenGL stream fallback is output-only; stereo compute backend is not implemented"
 
 
 def resolve_stereo_compute_backend(
@@ -26,6 +38,7 @@ def resolve_stereo_compute_backend(
     vulkan_available: bool,
     triton_available: bool | None = None,
     triton_vendor: str | None = None,
+    opengl_available: bool = False,
 ) -> StereoComputeBackend:
     """Resolve the stereo synthesis backend without changing depth inference."""
 
@@ -38,10 +51,12 @@ def resolve_stereo_compute_backend(
         else bool(triton_available) and str(triton_vendor or "").lower() in {"nvidia", "amd"}
     )
     if mode in {"auto", "vendor", "vendor_default"}:
-        if triton_ready:
-            return StereoComputeBackend.TRITON
+        # Vulkan is the cross-vendor Windows/Linux synthesis path. Triton is
+        # retained only for explicit requests or legacy callers.
         if vulkan_available:
             return StereoComputeBackend.VULKAN
+        if opengl_available:
+            return StereoComputeBackend.OPENGL
         return StereoComputeBackend.TORCH_FALLBACK
 
     if mode in {"vulkan", "vulkan_compute"}:
@@ -50,6 +65,13 @@ def resolve_stereo_compute_backend(
                 "Vulkan Compute was explicitly requested but is unavailable"
             )
         return StereoComputeBackend.VULKAN
+
+    if mode in {"opengl", "opengl_compute", "gl"}:
+        if not opengl_available:
+            raise StereoComputeBackendUnavailable(
+                "OpenGL stereo synthesis was requested but is unavailable"
+            )
+        return StereoComputeBackend.OPENGL
 
     if mode in {"cuda", "cuda_triton", "triton"}:
         if not triton_ready:

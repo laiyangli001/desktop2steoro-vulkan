@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 RuntimeMode = Literal["auto", "movie", "game", "image", "debug"]
 StereoQuality = Literal["fast", "fast_plus", "quality_4k", "hq_4k"]
-DepthBackend = Literal["auto", "tensorrt_native", "onnx_cuda", "pytorch_cuda", "pytorch_rocm", "migraphx_rocm"]
+DepthBackend = Literal["auto", "tensorrt_native", "onnx_cuda", "pytorch_cuda", "pytorch_rocm", "migraphx_rocm", "directml"]
 OnnxDtypeMode = Literal["auto", "fp16", "fp32"]
 DepthUpsampleMode = Literal["bilinear", "guided"]
 OutputFormat = Literal["half_sbs", "full_sbs", "half_tab", "full_tab", "mono", "anaglyph", "interleaved", "leia", "depth_map"]
@@ -208,7 +208,7 @@ def runtime_config_from_d2s_settings(
     elif settings.get("Depth Backend"):
         depth_backend = _normalize_depth_backend(settings["Depth Backend"])
     else:
-        depth_backend = "pytorch_cuda"
+        depth_backend = "auto"
 
     onnx_dtype: OnnxDtypeMode = "fp16" if _to_bool(settings.get("FP16", True)) else "fp32"
     preset_value = settings.get("Stereo Preset", settings.get("Stereo Mode Preset"))
@@ -372,6 +372,8 @@ def _normalize_depth_backend(value: Any) -> DepthBackend:
         "amd_rocm": "pytorch_rocm",
         "migraphx": "migraphx_rocm",
         "migraphx_rocm": "migraphx_rocm",
+        "directml": "directml",
+        "dml": "directml",
         "rocm_migraphx": "migraphx_rocm",
     }
     try:
@@ -517,7 +519,7 @@ def depth_provider_config_from_runtime(config: StereoRuntimeConfig) -> "DepthPro
 
     backend = config.depth_backend
     if backend == "auto":
-        backend = "tensorrt_native"
+        backend = "auto"
     if backend == "onnx_cuda":
         backend = "onnx_cuda_iobinding"
     if backend == "pytorch_cuda":

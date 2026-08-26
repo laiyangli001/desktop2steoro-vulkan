@@ -118,6 +118,40 @@ def _copy_frame_buffer(frame_buffer, capture_tool):
     return frame_buffer.clone(), FrameCopyMode.CLONE, device
 
 
+def _borrow_native_resource(frame_buffer):
+    """Borrow an exposed WGC/D3D11 resource without changing CPU compatibility.
+
+    windows-capture packages differ by release. Some expose a D3D11 texture
+    through a property or accessor while older releases expose only a CPU
+    frame buffer. The resource is retained in CapturedFrame for a downstream
+    consumer and is never reported as zero-copy until that consumer verifies
+    the same adapter, format and synchronization contract.
+    """
+    for attribute in (
+        "d3d11_texture",
+        "native_texture",
+        "texture",
+        "resource",
+        "get_d3d11_texture",
+        "get_native_texture",
+    ):
+        try:
+            value = getattr(frame_buffer, attribute, None)
+            value = value() if callable(value) else value
+        except Exception:
+            continue
+        if value is None or value is frame_buffer:
+            continue
+        kind = str(
+            getattr(value, "resource_kind", "")
+            or getattr(value, "kind", "")
+            or type(value).__name__
+        ).lower()
+        if any(token in kind for token in ("d3d", "texture", "gpu", "dxgi")):
+            return value
+    return None
+
+
 def _setup_dpi_awareness():
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(2)
@@ -416,7 +450,17 @@ class WindowsCaptureEventRunner:
                 self._log_capture_fps(capture_start_time)
                 copy_start_time = time.perf_counter()
                 raw, copy_mode, frame_raw_device = _copy_frame_buffer(frame.frame_buffer, self.capture_tool)
+                native_resource = _borrow_native_resource(frame.frame_buffer)
                 enqueue_start_time = time.perf_counter()
+                resource_kind = (
+                    str(
+                        getattr(native_resource, "resource_kind", "")
+                        or getattr(native_resource, "kind", "")
+                        or type(native_resource).__name__
+                    )
+                    if native_resource is not None
+                    else "cpu_frame_buffer"
+                )
                 captured_frame = capture_frame_from_raw(
                     raw,
                     self.config.output_resolution,
@@ -425,9 +469,26 @@ class WindowsCaptureEventRunner:
                     copy_mode=copy_mode,
                     original_format=type(frame.frame_buffer).__name__,
                     frame_raw_device=frame_raw_device,
+                    native_resource=native_resource,
                     metadata={
                         "backend": "windows_capture_event",
-                        "zero_copy": copy_mode is FrameCopyMode.GPU_TENSOR,
+                        "capture_gpu": bool(
+                            copy_mode is FrameCopyMode.GPU_TENSOR
+                            or native_resource is not None
+                        ),
+                        "resource_kind": resource_kind,
+                        "resource_lifecycle": (
+                            "borrowed_until_frame_release"
+                            if native_resource is not None
+                            else "owned_copy"
+                        ),
+                        "gpu_to_cpu": False,
+                        "gpu_copy_count": 0,
+                        "zero_copy": bool(
+                            copy_mode is FrameCopyMode.GPU_TENSOR
+                            and native_resource is None
+                        ),
+                        "zero_copy_ready": False,
                     },
                 )
                 self._remember_emitted_frame(captured_frame, capture_start_time)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, asdict, field, replace
 import importlib
 import importlib.util
 import os
@@ -867,10 +867,285 @@ def _prepare_accelerated_artifacts(
     return result
 
 
+class AutoDepthProvider:
+    """Lazy automatic depth provider with explicit fallback telemetry."""
+
+    def __init__(self, config: DepthProviderConfig):
+        self.config = config
+        self._provider = None
+        self._attempts: list[dict[str, str]] = []
+        self._factories = None
+        self._next_candidate = 0
+        self.info = DepthProviderInfo(
+            provider="auto",
+            model_name=config.model_name,
+            model_id=config.model_id,
+            depth_resolution=config.depth_resolution,
+            cache_dir=str(config.cache_dir or ""),
+            load_mode="auto",
+            depth_backend="auto",
+            runtime="auto",
+            execution_provider="automatic",
+            output_device=str(config.device),
+        )
+
+    @property
+    def attempts(self) -> tuple[dict[str, str], ...]:
+        return tuple(dict(item) for item in self._attempts)
+
+    def _device_type(self) -> str:
+        try:
+            return str(torch.device(self.config.device).type)
+        except (TypeError, RuntimeError, ValueError):
+            return "cpu"
+
+    def _torch_provider(self, device: str | torch.device):
+        cfg = self.config
+        common = {
+            "cache_dir": cfg.cache_dir,
+            "local_files_only": cfg.local_files_only,
+            "force_download": cfg.force_download,
+            "depth_upsample": cfg.depth_upsample,
+            "depth_upsample_edge_strength": cfg.depth_upsample_edge_strength,
+        }
+        if cfg.model_id != DISTILL_ANY_DEPTH_BASE_MODEL_ID:
+            if _is_infinidepth_model(cfg.model_id):
+                return InfiniDepthProvider(
+                    model_id=cfg.model_id,
+                    model_name=cfg.model_name,
+                    device=device,
+                    depth_resolution=cfg.depth_resolution,
+                    **common,
+                )
+            return GenericAutoDepthProvider(
+                model_id=cfg.model_id,
+                model_name=cfg.model_name,
+                device=device,
+                depth_resolution=cfg.depth_resolution,
+                patch_size=cfg.patch_size,
+                **common,
+            )
+        return DistillAnyDepthBase518(device=device, **common)
+
+    def _candidate_factories(self):
+        if self._factories is not None:
+            return self._factories
+        cfg = self.config
+        device_type = self._device_type()
+        factories: list[tuple[str, Callable[[], Any]]] = []
+        if device_type == "cuda" and not getattr(torch.version, "hip", None):
+            from .providers.nvidia.tensorrt_native import NativeTensorRtDepthProvider
+
+            factories.append((
+                "原生 TensorRT",
+                lambda: NativeTensorRtDepthProvider(
+                    device=cfg.device,
+                    cache_dir=cfg.cache_dir,
+                    onnx_path=cfg.onnx_path,
+                    onnx_dtype=cfg.onnx_dtype,
+                    engine_path=cfg.engine_path,
+                    local_files_only=cfg.local_files_only,
+                    force_download=cfg.force_download,
+                    model_id=cfg.model_id,
+                    model_name=cfg.model_name,
+                    depth_resolution=cfg.depth_resolution,
+                    build_engine=cfg.build_engine,
+                    force_rebuild=cfg.force_rebuild,
+                    use_cuda_graph=cfg.use_cuda_graph,
+                    profile_sync=cfg.profile_sync,
+                    execution_slot_count=cfg.execution_slot_count,
+                    depth_upsample=cfg.depth_upsample,
+                    depth_upsample_edge_strength=cfg.depth_upsample_edge_strength,
+                ),
+            ))
+            factories.append(("PyTorch CUDA", lambda: self._torch_provider(cfg.device)))
+        elif device_type == "cuda" and getattr(torch.version, "hip", None):
+            from .providers.amd import create_pytorch_rocm_provider
+
+            factories.append((
+                "PyTorch ROCm",
+                lambda: create_pytorch_rocm_provider(
+                    model_id=cfg.model_id,
+                    model_name=cfg.model_name,
+                    device=cfg.device,
+                    cache_dir=cfg.cache_dir,
+                    depth_resolution=cfg.depth_resolution,
+                    patch_size=cfg.patch_size,
+                    local_files_only=cfg.local_files_only,
+                    force_download=cfg.force_download,
+                    depth_upsample=cfg.depth_upsample,
+                    depth_upsample_edge_strength=cfg.depth_upsample_edge_strength,
+                ),
+            ))
+        elif device_type == "privateuseone":
+            from .providers.directml import create_directml_provider
+
+            factories.append((
+                "DirectML",
+                lambda: create_directml_provider(
+                    model_id=cfg.model_id,
+                    model_name=cfg.model_name,
+                    device=cfg.device,
+                    cache_dir=cfg.cache_dir,
+                    depth_resolution=cfg.depth_resolution,
+                    patch_size=cfg.patch_size,
+                    local_files_only=cfg.local_files_only,
+                    force_download=cfg.force_download,
+                    depth_upsample=cfg.depth_upsample,
+                    depth_upsample_edge_strength=cfg.depth_upsample_edge_strength,
+                ),
+            ))
+        elif device_type == "xpu":
+            from .providers.intel import create_pytorch_xpu_provider
+
+            factories.append((
+                "PyTorch XPU",
+                lambda: create_pytorch_xpu_provider(
+                    model_id=cfg.model_id,
+                    model_name=cfg.model_name,
+                    device=cfg.device,
+                    cache_dir=cfg.cache_dir,
+                    depth_resolution=cfg.depth_resolution,
+                    patch_size=cfg.patch_size,
+                    local_files_only=cfg.local_files_only,
+                    force_download=cfg.force_download,
+                    depth_upsample=cfg.depth_upsample,
+                    depth_upsample_edge_strength=cfg.depth_upsample_edge_strength,
+                ),
+            ))
+        elif device_type == "mps":
+            from .providers.apple import create_pytorch_mps_provider
+
+            factories.append((
+                "PyTorch MPS",
+                lambda: create_pytorch_mps_provider(
+                    model_id=cfg.model_id,
+                    model_name=cfg.model_name,
+                    device=cfg.device,
+                    cache_dir=cfg.cache_dir,
+                    depth_resolution=cfg.depth_resolution,
+                    patch_size=cfg.patch_size,
+                    local_files_only=cfg.local_files_only,
+                    force_download=cfg.force_download,
+                    depth_upsample=cfg.depth_upsample,
+                    depth_upsample_edge_strength=cfg.depth_upsample_edge_strength,
+                ),
+            ))
+        if os.name == "nt" and device_type not in {"privateuseone", "cpu"}:
+            from .providers.directml import create_directml_provider, is_directml_available
+
+            if is_directml_available():
+                factories.append((
+                    "DirectML",
+                    lambda: create_directml_provider(
+                        model_id=cfg.model_id,
+                        model_name=cfg.model_name,
+                        cache_dir=cfg.cache_dir,
+                        depth_resolution=cfg.depth_resolution,
+                        patch_size=cfg.patch_size,
+                        local_files_only=cfg.local_files_only,
+                        force_download=cfg.force_download,
+                        depth_upsample=cfg.depth_upsample,
+                        depth_upsample_edge_strength=cfg.depth_upsample_edge_strength,
+                    ),
+                ))
+        factories.append(("CPU", lambda: self._torch_provider("cpu")))
+        self._factories = factories
+        return factories
+
+    def _activate_next(self) -> Any:
+        if self._provider is not None:
+            return self._provider
+        factories = self._candidate_factories()
+        last_error = None
+        while self._next_candidate < len(factories):
+            name, factory = factories[self._next_candidate]
+            self._next_candidate += 1
+            try:
+                provider = factory()
+                load = getattr(provider, "load", None)
+                if callable(load):
+                    load()
+                self._provider = provider
+                fallback_reason = "; ".join(
+                    f"{item['backend']}: {item['reason']}" for item in self._attempts
+                ) or None
+                self.info = replace(provider.info, fallback_reason=fallback_reason)
+                print(
+                    f"[DepthBackend] selected={name} attempts={len(self._attempts)}",
+                    flush=True,
+                )
+                return provider
+            except Exception as exc:
+                last_error = exc
+                reason = f"{type(exc).__name__}: {exc}"
+                self._attempts.append({
+                    "backend": name,
+                    "status": "failed",
+                    "reason": reason,
+                })
+                print(f"[DepthBackend] fallback={name} reason={reason}", flush=True)
+        raise RuntimeError(
+            "No depth inference backend is available: "
+            + "; ".join(
+                f"{item['backend']}={item['reason']}" for item in self._attempts
+            )
+        ) from last_error
+
+    def load(self):
+        provider = self._activate_next()
+        load = getattr(provider, "load", None)
+        return load() if callable(load) else None
+
+    def predict_profile(self, rgb: torch.Tensor) -> DepthProfileResult:
+        provider = self._activate_next()
+        try:
+            result = provider.predict_profile(rgb)
+        except Exception as exc:
+            close = getattr(provider, "close", None)
+            if callable(close):
+                close()
+            self._provider = None
+            self._attempts.append({
+                "backend": str(getattr(provider.info, "depth_backend", type(provider).__name__)),
+                "status": "failed",
+                "reason": f"{type(exc).__name__}: {exc}",
+            })
+            print(
+                f"[DepthBackend] active provider failed; retrying chain: "
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            provider = self._activate_next()
+            result = provider.predict_profile(rgb)
+        self.info = replace(
+            provider.info,
+            fallback_reason=(
+                "; ".join(
+                    f"{item['backend']}: {item['reason']}" for item in self._attempts
+                ) or None
+            ),
+        )
+        return result
+
+    def predict(self, rgb: torch.Tensor) -> torch.Tensor:
+        return self.predict_profile(rgb).depth
+
+    def close(self) -> None:
+        if self._provider is not None:
+            close = getattr(self._provider, "close", None)
+            if callable(close):
+                close()
+        self._provider = None
+
+
 def create_depth_provider(config: DepthProviderConfig | dict[str, Any] | None = None):
     cfg = config if isinstance(config, DepthProviderConfig) else DepthProviderConfig(**(config or {}))
     backend = cfg.backend
     device = torch.device(cfg.device)
+
+    if backend in {"auto", "automatic", "nvidia_auto"}:
+        return AutoDepthProvider(cfg)
 
     if backend in {"migraphx_rocm", "rocm_migraphx", "migraphx"}:
         from .providers.amd import create_migraphx_rocm_provider
@@ -916,6 +1191,22 @@ def create_depth_provider(config: DepthProviderConfig | dict[str, Any] | None = 
             model_id=cfg.model_id,
             model_name=cfg.model_name,
             device=device,
+            cache_dir=cfg.cache_dir,
+            depth_resolution=cfg.depth_resolution,
+            patch_size=cfg.patch_size,
+            local_files_only=cfg.local_files_only,
+            force_download=cfg.force_download,
+            depth_upsample=cfg.depth_upsample,
+            depth_upsample_edge_strength=cfg.depth_upsample_edge_strength,
+        )
+
+    if backend in {"directml", "pytorch_directml", "dml"}:
+        from .providers.directml import create_directml_provider
+
+        return create_directml_provider(
+            model_id=cfg.model_id,
+            model_name=cfg.model_name,
+            device=cfg.device,
             cache_dir=cfg.cache_dir,
             depth_resolution=cfg.depth_resolution,
             patch_size=cfg.patch_size,
