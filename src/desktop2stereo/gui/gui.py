@@ -78,6 +78,8 @@ class Desktop2StereoGUI(
         self._calibration_poll_task = None
         self._calibration_dialog = None
         self._display_refresh_warning_dialog = None
+        self._display_refresh_warning_payload = None
+        self._pending_display_refresh_warnings = []
         self._calibration_active = False
         self._calibration_previous_target_value = None
         self.audio_devices = []

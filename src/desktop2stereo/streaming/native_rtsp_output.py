@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import queue
 import socket
 import struct
 import threading
@@ -33,6 +34,14 @@ def _pack_rtp_header(
         timestamp & 0xFFFFFFFF,
         ssrc & 0xFFFFFFFF,
     )
+
+
+def _ntp_timestamp(now: float | None = None) -> tuple[int, int]:
+    """Return an RTCP NTP timestamp for the wall clock corresponding to media time."""
+    wall_time = time.time() if now is None else float(now)
+    seconds = int(wall_time) + 2_208_988_800
+    fraction = int((wall_time - int(wall_time)) * (1 << 32)) & 0xFFFFFFFF
+    return seconds & 0xFFFFFFFF, fraction
 
 
 def _audio_pacing_step(deadline: float | None, now: float) -> tuple[float, float]:
@@ -131,8 +140,17 @@ class NativeRtspAvOutput:
         self._audio_seq = 0
         self._video_ssrc = 0xD2500001
         self._audio_ssrc = 0xD2500002
+        self._rtcp_cname = b"desktop2stereo-native"
+        # Both RTP clocks are anchored to this one media clock.  RTCP Sender
+        # Reports map these RTP timestamps to the same NTP timeline so the
+        # browser can synchronize the two tracks instead of treating them as
+        # independent streams.
+        self._media_clock_started = time.monotonic()
+        self._video_first_pts: int | None = None
         self._video_timestamp = 0
+        self._audio_capture_origin: float | None = None
         self._audio_timestamp = 0
+        self._last_audio_timestamp = 0
         self._audio_stop = threading.Event()
         self._audio_thread: threading.Thread | None = None
         self._audio_socket: socket.socket | None = None
@@ -143,6 +161,16 @@ class NativeRtspAvOutput:
         self._network_rate_bytes = 0
         self._network_rate_time = self._network_rate_started
         self._network_bitrate_mbps = 0.0
+        self._write_queue: queue.PriorityQueue = queue.PriorityQueue()
+        self._write_sequence = 0
+        self._writer_stop = threading.Event()
+        self._writer_thread: threading.Thread | None = None
+        self._video_rtp_packets = 0
+        self._video_rtp_octets = 0
+        self._audio_rtp_packets = 0
+        self._audio_rtp_octets = 0
+        self._last_video_rtcp_at = 0.0
+        self._last_audio_rtcp_at = 0.0
         self._url = f"rtsp://{self.host}:{self.port}/{self.stream_key}"
 
     @property
@@ -181,6 +209,7 @@ class NativeRtspAvOutput:
             },
         )
         self._request("RECORD", self._url, {"Session": self._session})
+        self._start_media_writer()
         if self.audio_sender is not None:
             self._opus = _Opus()
             self._audio_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -252,30 +281,90 @@ class NativeRtspAvOutput:
             if end > start:
                 yield data[start:end]
 
+    def _start_media_writer(self) -> None:
+        self._writer_thread = threading.Thread(
+            target=self._media_writer_loop,
+            name="NativeNvencRtpWriter",
+            daemon=True,
+        )
+        self._writer_thread.start()
+
+    def _media_writer_loop(self) -> None:
+        while not self._writer_stop.is_set() or not self._write_queue.empty():
+            try:
+                _priority, _sequence, payload = self._write_queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            try:
+                if payload is None:
+                    return
+                if self._socket is None:
+                    return
+                with self._socket_write_lock:
+                    self._socket.sendall(payload)
+                now = time.monotonic()
+                self._network_bytes_sent += len(payload)
+                elapsed = now - self._network_rate_time
+                if elapsed >= 0.5:
+                    self._network_bitrate_mbps = (
+                        (self._network_bytes_sent - self._network_rate_bytes)
+                        * 8.0 / elapsed / 1_000_000.0
+                    )
+                    self._network_rate_bytes = self._network_bytes_sent
+                    self._network_rate_time = now
+            finally:
+                self._write_queue.task_done()
+
     @staticmethod
     def _interleaved_frame(channel: int, packet: bytes) -> bytes:
         return b"$" + bytes([channel]) + struct.pack(">H", len(packet)) + packet
 
-    def _interleaved(self, channel: int, packet: bytes) -> None:
-        self._interleaved_batch(self._interleaved_frame(channel, packet))
+    def _interleaved(self, channel: int, packet: bytes, *, priority: int = 1) -> None:
+        self._interleaved_batch(self._interleaved_frame(channel, packet), priority=priority)
 
-    def _interleaved_batch(self, frames: bytes | bytearray) -> None:
+    def _interleaved_batch(self, frames: bytes | bytearray, *, priority: int = 1) -> None:
         if self._socket is None:
             raise RuntimeError("Native RTSP socket is closed")
         if not frames:
             return
-        with self._socket_write_lock:
-            self._socket.sendall(frames)
+        self._write_sequence += 1
+        self._write_queue.put((int(priority), self._write_sequence, bytes(frames)))
+
+    def _send_rtcp_sender_report(self, kind: str, rtp_timestamp: int, *, force: bool = False) -> None:
         now = time.monotonic()
-        self._network_bytes_sent += len(frames)
-        elapsed = now - self._network_rate_time
-        if elapsed >= 0.5:
-            self._network_bitrate_mbps = (
-                (self._network_bytes_sent - self._network_rate_bytes)
-                * 8.0 / elapsed / 1_000_000.0
-            )
-            self._network_rate_bytes = self._network_bytes_sent
-            self._network_rate_time = now
+        if kind == "video":
+            if not force and now - self._last_video_rtcp_at < 1.0:
+                return
+            self._last_video_rtcp_at = now
+            ssrc = self._video_ssrc
+            packet_count = self._video_rtp_packets
+            octet_count = self._video_rtp_octets
+            channel = 1
+        else:
+            if not force and now - self._last_audio_rtcp_at < 1.0:
+                return
+            self._last_audio_rtcp_at = now
+            ssrc = self._audio_ssrc
+            packet_count = self._audio_rtp_packets
+            octet_count = self._audio_rtp_octets
+            channel = 3
+        ntp_seconds, ntp_fraction = _ntp_timestamp()
+        # RFC 3550 RTCP SR: V/P/RC, PT=200, length=6, then one sender block.
+        sender_report = struct.pack(
+            ">BBHIIIIII",
+            0x80, 200, 6, ssrc,
+            ntp_seconds, ntp_fraction, int(rtp_timestamp) & 0xFFFFFFFF,
+            packet_count & 0xFFFFFFFF, octet_count & 0xFFFFFFFF,
+        )
+        # RFC 3550 requires an RTCP compound packet to carry an SDES CNAME.
+        # The same CNAME on both SSRCs tells the receiver that audio and video
+        # belong to one synchronization context.
+        cname = self._rtcp_cname[:255]
+        sdes_body = bytes([1, len(cname)]) + cname + b"\x00"
+        sdes_body += b"\x00" * ((4 - ((4 + len(sdes_body)) % 4)) % 4)
+        sdes_length = (4 + len(sdes_body)) // 4 - 1
+        sdes = struct.pack(">BBH", 0x81, 202, sdes_length) + struct.pack(">I", ssrc) + sdes_body
+        self._interleaved(channel, sender_report + sdes, priority=0)
 
     def _send_h264(self, data: bytes, timestamp: int) -> None:
         batch = bytearray()
@@ -294,6 +383,8 @@ class NativeRtspAvOutput:
                     ssrc=self._video_ssrc,
                 ) + payload
                 self._video_seq = (self._video_seq + 1) & 0xFFFF
+                self._video_rtp_packets += 1
+                self._video_rtp_octets += len(payload)
                 batch.extend(self._interleaved_frame(0, packet))
                 if len(batch) >= self._video_batch_bytes:
                     self._interleaved_batch(batch)
@@ -315,12 +406,15 @@ class NativeRtspAvOutput:
                     ssrc=self._video_ssrc,
                 ) + payload
                 self._video_seq = (self._video_seq + 1) & 0xFFFF
+                self._video_rtp_packets += 1
+                self._video_rtp_octets += len(payload)
                 batch.extend(self._interleaved_frame(0, packet))
                 if len(batch) >= self._video_batch_bytes:
                     self._interleaved_batch(batch)
                     batch.clear()
                 first = False
-        self._interleaved_batch(batch)
+        self._interleaved_batch(batch, priority=1)
+        self._send_rtcp_sender_report("video", self._video_timestamp)
 
     def _audio_loop(self) -> None:
         assert self._audio_socket is not None and self._opus is not None
@@ -337,6 +431,12 @@ class NativeRtspAvOutput:
                     self._audio_buffer.extend(self._audio_socket.recv(65536))
                 except socket.timeout:
                     continue
+                if self._audio_capture_origin is None:
+                    self._audio_capture_origin = time.monotonic()
+                    self._audio_timestamp = max(
+                        0,
+                        int((self._audio_capture_origin - self._media_clock_started) * 48000),
+                    )
                 if len(self._audio_buffer) < prebuffer_size:
                     continue
                 # WASAPI returns 4096-frame blocks about every 85 ms. Starting
@@ -390,20 +490,42 @@ class NativeRtspAvOutput:
                 ssrc=self._audio_ssrc,
             )
             self._audio_seq = (self._audio_seq + 1) & 0xFFFF
+            self._last_audio_timestamp = self._audio_timestamp
             self._audio_timestamp += 960
-            self._interleaved(2, header + encoded)
+            self._audio_rtp_packets += 1
+            self._audio_rtp_octets += len(encoded)
+            self._interleaved(2, header + encoded, priority=0)
+            self._send_rtcp_sender_report("audio", self._last_audio_timestamp)
             next_send_at = following_send_at
 
     def submit_cuda_frame(self, frame: Any) -> None:
         for packet in self.encoder.encode_timed(frame):
             if packet.data:
-                timestamp = max(0, int(packet.pts)) * 90000 // self.fps
-                self._send_h264(packet.data, timestamp)
+                pts = int(packet.pts)
+                if self._video_first_pts is None:
+                    self._video_first_pts = pts
+                    self._video_timestamp = max(
+                        0,
+                        int((time.monotonic() - self._media_clock_started) * 90000),
+                    )
+                else:
+                    self._video_timestamp = max(
+                        0,
+                        int((pts - self._video_first_pts) * 90000 // self.fps),
+                    )
+                self._send_h264(packet.data, self._video_timestamp)
 
     def close(self) -> None:
         self._audio_stop.set()
         if self._audio_thread is not None:
             self._audio_thread.join(timeout=1.0)
+        if self._writer_thread is not None:
+            self._writer_stop.set()
+            self._write_sequence += 1
+            self._write_queue.put((99, self._write_sequence, None))
+            self._write_queue.join()
+            self._writer_thread.join(timeout=2.0)
+            self._writer_thread = None
         if self._audio_socket is not None:
             self._audio_socket.close()
         if self._opus is not None:

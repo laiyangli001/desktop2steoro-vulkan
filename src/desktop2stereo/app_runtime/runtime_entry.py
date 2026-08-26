@@ -437,7 +437,39 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
         print(
             "[D2S_DISPLAY_REFRESH_WARNING] "
             + json.dumps(
-                {"refresh_hz": int(refresh_hz), "sbs_fps": round(float(sbs_fps), 1)}
+                {
+                    "kind": "output",
+                    "refresh_hz": int(refresh_hz),
+                    "sbs_fps": round(float(sbs_fps), 1),
+                }
+            ),
+            flush=True,
+        )
+
+    def report_capture_refresh_warning(
+        refresh_hz: int, capture_target: int
+    ) -> None:
+        if str(settings.get("Language", "EN")).strip().upper() == "CN":
+            message = (
+                f"输入显示器当前仅 {refresh_hz} Hz，低于动态捕获目标 "
+                f"{capture_target} FPS；请提高输入显示器刷新率，或手动降低捕获帧率。"
+            )
+        else:
+            message = (
+                f"The input display is running at {refresh_hz} Hz, below the dynamic "
+                f"capture target of {capture_target} FPS; increase the input display "
+                "refresh rate or lower the capture target manually."
+            )
+        print(f"[VulkanLocalViewer] WARNING: {message}", flush=True)
+        print(f"[D2S_STATUS] {message}", flush=True)
+        print(
+            "[D2S_DISPLAY_REFRESH_WARNING] "
+            + json.dumps(
+                {
+                    "kind": "input_capture_target",
+                    "refresh_hz": int(refresh_hz),
+                    "capture_target": int(capture_target),
+                }
             ),
             flush=True,
         )
@@ -779,6 +811,7 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
                 show_fps_provider=callbacks.show_fps,
                 on_sbs_fps=observe_sbs_fps if adaptive_capture_rate.enabled else None,
                 on_display_refresh_warning=report_display_refresh_warning,
+                on_capture_refresh_warning=report_capture_refresh_warning,
                 on_breakdown_inc=callbacks.breakdown_inc,
                 on_breakdown_add_time=callbacks.breakdown_add_time,
             )

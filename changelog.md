@@ -1,5 +1,12 @@
 # Desktop2Stereo Vulkan 项目日志
 
+## 2026-08-27
+
+- 修复 NativeNVENC 带音频推流的卡顿和音画不同步：按 RFC 3550 使用同一媒体时钟关联音频/视频 RTP 时间戳，新增每轨 RTCP Sender Report（NTP↔RTP 映射）及同一同步上下文的 SDES CNAME，并通过独立优先级写队列让 Opus/RTCP 不再同步阻塞于 4K 视频批量发送；RTSP interleaved 通道按 RFC 7826 保持视频/RTCP 与音频/RTCP 配对。
+- 修复进入高级网络推流后仍显示旧 CRF/码率的问题：切换到 RTMP Streamer 时立即应用当前匹配且稳定的自动校准 profile；同时兼容旧 profile 中已废弃的 `Stereo Output` 等指纹字段。安全目标码率为 38 Mbps 时现在同步使用 CRF 20，不再沿用旧配置的 CRF 26。
+- 修复切换高级网络推流时 `CompactDropdown` 报 `Control must be added to the page first`：下拉控件在页面挂载前修改 `value`、`options` 或 tooltip，或被旧流程直接调用 `update()` 时，都不会再把 Flet 的 `AssertionError` 抛出；页面挂载后仍正常刷新。
+- Local Viewer 新增输入显示器刷新率提醒：从 GLFW 映射后的实际输入显示器读取刷新率；当自动调节后的动态 `capture_target` 高于输入刷新率时，显示醒目的中英文弹窗和状态警告，但不停止运行。输入与 SBS 输出刷新率警告同时发生时按队列依次显示，避免后到警告被当前弹窗吞掉。
+
 ## 2026-08-26
 
 - 将可靠下载对策同步到其他平台安装入口：Linux CUDA 同样预装 TensorRT 构建工具、关闭隔离构建并校验版本；Linux/Windows ROCm 和 macOS MPS 不引入 NVIDIA 专属步骤，但统一移除 `--no-cache-dir`，改用项目环境持久缓存、二进制优先以及 10 次重试和 180 秒超时，避免网络中断后反复下载已经完成的大包。

@@ -554,31 +554,64 @@ class GUIProcessMixin:
 
     def _show_display_refresh_warning(self, payload: dict) -> None:
         if getattr(self, "_display_refresh_warning_dialog", None) is not None:
+            current = getattr(self, "_display_refresh_warning_payload", None)
+            pending = getattr(self, "_pending_display_refresh_warnings", None)
+            if pending is None:
+                pending = []
+                self._pending_display_refresh_warnings = pending
+            if payload != current and payload not in pending:
+                pending.append(dict(payload))
             return
         try:
             refresh_hz = int(payload.get("refresh_hz", 0) or 0)
-            sbs_fps = float(payload.get("sbs_fps", 0.0) or 0.0)
+            kind = str(payload.get("kind", "output") or "output")
+            if kind == "input_capture_target":
+                capture_target = int(payload.get("capture_target", 0) or 0)
+                if refresh_hz <= 0 or capture_target <= 0:
+                    return
+            else:
+                sbs_fps = float(payload.get("sbs_fps", 0.0) or 0.0)
+                if refresh_hz <= 0 or sbs_fps <= 0.0:
+                    return
         except (TypeError, ValueError, AttributeError):
             return
-        if refresh_hz <= 0 or sbs_fps <= 0.0:
-            return
         messages = UI_MESSAGES[self.locale]
-        body = messages.get(
-            "display_refresh_warning_body",
-            "The SBS output display is running at {refresh_hz} Hz, below the "
-            "measured {sbs_fps:.1f} FPS or the recommended 60 Hz minimum. "
-            "Increase the display refresh rate in Windows or the GPU control panel.",
-        ).format(refresh_hz=refresh_hz, sbs_fps=sbs_fps)
+        if kind == "input_capture_target":
+            title = messages.get(
+                "Input display refresh warning",
+                "Input display refresh warning",
+            )
+            body = messages.get(
+                "input_refresh_warning_body",
+                "The input display is running at {refresh_hz} Hz, below the "
+                "dynamic capture target of {capture_target} FPS. Increase the "
+                "input display refresh rate or lower the capture target manually.",
+            ).format(
+                refresh_hz=refresh_hz,
+                capture_target=capture_target,
+            )
+        else:
+            title = messages.get(
+                "Display refresh warning",
+                "Display refresh warning",
+            )
+            body = messages.get(
+                "display_refresh_warning_body",
+                "The SBS output display is running at {refresh_hz} Hz, below the "
+                "measured {sbs_fps:.1f} FPS or the recommended 60 Hz minimum. "
+                "Increase the display refresh rate in Windows or the GPU control panel.",
+            ).format(refresh_hz=refresh_hz, sbs_fps=sbs_fps)
         continuing = messages.get(
             "display_refresh_warning_continuing",
             "Desktop2Stereo will continue running; this warning does not stop output.",
         )
+        self._display_refresh_warning_payload = dict(payload)
         self._display_refresh_warning_dialog = ft.AlertDialog(
             modal=True,
             title=ft.Row(
                 [
                     ft.Icon(ft.Icons.WARNING_AMBER_ROUNDED, color=ft.Colors.ORANGE),
-                    ft.Text(messages.get("Display refresh warning", "Display refresh warning")),
+                    ft.Text(title),
                 ],
                 spacing=10,
             ),
@@ -588,7 +621,7 @@ class GUIProcessMixin:
                     ft.Text(continuing, color=ft.Colors.GREEN),
                 ],
                 width=520,
-                height=150,
+                height=170,
                 spacing=16,
             ),
             actions=[
@@ -608,6 +641,10 @@ class GUIProcessMixin:
         except Exception:
             pass
         self._display_refresh_warning_dialog = None
+        self._display_refresh_warning_payload = None
+        pending = getattr(self, "_pending_display_refresh_warnings", None) or []
+        if pending:
+            self._show_display_refresh_warning(pending.pop(0))
 
     def _stream_calibration_auto_enabled(self) -> bool:
         value = str(getattr(self.stream_calibration_mode_dd, "value", "") or "")

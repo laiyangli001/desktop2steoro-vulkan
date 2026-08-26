@@ -11,6 +11,7 @@ from viewer.vulkan_local_viewer import (
     LOCAL_VIEWER_SOURCE_FORMAT,
     choose_present_mode,
     choose_srgb_surface_format,
+    capture_refresh_warning_needed,
     configure_glfw_window_hints,
     direct_display_capability,
     display_refresh_warning_needed,
@@ -85,6 +86,32 @@ def test_display_refresh_warning_detects_slow_output_display() -> None:
     assert not display_refresh_warning_needed(60, 58.0)
     assert not display_refresh_warning_needed(120, 58.0)
     assert not display_refresh_warning_needed(0, 58.0)
+
+
+def test_capture_refresh_warning_detects_input_display_below_target() -> None:
+    assert capture_refresh_warning_needed(60, 64)
+    assert capture_refresh_warning_needed(120, 121)
+    assert not capture_refresh_warning_needed(60, 60)
+    assert not capture_refresh_warning_needed(120, 64)
+    assert not capture_refresh_warning_needed(0, 64)
+
+
+def test_capture_refresh_warning_is_reported_only_once() -> None:
+    warnings = []
+    viewer = VulkanLocalViewer(
+        VulkanLocalViewerConfig(
+            on_sbs_fps=lambda _fps, _frames: 64,
+            on_capture_refresh_warning=lambda hz, target: warnings.append(
+                (hz, target)
+            ),
+        )
+    )
+    viewer._input_refresh_hz = 60
+
+    viewer._report_present_fps(58.0, 300)
+    viewer._report_present_fps(57.0, 600)
+
+    assert warnings == [(60, 64)]
 
 
 def test_display_refresh_warning_is_reported_only_once() -> None:

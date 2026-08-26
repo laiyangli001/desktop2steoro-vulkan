@@ -16,6 +16,18 @@ FONT_SIZE = S(14)
 LABEL_ALIGN_WIDTH = 0
 
 
+def _refresh_if_attached(*controls):
+    """Refresh controls only when Flet has attached them to a page."""
+    for control in controls:
+        try:
+            control.update()
+        except (RuntimeError, AssertionError):
+            # Flet raises AssertionError when update() is called before the
+            # control is attached to a page. Property setters are also used
+            # while the GUI tree is being assembled, so this is expected.
+            pass
+
+
 def set_label_align_width(value):
     global LABEL_ALIGN_WIDTH
     LABEL_ALIGN_WIDTH = value
@@ -67,7 +79,7 @@ class CompactTextField(ft.Container):
             border=ft.Border(ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE)),
             border_radius=4, content=tf,
         )
-        self.update()
+        _refresh_if_attached(self)
 
     def set_tooltip(self, text):
         self._tooltip = text
@@ -80,10 +92,7 @@ class CompactTextField(ft.Container):
     def value(self, val):
         self._value = val
         self._label.value = val
-        try:
-            self._label.update()
-        except RuntimeError:
-            pass
+        _refresh_if_attached(self._label)
 
     def _on_submit(self, e):
         if self._committed:
@@ -155,11 +164,7 @@ class CompactDisplayField(ft.Container):
         self._value = str(value or "")
         self._label.value = self._value
         self._apply_width()
-        try:
-            self._label.update()
-            self.update()
-        except RuntimeError:
-            pass
+        _refresh_if_attached(self._label, self)
 
 
 class CompactDropdown(ft.Container):
@@ -193,6 +198,13 @@ class CompactDropdown(ft.Container):
         elif CompactDropdown._instances is not None:
             CompactDropdown._instances.append(self)
 
+    def update(self):
+        """Refresh when mounted; ignore Flet's pre-mount assertion."""
+        try:
+            return super().update()
+        except (RuntimeError, AssertionError):
+            return None
+
     def reapply_width(self):
         self._apply_width()
 
@@ -223,11 +235,7 @@ class CompactDropdown(ft.Container):
             self._value = val
             self._label.value = val
             self._apply_width()
-            try:
-                self._label.update()
-                self.update()
-            except RuntimeError:
-                pass
+            _refresh_if_attached(self._label, self)
             if self._on_select_cb:
                 ev = SimpleNamespace(control=SimpleNamespace(value=val))
                 self._on_select_cb(ev)
@@ -267,11 +275,8 @@ class CompactDropdown(ft.Container):
 
     def set_tooltip(self, text):
         self._tooltip = text
-        try:
-            self._build_menu()
-            self.update()
-        except RuntimeError:
-            pass
+        self._build_menu()
+        _refresh_if_attached(self)
 
     @property
     def value(self):
@@ -281,12 +286,8 @@ class CompactDropdown(ft.Container):
     def value(self, val):
         self._label.value = val
         self._apply_width()
-        try:
-            self._build_menu()
-            self._label.update()
-            self.update()
-        except RuntimeError:
-            pass
+        self._build_menu()
+        _refresh_if_attached(self._label, self)
 
     @property
     def options(self):
@@ -295,8 +296,5 @@ class CompactDropdown(ft.Container):
     @options.setter
     def options(self, opts):
         self._options = opts
-        try:
-            self._build_menu()
-            self.update()
-        except RuntimeError:
-            pass
+        self._build_menu()
+        _refresh_if_attached(self)

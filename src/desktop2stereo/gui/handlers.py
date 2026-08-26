@@ -502,6 +502,17 @@ class GUIHandlerMixin:
         self.target_fps_dd.value = self._target_fps_to_display(fps)
         if self.run_mode_key in {"MJPEG Streamer", "RTMP Streamer"}:
             self.stream_settings_cb.value = False
+        if self.run_mode_key == "RTMP Streamer":
+            # Collect every GUI control after changing mode.  The calibration
+            # fingerprint must be built from the same values that will be
+            # written at run time, otherwise an old local-mode snapshot can
+            # prevent a valid network profile from being restored.
+            self._collect_config()
+            # A completed auto-calibration profile is scoped to the network
+            # streamer. Apply it immediately when entering this mode so the
+            # visible CRF/bitrate controls cannot retain stale local-mode
+            # values (for example CRF=26 after a 38 Mbps calibration).
+            self._persist_current_stream_calibration_profile()
         self._sync_visibility()
         self._fit_window_to_content(update=True, resize_window=True)
 

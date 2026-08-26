@@ -151,6 +151,15 @@ def display_refresh_warning_needed(
     return refresh + 0.5 < produced or refresh + 0.5 < minimum_refresh_hz
 
 
+def capture_refresh_warning_needed(refresh_hz: float, capture_target: int) -> bool:
+    """Return whether the input display is slower than adaptive capture."""
+    refresh = float(refresh_hz)
+    target = int(capture_target)
+    if refresh <= 0.0 or target <= 0:
+        return False
+    return refresh + 0.5 < target
+
+
 def fit_rect(source: tuple[int, int], target: tuple[int, int]) -> tuple[int, int, int, int]:
     """Return an aspect-correct, centered destination rectangle."""
     sw, sh = source
@@ -302,6 +311,7 @@ class VulkanLocalViewerConfig:
     show_fps_provider: Callable[[], bool] | None = None
     on_sbs_fps: Callable[[float, int], int] | None = None
     on_display_refresh_warning: Callable[[int, float], None] | None = None
+    on_capture_refresh_warning: Callable[[int, int], None] | None = None
     on_breakdown_inc: Callable[[str, int | float], None] | None = None
     on_breakdown_add_time: Callable[[str, float], None] | None = None
     window_width: int = 1280
@@ -400,7 +410,9 @@ class VulkanLocalViewer:
         self._fps_frames = 0
         self._fps_started = time.perf_counter()
         self._output_refresh_hz = 0
+        self._input_refresh_hz = 0
         self._display_refresh_warning_reported = False
+        self._capture_refresh_warning_reported = False
 
     def initialize(self) -> None:
         import glfw
@@ -417,6 +429,17 @@ class VulkanLocalViewer:
             else None
         )
         self._target_monitor = monitor
+        input_capture_index = (
+            self.config.preview_monitor_index
+            if self.config.preview_monitor_index is not None
+            else self.config.monitor_index
+        )
+        if monitors:
+            input_monitor = monitors[
+                resolve_glfw_monitor_index(input_capture_index, glfw)
+            ]
+            input_mode = glfw.get_video_mode(input_monitor)
+            self._input_refresh_hz = int(input_mode.refresh_rate)
         width, height = self.config.window_width, self.config.window_height
         x, y = 40, 40
         if monitor is not None:
@@ -612,6 +635,11 @@ class VulkanLocalViewer:
         )
 
     def _report_present_fps(self, fps: float, frame_count: int) -> int | None:
+        capture_target = (
+            self.config.on_sbs_fps(fps, frame_count)
+            if self.config.on_sbs_fps is not None
+            else None
+        )
         if (
             not self._display_refresh_warning_reported
             and self._exclusive_fullscreen
@@ -621,11 +649,17 @@ class VulkanLocalViewer:
             callback = self.config.on_display_refresh_warning
             if callback is not None:
                 callback(self._output_refresh_hz, fps)
-        capture_target = (
-            self.config.on_sbs_fps(fps, frame_count)
-            if self.config.on_sbs_fps is not None
-            else None
-        )
+        if (
+            not self._capture_refresh_warning_reported
+            and capture_target is not None
+            and capture_refresh_warning_needed(
+                self._input_refresh_hz, capture_target
+            )
+        ):
+            self._capture_refresh_warning_reported = True
+            callback = self.config.on_capture_refresh_warning
+            if callback is not None:
+                callback(self._input_refresh_hz, int(capture_target))
         show_fps = (
             bool(self.config.show_fps_provider())
             if self.config.show_fps_provider is not None

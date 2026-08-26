@@ -70,12 +70,16 @@ def calibration_fingerprint_matches(
     current = build_calibration_fingerprint(settings)
     if saved_fingerprint == current:
         return True
-    # Older profiles included manually/physically derived fields.  CRF is now
-    # derived from the calibrated safe bitrate, and monitor indices can be
-    # re-enumerated after restart, so ignore those legacy fields.
-    legacy = dict(saved_fingerprint)
-    legacy.pop("CRF", None)
-    legacy.pop("Monitor Index", None)
+    # Older profiles included derived/UI-only fields.  CRF is now derived
+    # from the calibrated safe bitrate, while monitor/output controls can be
+    # re-enumerated after restart. Remove every field that the current
+    # fingerprint builder intentionally excludes, not just the two fields
+    # handled by the original compatibility code.
+    legacy = {
+        key: value
+        for key, value in saved_fingerprint.items()
+        if key not in _CALIBRATION_RESULT_KEYS and key not in _CALIBRATION_UI_KEYS
+    }
     return legacy == current
 
 

@@ -257,6 +257,46 @@ def test_display_refresh_warning_uses_non_stopping_modal_dialog():
     assert gui._display_refresh_warning_dialog is None
 
 
+def test_input_refresh_warning_is_queued_behind_output_warning():
+    shown = []
+    popped = []
+
+    class Harness(gui_process.GUIProcessMixin):
+        pass
+
+    gui = Harness()
+    gui.locale = "CN"
+    gui.page = SimpleNamespace(
+        show_dialog=lambda dialog: shown.append(dialog),
+        pop_dialog=lambda: popped.append(True),
+    )
+    gui._display_refresh_warning_dialog = None
+    gui._display_refresh_warning_payload = None
+    gui._pending_display_refresh_warnings = []
+
+    gui._show_display_refresh_warning(
+        {"kind": "output", "refresh_hz": 30, "sbs_fps": 58.2}
+    )
+    gui._show_display_refresh_warning(
+        {
+            "kind": "input_capture_target",
+            "refresh_hz": 60,
+            "capture_target": 64,
+        }
+    )
+
+    assert len(shown) == 1
+    gui._close_display_refresh_warning()
+    assert len(shown) == 2
+    assert "输入显示器" in shown[1].content.controls[0].value
+    assert "60 Hz" in shown[1].content.controls[0].value
+    assert "64 FPS" in shown[1].content.controls[0].value
+
+    gui._close_display_refresh_warning()
+    assert popped == [True, True]
+    assert gui._display_refresh_warning_dialog is None
+
+
 def test_child_refresh_warning_payload_opens_dialog():
     payloads = []
 

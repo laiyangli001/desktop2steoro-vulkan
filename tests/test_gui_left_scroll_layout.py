@@ -6,7 +6,7 @@ import flet as ft
 from path_config import APP_ROOT
 
 from gui.config import DEFAULTS
-from gui.controls import CompactDisplayField, S
+from gui.controls import CompactDisplayField, CompactDropdown, S
 from gui.builders import GUIBuilderMixin
 
 
@@ -24,6 +24,27 @@ def test_left_settings_area_uses_a_bounded_scroll_viewport() -> None:
 
     assert "scroll=ft.ScrollMode.AUTO" in scroll_source
     assert "expand=True" in scroll_source
+
+
+def test_compact_dropdown_setters_tolerate_unattached_flet_controls() -> None:
+    dropdown = CompactDropdown(options=["Local Viewer"], value="Local Viewer")
+
+    def fail_update():
+        raise AssertionError("Control must be added to the page first")
+
+    dropdown.update = fail_update
+    dropdown.value = "RTMP Streamer"
+    dropdown.options = ["RTMP Streamer", "Local Viewer"]
+    dropdown.set_tooltip("Run mode")
+
+    assert dropdown.value == "RTMP Streamer"
+    assert dropdown.options == ["RTMP Streamer", "Local Viewer"]
+
+
+def test_compact_dropdown_update_is_safe_before_page_mount() -> None:
+    dropdown = CompactDropdown(options=["Local Viewer"], value="Local Viewer")
+    # Flet raises AssertionError for the inherited update() before mounting.
+    dropdown.update()
 
 
 def test_native_window_uses_a_visible_compact_startup_surface() -> None:
