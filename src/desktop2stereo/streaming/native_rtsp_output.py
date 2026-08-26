@@ -170,7 +170,7 @@ class NativeRtspAvOutput:
         self._audio_write_queue: collections.deque[bytes] = collections.deque()
         self._video_write_queue: collections.deque[tuple[float | None, list[bytes]]] = collections.deque()
         self._write_condition = threading.Condition()
-        self._dropped_video_batches = 0
+        self._video_backpressure_events = 0
         self._writer_stop = threading.Event()
         self._writer_thread: threading.Thread | None = None
         self._video_rtp_packets = 0
@@ -319,6 +319,7 @@ class NativeRtspAvOutput:
                         self._write_condition.wait(timeout=due_at - now)
                         continue
                     self._video_write_queue.popleft()
+                    self._write_condition.notify_all()
                     payload = None
             if self._socket is None:
                 continue
@@ -379,16 +380,6 @@ class NativeRtspAvOutput:
             if int(priority) == 0:
                 self._audio_write_queue.append(payload)
             else:
-                if len(self._video_write_queue) >= self._max_video_queue:
-                    self._video_write_queue.popleft()
-                    self._dropped_video_batches += 1
-                    if self._dropped_video_batches == 1 or self._dropped_video_batches % 30 == 0:
-                        print(
-                            "[DirectSbsStream] Native RTP video queue drop: "
-                            f"count={self._dropped_video_batches} "
-                            f"depth={self._max_video_queue}",
-                            flush=True,
-                        )
                 self._video_write_queue.append((due_at, [payload]))
             self._write_condition.notify()
 
@@ -419,15 +410,17 @@ class NativeRtspAvOutput:
         if not batches:
             return
         with self._write_condition:
-            if len(self._video_write_queue) >= self._max_video_queue:
-                self._video_write_queue.popleft()
-                self._dropped_video_batches += 1
-                if self._dropped_video_batches == 1 or self._dropped_video_batches % 30 == 0:
+            while len(self._video_write_queue) >= self._max_video_queue and not self._writer_stop.is_set():
+                self._video_backpressure_events += 1
+                if self._video_backpressure_events == 1 or self._video_backpressure_events % 30 == 0:
                     print(
-                        "[DirectSbsStream] Native RTP video frame drop: "
-                        f"count={self._dropped_video_batches} depth={self._max_video_queue}",
+                        "[DirectSbsStream] Native RTP video backpressure: "
+                        f"count={self._video_backpressure_events} depth={self._max_video_queue}",
                         flush=True,
                     )
+                self._write_condition.wait(timeout=0.1)
+            if self._writer_stop.is_set():
+                return
             self._video_write_queue.append((due_at, batches))
             self._write_condition.notify()
 

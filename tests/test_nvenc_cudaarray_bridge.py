@@ -97,7 +97,7 @@ def test_native_video_sequences_are_assigned_only_when_sent():
     assert octets == 2
 
 
-def test_native_video_drop_does_not_consume_sequence_numbers():
+def test_native_video_queue_keeps_sequence_unassigned_until_send():
     output = NativeRtspAvOutput(
         object(), host="127.0.0.1", port=8554, stream_key="live", fps=25
     )
@@ -107,7 +107,7 @@ def test_native_video_drop_does_not_consume_sequence_numbers():
         0, _pack_rtp_header(payload_type=96, marker=True, sequence=0, timestamp=0, ssrc=1) + b"x"
     )
     output._enqueue_video_frame([frame], 0.0)
-    output._enqueue_video_frame([frame], 0.0)
+    assert len(output._video_write_queue) == 1
     assert output._video_seq == 0
     assigned, count, _ = output._assign_video_sequences(output._video_write_queue[0][1])
     assert int.from_bytes(assigned[0][6:8], "big") == 0
