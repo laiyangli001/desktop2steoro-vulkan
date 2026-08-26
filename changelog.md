@@ -2,6 +2,7 @@
 
 ## 2026-08-26
 
+- 修复 Windows CUDA 独立安装器反复失败于 TensorRT 隔离构建依赖下载的问题：失败源是 18 KB TensorRT 前端源码包创建临时构建环境时，再次通过镜像下载 wheel/setuptools，连接截断后外层 requirements 重试只会重复同一步。安装器现在先独立安装并重试固定版本的 setuptools、wheel 和 packaging，CUDA requirements 使用 `--no-build-isolation` 复用这些构建工具；CUDA 下载启用持久 pip 缓存和二进制优先，使成功的大包不会在下一次尝试重新下载；面向海外发布的默认主源改为官方 PyPI，并保留 PyTorch CUDA、NVIDIA 官方源以及华为云、阿里云国内镜像作为 `extra-index-url` 候选源，最后显式校验 TensorRT 版本。
 - Windows Local Viewer 新增 `VK_EXT_full_screen_exclusive` 主路径：修正 raw direct-display 将 `VK_NV_acquire_winrt_display` 错当 Instance 扩展的检测，按目标 `HMONITOR` 查询 Surface 独占能力，以 application-controlled Swapchain 完成 acquire/release，并在独占丢失、过期或次优状态时自动重建；申请失败继续使用持久 borderless，不中断运行。RTX 3090 实机已确认 `3840x2160` 独占 Swapchain 与 CUDA external-image Present 成功；同时规避 NVIDIA 独占模式下 MAILBOX 阻塞，VSync 关闭使用 IMMEDIATE、开启使用 FIFO。
 - Local Viewer 新增 SBS 输出显示器刷新率检查：首个稳定 FPS 统计窗口后，将实际输出显示器刷新率与 SBS 合成/提交帧率比较；输出刷新率低于实测 SBS FPS，或低于建议最低 60 Hz 时，只显示一次带醒目警告图标的本地化弹窗，并保留 GUI 状态提醒和警告日志。弹窗明确说明程序会继续运行，用户关闭提醒不会停止当前输出。
 - 修复鼠标长按停止按钮时被 GUI 刷新取消的问题：停止按钮不再随运行状态反复切换 `disabled` 或被无变化重绘，按压期间的 Flet 点击手势可持续到鼠标释放；按钮在闲置状态保持可点击但安全地不执行停止，避免启动状态切换再次打断长按。

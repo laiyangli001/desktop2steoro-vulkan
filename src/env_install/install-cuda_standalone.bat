@@ -52,6 +52,11 @@ if not exist "%PYTHON_ROOT%\python.exe" (
 Set "PYTHON_EXE=%PYTHON_ROOT%\python.exe"
 Set "PIP_RETRIES=10"
 Set "PIP_TIMEOUT=180"
+if defined LOCALAPPDATA (
+    Set "D2S_PIP_CACHE=%LOCALAPPDATA%\Desktop2Stereo\pip-cache"
+) else (
+    Set "D2S_PIP_CACHE=%TEMP%\Desktop2Stereo-pip-cache"
+)
 
 @REM Bootstrap pip from the complete runtime without another network download.
 "%PYTHON_EXE%" -m pip --version >nul 2>nul
@@ -67,9 +72,32 @@ if errorlevel 1 (
 
 @REM Update pip
 echo - Updating the pip package
-"%PYTHON_EXE%" -m pip install --upgrade pip -r "%SCRIPT_DIR%requirements-pip-options.txt" --no-cache-dir --no-warn-script-location --retries 5 --timeout 120
+"%PYTHON_EXE%" -m pip install --upgrade pip -r "%SCRIPT_DIR%requirements-pip-options.txt" --cache-dir "%D2S_PIP_CACHE%" --prefer-binary --no-warn-script-location --retries %PIP_RETRIES% --timeout %PIP_TIMEOUT%
 if %errorlevel% neq 0 (
     echo Failed to update pip
+    pause
+    exit /b 1
+)
+
+@REM TensorRT is distributed as a small source front-end package. Its isolated
+@REM build otherwise downloads wheel/setuptools again and mirror truncation is not
+@REM recoverable by retrying the outer requirements command. Prepare the official
+@REM build prerequisites once and reuse pip's persistent download cache.
+echo.
+echo - Preparing Python package build tools
+call :install_build_requirements
+if errorlevel 1 (
+    echo - Build tools download failed; retrying 1/2
+    timeout /t 3 /nobreak >nul
+    call :install_build_requirements
+)
+if errorlevel 1 (
+    echo - Build tools download failed; retrying 2/2
+    timeout /t 3 /nobreak >nul
+    call :install_build_requirements
+)
+if errorlevel 1 (
+    echo Failed to prepare Python package build tools after 3 attempts
     pause
     exit /b 1
 )
@@ -93,7 +121,13 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
-"%PYTHON_EXE%" -m pip install -r "%SCRIPT_DIR%requirements.txt" --no-cache-dir --no-warn-script-location --retries 5 --timeout 120
+"%PYTHON_EXE%" -c "import tensorrt as trt; raise SystemExit(0 if trt.__version__ == '10.14.1.48.post1' else 1)"
+if errorlevel 1 (
+    echo TensorRT installation validation failed
+    pause
+    exit /b 1
+)
+"%PYTHON_EXE%" -m pip install -r "%SCRIPT_DIR%requirements.txt" --cache-dir "%D2S_PIP_CACHE%" --prefer-binary --no-warn-script-location --retries %PIP_RETRIES% --timeout %PIP_TIMEOUT%
 if %errorlevel% neq 0 (
     echo Failed to install requirements
     pause
@@ -104,6 +138,10 @@ echo Python environment deployed successfully.
 pause
 exit /b 0
 
+:install_build_requirements
+"%PYTHON_EXE%" -m pip install "setuptools==78.1.0" "wheel>=0.45,<1" "packaging>=24,<27" -r "%SCRIPT_DIR%requirements-pip-options.txt" --cache-dir "%D2S_PIP_CACHE%" --prefer-binary --no-warn-script-location --retries %PIP_RETRIES% --timeout %PIP_TIMEOUT%
+exit /b %errorlevel%
+
 :install_cuda_requirements
-"%PYTHON_EXE%" -m pip install -r "%SCRIPT_DIR%requirements-cuda.txt" --no-cache-dir --no-warn-script-location --retries 5 --timeout 120
+"%PYTHON_EXE%" -m pip install -r "%SCRIPT_DIR%requirements-cuda.txt" --cache-dir "%D2S_PIP_CACHE%" --prefer-binary --no-build-isolation --no-warn-script-location --retries %PIP_RETRIES% --timeout %PIP_TIMEOUT%
 exit /b %errorlevel%

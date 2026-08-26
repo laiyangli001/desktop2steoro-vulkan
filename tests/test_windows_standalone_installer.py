@@ -24,7 +24,31 @@ def test_cuda_installer_uses_complete_project_local_python() -> None:
     assert 'Set "PYTHON_ROOT=%PROJECT_ROOT%\\python3"' in script
     assert 'Set "PIP_RETRIES=10"' in script
     assert 'Set "PIP_TIMEOUT=180"' in script
+    assert 'Set "D2S_PIP_CACHE=%LOCALAPPDATA%\\Desktop2Stereo\\pip-cache"' in script
+    assert script.count("call :install_build_requirements") == 3
+    assert "install_build_requirements_official" not in script
     assert script.count("call :install_cuda_requirements") == 3
+    assert '"wheel>=0.45,<1"' in script
+    assert "--cache-dir \"%D2S_PIP_CACHE%\"" in script
+    assert "--prefer-binary --no-build-isolation" in script
+    assert (
+        '-r \"%SCRIPT_DIR%requirements-cuda.txt\" --no-cache-dir'
+        not in script
+    )
+    assert "import tensorrt as trt" in script
+    assert "trt.__version__ == '10.14.1.48.post1'" in script
+
+    index_options = (ENV_INSTALL_ROOT / "requirements-pip-options.txt").read_text(
+        encoding="utf-8"
+    )
+    cuda_requirements = (ENV_INSTALL_ROOT / "requirements-cuda.txt").read_text(
+        encoding="utf-8"
+    )
+    assert "--index-url https://pypi.org/simple" in index_options
+    assert "--extra-index-url https://repo.huaweicloud.com/repository/pypi/simple/" in index_options
+    assert "--extra-index-url https://mirrors.aliyun.com/pypi/simple/" in index_options
+    assert "--extra-index-url https://download.pytorch.org/whl/cu128" in cuda_requirements
+    assert "--extra-index-url https://pypi.nvidia.com" in cuda_requirements
 
 
 def test_rocm_installer_uses_and_validates_project_local_python() -> None:

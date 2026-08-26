@@ -1,3 +1,4 @@
-# Shared package-index settings for all Desktop2Stereo requirements files.
---index-url https://repo.huaweicloud.com/repository/pypi/simple/
---trusted-host repo.huaweicloud.com
+# Official PyPI is primary; domestic mirrors remain additional candidates.
+--index-url https://pypi.org/simple
+--extra-index-url https://repo.huaweicloud.com/repository/pypi/simple/
+--extra-index-url https://mirrors.aliyun.com/pypi/simple/
