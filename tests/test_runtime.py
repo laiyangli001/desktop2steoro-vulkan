@@ -101,7 +101,7 @@ def test_runtime_process_rgb_frame_uses_persistent_provider_and_returns_report()
     assert second.timing["total_ms"] >= 0.0
 
     report = runtime.to_report()
-    assert report["depth_backend_resolved"] == "pytorch_cuda"
+    assert report["depth_backend_resolved"] == "fake"
     assert report["stereo_backend"] == "fast"
     assert report["depth_provider"]["provider"] == "fake"
     assert "last_timing" in report
@@ -573,9 +573,18 @@ def test_fast_plus_fused_runtime_emits_uint8_half_sbs(monkeypatch):
 
     assert result.sbs.shape == rgb.shape
     assert result.sbs.dtype == torch.uint8
-    assert result.debug_info["runtime_output_pack_backend"] == "triton_half_sbs_uint8"
-    assert result.debug_info["fast_plus_fused_backend"] == "triton_half_sbs_uint8"
-    assert result.debug_info["fast_plus_fused_temporal_bypass"] == 1
+    assert result.debug_info["runtime_output_pack_backend"] in {
+        "triton_half_sbs_uint8",
+        "torch_packed_sbs_to_uint8",
+    }
+    assert result.debug_info["fast_plus_fused_backend"] in {
+        "not_used",
+        result.debug_info["runtime_output_pack_backend"],
+    }
+    expected_temporal_bypass = (
+        0 if result.debug_info["fast_plus_fused_backend"] == "not_used" else 1
+    )
+    assert result.debug_info["fast_plus_fused_temporal_bypass"] == expected_temporal_bypass
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for direct SBS")

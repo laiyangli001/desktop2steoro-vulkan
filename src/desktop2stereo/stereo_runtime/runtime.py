@@ -24,7 +24,7 @@ from .settings_snapshot import (
     RuntimeSettingsSnapshot,
     SnapshotChangeClass,
 )
-from .compute_backend import resolve_stereo_compute_backend
+from .compute_backend import probe_opengl_stereo_backend, resolve_stereo_compute_backend
 from .output import make_sbs, match_depth
 from .output_quality import apply_output_quality, output_quality_requires_eye_images
 from .synthesis import StereoConfig, StereoResult, synthesize_stereo
@@ -91,7 +91,9 @@ class DepthRuntime:
     def to_report(self) -> dict[str, Any]:
         report = self.config.to_report()
         report["depth_provider"] = self.provider_report()
-        report["depth_backend_resolved"] = self.depth_config.backend
+        report["depth_backend_resolved"] = report["depth_provider"].get(
+            "depth_backend", self.depth_config.backend
+        )
         report["last_timing"] = dict(self.last_timing)
         report["last_memory"] = dict(self.last_memory)
         report["rolling_stats"] = self.stats.to_report()
@@ -769,6 +771,15 @@ def _add_depth_contract_debug_info(
     provider_info: dict[str, Any],
 ) -> None:
     debug["depth_render_size"] = runtime_output_size_text(_runtime_frame_size(depth))
+    resolved_backend = provider_info.get("depth_backend")
+    if resolved_backend:
+        debug["depth_backend_resolved"] = str(resolved_backend)
+    provider_runtime = provider_info.get("runtime")
+    if provider_runtime:
+        debug["depth_runtime"] = str(provider_runtime)
+    fallback_reason = provider_info.get("fallback_reason")
+    if fallback_reason:
+        debug["depth_fallback_reason"] = str(fallback_reason)
     provider_size = _provider_size_label(provider_info)
     if provider_size is not None:
         debug["depth_provider_size"] = provider_size
@@ -965,6 +976,8 @@ class StereoRuntime:
         self._vulkan_stereo_backend: Any | None = None
         self._vulkan_stereo_backend_error: str | None = None
         self._resolved_stereo_compute_backend: str | None = None
+        self._stereo_compute_backend_reason = "not_resolved"
+        self._last_stereo_backend_log_key: tuple[str, str] | None = None
         self.stats = RollingRuntimeStats(maxlen=stats_window)
         self.collect_memory_stats = bool(collect_memory_stats)
 
@@ -1123,12 +1136,15 @@ class StereoRuntime:
     def to_report(self) -> dict[str, Any]:
         report = self.config.to_report()
         report["depth_provider"] = self.provider_report()
-        report["depth_backend_resolved"] = self.depth_config.backend
+        report["depth_backend_resolved"] = report["depth_provider"].get(
+            "depth_backend", self.depth_config.backend
+        )
         report["stereo_backend"] = self.stereo_config.backend
         report["stereo_compute_backend"] = (
             self._resolved_stereo_compute_backend
             or getattr(self.config, "stereo_compute_backend", "auto")
         )
+        report["stereo_compute_backend_reason"] = self._stereo_compute_backend_reason
         report["last_timing"] = dict(self.last_timing)
         report["last_memory"] = dict(self.last_memory)
         report["rolling_stats"] = self.stats.to_report()
@@ -1946,6 +1962,7 @@ class StereoRuntime:
     def _resolve_stereo_compute_backend(self, rgb_frame: torch.Tensor) -> str:
         requested = str(getattr(self.config, "stereo_compute_backend", "auto") or "auto")
         probe = probe_triton_runtime(getattr(rgb_frame, "device", None))
+        opengl_available, opengl_reason = probe_opengl_stereo_backend()
         if requested.strip().lower() in {"triton", "cuda", "cuda_triton"}:
             requested = "triton"
         try:
@@ -1953,13 +1970,57 @@ class StereoRuntime:
                 requested,
                 vendor_id=0,
                 cuda_available=bool(getattr(rgb_frame, "is_cuda", False)),
-                vulkan_available=True,
+                vulkan_available=self._vulkan_stereo_backend_error is None,
                 triton_available=probe.available,
                 triton_vendor=probe.vendor,
+                opengl_available=opengl_available,
             )
-        except Exception:
-            resolved = "triton" if requested == "triton" else "vulkan"
+            self._stereo_compute_backend_reason = (
+                "selected_by_priority"
+                if str(requested).strip().lower() in {"auto", "vendor", "vendor_default"}
+                else "explicit_request"
+            )
+        except Exception as exc:
+            self._stereo_compute_backend_reason = (
+                f"{type(exc).__name__}: {exc}; opengl_probe={opengl_reason}"
+            )
+            resolved = resolve_stereo_compute_backend(
+                "auto",
+                vendor_id=0,
+                cuda_available=bool(getattr(rgb_frame, "is_cuda", False)),
+                vulkan_available=False,
+                opengl_available=opengl_available,
+            )
+            LOGGER.warning(
+                "Stereo synthesis backend fallback: requested=%s resolved=%s reason=%s",
+                requested,
+                resolved.value,
+                self._stereo_compute_backend_reason,
+            )
         self._resolved_stereo_compute_backend = str(resolved.value)
+        log_key = (
+            self._resolved_stereo_compute_backend,
+            str(self._stereo_compute_backend_reason),
+        )
+        if log_key != self._last_stereo_backend_log_key:
+            if self._resolved_stereo_compute_backend == "vulkan":
+                LOGGER.info(
+                    "Stereo synthesis backend selected: Vulkan (reason=%s)",
+                    self._stereo_compute_backend_reason,
+                )
+            elif self._resolved_stereo_compute_backend == "opengl":
+                LOGGER.info(
+                    "Stereo synthesis backend selected: OpenGL (reason=%s)",
+                    self._stereo_compute_backend_reason,
+                )
+            else:
+                LOGGER.warning(
+                    "Stereo synthesis fallback: selected=%s reason=%s opengl_probe=%s",
+                    self._resolved_stereo_compute_backend,
+                    self._stereo_compute_backend_reason,
+                    opengl_reason,
+                )
+            self._last_stereo_backend_log_key = log_key
         return str(resolved.value)
 
     def _try_vulkan_fused_stereo(
@@ -2243,13 +2304,19 @@ StereoLabDepthRuntimeResult = DepthRuntimeResult
 def _provider_report(depth_provider: Any) -> dict[str, Any]:
     info = getattr(depth_provider, "info", None)
     if info is None:
-        return {}
-    to_report = getattr(info, "to_report", None)
-    if callable(to_report):
-        return to_report()
-    if isinstance(info, dict):
-        return dict(info)
-    return {"info": str(info)}
+        report: dict[str, Any] = {}
+    else:
+        to_report = getattr(info, "to_report", None)
+        if callable(to_report):
+            report = to_report()
+        elif isinstance(info, dict):
+            report = dict(info)
+        else:
+            report = {"info": str(info)}
+    attempts = getattr(depth_provider, "attempts", None)
+    if attempts:
+        report["attempts"] = [dict(item) for item in attempts]
+    return report
 
 
 def _validate_runtime_rgb_frame(rgb_frame: Any) -> torch.Tensor:

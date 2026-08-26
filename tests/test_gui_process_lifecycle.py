@@ -433,3 +433,34 @@ def test_stable_calibration_result_shows_network_limit_and_safe_rates(
     assert "峰值" not in gui.stream_calibration_result.value
     assert "帧率 30 FPS" in gui.stream_calibration_result.value
     assert fit_calls == [(False, True)]
+
+
+def test_backend_status_payload_is_rendered_as_read_only_telemetry():
+    control = SimpleNamespace(value="", visible=False)
+    bar = SimpleNamespace(visible=False)
+    updates = []
+
+    class Harness(gui_process.GUIProcessMixin):
+        backend_status_text = control
+        _backend_status_bar = bar
+
+        def _safe_update(self, *controls):
+            updates.extend(controls)
+
+    gui = Harness()
+    gui._set_backend_status({
+        "depth_backend": "pytorch_cuda",
+        "stereo_backend": "vulkan",
+        "fallback": True,
+        "fallback_reasons": ["TensorRT unavailable"],
+        "gpu_to_cpu": True,
+        "gpu_copy_count": 1,
+        "zero_copy": False,
+    })
+
+    assert control.visible is True
+    assert bar.visible is True
+    assert "深度=pytorch_cuda" in control.value
+    assert "GPU复制=1" in control.value
+    assert "TensorRT unavailable" in control.value
+    assert updates == [control, bar]

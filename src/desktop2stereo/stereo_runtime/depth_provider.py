@@ -977,7 +977,7 @@ class AutoDepthProvider:
                     depth_upsample_edge_strength=cfg.depth_upsample_edge_strength,
                 ),
             ))
-        elif device_type == "privateuseone":
+        elif device_type == "privateuseone" and os.name == "nt":
             from .providers.directml import create_directml_provider
 
             factories.append((
@@ -1031,10 +1031,10 @@ class AutoDepthProvider:
                     depth_upsample_edge_strength=cfg.depth_upsample_edge_strength,
                 ),
             ))
-        if os.name == "nt" and device_type not in {"privateuseone", "cpu"}:
+        if os.name == "nt":
             from .providers.directml import create_directml_provider, is_directml_available
 
-            if is_directml_available():
+            if is_directml_available() and not any(name == "DirectML" for name, _ in factories):
                 factories.append((
                     "DirectML",
                     lambda: create_directml_provider(

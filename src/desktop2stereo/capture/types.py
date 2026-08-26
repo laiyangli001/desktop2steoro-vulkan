@@ -117,6 +117,39 @@ def capture_frame_from_raw(
     )
 
 
+def native_resource_contract(resource: Any) -> dict[str, Any]:
+    """Return conservative metadata for a borrowed producer resource."""
+    adapter_luid = int(getattr(resource, "adapter_luid", 0) or 0)
+    width = getattr(resource, "width", None)
+    height = getattr(resource, "height", None)
+    return {
+        "resource_kind": str(
+            getattr(resource, "resource_kind", "")
+            or getattr(resource, "kind", "")
+            or type(resource).__name__
+        ),
+        "resource_format": str(getattr(resource, "format", "") or "unknown"),
+        "resource_width": int(width) if width is not None else None,
+        "resource_height": int(height) if height is not None else None,
+        "adapter_luid": adapter_luid,
+        "adapter_identity": f"luid:{adapter_luid:016x}" if adapter_luid else None,
+        "resource_lifecycle": "borrowed_until_frame_release",
+    }
+
+
+def release_native_resource(item: Any) -> bool:
+    """Release only an explicit borrowed-resource lease, never arbitrary objects."""
+    resource = getattr(item, "native_resource", None)
+    release = getattr(resource, "release", None)
+    if not callable(release):
+        return False
+    try:
+        release()
+        return True
+    except Exception:
+        return False
+
+
 def capture_frame_from_native_texture(
     resource: Any,
     target_height: OutputResolution,
@@ -125,6 +158,16 @@ def capture_frame_from_native_texture(
     config: CaptureConfig | None = None,
 ) -> CapturedFrame:
     """Create a borrowed native-texture frame without mapping it to the CPU."""
+    metadata = {
+        "backend": "desktop_duplication",
+        "capture_gpu": True,
+        "gpu_to_cpu": False,
+        "gpu_copy_count": 0,
+        # The encoder/inference consumer has not yet been verified.
+        "zero_copy": False,
+        "zero_copy_ready": False,
+        **native_resource_contract(resource),
+    }
     return capture_frame_from_raw(
         resource,
         target_height,
@@ -134,16 +177,7 @@ def capture_frame_from_native_texture(
         original_format=str(getattr(resource, "format", "BGRA8")),
         frame_raw_device="d3d11",
         native_resource=resource,
-        metadata={
-            "backend": "desktop_duplication",
-            "resource_kind": str(getattr(resource, "resource_kind", "d3d11_texture")),
-            "capture_gpu": True,
-            "gpu_to_cpu": False,
-            "gpu_copy_count": 0,
-            # The encoder/inference consumer has not yet been verified.
-            "zero_copy": False,
-            "adapter_luid": int(getattr(resource, "adapter_luid", 0)),
-        },
+        metadata=metadata,
         capture_size=(int(resource.width), int(resource.height)),
     )
 

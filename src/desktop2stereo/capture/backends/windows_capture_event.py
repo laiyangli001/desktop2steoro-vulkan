@@ -7,7 +7,7 @@ import time
 from ctypes import wintypes
 from dataclasses import replace
 
-from capture.types import FrameCopyMode, capture_frame_from_raw
+from capture.types import FrameCopyMode, capture_frame_from_raw, native_resource_contract
 
 
 CAPTURE_CURSOR_DELAY_S = 0.2
@@ -451,16 +451,22 @@ class WindowsCaptureEventRunner:
                 copy_start_time = time.perf_counter()
                 raw, copy_mode, frame_raw_device = _copy_frame_buffer(frame.frame_buffer, self.capture_tool)
                 native_resource = _borrow_native_resource(frame.frame_buffer)
-                enqueue_start_time = time.perf_counter()
-                resource_kind = (
-                    str(
-                        getattr(native_resource, "resource_kind", "")
-                        or getattr(native_resource, "kind", "")
-                        or type(native_resource).__name__
+                if _env_bool("D2S_WGC_NATIVE_RESOURCE_REQUIRED") and native_resource is None:
+                    raise RuntimeError(
+                        "WindowsCapture did not expose a D3D11 resource while "
+                        "D2S_WGC_NATIVE_RESOURCE_REQUIRED is enabled"
                     )
-                    if native_resource is not None
-                    else "cpu_frame_buffer"
-                )
+                enqueue_start_time = time.perf_counter()
+                resource_contract = native_resource_contract(native_resource) if native_resource is not None else {
+                    "resource_kind": "cpu_frame_buffer",
+                    "resource_format": type(frame.frame_buffer).__name__,
+                    "resource_width": None,
+                    "resource_height": None,
+                    "adapter_luid": 0,
+                    "adapter_identity": None,
+                    "resource_lifecycle": "owned_copy",
+                }
+                native_to_cpu = bool(native_resource is not None and raw is not native_resource)
                 captured_frame = capture_frame_from_raw(
                     raw,
                     self.config.output_resolution,
@@ -476,19 +482,19 @@ class WindowsCaptureEventRunner:
                             copy_mode is FrameCopyMode.GPU_TENSOR
                             or native_resource is not None
                         ),
-                        "resource_kind": resource_kind,
-                        "resource_lifecycle": (
-                            "borrowed_until_frame_release"
-                            if native_resource is not None
-                            else "owned_copy"
-                        ),
-                        "gpu_to_cpu": False,
-                        "gpu_copy_count": 0,
+                        **resource_contract,
+                        "gpu_to_cpu": native_to_cpu,
+                        "gpu_copy_count": 1 if native_to_cpu else 0,
                         "zero_copy": bool(
                             copy_mode is FrameCopyMode.GPU_TENSOR
                             and native_resource is None
                         ),
                         "zero_copy_ready": False,
+                        "fallback_reason": (
+                            "WGC native resource was retained but CPU compatibility "
+                            "copy was required"
+                            if native_to_cpu else None
+                        ),
                     },
                 )
                 self._remember_emitted_frame(captured_frame, capture_start_time)

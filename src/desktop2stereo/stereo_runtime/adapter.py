@@ -18,7 +18,7 @@ OnnxDtypeMode = Literal["auto", "fp16", "fp32"]
 DepthUpsampleMode = Literal["bilinear", "guided"]
 OutputFormat = Literal["half_sbs", "full_sbs", "half_tab", "full_tab", "mono", "anaglyph", "interleaved", "leia", "depth_map"]
 HoleFill = Literal["none", "fast", "edge_aware"]
-StereoComputeBackendMode = Literal["auto", "triton", "vulkan"]
+StereoComputeBackendMode = Literal["auto", "triton", "vulkan", "opengl"]
 
 
 @dataclass(frozen=True)
@@ -417,6 +417,8 @@ def _normalize_stereo_compute_backend(value: Any) -> StereoComputeBackendMode:
         return "triton"
     if key in {"vulkan", "vulkan_compute"}:
         return "vulkan"
+    if key in {"opengl", "opengl_compute", "gl"}:
+        return "opengl"
     raise ValueError(f"unknown stereo compute backend: {value!r}")
 
 

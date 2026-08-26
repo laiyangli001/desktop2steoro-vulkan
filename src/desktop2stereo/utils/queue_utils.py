@@ -4,6 +4,17 @@ import queue
 from typing import Any, Callable
 
 
+def _release_item(item: Any) -> None:
+    """Release an optional borrowed capture resource before dropping an item."""
+    resource = getattr(item, "native_resource", None)
+    release = getattr(resource, "release", None)
+    if callable(release):
+        try:
+            release()
+        except Exception:
+            pass
+
+
 def put_latest(q: queue.Queue, item: Any) -> None:
     """Keep only the newest item without blocking producer threads."""
     while True:
@@ -12,7 +23,7 @@ def put_latest(q: queue.Queue, item: Any) -> None:
             return
         except queue.Full:
             try:
-                q.get_nowait()
+                _release_item(q.get_nowait())
             except queue.Empty:
                 return
 
@@ -20,7 +31,7 @@ def put_latest(q: queue.Queue, item: Any) -> None:
 def clear_nonblocking(q: queue.Queue) -> None:
     while True:
         try:
-            q.get_nowait()
+            _release_item(q.get_nowait())
         except queue.Empty:
             return
 
@@ -35,7 +46,9 @@ def drain_latest(
     latest = first_item
     while True:
         try:
-            latest = q.get_nowait()
+            candidate = q.get_nowait()
+            _release_item(latest)
+            latest = candidate
             if on_drop is not None:
                 on_drop()
         except queue.Empty:

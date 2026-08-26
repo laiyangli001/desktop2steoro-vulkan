@@ -71,6 +71,7 @@ _LOG_FILE_LINE_RE = re.compile(r"^\[(?P<asctime>\d\d:\d\d:\d\d)\] \[(?P<level>[A
 _LEGACY_LOG_FILE_LINE_RE = re.compile(r"^\[(?P<asctime>\d\d:\d\d:\d\d)\] \[(?P<name>[^\]]+)\] (?P<message>.*)$")
 _PROGRESS_PREFIX = "[D2S_PROGRESS] "
 _STATUS_PREFIX = "[D2S_STATUS] "
+_BACKEND_STATUS_PREFIX = "[D2S_BACKEND_STATUS] "
 _ASYNCIO_SHUTDOWN_UNRAISABLE_MODULES = (
     "asyncio.base_subprocess",
     "asyncio.proactor_events",
@@ -492,6 +493,36 @@ class GUIProcessMixin:
         if msg:
             status_logger.info(msg)
         self._safe_update(self.status_text)
+
+    def _set_backend_status(self, payload):
+        """Display read-only runtime backend telemetry in the GUI footer."""
+        control = getattr(self, "backend_status_text", None)
+        if control is None or not isinstance(payload, dict):
+            return
+        depth = payload.get("depth_backend") or "unknown"
+        stereo = payload.get("stereo_backend") or "unknown"
+        fallback = "是" if payload.get("fallback") else "否"
+        gpu_to_cpu = "是" if payload.get("gpu_to_cpu") else "否"
+        zero_copy = "是" if payload.get("zero_copy") else "否"
+        copies = payload.get("gpu_copy_count", 0)
+        reasons = payload.get("fallback_reasons") or []
+        reason_text = "; ".join(str(item) for item in reasons if item)
+        if len(reason_text) > 220:
+            reason_text = reason_text[:217] + "..."
+        text = (
+            f"深度={depth} | 合成={stereo} | 回退={fallback} | "
+            f"CPU回读={gpu_to_cpu} | GPU复制={copies} | 零回读={zero_copy}"
+        )
+        if reason_text:
+            text += f" | 原因={reason_text}"
+        control.value = text
+        control.visible = True
+        bar = getattr(self, "_backend_status_bar", None)
+        if bar is not None:
+            bar.visible = True
+            self._safe_update(control, bar)
+        else:
+            self._safe_update(control)
 
     def _set_running_ui(self, running: bool):
         self.run_btn.disabled = running
@@ -1331,7 +1362,13 @@ class GUIProcessMixin:
             return
         lower = text.lower()
         mediamtx_level = _MEDIAMTX_LEVEL_RE.match(text)
-        if text.startswith(_STATUS_PREFIX):
+        if text.startswith(_BACKEND_STATUS_PREFIX):
+            payload_text = text[len(_BACKEND_STATUS_PREFIX):].strip()
+            try:
+                self._set_backend_status(json.loads(payload_text))
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                child_logger.warning("Invalid backend status payload: %s", exc)
+        elif text.startswith(_STATUS_PREFIX):
             status_message = text[len(_STATUS_PREFIX):].strip()
             # set_status() owns both GUI mutation and status logging. Logging
             # here as well produced duplicate consecutive status records.

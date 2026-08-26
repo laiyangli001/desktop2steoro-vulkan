@@ -269,7 +269,7 @@ class GUIBuilderMixin:
         # The footer contains a default-height Flet button row, the status row,
         # their spacing, and the footer's top padding.  S(58) only covered the
         # buttons and clipped the status row after the native window was fitted.
-        footer_height = S(84)
+        footer_height = S(104)
         window_chrome = S(42)
         safety_margin = S(0)
         min_height = S(560)
@@ -788,6 +788,10 @@ class GUIBuilderMixin:
             self.theme_label, self.theme_dd], spacing=1)
 
         self.status_text = ft.Text("", italic=True, size=FONT_SIZE)
+        self.backend_status_text = ft.Text(
+            "", size=max(10, FONT_SIZE - 1), color=ft.Colors.GREY,
+            visible=False, no_wrap=True, overflow=ft.TextOverflow.VISIBLE,
+        )
         self.log_visibility_link = ft.Text(
             UI_MESSAGES[self.locale].get("Hide log panel link", "Hide log window ->"),
             size=FONT_SIZE,
@@ -913,8 +917,14 @@ class GUIBuilderMixin:
             ft.Container(content=self.status_text, bgcolor=ft.Colors.SURFACE_CONTAINER,
                          border_radius=0, padding=ft.Padding(S(8), S(4), S(8), S(4)), expand=True),
             self.log_visibility_link_box])
+        self._backend_status_bar = ft.Container(
+            content=self.backend_status_text,
+            bgcolor=ft.Colors.SURFACE_CONTAINER,
+            padding=ft.Padding(S(8), S(3), S(8), S(3)),
+            visible=False,
+        )
         footer = ft.Container(
-            ft.Column([self._btn_bar, self._status_bar], spacing=S(6)),
+            ft.Column([self._btn_bar, self._status_bar, self._backend_status_bar], spacing=S(6)),
             padding=ft.Padding(0, S(6), 0, 0))
         scroll_area.controls.append(footer)
         self._scroll_area = scroll_area

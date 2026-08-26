@@ -38,7 +38,7 @@ Windows 捕获工具边界：
 
 | 操作系统 | GPU/硬件类型 | 捕获模式 | 首选捕获工具/API | 捕获输出资源 | 首选推理后端 | 推理备用后端 | 首选立体合成后端 | 合成备用后端 | 是否支持零 CPU 回读 | 预计 GPU 复制次数 | 当前实现状态 | 自动选择及回退顺序 | 备注与限制 |
 |---|---|---|---|---|---|---|---|---|---|---:|---|---|---|
-| Windows | NVIDIA | 显示器、窗口 | WindowsCaptureCUDA；显示器也可用 DesktopDuplication | 首选 CUDA GPU Tensor；DesktopDuplication 原生资源为 D3D11 Texture，当前兼容输出仍会 staging readback | 原生 TensorRT | PyTorch CUDA → DirectML → CPU | 目标为 Vulkan | OpenGL → Torch/CPU | 捕获到推理可避免 CPU 回读；推理到 Vulkan 的完整共享链路需按输出模式验证 | 0–1 | 厂商捕获和 NVIDIA 推理已实现；完整跨 API 零回读为部分实现/待验证 | 捕获：WindowsCaptureCUDA → DesktopDuplication → WindowsCapture → DXCamera；推理：原生 TensorRT → PyTorch CUDA → DirectML → CPU；合成目标：Vulkan → OpenGL → CPU | 当前合成解析器实际优先 Triton，再选 Vulkan、Torch；与本文建议的 Vulkan 主合成顺序存在差异 |
+| Windows | NVIDIA | 显示器、窗口 | WindowsCaptureCUDA；显示器也可用 DesktopDuplication | 首选 CUDA GPU Tensor；DesktopDuplication 原生资源为 D3D11 Texture，当前兼容输出仍会 staging readback | 原生 TensorRT | PyTorch CUDA → DirectML → CPU | 目标为 Vulkan | OpenGL → Torch/CPU | 捕获到推理可避免 CPU 回读；推理到 Vulkan 的完整共享链路需按输出模式验证 | 0–1 | 厂商捕获和 NVIDIA 推理已实现；完整跨 API 零回读为部分实现/待验证 | 捕获：WindowsCaptureCUDA → DesktopDuplication → WindowsCapture → DXCamera；推理：原生 TensorRT → PyTorch CUDA → DirectML → CPU；合成：Vulkan → OpenGL → Torch/CPU | OpenGL 当前仅有输出/流媒体兼容实现，真正立体合成能力仍待补齐；完整跨 API 零回读待验证 |
 | Windows | AMD | 显示器、窗口 | WindowsCaptureROCm；显示器也可用 DesktopDuplication | 首选 ROCm/HIP GPU Tensor；DesktopDuplication 为 D3D11 Texture，兼容路径可回读 CPU | MIGraphX/ROCm | PyTorch ROCm → DirectML → CPU | 目标为 Vulkan | OpenGL → Torch/CPU | 厂商捕获到 ROCm 推理具备无 CPU 回读代码基础；端到端仍待 AMD 真机验证 | 0–1 | ROCm 捕获依赖、MIGraphX 和 PyTorch ROCm provider 已实现；硬件闭环待验证 | 捕获：WindowsCaptureROCm → DesktopDuplication → WindowsCapture → DXCamera；推理：MIGraphX → PyTorch ROCm → DirectML → CPU；合成目标：Vulkan → OpenGL → CPU | MIGraphX 当前主要面向 Distill-Any-Depth；模型、驱动和 `wc-rocm` 兼容性必须真机验证 |
 | Windows | Intel | 显示器；窗口使用 WindowsCapture | 显示器首选 DesktopDuplication；窗口首选 WindowsCapture | D3D11 BGRA Texture；当前同帧兼容输出仍保留 staging readback | OpenVINO GPU RemoteTensor / D3D11 原生桥 | PyTorch XPU → DirectML → CPU | Vulkan；Intel 专用最终输出可使用 D3D11/oneVPL 路径 | OpenGL → Torch/CPU | 原生输入侧具备零 CPU 回读基础；当前深度输出和部分兼容消费者仍会回读，不能宣称端到端零回读 | 目标 0–1；当前兼容路径至少 1 | D3D11/OpenVINO/oneVPL/Vulkan 互操作组件已实现并由 CI 编译；完整 Intel 真机长跑待验证 | 捕获：DesktopDuplication（显示器）或 WindowsCapture（窗口）→ DXCamera；推理：OpenVINO → XPU → DirectML → CPU；合成：Vulkan或专用 D3D11 → OpenGL → CPU | 必须校验 Desktop Duplication、OpenVINO、Vulkan和 oneVPL 的 Adapter LUID；OpenVINO 输出 ABI 当前仍可能回读 CPU |
 | Windows | 其他支持 DX12/DirectML 的 GPU，包括国产显卡 | 显示器、窗口 | WindowsCapture；显示器可选 DesktopDuplication | 当前通用 WindowsCapture 为 CPU NumPy；目标为 D3D11 Texture，经共享资源或一次 GPU 复制进入 D3D12 | DirectML | CPU | Vulkan | OpenGL → CPU | 当前不支持完整零 CPU 回读；目标支持，但需逐厂商、逐驱动验证 | 目标 0–1；当前通常 1 次 CPU→GPU 上传且伴随 CPU 回读 | DirectML 设备发现和 PyTorch DirectML 计算路径已有基础；D3D11/D3D12/Vulkan 共享闭环为规划 | 捕获：WindowsCapture → DesktopDuplication（仅显示器）→ DXCamera；推理：DirectML → CPU；合成：Vulkan → OpenGL → CPU | “支持 DX12”不等于已经通过 DirectML 模型算子、共享句柄和 Vulkan 外部内存验证；国产显卡均标记待验证 |
@@ -89,7 +89,7 @@ Apple Silicon 首选 CoreML，MPSGraph用于需要更细控制或 CoreML 算子�
 
 ## 6. 各平台“自动”模式完整选择顺序
 
-以下是目标选择顺序；它与当前代码有差异的部分列在第 10 节。
+以下是自动选择顺序；仍未闭环或仅为目标的部分列在第 10 节。
 
 ### 6.1 Windows
 
@@ -227,16 +227,31 @@ zero_copy = false
 
 ## 10. 当前实现与目标架构的主要缺口
 
-1. **Windows DirectML闭环**：已能发现 DirectML设备并让模型在 PyTorch DirectML设备上运行，但尚缺 D3D11/D3D12共享纹理输入、模型预处理、DirectML输出到Vulkan的完整资源与同步契约。
-2. **Windows通用捕获资源**：当前通用 `WindowsCapture`仍复制到CPU；需要保留 WGC 的 D3D11 Texture，才能实现通用 DX12/DirectML目标路径。
-3. **立体合成自动顺序**：当前 `resolve_stereo_compute_backend()` 为 NVIDIA/AMD优先 Triton，其次 Vulkan，最后 Torch；没有 OpenGL分支。若采用本文策略，需要调整为以Vulkan为Windows/Linux通用主路径，并补充真实OpenGL兼容实现和探测。
-4. **Intel真机闭环**：Desktop Duplication、OpenVINO D3D11、Vulkan/D3D11共享Surface和oneVPL组件已具备代码与CI构建基础，但Adapter LUID、驱动互操作、严格零回读和4K长时间稳定性仍待Intel真机验证。
-5. **macOS原生链路**：当前没有CoreML depth provider、MPSGraph推理桥、CVMetalTextureCache输入桥和Metal立体合成后端；现状仍是CPU NumPy到PyTorch MPS。
-6. **Linux原生GPU捕获**：当前只有MSS + Xlib CPU捕获。Wayland、PipeWire、DMA-BUF、厂商原生捕获和窗口surface零拷贝均未实现。
-7. **其他及国产GPU验证**：DirectML和Vulkan的API可用性不能替代模型算子、共享资源、驱动稳定性和性能验证；必须建立具体设备白名单/黑名单与探针结果。
-8. **统一可观测性**：所有路径应统一记录捕获工具、捕获模式、推理后端、合成后端、设备身份、资源格式、`gpu_to_cpu`、`gpu_copy_count`、`zero_copy`和回退原因。
-9. **GUI简化与内部自动路由**：GUI只保留捕获模式和捕获工具；推理与立体合成需要建立统一的内部能力探测、按序尝试、失败回退和只读状态展示，避免把厂商后端选择暴露给用户。
-10. **硬件回归矩阵**：NVIDIA、AMD、Intel、Apple Silicon、Intel Mac、其他DX12 GPU和Linux各类GPU均需建立独立真机测试，不应以单一开发机结果推断全平台支持。
+本节只记录仍未闭环的事项；“已增加探针/契约”不等于“已完成零拷贝或真机验证”。macOS 原生 CoreML/MPSGraph/Metal 链路本轮不实现，且不修改 `17-macos-zero-copy-capture-inference-survey.md`。
+
+| 缺口 | 当前状态 | 已交付证据 | 未完成/验证边界 |
+|---|---|---|---|
+| Windows DirectML闭环 | 部分实现 | 设备创建、代表性算子探针、自动回退接入 | D3D11/D3D12共享输入、模型级算子覆盖、输出到 Vulkan 的同步与真机验证 |
+| WGC 原生资源契约 | 部分实现 | 借用资源元数据、Adapter LUID/格式/尺寸校验、显式 CPU 回退决策 | `windows_capture` 原生对象暴露、DirectML消费者桥和跨 API 同步待验证 |
+| 立体合成自动顺序 | 已调整；OpenGL缺口 | 自动顺序 Vulkan → OpenGL → Torch/CPU；OpenGL 能力探针与回退日志 | 项目现有 OpenGL 仅输出/流媒体兼容，不是立体合成实现 |
+| Intel 跨 API 闭环 | 部分实现 | D3D11/OpenVINO/Vulkan/oneVPL 入口与 LUID 校验 | Intel 真机句柄、格式、同步、长跑和零回读待验证 |
+| macOS 原生链路 | 本轮排除 | 文档明确不实现、不把目标写成现状 | 由其他项目处理；本项目不修改文档 17 |
+| Linux 原生 GPU 捕获 | 探针已补齐 | MSS/Xlib、Wayland/PipeWire/DMA-BUF 状态探针 | 原生 PipeWire/DMA-BUF、窗口 surface、显式同步待实现 |
+| 其他/国产 GPU | 探针部分实现 | DirectML 设备与代表性算子探针、资源契约报告 | 模型覆盖、驱动白名单、共享句柄和性能仍待逐卡验证 |
+| 统一可观测性 | 部分实现 | `[D2S_BACKEND_STATUS]` 日志、GUI 只读状态、资源计数 | 真机端到端计数一致性待验证 |
+| GUI 与自动路由 | 代码侧已保持 | 未新增推理/合成下拉框，显示实际后端和回退原因 | 仅允许展示已实际选择的后端，不能据此证明后端闭环 |
+| 硬件回归矩阵 | 测试骨架已增加 | `hardware_regression_matrix()` 与单元测试入口 | NVIDIA/AMD/Intel/国产 GPU、Linux 和 macOS 原生链路仍需真机回归 |
+
+1. **Windows DirectML闭环（部分实现）**：已增加 DirectML 设备创建、基础张量算子探针，并纳入 Windows 自动推理回退；探针会报告设备、基础算子、隐式 CPU fallback 和未知能力。尚未实现 D3D11/D3D12 共享纹理输入、模型级算子覆盖验证、DirectML 输出到 Vulkan 的外部内存与同步，因此不得宣称端到端零 CPU 回读。
+2. **Windows Graphics Capture资源契约（部分实现）**：`WindowsCapture` 回调现在可借用并传递可识别的 D3D11 原生资源元数据（格式、尺寸、Adapter LUID/身份、生命周期），并在兼容消费者需要 CPU 图像时显式记录 `gpu_to_cpu`、`gpu_copy_count` 和回退原因；`D2S_WGC_NATIVE_RESOURCE_REQUIRED=1` 可用于资源缺失时快速失败。当前 `windows_capture` 包的实际原生对象暴露、DirectML 消费者桥接、跨 API 同步和真机资源导入仍待验证。
+3. **立体合成自动顺序（已调整但 OpenGL 仍是缺口）**：自动解析器已按 Vulkan → OpenGL → Torch/CPU 传递可用性；NVIDIA/AMD 不再在自动模式优先 Triton，Triton 保留为显式/兼容优化路径。当前 OpenGL 探针只识别“立体合成后端”能力；项目已有的 OpenGL 代码是输出/流媒体 fallback，不能当作 GPU 立体合成实现，因此实际自动链仍通常为 Vulkan → Torch/CPU。
+4. **Intel真机闭环（部分实现/待验证）**：Desktop Duplication、OpenVINO D3D11、Vulkan/D3D11 资源入口、oneVPL 和 Adapter LUID 校验已具备代码基础；新增通用资源共享决策与遥测字段，但尚未完成 Intel 真机的跨 API 句柄、格式、同步、严格零回读和 4K 长时间稳定性验证。
+5. **macOS原生链路（本轮明确排除）**：CoreML depth provider、MPSGraph/CVMetalTextureCache 输入桥和 Metal 立体合成仍由其他项目处理；本项目继续把现有 macOS 路径标记为待验证/兼容回退，不把设计目标写成已实现。
+6. **Linux原生GPU捕获（探针已补齐，原生路径仍缺失）**：新增 Linux 能力探针，明确当前只有 MSS + Xlib CPU 捕获；X11 窗口仅按坐标裁剪，不是窗口 surface 零拷贝。Wayland、PipeWire、DMA-BUF、显式同步、DRM/Vulkan 设备身份和厂商原生捕获均仍未实现，自动模式保留 CPU 兼容回退。
+7. **其他及国产GPU能力验证（探针部分实现）**：Windows DirectML 探针可验证运行时、设备创建和基础算子，但模型算子覆盖、D3D11 共享资源、Vulkan 外部内存、Adapter 匹配和性能白名单/黑名单仍分别标记为未探测或待验证，不能仅凭“支持 DX12”推断可用。
+8. **统一可观测性（部分实现）**：运行时报告已纳入实际深度后端、合成后端及选择原因、provider 尝试记录；捕获调试字段已纳入资源类型/格式、设备身份、生命周期、`gpu_to_cpu`、`gpu_copy_count`、`zero_copy_ready` 和回退原因。真实硬件的跨 API 计数和端到端帧级一致性仍需验证。
+9. **GUI简化与内部自动路由（代码侧已保持）**：本轮没有新增推理或立体合成下拉框；这些后端由能力探测和自动链内部选择，GUI 只应展示只读实际后端、回退原因和资源遥测。若现有界面尚未展示全部只读字段，属于显示层缺口，不得作为后端已实现的证明。
+10. **硬件回归矩阵（测试骨架已增加）**：已增加 LUID/资源契约、队列借用资源释放、Linux 能力探针、DirectML 安全探针和 OpenGL 自动选择的单元测试；NVIDIA、AMD、Intel、其他 DX12/国产 GPU、Linux 原生捕获及 macOS 原生链路仍缺对应真机/驱动回归，不应以单一开发机结果推断全平台支持。
 
 ## 11. 当前代码核对基线
 

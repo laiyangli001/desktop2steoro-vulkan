@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import queue
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -481,11 +482,22 @@ def _capture_debug_fields(captured_frame: CapturedFrame | None, frame_rgb) -> di
         "capture_zero_copy": getattr(frame_rgb, "_d2s_capture_zero_copy", _capture_zero_copy(captured_frame)),
     }
     if captured_frame is not None:
+        metadata = captured_frame.metadata if isinstance(captured_frame.metadata, dict) else {}
         fields.update(
             capture_tool=captured_frame.capture_tool,
+            capture_mode=captured_frame.capture_mode,
             capture_frame_raw_device=captured_frame.frame_raw_device,
             capture_frame_raw_type=captured_frame.frame_raw_type,
             capture_frame_raw_dtype=captured_frame.frame_raw_dtype,
+            capture_resource_kind=metadata.get("resource_kind"),
+            capture_resource_format=metadata.get("resource_format"),
+            capture_adapter_luid=metadata.get("adapter_luid"),
+            capture_adapter_identity=metadata.get("adapter_identity"),
+            capture_gpu_to_cpu=metadata.get("gpu_to_cpu"),
+            capture_gpu_copy_count=metadata.get("gpu_copy_count"),
+            capture_zero_copy_ready=metadata.get("zero_copy_ready"),
+            capture_resource_lifecycle=metadata.get("resource_lifecycle"),
+            capture_fallback_reason=metadata.get("fallback_reason"),
         )
     return {key: value for key, value in fields.items() if value is not None}
 
@@ -867,6 +879,83 @@ class RuntimePipelineLoop:
         self._presenter_backpressure_active = False
         self._preprocess_diagnostic_saved = False
         self._preprocess_diagnostic_first_frame_time = None
+        self._backend_status_emitted = False
+
+    def _emit_backend_status_once(self, debug_info: dict | None) -> None:
+        if self._backend_status_emitted or not isinstance(debug_info, dict):
+            return
+        runtime = self.context.stereo_runtime
+        provider_report = {}
+        try:
+            provider_report = dict(runtime.provider_report())
+        except Exception as exc:
+            provider_report = {"fallback_reason": f"provider_report_failed: {type(exc).__name__}: {exc}"}
+        attempts = provider_report.get("attempts") or []
+        capture_reason = debug_info.get("capture_fallback_reason")
+        stereo_reason = str(
+            getattr(runtime, "_stereo_compute_backend_reason", "") or ""
+        )
+        fallback_reasons = []
+        if provider_report.get("fallback_reason"):
+            fallback_reasons.append(str(provider_report["fallback_reason"]))
+        if capture_reason:
+            fallback_reasons.append(str(capture_reason))
+        if stereo_reason and stereo_reason not in {"selected_by_priority", "explicit_request"}:
+            fallback_reasons.append(stereo_reason)
+        gpu_copy_count = debug_info.get("capture_gpu_copy_count")
+        try:
+            gpu_copy_count = int(gpu_copy_count) if gpu_copy_count is not None else 0
+        except (TypeError, ValueError):
+            gpu_copy_count = 0
+        gpu_to_cpu = bool(debug_info.get("capture_gpu_to_cpu", False))
+        zero_copy = bool(
+            debug_info.get("capture_zero_copy", False)
+            and debug_info.get("capture_zero_copy_ready", False)
+            and not gpu_to_cpu
+        )
+        payload = {
+            "os": platform.system(),
+            "device": str(getattr(getattr(runtime, "config", None), "device", "")),
+            "capture_mode": debug_info.get("capture_mode"),
+            "capture_tool": debug_info.get("capture_tool"),
+            "depth_backend": provider_report.get(
+                "depth_backend",
+                debug_info.get("depth_backend_resolved", debug_info.get("runtime_depth_backend", "unknown")),
+            ),
+            "stereo_backend": debug_info.get(
+                "stereo_compute_backend",
+                getattr(runtime, "_resolved_stereo_compute_backend", "unknown"),
+            ),
+            "stereo_backend_reason": stereo_reason or "not_reported",
+            "fallback": bool(attempts or fallback_reasons),
+            "fallback_reasons": fallback_reasons,
+            "adapter_luid": debug_info.get("capture_adapter_luid"),
+            "adapter_identity": debug_info.get("capture_adapter_identity"),
+            "resource_kind": debug_info.get("capture_resource_kind"),
+            "resource_format": debug_info.get("capture_resource_format"),
+            "capture_size": debug_info.get("capture_size"),
+            "gpu_to_cpu": gpu_to_cpu,
+            "gpu_copy_count": gpu_copy_count,
+            "zero_copy": zero_copy,
+            "zero_copy_ready": bool(debug_info.get("capture_zero_copy_ready", False)),
+        }
+        try:
+            print(
+                "[D2S_BACKEND_STATUS] "
+                + json.dumps(payload, ensure_ascii=False, sort_keys=True),
+                flush=True,
+            )
+            self._backend_status_emitted = True
+        except (TypeError, ValueError) as exc:
+            print(
+                "[D2S_BACKEND_STATUS] "
+                + json.dumps(
+                    {"fallback": True, "fallback_reasons": [f"serialization: {exc}"]},
+                    ensure_ascii=False,
+                ),
+                flush=True,
+            )
+            self._backend_status_emitted = True
 
     def _presenter_pressure_active(self) -> bool:
         ctx = self.context
@@ -1485,6 +1574,7 @@ class RuntimePipelineLoop:
                             debug_info["native_depth_zero_copy"] = int(
                                 bool(native_debug.get("zero_copy", False))
                             )
+                self._emit_backend_status_once(debug_info)
                 ctx.breakdown_add_runtime_timing(runtime_result)
                 ctx.log_fast_plus_fused_runtime_state(runtime_result)
                 if runtime_result.depth is None:

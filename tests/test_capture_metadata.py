@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from capture.backends.windows_capture_event import _borrow_native_resource
 from capture.types import (
     CaptureConfig,
     CapturedFrame,
@@ -22,6 +23,16 @@ class FakeFrame:
     shape = (720, 1280, 4)
     dtype = "uint8"
     device = "cuda:0"
+
+
+class FakeWgcFrameBuffer:
+    def __init__(self):
+        self.d3d11_texture = FakeNativeTexture()
+
+
+def test_windows_capture_borrows_optional_d3d11_resource():
+    frame_buffer = FakeWgcFrameBuffer()
+    assert _borrow_native_resource(frame_buffer) is frame_buffer.d3d11_texture
 
 
 def test_capture_frame_from_raw_populates_metadata_contract():

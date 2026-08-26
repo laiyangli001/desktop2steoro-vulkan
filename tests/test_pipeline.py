@@ -1,3 +1,4 @@
+import json
 import queue
 import threading
 from types import SimpleNamespace
@@ -423,6 +424,45 @@ def test_pipeline_does_not_rebuild_before_threshold(monkeypatch):
 
     assert calls == []
     assert loop._consecutive_runtime_errors == 2
+
+
+def test_backend_status_log_reports_explicit_resource_fallback(capsys):
+    runtime = SimpleNamespace(
+        provider_report=lambda: {
+            "depth_backend": "cpu",
+            "attempts": [{"backend": "tensorrt", "status": "failed"}],
+            "fallback_reason": "TensorRT unavailable",
+        },
+        config=SimpleNamespace(device="cpu"),
+        _resolved_stereo_compute_backend="torch",
+        _stereo_compute_backend_reason="vulkan_unavailable",
+    )
+    loop = object.__new__(RuntimePipelineLoop)
+    loop.context = SimpleNamespace(stereo_runtime=runtime)
+    loop._backend_status_emitted = False
+
+    loop._emit_backend_status_once({
+        "capture_mode": "monitor",
+        "capture_tool": "WindowsCapture",
+        "capture_adapter_luid": 7,
+        "capture_resource_kind": "d3d11_texture",
+        "capture_resource_format": "BGRA8",
+        "capture_gpu_to_cpu": True,
+        "capture_gpu_copy_count": 1,
+        "capture_zero_copy": False,
+        "capture_zero_copy_ready": False,
+    })
+
+    line = capsys.readouterr().out.strip()
+    assert line.startswith("[D2S_BACKEND_STATUS] ")
+    payload = json.loads(line.split(" ", 1)[1])
+    assert payload["depth_backend"] == "cpu"
+    assert payload["gpu_to_cpu"] is True
+    assert payload["gpu_copy_count"] == 1
+    assert payload["zero_copy"] is False
+    assert "TensorRT unavailable" in payload["fallback_reasons"]
+    loop._emit_backend_status_once({})
+    assert capsys.readouterr().out == ""
 
 
 def test_cuda_capture_disables_previously_enabled_openxr_cuda_graph():
