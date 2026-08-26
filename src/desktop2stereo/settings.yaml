@@ -1,7 +1,7 @@
 Capture Mode: Monitor
 Monitor Index: 1
 Window Title: ''
-Show FPS: true
+Show FPS: false
 Model List:
   Distill-Any-Depth-Small:
     resolutions:
@@ -519,7 +519,7 @@ Recompile MIGraphX: false
 Recompile OpenVINO: false
 Computing Device: 0
 Language: CN
-Run Mode: Local Viewer
+Run Mode: RTMP Streamer
 XR Headset Model: Pico 4 / 4 Ultra
 XR Preview Window: false
 VSync: false
@@ -539,13 +539,13 @@ Stream Protocol: WebRTC
 Streamer Port: 1122
 Stream Quality: 100
 Use Stream Calibration: true
-Stream Target Bitrate Mbps: 23
-Stream Peak Bitrate Mbps: 26
+Stream Target Bitrate Mbps: 49
+Stream Peak Bitrate Mbps: 55
 Stream Calibration Port: 1123
 Stream Key: live
 Audio Capture Backend: auto
 Video Encoder Backend: auto
-CRF: 26
+CRF: 20
 Audio Delay: -0.1
 Controller Model: PICO
 Environment Model: Default
