@@ -362,7 +362,9 @@ class NativeRtspAvOutput:
         cname = self._rtcp_cname[:255]
         sdes_body = bytes([1, len(cname)]) + cname + b"\x00"
         sdes_body += b"\x00" * ((4 - ((4 + len(sdes_body)) % 4)) % 4)
-        sdes_length = (4 + len(sdes_body)) // 4 - 1
+        # RTCP length counts the complete packet after the 4-byte header;
+        # include the 4-byte SSRC before the SDES item body.
+        sdes_length = (8 + len(sdes_body)) // 4 - 1
         sdes = struct.pack(">BBH", 0x81, 202, sdes_length) + struct.pack(">I", ssrc) + sdes_body
         self._interleaved(channel, sender_report + sdes, priority=0)
 
