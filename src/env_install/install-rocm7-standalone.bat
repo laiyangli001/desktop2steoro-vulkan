@@ -16,7 +16,12 @@ set "PIP_TIMEOUT=180"
 if defined LOCALAPPDATA (
     set "D2S_PIP_CACHE=%LOCALAPPDATA%\Desktop2Stereo\pip-cache"
 ) else (
-    set "D2S_PIP_CACHE=%TEMP%\Desktop2Stereo-pip-cache"
+set "D2S_PIP_CACHE=%TEMP%\Desktop2Stereo-pip-cache"
+)
+
+if exist "%PYTHON_EXE%" (
+    "%PYTHON_EXE%" -c "import importlib.util, sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) and sys.maxsize.bit_length() == 63 and importlib.util.find_spec('ensurepip') is not None else 1)" >nul 2>nul
+    if not errorlevel 1 goto python_ready
 )
 
 echo - Installing fresh Python %PYTHON_VERSION% x64 runtime
@@ -33,6 +38,7 @@ if errorlevel 1 (
     exit /b 1
 )
 if exist "%PYTHON_ARCHIVE%" del /f /q "%PYTHON_ARCHIVE%" >nul 2>nul
+:python_ready
 
 REM --- Get AMD GPUs sorted by AdapterRAM (largest first) ---
 for /f "usebackq delims=" %%i in (`powershell -NoProfile -Command "Get-CimInstance Win32_VideoController | Where-Object Name -like '*AMD*' | Sort-Object AdapterRAM -Descending | ForEach-Object { $_.Name }"`) do (

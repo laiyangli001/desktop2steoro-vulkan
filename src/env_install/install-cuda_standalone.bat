@@ -2,7 +2,7 @@
 echo --- Desktop2Stereo Installer (With CUDA for NVIDIA GPUs.) ---
 echo - Setting up the virtual environment
 
-@REM Install a fresh project-local Python 3.12 x64 runtime.
+@REM Install or reuse the project-local Python 3.12 x64 runtime.
 @REM The official NuGet package provides a complete relocatable runtime layout.
 Set "PYTHON_VERSION=3.12.10"
 Set "SCRIPT_DIR=%~dp0"
@@ -11,6 +11,11 @@ Set "PYTHON_ROOT=%PROJECT_ROOT%\python3"
 Set "PYTHON_STAGING=%SCRIPT_DIR%python3.installing"
 Set "PYTHON_ARCHIVE=%TEMP%\python-%PYTHON_VERSION%-nuget.zip"
 Set "PYTHON_URL=https://www.nuget.org/api/v2/package/python/%PYTHON_VERSION%"
+
+if exist "%PYTHON_ROOT%\python.exe" (
+    "%PYTHON_ROOT%\python.exe" -c "import importlib.util, sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) and sys.maxsize.bit_length() == 63 and importlib.util.find_spec('ensurepip') is not None else 1)" >nul 2>nul
+    if not errorlevel 1 goto python_ready
+)
 
 echo - Installing Python %PYTHON_VERSION% x64 to %PYTHON_ROOT%
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri '%PYTHON_URL%' -OutFile '%PYTHON_ARCHIVE%'"
@@ -34,7 +39,6 @@ if not exist "%PYTHON_ROOT%\python.exe" (
     pause
     exit /b 1
 )
-
 :python_ready
 
 @REM Set paths
