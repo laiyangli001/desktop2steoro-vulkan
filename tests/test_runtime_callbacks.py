@@ -83,16 +83,21 @@ def test_show_fps_hot_reload_updates_viewer_provider() -> None:
         get_nowait=lambda: (_ for _ in ()).throw(Exception()),
     )
     assert callbacks.show_fps() is False
+    assert callbacks.display_fit_mode() == "contain"
 
     callbacks.send_settings_snapshot(
         RuntimeSettingsSnapshot(
             version=1,
             timestamp=1.0,
-            presentation_flags={"show_fps": True},
+            presentation_flags={
+                "show_fps": True,
+                "display_fit_mode": "cover",
+            },
         )
     )
 
     assert callbacks.show_fps() is True
+    assert callbacks.display_fit_mode() == "cover"
 
 
 def test_audio_delay_hot_reload_is_forwarded_to_stream_output() -> None:

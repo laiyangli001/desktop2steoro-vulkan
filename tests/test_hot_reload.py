@@ -90,13 +90,17 @@ def test_hot_reload_value_snapshot_parses_expected_fields():
         "XR Headset Model": "Pimax Crystal / Light",
         "Debug Stereo Output": "yes",
         "Show FPS": "yes",
+        "Display Fit Mode": "cover",
         "Audio Delay": "0.25",
     }
 
     values = hot_reload_value_snapshot(settings, config)
 
     assert values["depth_strength"] == 1.25
-    assert values["presentation_flags"] == {"show_fps": True}
+    assert values["presentation_flags"] == {
+        "show_fps": True,
+        "display_fit_mode": "cover",
+    }
     assert values["convergence"] == 0.75
     assert "ipd" not in values
     assert "ipd_mm" not in values

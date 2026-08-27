@@ -304,7 +304,7 @@ class GUIBuilderMixin:
             self.temporal_strength_label,
             self.edge_threshold_label, self.anaglyph_label,
             self.render_scale_label, self.render_max_pixels_label, self.render_align_label,
-            self.display_mode_label, self.environment_label,
+            self.display_mode_label, self.environment_label, self.display_fit_label,
             self.theme_label, self.stream_quality_label, self.stream_key_label,
             self.audio_delay_label, self.color_contrast_label,
             self.color_gamma_label, self.color_tint_label, self.projection_max_lod_label,
@@ -759,16 +759,26 @@ class GUIBuilderMixin:
         row8 = ft.Row([self.capture_mode_dd, self._row8_spacer, self.monitor_dd, self.window_dd,
             ft.Container(width=S(8)), self.refresh_btn], spacing=1)
 
-        # Row 10: Stereo output + checkboxes
+        # Row 10: Stereo output + display fitting
         self.stereo_output_label = ft.Text("Stereo Output:", size=FONT_SIZE, width=S(130))
         self.stereo_monitor_dd = CompactDropdown(options=[],
             on_select=lambda e: self._fit_window_to_content())
-        self.fill_16_9_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="Fill 16:9")
-        self.fix_aspect_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="Fix Viewer Aspect")
+        fit_tooltip = UI_MESSAGES[self.locale]["tooltip_display_fit"]
+        self.display_fit_label = ft.Text(
+            "Display Fit:", size=FONT_SIZE, width=S(130), tooltip=fit_tooltip)
+        self.display_fit_dd = CompactDropdown(
+            options=self._display_fit_options(),
+            value=self._display_fit_to_display("contain"),
+            width=S(180),
+            on_select=self.on_stereo_hot_param_change,
+            tooltip=fit_tooltip,
+        )
         self.lossless_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="LSFG")
         self._stereo_spacer = ft.Container(width=S(10))
-        self.row9 = ft.Row([self.stereo_output_label, self.stereo_monitor_dd, self._stereo_spacer,
-            ft.Row([self.fill_16_9_cb, self.fix_aspect_cb, self.lossless_cb], spacing=S(20))], spacing=1)
+        self.row9 = ft.Row([
+            self.stereo_output_label, self.stereo_monitor_dd, self._stereo_spacer,
+            self.display_fit_label, self.display_fit_dd, self.lossless_cb,
+        ], spacing=1)
 
         # Bottom: Language + Theme + Buttons
         self.lang_label = ft.Text("Set Language:", size=FONT_SIZE, width=S(130))

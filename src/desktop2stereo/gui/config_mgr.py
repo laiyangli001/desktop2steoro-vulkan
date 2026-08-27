@@ -137,8 +137,9 @@ class GUIConfigMixin:
         self._sync_device_advanced_visibility(cfg.get("Run Mode", DEFAULTS.get("Run Mode", "Local Viewer")))
         self.fp16_cb.value = bool(cfg.get("FP16", DEFAULTS["FP16"]))
         self.showfps_cb.value = cfg.get("Show FPS", DEFAULTS["Show FPS"])
-        self.fill_16_9_cb.value = cfg.get("Fill 16:9", DEFAULTS["Fill 16:9"])
-        self.fix_aspect_cb.value = cfg.get("Fix Viewer Aspect", DEFAULTS["Fix Viewer Aspect"])
+        self.display_fit_dd.options = self._display_fit_options()
+        self.display_fit_dd.value = self._display_fit_to_display(
+            cfg.get("Display Fit Mode", DEFAULTS["Display Fit Mode"]))
         self.lossless_cb.value = cfg.get("Lossless Scaling Support", DEFAULTS["Lossless Scaling Support"])
         if keep_optional:
             self.locale = cfg.get("Language", DEFAULTS["Language"])
@@ -366,8 +367,10 @@ class GUIConfigMixin:
             "Parallel Inference Workers": parallel_workers,
             **recompile_values,
             "Capture Tool": self.capture_tool_dd.value,
-            "Fill 16:9": self.fill_16_9_cb.value,
-            "Fix Viewer Aspect": self.fix_aspect_cb.value,
+            "Display Fit Mode": self._display_to_display_fit(self.display_fit_dd.value),
+            # Retain the legacy keys for older runtime packages reading the same YAML.
+            "Fill 16:9": self._display_to_display_fit(self.display_fit_dd.value) == "contain",
+            "Fix Viewer Aspect": self._display_to_display_fit(self.display_fit_dd.value) != "stretch",
             "Lossless Scaling Support": self.lossless_cb.value,
             "Stream Key": self.stream_key_tf.value,
             "Video Encoder Backend": {
@@ -471,8 +474,12 @@ class GUIConfigMixin:
         stereo_quality = self._stereo_quality_for_preset(stereo_preset)
         parallax_budget = self._display_to_parallax_budget(self.parallax_budget_dd.value)
 
+        display_fit_mode = self._display_to_display_fit(self.display_fit_dd.value)
         cfg.update({
             "Show FPS": bool(self.showfps_cb.value),
+            "Display Fit Mode": display_fit_mode,
+            "Fill 16:9": display_fit_mode == "contain",
+            "Fix Viewer Aspect": display_fit_mode != "stretch",
             "Stereo Preset": stereo_preset,
             "Stereo Quality": stereo_quality,
             "Synthetic View": stereo_quality,
@@ -636,6 +643,36 @@ class GUIConfigMixin:
     def _depth_separation_to_display(self, value):
         from .localization import depth_separation_to_display
         return depth_separation_to_display(value, self.locale)
+
+    def _display_fit_options(self):
+        texts = UI_MESSAGES[self.locale]
+        return [
+            texts["Display Fit Contain"],
+            texts["Display Fit Cover"],
+            texts["Display Fit Stretch"],
+        ]
+
+    def _display_fit_to_display(self, value):
+        texts = UI_MESSAGES[self.locale]
+        normalized = str(value or "contain").strip().casefold()
+        return {
+            "contain": texts["Display Fit Contain"],
+            "cover": texts["Display Fit Cover"],
+            "stretch": texts["Display Fit Stretch"],
+        }.get(normalized, texts["Display Fit Contain"])
+
+    @staticmethod
+    def _display_to_display_fit(value):
+        normalized = str(value or "").strip().casefold()
+        translations = {
+            "keep ratio (complete)": "contain",
+            "保持比例（完整）": "contain",
+            "keep ratio (fill)": "cover",
+            "保持比例（铺满）": "cover",
+            "stretch to fill": "stretch",
+            "拉伸铺满": "stretch",
+        }
+        return translations.get(normalized, "contain")
 
     def _parallel_inference_options(self):
         from .localization import parallel_inference_options

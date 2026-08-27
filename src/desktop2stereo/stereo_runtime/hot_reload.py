@@ -243,7 +243,10 @@ def hot_reload_value_snapshot(settings_dict: dict, config) -> dict:
         ),
         "cross_eyed": to_bool_hot_reload(settings_dict.get("Cross Eyed", config.cross_eyed)),
         "presentation_flags": {
-            "show_fps": to_bool_hot_reload(settings_dict.get("Show FPS", False))
+            "show_fps": to_bool_hot_reload(settings_dict.get("Show FPS", False)),
+            "display_fit_mode": str(
+                settings_dict.get("Display Fit Mode", "contain") or "contain"
+            ).strip().casefold(),
         },
         "debug_output": debug_output_enabled,
         "debug_flags": {"debug_output": debug_output_enabled},

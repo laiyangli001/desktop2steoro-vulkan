@@ -17,6 +17,7 @@ from viewer.vulkan_local_viewer import (
     display_refresh_warning_needed,
     full_screen_exclusive_capability,
     fit_rect,
+    presentation_blit_regions,
     frame_to_cuda_rgba,
     frame_to_rgba_bytes,
     depth_preview_frame,
@@ -133,6 +134,69 @@ def test_display_refresh_warning_is_reported_only_once() -> None:
 
 def test_fit_rect_letterboxes_wide_sbs_frame() -> None:
     assert fit_rect((3840, 1080), (1280, 720)) == (0, 180, 1280, 360)
+
+
+def test_display_fit_contain_adds_only_expected_letterbox_bars() -> None:
+    assert presentation_blit_regions(
+        (3840, 2160), (3840, 2400), "contain", "Half-SBS"
+    ) == (
+        ((0, 0, 1920, 2160), (0, 120, 1920, 2280)),
+        ((1920, 0, 3840, 2160), (1920, 120, 3840, 2280)),
+    )
+
+
+def test_display_fit_contain_uses_single_eye_aspect_for_full_sbs() -> None:
+    assert presentation_blit_regions(
+        (7680, 2160), (3840, 2400), "contain", "Full-SBS"
+    ) == (
+        ((0, 0, 3840, 2160), (0, 120, 1920, 2280)),
+        ((3840, 0, 7680, 2160), (1920, 120, 3840, 2280)),
+    )
+
+
+def test_display_fit_cover_crops_half_sbs_eyes_symmetrically() -> None:
+    assert presentation_blit_regions(
+        (3840, 2160), (3840, 2400), "cover", "Half-SBS"
+    ) == (
+        ((96, 0, 1824, 2160), (0, 0, 1920, 2400)),
+        ((2016, 0, 3744, 2160), (1920, 0, 3840, 2400)),
+    )
+
+
+def test_display_fit_cover_reverses_crop_axis_for_taller_input() -> None:
+    assert presentation_blit_regions(
+        (3840, 2400), (3840, 2160), "cover", "Half-SBS"
+    ) == (
+        ((0, 120, 1920, 2280), (0, 0, 1920, 2160)),
+        ((1920, 120, 3840, 2280), (1920, 0, 3840, 2160)),
+    )
+
+
+def test_display_fit_cover_preserves_full_sbs_eye_boundaries() -> None:
+    assert presentation_blit_regions(
+        (7680, 2160), (3840, 2400), "cover", "Full-SBS"
+    ) == (
+        ((192, 0, 3648, 2160), (0, 0, 1920, 2400)),
+        ((4032, 0, 7488, 2160), (1920, 0, 3840, 2400)),
+    )
+
+
+def test_display_fit_cover_preserves_half_tab_eye_boundaries() -> None:
+    assert presentation_blit_regions(
+        (3840, 2160), (3840, 2400), "cover", "Half-TAB"
+    ) == (
+        ((192, 0, 3648, 1080), (0, 0, 3840, 1200)),
+        ((192, 1080, 3648, 2160), (0, 1200, 3840, 2400)),
+    )
+
+
+def test_display_fit_stretch_uses_the_complete_source_and_target() -> None:
+    assert presentation_blit_regions(
+        (3840, 2160), (3840, 2400), "stretch", "Half-SBS"
+    ) == (
+        ((0, 0, 1920, 2160), (0, 0, 1920, 2400)),
+        ((1920, 0, 3840, 2160), (1920, 0, 3840, 2400)),
+    )
 
 
 def test_frame_to_rgba_bytes_converts_chw_float() -> None:

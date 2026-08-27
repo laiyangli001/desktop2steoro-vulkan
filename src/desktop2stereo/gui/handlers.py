@@ -576,14 +576,13 @@ class GUIHandlerMixin:
         self.xr_headset_dd.visible = True
         self._sync_device_advanced_visibility(mode)
         self.row7b.visible = is_openxr
+        display_fit_visible = mode in ["Local Viewer", "3D Monitor"]
         if is_openxr:
             self.showfps_cb.visible = False
-            self.fill_16_9_cb.visible = False
-            self.fix_aspect_cb.visible = False
         else:
             self.showfps_cb.visible = True
-            self.fill_16_9_cb.visible = True
-            self.fix_aspect_cb.visible = mode in ["Local Viewer", "3D Monitor"]
+        self.display_fit_label.visible = display_fit_visible
+        self.display_fit_dd.visible = display_fit_visible
         if mode == "3D Monitor":
             self.display_mode_dd.options = ["Half-SBS", "Full-SBS", "Half-TAB", "Full-TAB"]
         else:
@@ -596,11 +595,13 @@ class GUIHandlerMixin:
         self.stereo_monitor_dd.visible = stereo_full
         if hasattr(self, '_stereo_spacer'):
             self._stereo_spacer.visible = stereo_full
-        self.row9.visible = (not is_openxr) and (stereo_full or self.fill_16_9_cb.visible or self.fix_aspect_cb.visible or self.lossless_cb.visible)
+        self.lossless_cb.visible = (OS_NAME == "Windows" and mode == "RTMP Streamer")
+        self.row9.visible = (not is_openxr) and (
+            stereo_full or display_fit_visible or self.lossless_cb.visible
+        )
         row_map = self._get_streamer_row_map()
         row_indices = row_map.get(mode, []) if is_streamer and self.stream_settings_cb.value else []
         self._show_streamer_rows(*row_indices)
-        self.lossless_cb.visible = (OS_NAME == "Windows" and mode == "RTMP Streamer")
         self.update_stereo_monitor_menu()
         self._fit_window_to_content()
         if mode == "Local Viewer":
@@ -793,8 +794,12 @@ class GUIHandlerMixin:
                   "紫色": "purple", "橙色": "orange", "青色": "teal", "粉色": "pink", "灰色": "grey"}
         key = cn_map.get(cur, cur.lower() if cur else "system")
         self.theme_dd.value = t.get(key, key) if self.locale == "CN" else key.capitalize()
-        self.fill_16_9_cb.label = t["Fill 16:9"]
-        self.fix_aspect_cb.label = t["Fix Viewer Aspect"]
+        display_fit_mode = self._display_to_display_fit(self.display_fit_dd.value)
+        self.display_fit_label.value = t["Display Fit:"]
+        self.display_fit_label.tooltip = t["tooltip_display_fit"]
+        self.display_fit_dd.options = self._display_fit_options()
+        self.display_fit_dd.value = self._display_fit_to_display(display_fit_mode)
+        self.display_fit_dd.tooltip = t["tooltip_display_fit"]
         self.lossless_cb.label = t["Lossless Scaling Support"]
         self.controller_label.value = t["Controller:"]
         self.environment_label.value = t["Environment:"]

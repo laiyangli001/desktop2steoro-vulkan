@@ -64,6 +64,7 @@ def _normalize_legacy_settings(settings: dict) -> dict:
         "Convergence": float(stereo.get("convergence", 0.5)),
         "Processing Resolution": "Auto",
         "Target FPS": 0,
+        "Display Fit Mode": "contain",
         "Fill 16:9": True,
         "VSync": False,
         "Fix Viewer Aspect": False,

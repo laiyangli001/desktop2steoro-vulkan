@@ -411,7 +411,11 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
         convergence=CONVERGENCE,
         capture_fps_provider=adaptive_capture_rate.current_fps,
     )
-    callbacks = RuntimeCallbacks(context, show_fps=bool(SHOW_FPS))
+    callbacks = RuntimeCallbacks(
+        context,
+        show_fps=bool(SHOW_FPS),
+        display_fit_mode=settings.get("Display Fit Mode", "contain"),
+    )
 
     def observe_sbs_fps(sbs_fps, frame_count=None):
         return adaptive_capture_rate.observe_sbs_fps(
@@ -809,6 +813,9 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
                 vsync=bool(LOCAL_VSYNC),
                 show_fps=bool(SHOW_FPS),
                 show_fps_provider=callbacks.show_fps,
+                display_mode=str(DISPLAY_MODE),
+                display_fit_mode=settings.get("Display Fit Mode", "contain"),
+                display_fit_mode_provider=callbacks.display_fit_mode,
                 on_sbs_fps=observe_sbs_fps if adaptive_capture_rate.enabled else None,
                 on_display_refresh_warning=report_display_refresh_warning,
                 on_capture_refresh_warning=report_capture_refresh_warning,

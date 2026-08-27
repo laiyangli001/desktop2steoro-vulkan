@@ -171,6 +171,118 @@ def fit_rect(source: tuple[int, int], target: tuple[int, int]) -> tuple[int, int
     return (tw - width) // 2, (th - height) // 2, width, height
 
 
+def normalize_display_fit_mode(value: Any) -> str:
+    normalized = str(value or "contain").strip().casefold().replace("-", "_")
+    aliases = {
+        "contain": "contain",
+        "complete": "contain",
+        "fit": "contain",
+        "cover": "cover",
+        "fill": "cover",
+        "stretch": "stretch",
+    }
+    return aliases.get(normalized, "contain")
+
+
+def _cover_crop_rect(
+    source: tuple[int, int], target_aspect: tuple[int, int]
+) -> tuple[int, int, int, int]:
+    """Return a centered source crop matching the requested aspect ratio."""
+    sw, sh = source
+    tw, th = target_aspect
+    if min(sw, sh, tw, th) <= 0:
+        return 0, 0, max(0, sw), max(0, sh)
+    if sw * th > sh * tw:
+        width = max(1, min(sw, round(sh * tw / th)))
+        return (sw - width) // 2, 0, width, sh
+    height = max(1, min(sh, round(sw * th / tw)))
+    return 0, (sh - height) // 2, sw, height
+
+
+def presentation_blit_regions(
+    source: tuple[int, int],
+    target: tuple[int, int],
+    fit_mode: str,
+    display_mode: str = "Half-SBS",
+) -> tuple[tuple[tuple[int, int, int, int], tuple[int, int, int, int]], ...]:
+    """Resolve source/destination blits without mixing the two packed eyes."""
+    sw, sh = source
+    tw, th = target
+    if min(sw, sh, tw, th) <= 0:
+        return ()
+    mode = normalize_display_fit_mode(fit_mode)
+    full_source = (0, 0, sw, sh)
+    full_target = (0, 0, tw, th)
+    packed_mode = str(display_mode or "").strip().casefold().replace("_", "-")
+
+    if packed_mode in {"half-sbs", "full-sbs", "half-tab", "full-tab"}:
+        is_sbs = packed_mode.endswith("sbs")
+        is_half = packed_mode.startswith("half-")
+        if is_sbs:
+            source_split = sw // 2
+            encoded_eye_size = (source_split, sh)
+            logical_eye_size = (source_split * (2 if is_half else 1), sh)
+            source_origins = ((0, 0), (source_split, 0))
+        else:
+            source_split = sh // 2
+            encoded_eye_size = (sw, source_split)
+            logical_eye_size = (sw, source_split * (2 if is_half else 1))
+            source_origins = ((0, 0), (0, source_split))
+
+        if mode == "contain":
+            x, y, width, height = fit_rect(logical_eye_size, target)
+            target_box = (x, y, x + width, y + height)
+        else:
+            target_box = full_target
+        tx0, ty0, tx1, ty1 = target_box
+        if is_sbs:
+            target_split = tx0 + (tx1 - tx0) // 2
+            destination_regions = (
+                (tx0, ty0, target_split, ty1),
+                (target_split, ty0, tx1, ty1),
+            )
+        else:
+            target_split = ty0 + (ty1 - ty0) // 2
+            destination_regions = (
+                (tx0, ty0, tx1, target_split),
+                (tx0, target_split, tx1, ty1),
+            )
+
+        if mode == "cover":
+            expansion_x = 2 if packed_mode == "half-sbs" else 1
+            expansion_y = 2 if packed_mode == "half-tab" else 1
+            crop_x, crop_y, crop_w, crop_h = _cover_crop_rect(
+                encoded_eye_size,
+                (tw * expansion_y, th * expansion_x),
+            )
+        else:
+            crop_x, crop_y = 0, 0
+            crop_w, crop_h = encoded_eye_size
+
+        regions = []
+        for (origin_x, origin_y), destination_rect in zip(
+            source_origins, destination_regions
+        ):
+            regions.append((
+                (
+                    origin_x + crop_x,
+                    origin_y + crop_y,
+                    origin_x + crop_x + crop_w,
+                    origin_y + crop_y + crop_h,
+                ),
+                destination_rect,
+            ))
+        return tuple(regions)
+
+    if mode == "stretch":
+        return ((full_source, full_target),)
+    if mode == "contain":
+        x, y, width, height = fit_rect(source, target)
+        return ((full_source, (x, y, x + width, y + height)),)
+    crop_x, crop_y, crop_w, crop_h = _cover_crop_rect(source, target)
+    return (((crop_x, crop_y, crop_x + crop_w, crop_y + crop_h), full_target),)
+
+
 def frame_to_rgba_bytes(frame: Any) -> tuple[bytes, int, int]:
     """Convert a CHW/HWC torch or numpy frame to tightly packed RGBA8."""
     import numpy as np
@@ -309,6 +421,9 @@ class VulkanLocalViewerConfig:
     vsync: bool = True
     show_fps: bool = False
     show_fps_provider: Callable[[], bool] | None = None
+    display_mode: str = "Half-SBS"
+    display_fit_mode: str = "contain"
+    display_fit_mode_provider: Callable[[], str] | None = None
     on_sbs_fps: Callable[[float, int], int] | None = None
     on_display_refresh_warning: Callable[[int, float], None] | None = None
     on_capture_refresh_warning: Callable[[int, int], None] | None = None
@@ -413,6 +528,8 @@ class VulkanLocalViewer:
         self._input_refresh_hz = 0
         self._display_refresh_warning_reported = False
         self._capture_refresh_warning_reported = False
+        self._presentation_geometry_reported = False
+        self._last_presentation_geometry = None
 
     def initialize(self) -> None:
         import glfw
@@ -1294,8 +1411,52 @@ class _TransferSource:
         self._transition(cmd, target, target_old_layout, vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
         clear = vk.VkClearColorValue(float32=[0.0, 0.0, 0.0, 1.0])
         vk.vkCmdClearColorImage(cmd, target, vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, clear, 1, [vk.VkImageSubresourceRange(aspectMask=vk.VK_IMAGE_ASPECT_COLOR_BIT, baseMipLevel=0, levelCount=1, baseArrayLayer=0, layerCount=1)])
-        x, y, width, height = fit_rect(self.size, o.extent)
-        vk.vkCmdBlitImage(cmd, source_image, vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, target, vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, [vk.VkImageBlit(srcSubresource=vk.VkImageSubresourceLayers(aspectMask=vk.VK_IMAGE_ASPECT_COLOR_BIT, mipLevel=0, baseArrayLayer=0, layerCount=1), srcOffsets=[vk.VkOffset3D(x=0, y=0, z=0), vk.VkOffset3D(x=self.size[0], y=self.size[1], z=1)], dstSubresource=vk.VkImageSubresourceLayers(aspectMask=vk.VK_IMAGE_ASPECT_COLOR_BIT, mipLevel=0, baseArrayLayer=0, layerCount=1), dstOffsets=[vk.VkOffset3D(x=x, y=y, z=0), vk.VkOffset3D(x=x + width, y=y + height, z=1)])], vk.VK_FILTER_LINEAR)
+        fit_mode = o.config.display_fit_mode
+        if o.config.display_fit_mode_provider is not None:
+            try:
+                fit_mode = o.config.display_fit_mode_provider()
+            except Exception:
+                fit_mode = o.config.display_fit_mode
+        fit_mode = normalize_display_fit_mode(fit_mode)
+        regions = presentation_blit_regions(
+            self.size,
+            o.extent,
+            fit_mode,
+            o.config.display_mode,
+        )
+        geometry = (fit_mode, o.config.display_mode, self.size, o.extent, regions)
+        if geometry != o._last_presentation_geometry:
+            prefix = "First-frame" if o._last_presentation_geometry is None else "Updated"
+            o._last_presentation_geometry = geometry
+            o._presentation_geometry_reported = True
+            print(
+                f"[VulkanLocalViewer] {prefix} presentation geometry: "
+                f"fit_mode={fit_mode} display_mode={o.config.display_mode} "
+                f"sbs_source={self.size[0]}x{self.size[1]} "
+                f"swapchain_extent={o.extent[0]}x{o.extent[1]} "
+                f"blit_regions={regions}",
+                flush=True,
+            )
+        blits = []
+        for source_rect, destination_rect in regions:
+            sx0, sy0, sx1, sy1 = source_rect
+            dx0, dy0, dx1, dy1 = destination_rect
+            blits.append(vk.VkImageBlit(
+                srcSubresource=vk.VkImageSubresourceLayers(aspectMask=vk.VK_IMAGE_ASPECT_COLOR_BIT, mipLevel=0, baseArrayLayer=0, layerCount=1),
+                srcOffsets=[vk.VkOffset3D(x=sx0, y=sy0, z=0), vk.VkOffset3D(x=sx1, y=sy1, z=1)],
+                dstSubresource=vk.VkImageSubresourceLayers(aspectMask=vk.VK_IMAGE_ASPECT_COLOR_BIT, mipLevel=0, baseArrayLayer=0, layerCount=1),
+                dstOffsets=[vk.VkOffset3D(x=dx0, y=dy0, z=0), vk.VkOffset3D(x=dx1, y=dy1, z=1)],
+            ))
+        vk.vkCmdBlitImage(
+            cmd,
+            source_image,
+            vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            target,
+            vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            len(blits),
+            blits,
+            vk.VK_FILTER_LINEAR,
+        )
         self._transition(cmd, target, vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, vk.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR)
         if cuda_source:
             self._transition(cmd, source_image, vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vk.VK_IMAGE_LAYOUT_GENERAL)
@@ -1378,6 +1539,9 @@ def run_vulkan_local_viewer(*, runtime_q: Any, shutdown_event: Any, config: Vulk
                     fullscreen=False,
                     window_preview=False,
                     show_fps=False,
+                    display_mode="Mono",
+                    display_fit_mode="contain",
+                    display_fit_mode_provider=None,
                     on_sbs_fps=None,
                     on_breakdown_inc=None,
                     on_breakdown_add_time=None,

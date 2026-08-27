@@ -9,7 +9,13 @@ from utils.queue_utils import clear_nonblocking, drain_latest, put_latest
 
 
 class RuntimeCallbacks:
-    def __init__(self, context, *, show_fps: bool = False):
+    def __init__(
+        self,
+        context,
+        *,
+        show_fps: bool = False,
+        display_fit_mode: str = "contain",
+    ):
         self.context = context
         self.capture_control = None
         self.capture_session = None
@@ -22,6 +28,7 @@ class RuntimeCallbacks:
         self._runtime_fps = 0.0
         self._capture_frame_ts = deque(maxlen=120)
         self._show_fps = bool(show_fps)
+        self._display_fit_mode = str(display_fit_mode or "contain")
         self.stream_output = None
 
     def set_stream_output(self, output) -> None:
@@ -29,6 +36,9 @@ class RuntimeCallbacks:
 
     def show_fps(self) -> bool:
         return self._show_fps
+
+    def display_fit_mode(self) -> str:
+        return self._display_fit_mode
 
     def stereo_warmup_key(self, rgb_frame):
         return self.context.stereo_warmup_tracker.key_for_frame(rgb_frame)
@@ -309,8 +319,13 @@ class RuntimeCallbacks:
 
     def send_settings_snapshot(self, snapshot):
         presentation_flags = getattr(snapshot, "presentation_flags", None)
-        if isinstance(presentation_flags, dict) and "show_fps" in presentation_flags:
-            self._show_fps = bool(presentation_flags["show_fps"])
+        if isinstance(presentation_flags, dict):
+            if "show_fps" in presentation_flags:
+                self._show_fps = bool(presentation_flags["show_fps"])
+            if "display_fit_mode" in presentation_flags:
+                self._display_fit_mode = str(
+                    presentation_flags["display_fit_mode"] or "contain"
+                )
         put_latest(self.context.settings_update_q, snapshot)
 
     def update_openxr_runtime_config(
