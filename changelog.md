@@ -2,6 +2,8 @@
 
 ## 2026-08-27
 
+- 修正 Windows Python 环境安装流程：CUDA 与 ROCm 独立安装器现在都直接部署官方 Python 3.12.10 NuGet 完整运行时，不再要求 AMD 用户先运行 CUDA 安装器；每次安装均从全新运行时开始，保留完整 `Lib`、`DLLs`、`include`、`libs` 和 `ensurepip`，其中包含 `_ssl.pyd` 所需的 `libcrypto-3.dll` 与 `libssl-3.dll`。
+- 修复 Windows 跨显示器移动 GUI 时“窗口从 4K 显示器移到 1K 显示器后缩小，但控件和文字不随窗口整体缩放”的问题：根因不是 Flet 版本、Flet 客户端文件、GUI 固定尺寸或捕获子进程中的 `SetProcessDpiAwareness(2)`，而是 Windows 在用户注册表 `HKCU\Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers` 中，针对本工程 `src\python3\python.exe` 路径残留了 `HIGHDPIAWARE` 兼容性覆盖。删除该路径对应的注册表值并彻底重启 Python/Flet 进程后，恢复由 Windows 自动整体缩放窗口内容。诊断此类问题时应先比较新旧可执行文件路径的 AppCompatFlags，避免修改 Flet 文件、恢复 GUI 自行计算 DPI 缩放或删除捕获运行时所需的 DPI 设置。
 - 修复 NativeNVENC 带音频推流的卡顿和音画不同步：按 RFC 3550 使用同一媒体时钟关联音频/视频 RTP 时间戳，新增每轨 RTCP Sender Report（NTP↔RTP 映射）及同一同步上下文的 SDES CNAME，并通过独立优先级写队列让 Opus/RTCP 不再同步阻塞于 4K 视频批量发送；RTSP interleaved 通道按 RFC 7826 保持视频/RTCP 与音频/RTCP 配对。另修正 SDES RTCP `length` 字段漏计 4 字节 SSRC 的错误，避免 MediaMTX 报 `rtcp: packet too short`。
 - 修复 NativeNVENC 异步视频发送造成的 WebRTC 读取端积压：视频 RTP 队列改为有界背压策略（默认深度 3），队列满时阻塞视频提交线程等待发送端腾出空间（保留帧内 RTP 分片完整性），并按 RTP 时间戳对应的统一媒体时钟节流；音频和 RTCP 仍优先发送，避免 MediaMTX 报 `reader is too slow` 时继续无限堆积视频。视频 RTP sequence number 延迟到实际发送时分配，避免丢帧或退出时制造假的 `RTP packets lost` 序号空洞。该行为与 FFmpeg rawvideo stdin 的阻塞式背压一致，不再用主动丢帧掩盖编码发送端过载。
 - 完成 NativeNVENC 视频发送合规验证：新增序号连续性、完整视频帧分组、RTP 分片边界和背压测试；本地全量 `1304 passed`，GitHub Windows NVENC 构建与合规检查均成功。

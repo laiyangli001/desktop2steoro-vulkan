@@ -38,6 +38,21 @@ def test_calibration_fingerprint_ignores_capture_monitor_index():
     assert build_calibration_fingerprint(base) == build_calibration_fingerprint(changed)
 
 
+def test_calibration_fingerprint_ignores_show_fps_overlay():
+    base = {
+        "Show FPS": False,
+        "Input Display Resolution Tier": "4K",
+        "Stream Protocol": "WebRTC",
+    }
+    changed = dict(base, **{"Show FPS": True})
+
+    assert build_calibration_fingerprint(base) == build_calibration_fingerprint(changed)
+
+    # Profiles written before this fix may still contain the old UI field.
+    legacy_profile = dict(build_calibration_fingerprint(base), **{"Show FPS": "False"})
+    assert calibration_fingerprint_matches(legacy_profile, changed)
+
+
 @pytest.mark.parametrize(
     ("width", "height", "expected"),
     [(1920, 1080, "1K"), (2560, 1440, "2K"), (3840, 2160, "4K")],

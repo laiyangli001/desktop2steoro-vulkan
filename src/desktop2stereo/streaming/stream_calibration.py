@@ -36,6 +36,8 @@ _CALIBRATION_RESULT_KEYS = {
 _CALIBRATION_UI_KEYS = {
     "Language",
     "Show Log Panel",
+    # Displaying runtime FPS only changes the GUI overlay, not the stream.
+    "Show FPS",
     "Stream Key",
     "Stereo Mix",
     "Audio Delay",

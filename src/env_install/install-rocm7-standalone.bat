@@ -7,6 +7,10 @@ for %%I in ("%SCRIPT_DIR%..") do set "PROJECT_ROOT=%%~fI"
 set "PYTHON_ROOT=%PROJECT_ROOT%\python3"
 set "PYTHONPATH=%PYTHON_ROOT%;%PYTHONPATH%"
 set "PYTHON_EXE=%PYTHON_ROOT%\python.exe"
+set "PYTHON_VERSION=3.12.10"
+set "PYTHON_STAGING=%SCRIPT_DIR%python3.installing"
+set "PYTHON_ARCHIVE=%TEMP%\python-%PYTHON_VERSION%-nuget.zip"
+set "PYTHON_URL=https://www.nuget.org/api/v2/package/python/%PYTHON_VERSION%"
 set "PIP_RETRIES=10"
 set "PIP_TIMEOUT=180"
 if defined LOCALAPPDATA (
@@ -15,18 +19,20 @@ if defined LOCALAPPDATA (
     set "D2S_PIP_CACHE=%TEMP%\Desktop2Stereo-pip-cache"
 )
 
-if not exist "%PYTHON_EXE%" (
-    echo ERROR: Project-local Python was not found at "%PYTHON_EXE%".
-    echo Install the complete Python 3.12 x64 runtime in src\python3 first.
-    pause
-    exit /b 1
-)
-"%PYTHON_EXE%" -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) and sys.maxsize.bit_length() == 63 else 1)" >nul 2>nul
+echo - Installing fresh Python %PYTHON_VERSION% x64 runtime
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri '%PYTHON_URL%' -OutFile '%PYTHON_ARCHIVE%'"
 if errorlevel 1 (
-    echo ERROR: ROCm7 requires the project-local Python 3.12 x64 runtime.
+    echo Failed to download Python %PYTHON_VERSION% x64
     pause
     exit /b 1
 )
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $staging=[IO.Path]::GetFullPath('%PYTHON_STAGING%'); if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }; Expand-Archive -LiteralPath '%PYTHON_ARCHIVE%' -DestinationPath $staging -Force; $runtime=Join-Path $staging 'tools'; & (Join-Path $runtime 'python.exe') -c 'import ensurepip, ssl, sqlite3, sys; raise SystemExit(0 if sys.version_info[:3] == (3, 12, 10) and sys.maxsize.bit_length() == 63 else 1)'; if ($LASTEXITCODE -ne 0) { throw 'Complete Python runtime validation failed' }; $target=[IO.Path]::GetFullPath('%PYTHON_ROOT%'); if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force }; Move-Item -LiteralPath $runtime -Destination $target; Remove-Item -LiteralPath $staging -Recurse -Force"
+if errorlevel 1 (
+    echo Failed to install Python %PYTHON_VERSION% x64
+    pause
+    exit /b 1
+)
+if exist "%PYTHON_ARCHIVE%" del /f /q "%PYTHON_ARCHIVE%" >nul 2>nul
 
 REM --- Get AMD GPUs sorted by AdapterRAM (largest first) ---
 for /f "usebackq delims=" %%i in (`powershell -NoProfile -Command "Get-CimInstance Win32_VideoController | Where-Object Name -like '*AMD*' | Sort-Object AdapterRAM -Descending | ForEach-Object { $_.Name }"`) do (
