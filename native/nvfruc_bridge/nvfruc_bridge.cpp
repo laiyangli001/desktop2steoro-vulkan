@@ -209,7 +209,12 @@ int32_t d2s_nvfruc_probe(void) {
     if (status != cudaSuccess) {
         return fail_cuda(status, "cudaGetDevice");
     }
-    return 0;
+    // Creating a tiny real session verifies NVOFA/NvOFFRUC support instead
+    // of treating CUDA device discovery alone as sufficient capability.
+    auto* probe = new Session{16, 16, device, nullptr, {}, nullptr};
+    const int result = initialize_session(probe);
+    release_session(probe);
+    return result;
 }
 
 const char* d2s_nvfruc_last_error(void) {

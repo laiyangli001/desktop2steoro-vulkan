@@ -1,5 +1,6 @@
 import json
 
+import stereo_runtime.nvfruc as nvfruc
 from stereo_runtime.nvfruc_calibration import (
     NvFrucCalibrationCache,
     NvFrucCalibrationResult,
@@ -35,6 +36,13 @@ def test_calibration_cache_is_fingerprint_scoped(tmp_path):
     assert cache.load("different") is None
     payload = json.loads((tmp_path / "nvfruc-calibration.json").read_text(encoding="utf-8"))
     assert payload["fingerprint"] == fingerprint
+
+
+def test_probe_reports_platform_unavailability(monkeypatch):
+    monkeypatch.setattr(nvfruc.platform, "system", lambda: "Linux")
+    result = nvfruc.probe_nvfruc()
+    assert result.available is False
+    assert "Windows" in result.reason
 
 
 def test_runtime_downgrade_never_returns_zero():
