@@ -29,6 +29,7 @@ native/filament/bridge/*.exp
 native/filament/bridge/*.lib
 native/nvfruc_bridge/Optical_Flow_SDK_*.zip
 src/desktop2stereo/stereo_runtime/nvfruc/*.dll
+!src/desktop2stereo/stereo_runtime/nvfruc/NvOFFRUC.dll
 .ci-artifacts/
 .tools/
 artifacts/
