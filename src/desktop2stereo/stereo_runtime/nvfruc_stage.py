@@ -69,7 +69,7 @@ class NvFrucStage:
         output_format = str(
             self.output_format_provider() if self.output_format_provider else
             getattr(previous_result, "output_format", "half_sbs")
-        )
+        ).strip().lower() or "half_sbs"
         debug = dict(getattr(previous_result, "debug_info", {}) or {})
         debug["nvfruc_generated"] = True
         debug["nvfruc_timestamp"] = timestamp
