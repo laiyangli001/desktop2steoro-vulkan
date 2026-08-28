@@ -3,13 +3,10 @@ name: Build Windows NvFRUC Bridge
 on:
   workflow_dispatch:
     inputs:
-      sdk_url:
-        description: "HTTPS URL or signed URL for the NVIDIA Optical Flow SDK archive"
-        required: true
-        type: string
-      sdk_sha256:
-        description: "Optional SHA-256 of the SDK archive"
+      sdk_ref:
+        description: "Private SDK repository ref"
         required: false
+        default: "main"
         type: string
 
 permissions:
@@ -25,6 +22,15 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Checkout private NvFRUC SDK repository
+        uses: actions/checkout@v5
+        with:
+          repository: laiyangli001/desktop2stereo-nvfruc-sdk
+          ref: ${{ inputs.sdk_ref }}
+          token: ${{ secrets.NVOFFRUC_SDK_REPO_TOKEN }}
+          lfs: true
+          path: .ci-nvfruc-sdk
+
       - name: Install CUDA compiler and runtime
         uses: Jimver/cuda-toolkit@v0.2.36
         with:
@@ -32,22 +38,16 @@ jobs:
           method: network
           sub-packages: '["nvcc", "cudart", "visual_studio_integration"]'
 
-      - name: Download NVIDIA Optical Flow SDK
+      - name: Locate NVIDIA Optical Flow SDK
         shell: pwsh
-        env:
-          SDK_URL: ${{ inputs.sdk_url }}
-          SDK_SHA256: ${{ inputs.sdk_sha256 }}
         run: |
-          $archive = Join-Path $env:RUNNER_TEMP "optical-flow-sdk.zip"
-          Invoke-WebRequest -Uri $env:SDK_URL -OutFile $archive
-          if ($env:SDK_SHA256) {
-            $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
-            if ($actual -ne $env:SDK_SHA256.ToUpperInvariant()) {
-              throw "Optical Flow SDK SHA-256 mismatch"
-            }
+          $archive = Get-ChildItem -LiteralPath .ci-nvfruc-sdk -Filter "Optical_Flow_SDK_*.zip" |
+            Select-Object -First 1
+          if (-not $archive) {
+            throw "Optical Flow SDK archive was not found in the private dependency repository"
           }
           $sdkRoot = Join-Path $env:RUNNER_TEMP "optical-flow-sdk"
-          Expand-Archive -LiteralPath $archive -DestinationPath $sdkRoot -Force
+          Expand-Archive -LiteralPath $archive.FullName -DestinationPath $sdkRoot -Force
           $header = Get-ChildItem -LiteralPath $sdkRoot -Recurse -Filter NvOFFRUC.h |
             Select-Object -First 1
           if (-not $header) {
