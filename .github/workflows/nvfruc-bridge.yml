@@ -27,7 +27,8 @@ jobs:
         with:
           repository: laiyangli001/desktop2stereo-nvfruc-sdk
           ref: ${{ inputs.sdk_ref }}
-          token: ${{ secrets.NVOFFRUC_SDK_REPO_TOKEN }}
+          ssh-key: ${{ secrets.NVOFFRUC_SDK_DEPLOY_KEY }}
+          persist-credentials: false
           lfs: true
           path: .ci-nvfruc-sdk
 
