@@ -269,7 +269,7 @@ int32_t d2s_nvfruc_process(
         return -1;
     }
 
-    uint64_t repeated = 0;
+    bool repeated = false;
     NvOFFRUC_PROCESS_IN_PARAMS input{};
     NvOFFRUC_PROCESS_OUT_PARAMS output{};
     input.stFrameDataInput.pFrame = session->arrays[0];
