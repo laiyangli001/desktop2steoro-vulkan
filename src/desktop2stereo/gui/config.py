@@ -191,6 +191,8 @@ DEFAULTS = {
     "Audio Delay": -0.1,
     "Controller Model": "PICO",
     "Environment Model": "Default",
+    "NVIDIA Frame Generation": False,
+    # Legacy key is read only for migration from pre-NvFRUC settings.
     "Lossless Scaling Support": False,
     "Capture Tool": "none",
     "Display Fit Mode": "contain",

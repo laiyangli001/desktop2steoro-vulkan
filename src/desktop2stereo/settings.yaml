@@ -559,6 +559,7 @@ CRF: 23
 Audio Delay: -0.1
 Controller Model: PICO
 Environment Model: Default
+NVIDIA Frame Generation: false
 Lossless Scaling Support: false
 Capture Tool: WindowsCaptureCUDA
 Display Fit Mode: stretch

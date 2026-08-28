@@ -175,8 +175,19 @@ class GUIHandlerMixin:
                 self.capture_tool_dd.value = new_opts[0]
             self.capture_tool_dd.update()
         self._update_accelerator_visibility(device_label)
+        self._sync_nvfruc_visibility(device_label)
         self.auto_enable_optimizers_based_on_device()
         self._fit_window_to_content()
+
+    def _sync_nvfruc_visibility(self, device_label=None):
+        device_label = device_label if device_label is not None else self.device_dd.value
+        is_nvidia_cuda = (
+            OS_NAME == "Windows"
+            and "CUDA" in (device_label or "")
+            and not devices_module.IS_ROCM
+        )
+        self.lossless_cb.visible = is_nvidia_cuda
+        self.lossless_cb.disabled = not is_nvidia_cuda
 
     def _update_accelerator_visibility(self, device_label):
         cuda = "CUDA" in device_label
@@ -599,9 +610,9 @@ class GUIHandlerMixin:
         self.stereo_monitor_dd.visible = stereo_full
         if hasattr(self, '_stereo_spacer'):
             self._stereo_spacer.visible = stereo_full
-        self.lossless_cb.visible = (OS_NAME == "Windows" and mode == "RTMP Streamer")
+        self._sync_nvfruc_visibility()
         self.row9.visible = (not is_openxr) and (
-            stereo_full or display_fit_visible or self.lossless_cb.visible
+            stereo_full or display_fit_visible
         )
         row_map = self._get_streamer_row_map()
         row_indices = row_map.get(mode, []) if is_streamer and self.stream_settings_cb.value else []
@@ -803,6 +814,7 @@ class GUIHandlerMixin:
         self.display_fit_dd.value = self._display_fit_to_display(display_fit_mode)
         self.display_fit_dd.set_tooltip(t["tooltip_display_fit"])
         self.lossless_cb.label = t["Lossless Scaling Support"]
+        self.lossless_cb.tooltip = t["tooltip_nvfruc"]
         self.controller_label.value = t["Controller:"]
         self.environment_label.value = t["Environment:"]
         self._refresh_environment_options()

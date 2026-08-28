@@ -738,9 +738,15 @@ class GUIBuilderMixin:
             value=environment_display_label(self.env_key, self.locale, self.env_model_display_names),
             on_select=self.on_env_change,
             width=S(130))
+        self.lossless_cb = ft.Checkbox(
+            scale=SCALE,
+            visual_density=ft.VisualDensity.COMPACT,
+            label="NvFRUC 补帧",
+            tooltip=UI_MESSAGES[self.locale]["tooltip_nvfruc"],
+        )
         self.row7a = ft.Row([
-            self.run_mode_label, self.run_mode_dd, ft.Container(width=S(40)),
-            self.stream_settings_cb,
+            self.run_mode_label, self.run_mode_dd, self.lossless_cb,
+            ft.Container(width=S(40)), self.stream_settings_cb,
         ], spacing=1)
         self.xr_headset_row = ft.Row(
             [self.xr_headset_label, self.xr_headset_dd, ft.Container(width=S(40)),
@@ -771,11 +777,10 @@ class GUIBuilderMixin:
             on_select=self.on_stereo_hot_param_change,
             tooltip=fit_tooltip,
         )
-        self.lossless_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="LSFG")
         self._stereo_spacer = ft.Container(width=S(10))
         self.row9 = ft.Row([
             self.stereo_output_label, self.stereo_monitor_dd, self._stereo_spacer,
-            self.display_fit_dd, self.lossless_cb,
+            self.display_fit_dd,
         ], spacing=1)
 
         # Bottom: Language + Theme + Buttons

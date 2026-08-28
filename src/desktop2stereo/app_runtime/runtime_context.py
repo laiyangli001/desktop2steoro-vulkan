@@ -47,6 +47,8 @@ class AppRuntimeContext:
     render_size_config: RenderSizeConfig
     application_runtime_target: str
     output_transport: str
+    # True when the GUI requested the process-local NVIDIA NvFRUC stage.
+    nvfruc_frame_generation: bool
 
 
 def initial_stereo_preset_state(config):
@@ -105,6 +107,12 @@ def create_runtime_context(
     capture_fps_provider=None,
 ):
     base_dir = os.path.dirname(os.path.abspath(file_path))
+    nvfruc_frame_generation = bool(
+        settings.get(
+            "NVIDIA Frame Generation",
+            settings.get("Lossless Scaling Support", False),
+        )
+    )
     use_cudart = "CUDA" in device_info and "ZLUDA" not in device_info
     time_sleep = 1.0 / fps
     openxr_runtime_direct = str(
@@ -198,6 +206,7 @@ def create_runtime_context(
         render_size_config=render_size_config or RenderSizeConfig(),
         application_runtime_target=application_runtime_target,
         output_transport=output_transport,
+        nvfruc_frame_generation=nvfruc_frame_generation,
     )
 
 

@@ -157,7 +157,10 @@ class GUIConfigMixin:
         self.display_fit_dd.options = self._display_fit_options()
         self.display_fit_dd.value = self._display_fit_to_display(
             cfg.get("Display Fit Mode", DEFAULTS["Display Fit Mode"]))
-        self.lossless_cb.value = cfg.get("Lossless Scaling Support", DEFAULTS["Lossless Scaling Support"])
+        self.lossless_cb.value = cfg.get(
+            "NVIDIA Frame Generation",
+            cfg.get("Lossless Scaling Support", DEFAULTS["NVIDIA Frame Generation"]),
+        )
         if keep_optional:
             self.locale = cfg.get("Language", DEFAULTS["Language"])
             self.lang_dd.value = "English" if self.locale == "EN" else "简体中文"
@@ -391,7 +394,7 @@ class GUIConfigMixin:
             # Retain the legacy keys for older runtime packages reading the same YAML.
             "Fill 16:9": self._display_to_display_fit(self.display_fit_dd.value) == "contain",
             "Fix Viewer Aspect": self._display_to_display_fit(self.display_fit_dd.value) != "stretch",
-            "Lossless Scaling Support": self.lossless_cb.value,
+            "NVIDIA Frame Generation": bool(self.lossless_cb.value),
             "Stream Key": self.stream_key_tf.value,
             "Video Encoder Backend": {
                 "Auto": "auto",

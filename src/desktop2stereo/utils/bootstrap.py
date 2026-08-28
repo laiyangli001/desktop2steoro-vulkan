@@ -82,6 +82,7 @@ def _normalize_legacy_settings(settings: dict) -> dict:
         "CRF": 23,
         "Audio Delay": -0.1,
         "Capture Tool": str(capture.get("tool", "none")),
+        "NVIDIA Frame Generation": False,
         "Lossless Scaling Support": False,
         "Stereo Output": None,
         "Stereo Output Identity": None,
