@@ -29,6 +29,7 @@ class NvFrucStage:
         output_format_provider: Callable[[], str] | None = None,
         device_index: int = 0,
         cuda_stream: int = 0,
+        calibration_controller: Any | None = None,
         on_status: Callable[[str], None] | None = None,
     ) -> None:
         self.input_q = input_q
@@ -37,6 +38,7 @@ class NvFrucStage:
         self.output_format_provider = output_format_provider
         self.device_index = int(device_index)
         self.cuda_stream = int(cuda_stream)
+        self.calibration_controller = calibration_controller
         self.on_status = on_status
         self._generator: NvFrucStereoGenerator | None = None
         self._previous: tuple[Any, float] | None = None
@@ -47,6 +49,8 @@ class NvFrucStage:
         self._resets = 0
         self._interpolate_seconds = 0.0
         self._last_report = time.perf_counter()
+        if self.calibration_controller is not None:
+            self.calibration_controller.start()
 
     def _status(self, message: str) -> None:
         if self.on_status is not None:
@@ -148,7 +152,22 @@ class NvFrucStage:
             next_timestamp=current_ts,
             output_timestamp=(previous_ts + current_ts) * 0.5,
         )
-        self._interpolate_seconds += time.perf_counter() - interpolate_started
+        interpolate_seconds = time.perf_counter() - interpolate_started
+        self._interpolate_seconds += interpolate_seconds
+        if self.calibration_controller is not None:
+            calibration_result = self.calibration_controller.observe(
+                process_ms=interpolate_seconds * 1000.0,
+                submitted_fps=0.0,
+                queue_depth=self.output_q.qsize(),
+                group_drops=self._group_drops,
+            )
+            if calibration_result is not None and calibration_result.phase in {"verify", "complete", "cached"}:
+                self._status(
+                    "NvFRUC calibration: "
+                    f"phase={calibration_result.phase} "
+                    f"safe={calibration_result.safe_output_fps} "
+                    f"base={calibration_result.base_runtime_fps}"
+                )
         generated_result = self._make_generated_result(
             current_result,
             generated_left,
@@ -214,8 +233,7 @@ class NvFrucStage:
                             self._generator.reset()
                         except Exception:
                             pass
-                    self._put(previous)
-                    self._put(current)
+                    self._put_group([previous, current])
                     self._previous = None
         finally:
             self.close()

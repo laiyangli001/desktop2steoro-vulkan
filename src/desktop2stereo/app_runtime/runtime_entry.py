@@ -57,7 +57,12 @@ from .runtime_context import (
 )
 from .runtime_output import VulkanRuntimeOutputConsumer
 from stereo_runtime.nvfruc import probe_nvfruc
-from stereo_runtime.nvfruc_calibration import output_base_fps
+from stereo_runtime.nvfruc_calibration import (
+    NvFrucCalibrationCache,
+    NvFrucCalibrationController,
+    calibration_fingerprint,
+    output_base_fps,
+)
 from stereo_runtime.nvfruc_stage import NvFrucStage
 
 
@@ -483,6 +488,7 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
         convergence=CONVERGENCE,
         capture_fps_provider=adaptive_capture_rate.current_fps,
     )
+    nvfruc_calibration = None
     if context.nvfruc_frame_generation:
         nvfruc_probe = probe_nvfruc()
         if not nvfruc_probe.available:
@@ -498,6 +504,37 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
             if stop_request_thread is not None:
                 stop_request_thread.join(timeout=0.2)
             return 1
+
+        calibration_values = {
+            "device": str(DEVICE_INFO),
+            "depth_model": str(settings.get("Depth Model", "")),
+            "inference_backend": str(settings.get("Inference Backend", "")),
+            "precision": str(settings.get("Precision", "")),
+            "input_resolution": str(OUTPUT_RESOLUTION),
+            "run_mode": configured_run_mode,
+            "output_format": str(settings.get("Output Format", "")),
+            "encoder": str(settings.get("Video Encoder Backend", "auto")),
+        }
+        calibration_fingerprint_value = calibration_fingerprint(calibration_values)
+        calibration_cache = NvFrucCalibrationCache(
+            Path(context.base_dir) / "models" / "nvfruc"
+        )
+
+        def apply_nvfruc_limit(output_limit: int) -> None:
+            base_limit = output_base_fps(output_limit, enabled=True)
+            adaptive_capture_rate.set_calibration_limit(base_limit)
+            print(
+                "[NvFRUC] calibrated output limit: "
+                f"output={int(output_limit)} base_runtime={int(base_limit)}",
+                flush=True,
+            )
+
+        nvfruc_calibration = NvFrucCalibrationController(
+            output_target_fps=int(FPS),
+            fingerprint=calibration_fingerprint_value,
+            cache=calibration_cache,
+            on_limit=apply_nvfruc_limit,
+        )
 
     callbacks = RuntimeCallbacks(
         context,
@@ -669,6 +706,7 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
             output_format_provider=lambda: getattr(
                 context.runtime_config, "output_format", "half_sbs"
             ),
+            calibration_controller=nvfruc_calibration,
             on_status=lambda message: print(f"[NvFRUC] {message}", flush=True),
         )
         presentation_q = context.presentation_q

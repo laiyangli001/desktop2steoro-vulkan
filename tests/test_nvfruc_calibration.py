@@ -8,6 +8,7 @@ from stereo_runtime.nvfruc_calibration import (
     calculate_safe_output_limit,
     downgrade_target_fps,
     output_base_fps,
+    NvFrucCalibrationController,
 )
 
 
@@ -43,6 +44,33 @@ def test_probe_reports_platform_unavailability(monkeypatch):
     result = nvfruc.probe_nvfruc()
     assert result.available is False
     assert "Windows" in result.reason
+
+
+def test_calibration_controller_runs_warmup_measurement_and_verification(tmp_path):
+    now = [0.0]
+    limits = []
+    controller = NvFrucCalibrationController(
+        output_target_fps=60,
+        fingerprint="test",
+        cache=NvFrucCalibrationCache(tmp_path),
+        clock=lambda: now[0],
+        on_limit=limits.append,
+    )
+    assert controller.start() is None
+    now[0] = 2.0
+    assert controller.observe(process_ms=10.0, now=now[0]) is None
+    now[0] = 3.0
+    assert controller.observe(process_ms=10.0, now=now[0]) is None
+    assert controller.phase == "measure"
+    now[0] = 13.0
+    pending = controller.observe(process_ms=10.0, now=now[0])
+    assert pending is not None and pending.reason == "verification_pending"
+    assert controller.current_target_fps == 60
+    now[0] = 18.0
+    result = controller.observe(process_ms=10.0, now=now[0])
+    assert result is not None and result.passed is True
+    assert controller.phase == "complete"
+    assert limits[-1] == 60
 
 
 def test_runtime_downgrade_never_returns_zero():
