@@ -76,3 +76,25 @@ def test_calibration_controller_runs_warmup_measurement_and_verification(tmp_pat
 def test_runtime_downgrade_never_returns_zero():
     assert downgrade_target_fps(60) == 54
     assert downgrade_target_fps(1) == 1
+
+
+def test_monitor_submission_downshifts_after_three_bad_windows(tmp_path):
+    now = [0.0]
+    limits = []
+    controller = NvFrucCalibrationController(
+        output_target_fps=60,
+        fingerprint="monitor",
+        cache=NvFrucCalibrationCache(tmp_path),
+        clock=lambda: now[0],
+        on_limit=limits.append,
+    )
+    controller.start()
+    controller.phase = "complete"
+    controller.current_target_fps = 60
+    controller._monitor_started = 0.0
+    for window in range(3):
+        now[0] = (window + 1) * 3.0
+        assert controller.monitor_submission(50.0, now=now[0]) in {54, 60}
+    assert controller.current_target_fps == 54
+    assert controller.downgrade_count == 1
+    assert limits[-1] == 54

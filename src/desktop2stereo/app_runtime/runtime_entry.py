@@ -552,6 +552,15 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
             capture_fps=capture_fps,
             frame_count=frame_count,
         )
+        if nvfruc_calibration is not None:
+            previous_target = nvfruc_calibration.current_target_fps
+            monitored_target = nvfruc_calibration.monitor_submission(sbs_fps)
+            if monitored_target < previous_target:
+                print(
+                    "[NvFRUC] sustained output underrun; "
+                    f"downshifted output target {previous_target} -> {monitored_target} FPS",
+                    flush=True,
+                )
         if float(sbs_fps) < 5.0:
             low_sbs_report_count += 1
             if low_sbs_report_count <= 5 or low_sbs_report_count % 6 == 0:

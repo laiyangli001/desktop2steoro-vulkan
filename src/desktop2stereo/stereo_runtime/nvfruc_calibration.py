@@ -167,6 +167,10 @@ class NvFrucCalibrationController:
         self._drop_samples: list[float] = []
         self.result: NvFrucCalibrationResult | None = None
         self.current_target_fps = self.output_target_fps
+        self._monitor_started: float | None = None
+        self._monitor_samples: list[float] = []
+        self._monitor_bad_windows = 0
+        self._downgrade_count = 0
 
     @property
     def active(self) -> bool:
@@ -178,6 +182,9 @@ class NvFrucCalibrationController:
             self.result = cached
             self.current_target_fps = min(self.output_target_fps, cached.safe_output_fps)
             self.phase = "cached"
+            self._monitor_started = self._clock()
+            self._monitor_samples.clear()
+            self._monitor_bad_windows = 0
             if self.on_limit is not None:
                 self.on_limit(self.current_target_fps)
             return cached
@@ -186,6 +193,10 @@ class NvFrucCalibrationController:
         self._samples.clear()
         self._queue_samples.clear()
         self._drop_samples.clear()
+        self._monitor_started = self._clock()
+        self._monitor_samples.clear()
+        self._monitor_bad_windows = 0
+        self._downgrade_count = 0
         self.result = None
         return None
 
@@ -250,6 +261,44 @@ class NvFrucCalibrationController:
                 self.cache.save(self.fingerprint, self.result)
             return self.result
         return self.result
+
+    def monitor_submission(
+        self,
+        submitted_fps: float,
+        *,
+        now: float | None = None,
+    ) -> int:
+        """Monitor completed output in 3-second windows and only downshift."""
+        if self.phase not in {"cached", "complete"} or self._monitor_started is None:
+            return self.current_target_fps
+        try:
+            measured = max(0.0, float(submitted_fps))
+        except (TypeError, ValueError):
+            return self.current_target_fps
+        timestamp = self._clock() if now is None else float(now)
+        self._monitor_samples.append(measured)
+        if timestamp - self._monitor_started < 3.0:
+            return self.current_target_fps
+        average = (
+            sum(self._monitor_samples) / len(self._monitor_samples)
+            if self._monitor_samples
+            else 0.0
+        )
+        if average < self.current_target_fps * 0.95:
+            self._monitor_bad_windows += 1
+        else:
+            self._monitor_bad_windows = 0
+        self._monitor_samples.clear()
+        self._monitor_started = timestamp
+        if self._monitor_bad_windows >= 3 and self.current_target_fps > 1:
+            self._monitor_bad_windows = 0
+            self._downgrade_count += 1
+            return self.downgrade()
+        return self.current_target_fps
+
+    @property
+    def downgrade_count(self) -> int:
+        return self._downgrade_count
 
     def downgrade(self) -> int:
         self.current_target_fps = downgrade_target_fps(self.current_target_fps)

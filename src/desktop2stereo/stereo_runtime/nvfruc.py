@@ -362,6 +362,13 @@ class NvFrucStereoGenerator:
         left_next = _to_argb_hwc(next_left)
         right_prev = _to_argb_hwc(prev_right)
         right_next = _to_argb_hwc(next_right)
+        if (
+            tuple(left_prev.shape) != tuple(left_next.shape)
+            or tuple(right_prev.shape) != tuple(right_next.shape)
+            or tuple(left_prev.shape) != tuple(right_prev.shape)
+        ):
+            raise ValueError("NvFRUC requires matching stereo frame dimensions")
+        self._rebuild_for_shape(int(left_prev.shape[0]), int(left_prev.shape[1]))
         import torch
 
         left_output = torch.empty_like(left_prev)
