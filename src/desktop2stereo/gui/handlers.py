@@ -444,9 +444,14 @@ class GUIHandlerMixin:
         self._fit_window_to_content()
 
     def _on_monitor_change(self, e):
+        self._missing_monitor_identity = False
         self.update_stereo_monitor_menu()
         self._fit_window_to_content()
         self.set_status(f"{UI_MESSAGES[self.locale]['Selected input monitor:']} {e.control.value}")
+
+    def _on_stereo_monitor_change(self, _e):
+        self._missing_stereo_output_identity = False
+        self._fit_window_to_content()
 
     # ── run mode / visibility handlers ──
 

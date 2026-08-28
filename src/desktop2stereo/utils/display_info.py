@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
 import os
 import re
@@ -22,6 +23,10 @@ class DisplayInfo:
     model: str | None = None
     serial: str | None = None
     device_display_number: int | None = None
+    output_technology: int | None = None
+    display_kind: str = "unknown"
+    display_kind_source: str = "unknown"
+    monitor_device_path: str | None = None
 
     @property
     def rect(self) -> tuple[int, int, int, int]:
@@ -47,6 +52,68 @@ def enumerate_displays(os_name: str | None = None) -> list[DisplayInfo]:
     else:
         displays = _enrich_linux(displays)
     return _assign_display_numbers(displays, platform_name)
+
+
+def display_identity_record(
+    display: DisplayInfo | Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Return the stable, serializable fields used to find a display again."""
+    if display is None:
+        return None
+    values = display.as_dict() if isinstance(display, DisplayInfo) else dict(display)
+    keys = (
+        "stable_id",
+        "name",
+        "manufacturer",
+        "model",
+        "serial",
+        "left",
+        "top",
+        "width",
+        "height",
+    )
+    return {key: values[key] for key in keys if values.get(key) is not None}
+
+
+def resolve_display_capture_index(
+    saved_index: Any,
+    identity: Mapping[str, Any] | None,
+    displays: Iterable[DisplayInfo] | None = None,
+) -> int | None:
+    """Resolve a saved identity, returning None when that display is unavailable."""
+    try:
+        fallback_index = max(1, int(saved_index))
+    except (TypeError, ValueError):
+        fallback_index = 1
+    if not isinstance(identity, Mapping) or not identity:
+        return fallback_index
+
+    known = list(displays) if displays is not None else enumerate_displays()
+    if not known:
+        return None
+
+    def integer(key: str, fallback: int = 0) -> int:
+        try:
+            return int(identity.get(key, fallback))
+        except (TypeError, ValueError):
+            return fallback
+
+    target = DisplayInfo(
+        capture_index=fallback_index,
+        # Display numbers are transient; identity matching must never reuse them.
+        display_number=0,
+        left=integer("left"),
+        top=integer("top"),
+        width=integer("width"),
+        height=integer("height"),
+        stable_id=str(identity.get("stable_id") or "").strip() or None,
+        name=str(identity.get("name") or "").strip() or None,
+        manufacturer=str(identity.get("manufacturer") or "").strip() or None,
+        model=str(identity.get("model") or "").strip() or None,
+        serial=str(identity.get("serial") or "").strip() or None,
+    )
+    matched = match_display_index(target, known)
+    return int(known[matched].capture_index) if matched is not None else None
 
 
 def resolve_glfw_monitor_index(
@@ -153,6 +220,7 @@ def _mss_displays() -> list[DisplayInfo]:
 
 def _enrich_windows(displays: list[DisplayInfo]) -> list[DisplayInfo]:
     metadata = _windows_wmi_metadata()
+    display_config = _windows_display_config_metadata()
     device_numbers: dict[tuple[int, int, int, int], int] = {}
     try:
         import win32api
@@ -168,6 +236,8 @@ def _enrich_windows(displays: list[DisplayInfo]) -> list[DisplayInfo]:
     enriched = []
     for display in displays:
         monitor_metadata = metadata.get(_windows_instance_key(display.stable_id), {})
+        device_display_number = device_numbers.get(display.rect)
+        target_metadata = display_config.get(device_display_number, {})
         enriched.append(
             replace(
                 display,
@@ -176,10 +246,330 @@ def _enrich_windows(displays: list[DisplayInfo]) -> list[DisplayInfo]:
                 manufacturer=monitor_metadata.get("manufacturer"),
                 model=monitor_metadata.get("model"),
                 serial=monitor_metadata.get("serial"),
-                device_display_number=device_numbers.get(display.rect),
+                device_display_number=device_display_number,
+                output_technology=target_metadata.get("output_technology"),
+                display_kind=target_metadata.get("display_kind", "unknown"),
+                display_kind_source=target_metadata.get(
+                    "display_kind_source", "unknown"
+                ),
+                monitor_device_path=target_metadata.get("monitor_device_path"),
             )
         )
     return enriched
+
+
+def resolve_windows_fullscreen_policy(
+    capture_index: int,
+    displays: Iterable[DisplayInfo] | None = None,
+) -> tuple[str, DisplayInfo | None]:
+    """Choose capture-compatible DWM for physical or unclassified targets."""
+    known = list(displays) if displays is not None else enumerate_displays("Windows")
+    target = next(
+        (item for item in known if item.capture_index == int(capture_index)),
+        None,
+    )
+    if target is None or target.display_kind in {"physical", "unknown"}:
+        return "capture_compatible", target
+    return "exclusive", target
+
+
+def classify_windows_output_technology(value: Any) -> str:
+    """Classify a QueryDisplayConfig output target without name heuristics."""
+    try:
+        technology = int(value) & 0xFFFFFFFF
+    except (TypeError, ValueError):
+        return "unknown"
+    if technology == 17:
+        return "virtual"
+    if technology == 16:
+        return "indirect"
+    if technology == 15:
+        return "remote"
+    if technology == 0x80000000 or 0 <= technology <= 14:
+        return "physical"
+    return "unknown"
+
+
+def _windows_monitor_instance_id(monitor_device_path: str | None) -> str | None:
+    text = str(monitor_device_path or "").strip()
+    if not text:
+        return None
+    if text.startswith("\\\\?\\"):
+        text = text[4:]
+    text = text.split("#{", 1)[0]
+    return text.replace("#", "\\") or None
+
+
+def _windows_parent_device_id(monitor_device_path: str | None) -> str | None:
+    if os.name != "nt":
+        return None
+    instance_id = _windows_monitor_instance_id(monitor_device_path)
+    if not instance_id:
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        cfgmgr32 = ctypes.windll.cfgmgr32
+        device = wintypes.ULONG()
+        parent = wintypes.ULONG()
+        if int(cfgmgr32.CM_Locate_DevNodeW(ctypes.byref(device), instance_id, 0)) != 0:
+            return None
+        if int(cfgmgr32.CM_Get_Parent(ctypes.byref(parent), device, 0)) != 0:
+            return None
+        size = wintypes.ULONG()
+        if int(cfgmgr32.CM_Get_Device_ID_Size(ctypes.byref(size), parent, 0)) != 0:
+            return None
+        output = ctypes.create_unicode_buffer(int(size.value) + 1)
+        if int(cfgmgr32.CM_Get_Device_IDW(parent, output, len(output), 0)) != 0:
+            return None
+        return str(output.value or "").strip() or None
+    except Exception:
+        return None
+
+
+def _windows_virtual_display_parent(
+    monitor_device_path: str | None,
+) -> tuple[bool | None, str | None]:
+    """Identify virtual adapters that advertise a physical connector type."""
+    parent_id = _windows_parent_device_id(monitor_device_path)
+    if not parent_id:
+        return None, None
+    try:
+        import winreg
+
+        key_path = rf"SYSTEM\CurrentControlSet\Enum\{parent_id}"
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path) as key:
+            values: dict[str, Any] = {}
+            for name in ("HardwareID", "DeviceDesc", "FriendlyName", "Mfg", "Service"):
+                try:
+                    values[name] = winreg.QueryValueEx(key, name)[0]
+                except OSError:
+                    continue
+    except Exception:
+        values = {}
+
+    fields = [parent_id]
+    for value in values.values():
+        if isinstance(value, (list, tuple)):
+            fields.extend(str(item) for item in value)
+        else:
+            fields.append(str(value))
+    evidence = " ".join(fields).casefold()
+    virtual_tokens = (
+        "virtual display",
+        "virtualdisplay",
+        "mttvdd",
+        "iddsample",
+        "indirect display",
+        "spacedesk",
+        "parsec",
+        "usbmmidd",
+    )
+    is_root_display = parent_id.upper().startswith("ROOT\\DISPLAY\\")
+    is_virtual = is_root_display or any(token in evidence for token in virtual_tokens)
+    return is_virtual, parent_id
+
+
+def _windows_display_config_metadata() -> dict[int, dict[str, Any]]:
+    """Return active Windows display targets keyed by their DISPLAY number."""
+    if os.name != "nt":
+        return {}
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class LUID(ctypes.Structure):
+            _fields_ = [("LowPart", wintypes.DWORD), ("HighPart", wintypes.LONG)]
+
+        class RATIONAL(ctypes.Structure):
+            _fields_ = [("Numerator", wintypes.UINT), ("Denominator", wintypes.UINT)]
+
+        class REGION(ctypes.Structure):
+            _fields_ = [("cx", wintypes.UINT), ("cy", wintypes.UINT)]
+
+        class PATH_SOURCE_INFO(ctypes.Structure):
+            _fields_ = [
+                ("adapterId", LUID),
+                ("id", wintypes.UINT),
+                ("modeInfoIdx", wintypes.UINT),
+                ("statusFlags", wintypes.UINT),
+            ]
+
+        class PATH_TARGET_INFO(ctypes.Structure):
+            _fields_ = [
+                ("adapterId", LUID),
+                ("id", wintypes.UINT),
+                ("modeInfoIdx", wintypes.UINT),
+                ("outputTechnology", wintypes.UINT),
+                ("rotation", wintypes.UINT),
+                ("scaling", wintypes.UINT),
+                ("refreshRate", RATIONAL),
+                ("scanLineOrdering", wintypes.UINT),
+                ("targetAvailable", wintypes.BOOL),
+                ("statusFlags", wintypes.UINT),
+            ]
+
+        class PATH_INFO(ctypes.Structure):
+            _fields_ = [
+                ("sourceInfo", PATH_SOURCE_INFO),
+                ("targetInfo", PATH_TARGET_INFO),
+                ("flags", wintypes.UINT),
+            ]
+
+        class VIDEO_SIGNAL_INFO(ctypes.Structure):
+            _fields_ = [
+                ("pixelRate", ctypes.c_uint64),
+                ("hSyncFreq", RATIONAL),
+                ("vSyncFreq", RATIONAL),
+                ("activeSize", REGION),
+                ("totalSize", REGION),
+                ("videoStandard", wintypes.UINT),
+                ("scanLineOrdering", wintypes.UINT),
+            ]
+
+        class TARGET_MODE(ctypes.Structure):
+            _fields_ = [("targetVideoSignalInfo", VIDEO_SIGNAL_INFO)]
+
+        class POINTL(ctypes.Structure):
+            _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
+
+        class SOURCE_MODE(ctypes.Structure):
+            _fields_ = [
+                ("width", wintypes.UINT),
+                ("height", wintypes.UINT),
+                ("pixelFormat", wintypes.UINT),
+                ("position", POINTL),
+            ]
+
+        class DESKTOP_IMAGE_INFO(ctypes.Structure):
+            _fields_ = [
+                ("PathSourceSize", POINTL),
+                ("DesktopImageRegion", wintypes.RECT),
+                ("DesktopImageClip", wintypes.RECT),
+            ]
+
+        class MODE_UNION(ctypes.Union):
+            _fields_ = [
+                ("targetMode", TARGET_MODE),
+                ("sourceMode", SOURCE_MODE),
+                ("desktopImageInfo", DESKTOP_IMAGE_INFO),
+            ]
+
+        class MODE_INFO(ctypes.Structure):
+            _anonymous_ = ("mode",)
+            _fields_ = [
+                ("infoType", wintypes.UINT),
+                ("id", wintypes.UINT),
+                ("adapterId", LUID),
+                ("mode", MODE_UNION),
+            ]
+
+        class DEVICE_INFO_HEADER(ctypes.Structure):
+            _fields_ = [
+                ("type", wintypes.UINT),
+                ("size", wintypes.UINT),
+                ("adapterId", LUID),
+                ("id", wintypes.UINT),
+            ]
+
+        class SOURCE_DEVICE_NAME(ctypes.Structure):
+            _fields_ = [
+                ("header", DEVICE_INFO_HEADER),
+                ("viewGdiDeviceName", wintypes.WCHAR * 32),
+            ]
+
+        class TARGET_DEVICE_NAME(ctypes.Structure):
+            _fields_ = [
+                ("header", DEVICE_INFO_HEADER),
+                ("flags", wintypes.UINT),
+                ("outputTechnology", wintypes.UINT),
+                ("edidManufactureId", wintypes.USHORT),
+                ("edidProductCodeId", wintypes.USHORT),
+                ("connectorInstance", wintypes.UINT),
+                ("monitorFriendlyDeviceName", wintypes.WCHAR * 64),
+                ("monitorDevicePath", wintypes.WCHAR * 128),
+            ]
+
+        user32 = ctypes.windll.user32
+        qdc_only_active_paths = 0x00000002
+        error_insufficient_buffer = 122
+        path_count = wintypes.UINT()
+        mode_count = wintypes.UINT()
+        for _attempt in range(3):
+            result = int(
+                user32.GetDisplayConfigBufferSizes(
+                    qdc_only_active_paths,
+                    ctypes.byref(path_count),
+                    ctypes.byref(mode_count),
+                )
+            )
+            if result != 0:
+                return {}
+            paths = (PATH_INFO * max(1, int(path_count.value)))()
+            modes = (MODE_INFO * max(1, int(mode_count.value)))()
+            result = int(
+                user32.QueryDisplayConfig(
+                    qdc_only_active_paths,
+                    ctypes.byref(path_count),
+                    paths,
+                    ctypes.byref(mode_count),
+                    modes,
+                    None,
+                )
+            )
+            if result == error_insufficient_buffer:
+                continue
+            if result != 0:
+                return {}
+            break
+        else:
+            return {}
+
+        result_by_number: dict[int, dict[str, Any]] = {}
+        for path in paths[: int(path_count.value)]:
+            source = SOURCE_DEVICE_NAME()
+            source.header.type = 1
+            source.header.size = ctypes.sizeof(SOURCE_DEVICE_NAME)
+            source.header.adapterId = path.sourceInfo.adapterId
+            source.header.id = path.sourceInfo.id
+            if int(user32.DisplayConfigGetDeviceInfo(ctypes.byref(source))) != 0:
+                continue
+            display_number = _windows_display_number(source.viewGdiDeviceName)
+            if display_number is None:
+                continue
+
+            target = TARGET_DEVICE_NAME()
+            target.header.type = 2
+            target.header.size = ctypes.sizeof(TARGET_DEVICE_NAME)
+            target.header.adapterId = path.targetInfo.adapterId
+            target.header.id = path.targetInfo.id
+            target_result = int(
+                user32.DisplayConfigGetDeviceInfo(ctypes.byref(target))
+            )
+            technology = int(path.targetInfo.outputTechnology) & 0xFFFFFFFF
+            monitor_device_path = (
+                str(target.monitorDevicePath or "").strip() or None
+                if target_result == 0
+                else None
+            )
+            display_kind = classify_windows_output_technology(technology)
+            display_kind_source = "output_technology"
+            virtual_parent, parent_id = _windows_virtual_display_parent(
+                monitor_device_path
+            )
+            if virtual_parent is True:
+                display_kind = "virtual"
+                display_kind_source = f"pnp_parent:{parent_id}"
+            result_by_number[display_number] = {
+                "output_technology": technology,
+                "display_kind": display_kind,
+                "display_kind_source": display_kind_source,
+                "monitor_device_path": monitor_device_path,
+            }
+        return result_by_number
+    except Exception:
+        return {}
 
 
 def _windows_wmi_metadata() -> dict[str, dict[str, str | None]]:

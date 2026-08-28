@@ -229,7 +229,7 @@ def test_switching_local_input_to_output_monitor_selects_last_other_monitor():
     assert gui.stereo_monitor_dd.value == "2: 2560x1440 @ (1920,0)"
 
 
-def test_saved_local_output_cannot_match_input_monitor():
+def test_invalid_saved_local_output_requires_explicit_reselection():
     shared = "2: 2560x1440 @ (1920,0)"
     gui = FakeMonitorGui(monitor_value=shared)
     gui.monitor_label_to_index = {
@@ -241,7 +241,7 @@ def test_saved_local_output_cannot_match_input_monitor():
 
     monitor_mixin._apply_stereo_output(gui, {"Stereo Output": 2})
 
-    assert gui.stereo_monitor_dd.value == "1: 1920x1080 @ (0,0)"
+    assert gui.stereo_monitor_dd.value == ""
 
 
 def test_3d_monitor_output_can_match_input_monitor():

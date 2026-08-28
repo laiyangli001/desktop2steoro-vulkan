@@ -1255,6 +1255,18 @@ class GUIProcessMixin:
     def _validate_config_before_run(self):
         if self.run_mode_key == "Local Viewer" and self._get_monitor_count() <= 1:
             return False, UI_MESSAGES[self.locale]["Local Viewer requires a second display"]
+        if self.capture_mode_key == "Monitor" and (
+            getattr(self, "_missing_monitor_identity", False)
+            or not self.monitor_dd.value
+        ):
+            return False, UI_MESSAGES[self.locale]["Selected input display is unavailable"]
+        if self.run_mode_key in {"Local Viewer", "3D Monitor"} and (
+            getattr(self, "_missing_stereo_output_identity", False)
+            or not self.stereo_monitor_dd.value
+        ):
+            return False, UI_MESSAGES[self.locale][
+                "Selected stereo output display is unavailable"
+            ]
         try:
             port_val = int(self.stream_port_tf.value) if self.stream_port_tf.value else DEFAULT_PORT
             if not (1 <= port_val <= 65535):
@@ -1372,6 +1384,7 @@ class GUIProcessMixin:
             child_env = os.environ.copy()
             child_env["DESKTOP2STEREO_LOCALE"] = self.locale
             child_env["PYTHONIOENCODING"] = "utf-8"
+            child_env["D2S_STOP_REQUEST_FILE"] = STOP_REQUEST_FILE
             calibration_requested = self._calibration_run_requested
             self._calibration_run_requested = False
             if calibration_requested:

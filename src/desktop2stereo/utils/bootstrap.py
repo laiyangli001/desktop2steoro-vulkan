@@ -39,6 +39,7 @@ def _normalize_legacy_settings(settings: dict) -> dict:
     model = str(inference.get("model", "Distill-Any-Depth-Base"))
     flat_defaults = {
         "Monitor Index": int(capture.get("monitor_index", 1)),
+        "Monitor Identity": None,
         "Capture Mode": str(capture.get("mode", "Monitor")),
         "Window Title": None,
         "Depth Model": model,
@@ -83,6 +84,7 @@ def _normalize_legacy_settings(settings: dict) -> dict:
         "Capture Tool": str(capture.get("tool", "none")),
         "Lossless Scaling Support": False,
         "Stereo Output": None,
+        "Stereo Output Identity": None,
         "Render Size Policy": "scaled",
         "Render Scale": "4K / 100%",
         "Render Fixed Width": 1920,

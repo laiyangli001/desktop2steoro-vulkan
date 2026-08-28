@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from stereo_runtime.render_size import RenderSizeConfig, render_size_config_from_settings
 from utils.display import compute_output_resolution, get_fps
+from utils.display_info import resolve_display_capture_index
 from utils.run_mode import target_fps_for_run_mode
 from utils.xr_headset_presets import DEFAULT_XR_HEADSET_MODEL, resolve_xr_headset_preset
 from viewer.controller_help import get_controller_help_rows
@@ -41,10 +42,29 @@ class ViewerSettings:
 
 
 def resolve_viewer_settings(settings: dict) -> ViewerSettings:
-    monitor_index = settings["Monitor Index"]
+    monitor_index = resolve_display_capture_index(
+        settings["Monitor Index"],
+        settings.get("Monitor Identity"),
+    )
+    if monitor_index is None:
+        raise RuntimeError(
+            "configured input display is unavailable; refresh and select it again"
+        )
     display_mode = settings["Display Mode"]
-    stereo_display_index = settings.get("Stereo Output")
-    stereo_display_selection = False if not stereo_display_index else True
+    saved_stereo_display_index = settings.get("Stereo Output")
+    stereo_display_index = (
+        resolve_display_capture_index(
+            saved_stereo_display_index,
+            settings.get("Stereo Output Identity"),
+        )
+        if saved_stereo_display_index is not None
+        else None
+    )
+    if saved_stereo_display_index is not None and stereo_display_index is None:
+        raise RuntimeError(
+            "configured stereo output display is unavailable; refresh and select it again"
+        )
+    stereo_display_selection = stereo_display_index is not None
     # Only the 3D Monitor run mode actually renders onto the stereo-output
     # display, so only it should size the processing resolution to that screen.
     # Other modes (OpenXR Link, Local Viewer, streamers) must follow the

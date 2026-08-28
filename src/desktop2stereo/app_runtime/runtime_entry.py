@@ -38,6 +38,7 @@ from utils import (
     _get_settings,
     shutdown_event,
 )
+from utils.display_info import resolve_windows_fullscreen_policy
 from utils.run_mode import normalize_run_mode, target_fps_for_run_mode
 from utils.xr_headset_presets import DEFAULT_XR_HEADSET_MODEL
 from streaming.stream_session import (
@@ -344,6 +345,46 @@ def _queue_clear(queue) -> None:
             return
 
 
+def _consume_stop_request(
+    stop_request_path: str | None,
+    *,
+    expected_pid: int,
+) -> bool:
+    """Consume a stop request only when it targets this runtime process."""
+    if not stop_request_path:
+        return False
+    request_path = Path(stop_request_path)
+    try:
+        requested_pid = int(request_path.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return False
+    if requested_pid != expected_pid:
+        return False
+    try:
+        request_path.unlink()
+    except OSError:
+        pass
+    return True
+
+
+def _watch_stop_request(
+    stop_request_path: str,
+    *,
+    expected_pid: int,
+    stop_event: threading.Event,
+    poll_interval: float = 0.05,
+) -> None:
+    """Bridge the GUI stop file into this child process's shutdown event."""
+    while not stop_event.wait(poll_interval):
+        if _consume_stop_request(
+            stop_request_path,
+            expected_pid=expected_pid,
+        ):
+            print("[Main] GUI stop request received", flush=True)
+            stop_event.set()
+            return
+
+
 def _wait_for_runtime_ready(
     ready_event: threading.Event,
     pipeline_thread: threading.Thread,
@@ -372,6 +413,20 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
     """Run capture, inference, and pipeline threads until shutdown is requested."""
 
     shutdown_event.clear()
+    stop_request_thread = None
+    stop_request_path = os.environ.get("D2S_STOP_REQUEST_FILE", "").strip()
+    if stop_request_path:
+        stop_request_thread = threading.Thread(
+            target=_watch_stop_request,
+            kwargs={
+                "stop_request_path": stop_request_path,
+                "expected_pid": os.getpid(),
+                "stop_event": shutdown_event,
+            },
+            name="GuiStopRequest",
+            daemon=True,
+        )
+        stop_request_thread.start()
     settings = _get_settings()
     configured_run_mode = normalize_run_mode(
         settings.get("Run Mode", "Local Viewer")
@@ -819,10 +874,45 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
                 if bool(STEREO_DISPLAY_SELECTION)
                 else int(MONITOR_INDEX)
             )
+            fullscreen_policy = "exclusive"
+            fullscreen_target = None
+            if (
+                OS_NAME == "Windows"
+                and configured_run_mode == "Local Viewer"
+                and bool(STEREO_DISPLAY_SELECTION)
+            ):
+                fullscreen_policy, fullscreen_target = (
+                    resolve_windows_fullscreen_policy(selected_monitor)
+                )
+                target_kind = (
+                    fullscreen_target.display_kind
+                    if fullscreen_target is not None
+                    else "unknown"
+                )
+                target_technology = (
+                    fullscreen_target.output_technology
+                    if fullscreen_target is not None
+                    else None
+                )
+                target_source = (
+                    fullscreen_target.display_kind_source
+                    if fullscreen_target is not None
+                    else "unmatched"
+                )
+                print(
+                    "[VulkanLocalViewer] Automatic fullscreen policy: "
+                    f"display_kind={target_kind} "
+                    f"output_technology={target_technology} "
+                    f"source={target_source} mode={fullscreen_policy}",
+                    flush=True,
+                )
             local_viewer_config = VulkanLocalViewerConfig(
                 title=f"{WINDOW_TITLE or 'Desktop2Stereo'} Vulkan Viewer",
                 monitor_index=max(0, selected_monitor),
                 fullscreen=bool(STEREO_DISPLAY_SELECTION),
+                capture_compatible_fullscreen=(
+                    fullscreen_policy == "capture_compatible"
+                ),
                 window_preview=bool(settings.get("Window Preview", False)),
                 preview_monitor_index=max(0, int(MONITOR_INDEX)),
                 exclude_from_capture=_exclude_local_output_from_capture(
@@ -869,6 +959,8 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
         pass
     finally:
         shutdown_event.set()
+        if stop_request_thread is not None:
+            stop_request_thread.join(timeout=0.2)
         callbacks.stop_active_capture_session()
         _queue_clear(context.raw_q)
         _queue_clear(context.runtime_q)

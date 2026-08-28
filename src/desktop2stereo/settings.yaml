@@ -1,7 +1,17 @@
 Capture Mode: Monitor
-Monitor Index: 2
+Monitor Index: 3
+Monitor Identity:
+  stable_id: DISPLAY\HWP317F\5&3482c9ed&0&UID16642
+  name: HP Z27s
+  manufacturer: HWP
+  model: HP Z27s
+  serial: CNK72916XG
+  left: 0
+  top: 0
+  width: 3840
+  height: 2160
 Window Title: ''
-Show FPS: false
+Show FPS: true
 Model List:
   Distill-Any-Depth-Small:
     resolutions:
@@ -551,9 +561,20 @@ Controller Model: PICO
 Environment Model: Default
 Lossless Scaling Support: false
 Capture Tool: WindowsCaptureCUDA
-Fill 16:9: true
+Display Fit Mode: stretch
+Fill 16:9: false
 Fix Viewer Aspect: false
-Stereo Output: 3
+Stereo Output: 2
+Stereo Output Identity:
+  stable_id: DISPLAY\MTT1337\1&33320f0&0&UID256
+  name: VITURE
+  manufacturer: MTT
+  model: VITURE
+  serial: '2290649088'
+  left: 5760
+  top: 0
+  width: 3840
+  height: 2400
 Show Log Panel: true
 Input Display Resolution Tier: 4K
 Synthetic View: quality_4k

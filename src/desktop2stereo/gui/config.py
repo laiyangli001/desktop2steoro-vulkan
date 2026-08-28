@@ -98,6 +98,7 @@ def default_base_depth_model():
 DEFAULTS = {
     "Capture Mode": "Monitor",
     "Monitor Index": 1,
+    "Monitor Identity": None,
     "Window Title": "",
     "Show FPS": False,
     "Model List": DEFAULT_MODEL_LIST,
@@ -196,6 +197,7 @@ DEFAULTS = {
     "Fill 16:9": True,
     "Fix Viewer Aspect": False,
     "Stereo Output": None,
+    "Stereo Output Identity": None,
     "Show Log Panel": True,
 }
 

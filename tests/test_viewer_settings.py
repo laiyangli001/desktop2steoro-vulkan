@@ -1,4 +1,7 @@
+import pytest
+
 from stereo_runtime.render_size import RenderSizePolicy
+from utils.display_info import DisplayInfo
 from viewer.settings import resolve_viewer_settings
 
 
@@ -69,6 +72,55 @@ def test_resolve_viewer_settings_resolves_xr_headset_screen_preset():
     assert resolved.xr_headset_model == "XREAL Air / Air 2 / Pro"
     assert resolved.openxr_screen_distance == 4.0
     assert resolved.openxr_screen_width == 4.62
+
+
+def test_resolve_viewer_settings_rebinds_saved_display_identities(monkeypatch):
+    from utils import display_info
+
+    current_displays = [
+        DisplayInfo(1, 1, 0, 0, 1920, 1080, stable_id="output-id", model="Output"),
+        DisplayInfo(2, 2, 1920, 0, 1920, 1080, stable_id="other-id", model="Other"),
+        DisplayInfo(3, 3, 3840, 0, 3840, 2160, stable_id="input-id", model="Input"),
+    ]
+    monkeypatch.setattr(display_info, "enumerate_displays", lambda: current_displays)
+    settings = dict(
+        BASE_SETTINGS,
+        VSync=False,
+        **{
+            "Monitor Index": 1,
+            "Monitor Identity": {"stable_id": "input-id", "model": "Input"},
+            "Stereo Output": 3,
+            "Stereo Output Identity": {"stable_id": "output-id", "model": "Output"},
+        },
+    )
+
+    resolved = resolve_viewer_settings(settings)
+
+    assert resolved.monitor_index == 3
+    assert resolved.stereo_display_index == 1
+    assert resolved.stereo_display_selection is True
+
+
+def test_resolve_viewer_settings_rejects_disconnected_saved_display(monkeypatch):
+    from utils import display_info
+
+    monkeypatch.setattr(
+        display_info,
+        "enumerate_displays",
+        lambda: [
+            DisplayInfo(1, 1, 0, 0, 1920, 1080, stable_id="connected-id")
+        ],
+    )
+    settings = dict(
+        BASE_SETTINGS,
+        VSync=False,
+        **{
+            "Monitor Identity": {"stable_id": "disconnected-id"},
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="input display is unavailable"):
+        resolve_viewer_settings(settings)
 
 
 def test_resolve_viewer_settings_reads_render_size_config():

@@ -71,6 +71,13 @@ def full_screen_exclusive_capability(
     return not missing, tuple(missing)
 
 
+def should_request_full_screen_exclusive(
+    fullscreen: bool,
+    capture_compatible_fullscreen: bool,
+) -> bool:
+    return bool(fullscreen and not capture_compatible_fullscreen)
+
+
 def choose_srgb_surface_format(formats: Any, vk: Any) -> tuple[Any, bool]:
     """Prefer an sRGB surface format for display-referred runtime frames."""
     for name in LOCAL_VIEWER_SRGB_SURFACE_FORMATS:
@@ -428,6 +435,7 @@ class VulkanLocalViewerConfig:
     title: str = "Desktop2Stereo Vulkan Viewer"
     monitor_index: int = 0
     fullscreen: bool = False
+    capture_compatible_fullscreen: bool = False
     window_preview: bool = False
     preview_monitor_index: int | None = None
     manage_glfw_lifecycle: bool = True
@@ -818,8 +826,13 @@ class VulkanLocalViewer:
         available_instance_extensions = {
             prop.extensionName for prop in vk.vkEnumerateInstanceExtensionProperties(None)
         }
+        request_full_screen_exclusive = should_request_full_screen_exclusive(
+            self.config.fullscreen,
+            self.config.capture_compatible_fullscreen,
+        )
         if (
-            sys.platform == "win32"
+            request_full_screen_exclusive
+            and sys.platform == "win32"
             and FULL_SCREEN_EXCLUSIVE_INSTANCE_EXTENSION
             in available_instance_extensions
             and FULL_SCREEN_EXCLUSIVE_INSTANCE_EXTENSION not in extensions
@@ -865,11 +878,12 @@ class VulkanLocalViewer:
             *VulkanExportableSemaphore.required_device_extensions(),
         )
         self._interop_extensions = tuple(name for name in interop if name in available)
-        self._full_screen_exclusive_enabled, exclusive_missing = (
-            full_screen_exclusive_capability(
-                available_instance_extensions,
-                available,
-            )
+        exclusive_capable, exclusive_missing = full_screen_exclusive_capability(
+            available_instance_extensions,
+            available,
+        )
+        self._full_screen_exclusive_enabled = bool(
+            request_full_screen_exclusive and exclusive_capable
         )
         direct_display_supported, direct_display_missing = direct_display_capability(
             available_instance_extensions,
@@ -887,7 +901,13 @@ class VulkanLocalViewer:
                 f"{', '.join(direct_display_missing)}; using {fallback_mode}",
                 flush=True,
             )
-        if self.config.fullscreen and not self._full_screen_exclusive_enabled:
+        if self.config.fullscreen and self.config.capture_compatible_fullscreen:
+            print(
+                "[VulkanLocalViewer] Capture-compatible DWM borderless fullscreen "
+                "active; VK_EXT_full_screen_exclusive disabled",
+                flush=True,
+            )
+        elif self.config.fullscreen and not self._full_screen_exclusive_enabled:
             print(
                 "[VulkanLocalViewer] Win32 Vulkan full-screen exclusive unavailable: "
                 f"missing {', '.join(exclusive_missing)}; using persistent borderless "

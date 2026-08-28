@@ -761,13 +761,13 @@ class GUIBuilderMixin:
 
         # Row 10: Stereo output + display fitting
         self.stereo_output_label = ft.Text("Stereo Output:", size=FONT_SIZE, width=S(130))
-        self.stereo_monitor_dd = CompactDropdown(options=[],
-            on_select=lambda e: self._fit_window_to_content())
+        self.stereo_monitor_dd = CompactDropdown(
+            options=[], on_select=self._on_stereo_monitor_change)
         fit_tooltip = UI_MESSAGES[self.locale]["tooltip_display_fit"]
         self.display_fit_dd = CompactDropdown(
             options=self._display_fit_options(),
             value=self._display_fit_to_display("contain"),
-            width=S(180),
+            width=S(130),
             on_select=self.on_stereo_hot_param_change,
             tooltip=fit_tooltip,
         )
@@ -1087,6 +1087,7 @@ class GUIBuilderMixin:
 
     def populate_monitors(self):
         self.monitor_label_to_index = {}
+        self.monitor_label_to_display = {}
         monitors = list_monitors()
         if not monitors:
             self.monitor_dd.options = []
@@ -1107,6 +1108,7 @@ class GUIBuilderMixin:
             else:
                 label = f"{display_number}: {mon['width']}x{mon['height']} @ ({mon['left']},{mon['top']}){suffix}"
             self.monitor_label_to_index[label] = capture_index
+            self.monitor_label_to_display[label] = mon
             opts.append(label)
             if label == current_val:
                 found = True
@@ -1175,7 +1177,9 @@ class GUIBuilderMixin:
 
     def _apply_stereo_output(self, cfg):
         mon_count = self._get_monitor_count()
-        if mon_count <= 1:
+        if mon_count <= 1 or getattr(
+            self, "_missing_stereo_output_identity", False
+        ):
             self.stereo_monitor_dd.value = ""
             return
         input_label = (
@@ -1201,6 +1205,8 @@ class GUIBuilderMixin:
             if label:
                 self.stereo_monitor_dd.value = label
                 return
+            self.stereo_monitor_dd.value = ""
+            return
         self.stereo_monitor_dd.value = output_labels[-1] if output_labels else ""
 
     @staticmethod
@@ -1228,7 +1234,10 @@ class GUIBuilderMixin:
         current = self.stereo_monitor_dd.value
         valid = current in opts
         self.stereo_monitor_dd.options = opts
-        self.stereo_monitor_dd.value = current if valid else (opts[-1] if opts else "")
+        if getattr(self, "_missing_stereo_output_identity", False):
+            self.stereo_monitor_dd.value = ""
+        else:
+            self.stereo_monitor_dd.value = current if valid else (opts[-1] if opts else "")
         self.stereo_monitor_dd.update()
 
     def update_depth_resolution_options(self, model_name):

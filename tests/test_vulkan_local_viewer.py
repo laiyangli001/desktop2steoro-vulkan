@@ -27,6 +27,7 @@ from viewer.vulkan_local_viewer import (
     is_exclusive_fullscreen_toggle,
     present_fps_if_due,
     should_restore_persistent_fullscreen,
+    should_request_full_screen_exclusive,
     run_vulkan_local_viewer,
     VulkanLocalViewer,
     VulkanLocalViewerConfig,
@@ -134,6 +135,12 @@ def test_display_refresh_warning_is_reported_only_once() -> None:
 
 def test_fit_rect_letterboxes_wide_sbs_frame() -> None:
     assert fit_rect((3840, 1080), (1280, 720)) == (0, 180, 1280, 360)
+
+
+def test_capture_compatible_fullscreen_disables_exclusive_request() -> None:
+    assert should_request_full_screen_exclusive(True, False)
+    assert not should_request_full_screen_exclusive(True, True)
+    assert not should_request_full_screen_exclusive(False, False)
 
 
 def test_display_fit_feature_is_enabled_by_default() -> None:

@@ -24,6 +24,43 @@ def _load_environment_resolver():
     return namespace["_resolve_filament_environment_paths"]
 
 
+def test_stop_request_is_consumed_only_by_target_runtime(tmp_path: Path) -> None:
+    from app_runtime.runtime_entry import _consume_stop_request
+
+    request = tmp_path / "stop.request"
+    request.write_text("4321", encoding="utf-8")
+
+    assert not _consume_stop_request(str(request), expected_pid=1234)
+    assert request.is_file()
+    assert _consume_stop_request(str(request), expected_pid=4321)
+    assert not request.exists()
+
+
+def test_stop_request_watcher_sets_runtime_event(tmp_path: Path) -> None:
+    import threading
+
+    from app_runtime.runtime_entry import _watch_stop_request
+
+    request = tmp_path / "stop.request"
+    stopped = threading.Event()
+    watcher = threading.Thread(
+        target=_watch_stop_request,
+        kwargs={
+            "stop_request_path": str(request),
+            "expected_pid": 4321,
+            "stop_event": stopped,
+            "poll_interval": 0.01,
+        },
+    )
+    watcher.start()
+    request.write_text("4321", encoding="utf-8")
+    watcher.join(timeout=1.0)
+
+    assert stopped.is_set()
+    assert not watcher.is_alive()
+    assert not request.exists()
+
+
 def test_legacy_streamer_normalizes_to_mjpeg() -> None:
     from utils.run_mode import normalize_run_mode, resolve_run_mode
 

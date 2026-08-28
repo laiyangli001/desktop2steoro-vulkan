@@ -2,6 +2,7 @@
 import os
 import asyncio
 from utils import OS_NAME, DEFAULT_PORT, read_yaml
+from utils.display_info import display_identity_record, resolve_display_capture_index
 from utils.run_mode import normalize_run_mode, target_fps_setting_key
 from utils.xr_headset_presets import display_to_xr_headset, xr_headset_to_display
 from .config import (
@@ -27,16 +28,32 @@ class GUIConfigMixin:
         cfg["Run Mode"] = normalize_run_mode(
             cfg.get("Run Mode", DEFAULTS.get("Run Mode", "Local Viewer"))
         )
+        monitor_identity = cfg.get("Monitor Identity")
+        mon_idx = resolve_display_capture_index(
+            cfg.get("Monitor Index", DEFAULTS["Monitor Index"]),
+            monitor_identity,
+        )
+        self._missing_monitor_identity = bool(monitor_identity) and mon_idx is None
+        cfg["Monitor Index"] = mon_idx
+        saved_stereo_index = cfg.get("Stereo Output")
+        stereo_identity = cfg.get("Stereo Output Identity")
+        self._missing_stereo_output_identity = False
+        if saved_stereo_index is not None:
+            resolved_stereo_index = resolve_display_capture_index(
+                saved_stereo_index,
+                stereo_identity,
+            )
+            self._missing_stereo_output_identity = (
+                bool(stereo_identity) and resolved_stereo_index is None
+            )
+            cfg["Stereo Output"] = resolved_stereo_index
         self._config = cfg.copy()
         self._config.pop("Debug Mode", None)
-        current_primary = get_primary_monitor_index()
-        mon_idx = cfg.get("Monitor Index", DEFAULTS["Monitor Index"])
-        label = next((lbl for lbl, i in self.monitor_label_to_index.items() if i == mon_idx), None)
-        if label:
-            self.monitor_dd.value = label
-        elif self.monitor_label_to_index:
-            primary_label = next((lbl for lbl, i in self.monitor_label_to_index.items() if i == current_primary), None)
-            self.monitor_dd.value = primary_label or next(iter(self.monitor_label_to_index))
+        label = next(
+            (lbl for lbl, i in self.monitor_label_to_index.items() if i == mon_idx),
+            None,
+        )
+        self.monitor_dd.value = label or ""
         self.selected_window_name = cfg.get("Window Title", "")
         self.selected_window_handle = None
         self.selected_window_rect = None
@@ -258,6 +275,9 @@ class GUIConfigMixin:
         else:
             stereo_idx = self.monitor_label_to_index.get(stereo_val, None)
 
+        monitor_identity = self._display_identity_for_capture_index(monitor_idx)
+        stereo_identity = self._display_identity_for_capture_index(stereo_idx)
+
         hole_fill_mode = self._display_to_hole_fill_mode(self.hole_fill_mode_dd.value)
         temporal_strength = self._temporal_strength_for_hole_fill(
             self._parse_float(self.temporal_strength_dd.value, DEFAULTS["Temporal Strength"]),
@@ -382,7 +402,9 @@ class GUIConfigMixin:
             }.get(self.video_backend_dd.value, "ffmpeg"),
             "CRF": self._parse_int(self.crf_tf.value, DEFAULTS["CRF"]),
             "Audio Delay": self._parse_float(self.audio_delay_tf.value, DEFAULTS["Audio Delay"]),
+            "Monitor Identity": monitor_identity,
             "Stereo Output": stereo_idx,
+            "Stereo Output Identity": stereo_identity,
             "Controller Model": self.ctrl_model_dd.value,
             "Environment Model": self.env_key,
         })
@@ -643,6 +665,15 @@ class GUIConfigMixin:
     def _depth_separation_to_display(self, value):
         from .localization import depth_separation_to_display
         return depth_separation_to_display(value, self.locale)
+
+    def _display_identity_for_capture_index(self, capture_index):
+        if capture_index is None:
+            return None
+        displays = getattr(self, "monitor_label_to_display", {})
+        for label, index in self.monitor_label_to_index.items():
+            if int(index) == int(capture_index):
+                return display_identity_record(displays.get(label))
+        return None
 
     def _display_fit_options(self):
         texts = UI_MESSAGES[self.locale]

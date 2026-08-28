@@ -60,6 +60,9 @@ class Desktop2StereoGUI(
         self._starting = False
         self._proc_lock = None
         self.monitor_label_to_index = {}
+        self.monitor_label_to_display = {}
+        self._missing_monitor_identity = False
+        self._missing_stereo_output_identity = False
         self.device_label_to_index = {}
         self._esc_down = None
         self._esc_stopped = False
