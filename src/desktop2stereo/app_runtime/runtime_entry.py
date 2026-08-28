@@ -21,6 +21,7 @@ from utils import (
     DEPTH_STRENGTH,
     DEVICE,
     DEVICE_INFO,
+    DISPLAY_MODE,
     FPS,
     LOCAL_VSYNC,
     MONITOR_INDEX,
@@ -417,12 +418,30 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
         display_fit_mode=settings.get("Display Fit Mode", "contain"),
     )
 
+    low_sbs_report_count = 0
+
     def observe_sbs_fps(sbs_fps, frame_count=None):
-        return adaptive_capture_rate.observe_sbs_fps(
+        nonlocal low_sbs_report_count
+        capture_fps = callbacks.capture_fps()
+        capture_target = adaptive_capture_rate.observe_sbs_fps(
             sbs_fps,
-            capture_fps=callbacks.capture_fps(),
+            capture_fps=capture_fps,
             frame_count=frame_count,
         )
+        if float(sbs_fps) < 5.0:
+            low_sbs_report_count += 1
+            if low_sbs_report_count <= 5 or low_sbs_report_count % 6 == 0:
+                latencies = context.thread_latencies
+                print(
+                    "[VulkanLocalViewer] Low SBS flow: "
+                    f"sbs={float(sbs_fps):.1f} capture={capture_fps:.1f} "
+                    f"runtime={callbacks.runtime_fps():.1f} target={capture_target} "
+                    f"raw_q={context.raw_q.qsize()} runtime_q={context.runtime_q.qsize()} "
+                    f"capture_latency={float(latencies.get('capture', 0.0)) * 1000.0:.1f}ms "
+                    f"runtime_latency={float(latencies.get('runtime', 0.0)) * 1000.0:.1f}ms",
+                    flush=True,
+                )
+        return capture_target
 
     def report_display_refresh_warning(refresh_hz: int, sbs_fps: float) -> None:
         if str(settings.get("Language", "EN")).strip().upper() == "CN":

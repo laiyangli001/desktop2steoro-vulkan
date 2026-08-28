@@ -581,7 +581,6 @@ class GUIHandlerMixin:
             self.showfps_cb.visible = False
         else:
             self.showfps_cb.visible = True
-        self.display_fit_label.visible = display_fit_visible
         self.display_fit_dd.visible = display_fit_visible
         if mode == "3D Monitor":
             self.display_mode_dd.options = ["Half-SBS", "Full-SBS", "Half-TAB", "Full-TAB"]
@@ -795,11 +794,9 @@ class GUIHandlerMixin:
         key = cn_map.get(cur, cur.lower() if cur else "system")
         self.theme_dd.value = t.get(key, key) if self.locale == "CN" else key.capitalize()
         display_fit_mode = self._display_to_display_fit(self.display_fit_dd.value)
-        self.display_fit_label.value = t["Display Fit:"]
-        self.display_fit_label.tooltip = t["tooltip_display_fit"]
         self.display_fit_dd.options = self._display_fit_options()
         self.display_fit_dd.value = self._display_fit_to_display(display_fit_mode)
-        self.display_fit_dd.tooltip = t["tooltip_display_fit"]
+        self.display_fit_dd.set_tooltip(t["tooltip_display_fit"])
         self.lossless_cb.label = t["Lossless Scaling Support"]
         self.controller_label.value = t["Controller:"]
         self.environment_label.value = t["Environment:"]

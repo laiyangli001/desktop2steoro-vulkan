@@ -304,7 +304,7 @@ class GUIBuilderMixin:
             self.temporal_strength_label,
             self.edge_threshold_label, self.anaglyph_label,
             self.render_scale_label, self.render_max_pixels_label, self.render_align_label,
-            self.display_mode_label, self.environment_label, self.display_fit_label,
+            self.display_mode_label, self.environment_label,
             self.theme_label, self.stream_quality_label, self.stream_key_label,
             self.audio_delay_label, self.color_contrast_label,
             self.color_gamma_label, self.color_tint_label, self.projection_max_lod_label,
@@ -764,8 +764,6 @@ class GUIBuilderMixin:
         self.stereo_monitor_dd = CompactDropdown(options=[],
             on_select=lambda e: self._fit_window_to_content())
         fit_tooltip = UI_MESSAGES[self.locale]["tooltip_display_fit"]
-        self.display_fit_label = ft.Text(
-            "Display Fit:", size=FONT_SIZE, width=S(130), tooltip=fit_tooltip)
         self.display_fit_dd = CompactDropdown(
             options=self._display_fit_options(),
             value=self._display_fit_to_display("contain"),
@@ -777,7 +775,7 @@ class GUIBuilderMixin:
         self._stereo_spacer = ft.Container(width=S(10))
         self.row9 = ft.Row([
             self.stereo_output_label, self.stereo_monitor_dd, self._stereo_spacer,
-            self.display_fit_label, self.display_fit_dd, self.lossless_cb,
+            self.display_fit_dd, self.lossless_cb,
         ], spacing=1)
 
         # Bottom: Language + Theme + Buttons

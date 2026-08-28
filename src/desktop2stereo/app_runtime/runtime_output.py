@@ -836,6 +836,13 @@ class CudaVulkanOutputAdapter(GpuProducerAdapter):
                 # ownership path.
                 "vulkan_readback": "none",
                 "vulkan_output_path": "presenter_owned_storage_image",
+                "vulkan_output_image_direct": True,
+                "vulkan_gpu_to_cpu": False,
+                "vulkan_zero_cpu_readback": True,
+                # The runtime CUDA tensor is imported into Vulkan input
+                # buffers by a device-side copy.  Do not overclaim strict
+                # zero-copy until a native CUDA image producer is available.
+                "vulkan_zero_copy": False,
                 "vulkan_source_layout_left": left_contract["layout"],
                 "vulkan_source_layout_right": right_contract["layout"],
                 "vulkan_source_queue_family_left": left_contract["queue_family"],
@@ -1291,6 +1298,13 @@ class VulkanZeroCopyOutputAdapter(CudaVulkanOutputAdapter):
                 "vulkan_source_queue_family_left": left_contract["queue_family"],
                 "vulkan_source_queue_family_right": right_contract["queue_family"],
                 "vulkan_output_path": "presenter_owned_storage_image",
+                "vulkan_output_image_direct": True,
+                "vulkan_gpu_to_cpu": False,
+                "vulkan_zero_cpu_readback": True,
+                # The current request carries CUDA tensors and the Vulkan
+                # compute bridge imports them into external input buffers.
+                # That is GPU-only, but not strict no-copy ownership.
+                "vulkan_zero_copy": False,
                 "_vulkan_source_prepare_for_sampling": self.prepare_source_for_sampling,
                 "_vulkan_source_consumer_release": self.release_consumer_frame,
                 "_vulkan_output_release": self.release_output_frame,

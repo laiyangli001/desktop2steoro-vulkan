@@ -2013,6 +2013,11 @@ class StereoRuntime:
                     "Stereo synthesis backend selected: OpenGL (reason=%s)",
                     self._stereo_compute_backend_reason,
                 )
+            elif self._resolved_stereo_compute_backend == "cuda_triton":
+                LOGGER.info(
+                    "Stereo synthesis backend selected: vendor Triton (reason=%s)",
+                    self._stereo_compute_backend_reason,
+                )
             else:
                 LOGGER.warning(
                     "Stereo synthesis fallback: selected=%s reason=%s opengl_probe=%s",

@@ -250,6 +250,14 @@ class VulkanStereoImageComputeBackend:
             "vulkan_submit_timeline": int(timeline),
             "vulkan_readback": "none",
             "vulkan_compute_output": "presenter_owned_storage_image",
+            # The output contract is an image handle owned by the presenter;
+            # no Vulkan image is mapped or read back by this submission.  The
+            # CUDA input may still require one device-to-device import copy,
+            # therefore keep strict zero_copy separate from zero CPU readback.
+            "vulkan_output_image_direct": True,
+            "vulkan_gpu_to_cpu": False,
+            "vulkan_zero_cpu_readback": True,
+            "vulkan_zero_copy": False,
             "vulkan_compute_input_color_space": "srgb",
             "vulkan_compute_output_image_format": "R8G8B8A8_UNORM",
             "vulkan_compute_output_image_encoding": "linear",

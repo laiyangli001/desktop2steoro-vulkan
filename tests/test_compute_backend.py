@@ -11,12 +11,12 @@ from stereo_runtime.compute_backend import (
 )
 
 
-def test_auto_prefers_vulkan_even_when_nvidia_triton_is_available():
+def test_auto_prefers_nvidia_triton_before_vulkan():
     assert resolve_stereo_compute_backend(
         vendor_id=NVIDIA_VENDOR_ID,
         cuda_available=True,
         vulkan_available=True,
-    ) is StereoComputeBackend.VULKAN
+    ) is StereoComputeBackend.TRITON
 
 
 def test_auto_uses_vulkan_for_amd_and_intel():
@@ -28,14 +28,14 @@ def test_auto_uses_vulkan_for_amd_and_intel():
         ) is StereoComputeBackend.VULKAN
 
 
-def test_auto_keeps_vulkan_when_amd_triton_probe_succeeds():
+def test_auto_prefers_amd_triton_when_probe_succeeds():
     assert resolve_stereo_compute_backend(
         vendor_id=0x1002,
         cuda_available=True,
         vulkan_available=True,
         triton_available=True,
         triton_vendor="amd",
-    ) is StereoComputeBackend.VULKAN
+    ) is StereoComputeBackend.TRITON
 
 
 def test_auto_uses_vulkan_when_amd_triton_probe_fails():

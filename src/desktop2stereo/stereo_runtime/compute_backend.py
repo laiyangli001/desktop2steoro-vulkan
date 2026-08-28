@@ -51,8 +51,13 @@ def resolve_stereo_compute_backend(
         else bool(triton_available) and str(triton_vendor or "").lower() in {"nvidia", "amd"}
     )
     if mode in {"auto", "vendor", "vendor_default"}:
-        # Vulkan is the cross-vendor Windows/Linux synthesis path. Triton is
-        # retained only for explicit requests or legacy callers.
+        # Prefer the vendor-native GPU kernel when its runtime probe succeeds.
+        # The Vulkan layered backend currently performs a host-visible 4K
+        # readback for local output, which can reduce NVIDIA synthesis to about
+        # one frame per second. Intel and other non-Triton devices continue to
+        # use the cross-vendor Vulkan path.
+        if triton_ready:
+            return StereoComputeBackend.TRITON
         if vulkan_available:
             return StereoComputeBackend.VULKAN
         if opengl_available:

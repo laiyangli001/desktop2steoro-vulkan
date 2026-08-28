@@ -177,9 +177,17 @@ def normalize_display_fit_mode(value: Any) -> str:
         "contain": "contain",
         "complete": "contain",
         "fit": "contain",
+        "keep ratio (complete)": "contain",
+        "保持比例（完整）": "contain",
+        "保持比例(完整)": "contain",
         "cover": "cover",
         "fill": "cover",
+        "keep ratio (fill)": "cover",
+        "保持比例（铺满）": "cover",
+        "保持比例(铺满)": "cover",
         "stretch": "stretch",
+        "stretch to fill": "stretch",
+        "拉伸铺满": "stretch",
     }
     return aliases.get(normalized, "contain")
 
@@ -214,6 +222,12 @@ def presentation_blit_regions(
     full_source = (0, 0, sw, sh)
     full_target = (0, 0, tw, th)
     packed_mode = str(display_mode or "").strip().casefold().replace("_", "-")
+
+    if mode == "stretch":
+        return ((full_source, full_target),)
+    if mode == "contain":
+        x, y, width, height = fit_rect(source, target)
+        return ((full_source, (x, y, x + width, y + height)),)
 
     if packed_mode in {"half-sbs", "full-sbs", "half-tab", "full-tab"}:
         is_sbs = packed_mode.endswith("sbs")
@@ -424,6 +438,7 @@ class VulkanLocalViewerConfig:
     display_mode: str = "Half-SBS"
     display_fit_mode: str = "contain"
     display_fit_mode_provider: Callable[[], str] | None = None
+    display_fit_enabled: bool = True
     on_sbs_fps: Callable[[float, int], int] | None = None
     on_display_refresh_warning: Callable[[int, float], None] | None = None
     on_capture_refresh_warning: Callable[[int, int], None] | None = None
@@ -1282,6 +1297,7 @@ class _TransferSource:
         self._cuda_ready: VulkanExportableSemaphore | None = None
         self._cuda_importer: CudaVulkanImageImporter | None = None
         self._cuda_active = False
+        self._slow_present_count = 0
         self._create()
 
     def _memory_type(self, bits: int, required: int) -> int:
@@ -1365,20 +1381,29 @@ class _TransferSource:
 
     def present(self, pixels: Any) -> bool:
         vk, o = self.owner.vk, self.owner
-        vk.vkWaitForFences(o.device, 1, [o.fence], True, 1_000_000_000)
+        frame_started = time.perf_counter()
+        stage_started = frame_started
+        fence_value = vk.vkWaitForFences(
+            o.device, 1, [o.fence], True, 1_000_000_000
+        )
+        fence_result = int(vk.VK_SUCCESS if fence_value is None else fence_value)
+        fence_ms = (time.perf_counter() - stage_started) * 1000.0
         index_output = vk.ffi.new("uint32_t *")
         acquire = o._device_function(b"vkAcquireNextImageKHR", "VkResult(*)(VkDevice, VkSwapchainKHR, uint64_t, VkSemaphore, VkFence, uint32_t *)")
-        result = int(acquire(o.device, o.swapchain, 1_000_000_000, o.image_available, vk.ffi.NULL, index_output))
-        if o.is_swapchain_out_of_date(result):
+        stage_started = time.perf_counter()
+        acquire_result = int(acquire(o.device, o.swapchain, 1_000_000_000, o.image_available, vk.ffi.NULL, index_output))
+        acquire_ms = (time.perf_counter() - stage_started) * 1000.0
+        if o.is_swapchain_out_of_date(acquire_result):
             o.recreate_swapchain()
             return False
-        recreate_after_present = o.is_swapchain_recreate_result(result)
-        if result != int(vk.VK_SUCCESS) and not recreate_after_present:
-            raise RuntimeError(f"Vulkan local-viewer acquire failed ({result})")
+        recreate_after_present = o.is_swapchain_recreate_result(acquire_result)
+        if acquire_result != int(vk.VK_SUCCESS) and not recreate_after_present:
+            raise RuntimeError(f"Vulkan local-viewer acquire failed ({acquire_result})")
         index = int(index_output[0])
         vk.vkResetFences(o.device, 1, [o.fence])
 
         cuda_source = self._cuda_active and bool(getattr(pixels, "is_cuda", False))
+        stage_started = time.perf_counter()
         if cuda_source:
             try:
                 self._cuda_importer.copy_tensor(pixels, self._external_image)
@@ -1391,6 +1416,8 @@ class _TransferSource:
             mapped = vk.vkMapMemory(o.device, self.memory, 0, self.capacity, 0)
             vk.ffi.buffer(mapped, self.capacity)[:] = pixels
             vk.vkUnmapMemory(o.device, self.memory)
+        upload_ms = (time.perf_counter() - stage_started) * 1000.0
+        stage_started = time.perf_counter()
         cmd = o.command_buffer
         vk.vkResetCommandBuffer(cmd, 0)
         vk.vkBeginCommandBuffer(cmd, vk.VkCommandBufferBeginInfo(sType=vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO))
@@ -1411,12 +1438,14 @@ class _TransferSource:
         self._transition(cmd, target, target_old_layout, vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
         clear = vk.VkClearColorValue(float32=[0.0, 0.0, 0.0, 1.0])
         vk.vkCmdClearColorImage(cmd, target, vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, clear, 1, [vk.VkImageSubresourceRange(aspectMask=vk.VK_IMAGE_ASPECT_COLOR_BIT, baseMipLevel=0, levelCount=1, baseArrayLayer=0, layerCount=1)])
-        fit_mode = o.config.display_fit_mode
-        if o.config.display_fit_mode_provider is not None:
+        fit_mode = "contain"
+        if o.config.display_fit_enabled and o.config.display_fit_mode_provider is not None:
             try:
                 fit_mode = o.config.display_fit_mode_provider()
             except Exception:
                 fit_mode = o.config.display_fit_mode
+        elif o.config.display_fit_enabled:
+            fit_mode = o.config.display_fit_mode
         fit_mode = normalize_display_fit_mode(fit_mode)
         regions = presentation_blit_regions(
             self.size,
@@ -1437,40 +1466,63 @@ class _TransferSource:
                 f"blit_regions={regions}",
                 flush=True,
             )
-        blits = []
+        # Keep every driver call to one region.  NVIDIA Windows drivers can
+        # block the imported CUDA-image transfer when a single vkCmdBlitImage
+        # contains two packed-eye regions; separate commands preserve the
+        # symmetric cover crop without entering that multi-region path.
         for source_rect, destination_rect in regions:
             sx0, sy0, sx1, sy1 = source_rect
             dx0, dy0, dx1, dy1 = destination_rect
-            blits.append(vk.VkImageBlit(
-                srcSubresource=vk.VkImageSubresourceLayers(aspectMask=vk.VK_IMAGE_ASPECT_COLOR_BIT, mipLevel=0, baseArrayLayer=0, layerCount=1),
-                srcOffsets=[vk.VkOffset3D(x=sx0, y=sy0, z=0), vk.VkOffset3D(x=sx1, y=sy1, z=1)],
-                dstSubresource=vk.VkImageSubresourceLayers(aspectMask=vk.VK_IMAGE_ASPECT_COLOR_BIT, mipLevel=0, baseArrayLayer=0, layerCount=1),
-                dstOffsets=[vk.VkOffset3D(x=dx0, y=dy0, z=0), vk.VkOffset3D(x=dx1, y=dy1, z=1)],
-            ))
-        vk.vkCmdBlitImage(
-            cmd,
-            source_image,
-            vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            target,
-            vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            len(blits),
-            blits,
-            vk.VK_FILTER_LINEAR,
-        )
+            vk.vkCmdBlitImage(
+                cmd,
+                source_image,
+                vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                target,
+                vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                1,
+                [vk.VkImageBlit(
+                    srcSubresource=vk.VkImageSubresourceLayers(aspectMask=vk.VK_IMAGE_ASPECT_COLOR_BIT, mipLevel=0, baseArrayLayer=0, layerCount=1),
+                    srcOffsets=[vk.VkOffset3D(x=sx0, y=sy0, z=0), vk.VkOffset3D(x=sx1, y=sy1, z=1)],
+                    dstSubresource=vk.VkImageSubresourceLayers(aspectMask=vk.VK_IMAGE_ASPECT_COLOR_BIT, mipLevel=0, baseArrayLayer=0, layerCount=1),
+                    dstOffsets=[vk.VkOffset3D(x=dx0, y=dy0, z=0), vk.VkOffset3D(x=dx1, y=dy1, z=1)],
+                )],
+                vk.VK_FILTER_LINEAR,
+            )
         self._transition(cmd, target, vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, vk.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR)
         if cuda_source:
             self._transition(cmd, source_image, vk.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vk.VK_IMAGE_LAYOUT_GENERAL)
         vk.vkEndCommandBuffer(cmd)
+        record_ms = (time.perf_counter() - stage_started) * 1000.0
         waits = [o.image_available]
         stages = [vk.VK_PIPELINE_STAGE_TRANSFER_BIT]
         if cuda_source:
             waits.append(self._cuda_ready.semaphore)
             stages.append(vk.VK_PIPELINE_STAGE_TRANSFER_BIT)
         submit = vk.VkSubmitInfo(sType=vk.VK_STRUCTURE_TYPE_SUBMIT_INFO, waitSemaphoreCount=len(waits), pWaitSemaphores=waits, pWaitDstStageMask=stages, commandBufferCount=1, pCommandBuffers=[cmd], signalSemaphoreCount=1, pSignalSemaphores=[o.render_finished])
-        vk.vkQueueSubmit(o.queue, 1, [submit], o.fence)
+        stage_started = time.perf_counter()
+        submit_value = vk.vkQueueSubmit(o.queue, 1, [submit], o.fence)
+        submit_result = int(vk.VK_SUCCESS if submit_value is None else submit_value)
+        submit_ms = (time.perf_counter() - stage_started) * 1000.0
         present_info = vk.VkPresentInfoKHR(sType=vk.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR, waitSemaphoreCount=1, pWaitSemaphores=[o.render_finished], swapchainCount=1, pSwapchains=[o.swapchain], pImageIndices=[index])
         present = o._device_function(b"vkQueuePresentKHR", "VkResult(*)(VkQueue, const VkPresentInfoKHR *)")
+        stage_started = time.perf_counter()
         result = int(present(o.queue, vk.ffi.addressof(present_info)))
+        present_ms = (time.perf_counter() - stage_started) * 1000.0
+        total_ms = (time.perf_counter() - frame_started) * 1000.0
+        if total_ms >= 100.0:
+            self._slow_present_count += 1
+            if self._slow_present_count <= 5 or self._slow_present_count % 30 == 0:
+                print(
+                    "[VulkanLocalViewer] Slow present stages: "
+                    f"total={total_ms:.1f}ms fence={fence_ms:.1f}ms "
+                    f"fence_result={fence_result} acquire={acquire_ms:.1f}ms "
+                    f"acquire_result={acquire_result} "
+                    f"upload={upload_ms:.1f}ms record={record_ms:.1f}ms "
+                    f"submit={submit_ms:.1f}ms submit_result={submit_result} "
+                    f"present={present_ms:.1f}ms present_result={result} "
+                    f"cuda={cuda_source} fit={fit_mode}",
+                    flush=True,
+                )
         o._swap_image_initialized[index] = True
         if o.is_swapchain_recreate_result(result) or recreate_after_present:
             o.recreate_swapchain()
@@ -1542,6 +1594,7 @@ def run_vulkan_local_viewer(*, runtime_q: Any, shutdown_event: Any, config: Vulk
                     display_mode="Mono",
                     display_fit_mode="contain",
                     display_fit_mode_provider=None,
+                    display_fit_enabled=True,
                     on_sbs_fps=None,
                     on_breakdown_inc=None,
                     on_breakdown_add_time=None,

@@ -1,6 +1,24 @@
 # Desktop2Stereo Vulkan 项目日志
 
+## 2026-08-28
+
+- 完成 Presenter-owned Vulkan 输出图像直通：Vulkan layered image pass 现在明确将合成结果写入持久化 `VulkanExportableImage`，通过 timeline/外部 semaphore 交接给输出消费者，不再把输出图像读回 CPU；新增 `vulkan_output_image_direct`、`vulkan_zero_cpu_readback` 和 `vulkan_gpu_to_cpu` 遥测。CUDA→Vulkan 输入仍可能包含一次设备侧导入复制，因此严格 `zero_copy` 仍保持 false，避免把“零 CPU 回读”误报成端到端零复制。
+- 已在当前 Vulkan 实机完成输出阶段验收：96×64 CUDA RGB/depth 输入经 `d2s_stereo_layered_output` 写入 Presenter-owned storage image，提交 timeline=3，生产路径报告 `vulkan_readback=none`；临时 host image 只用于测试读取像素，不进入运行时输出链。
+
+- 补充 Vulkan 零拷贝输出验收说明：Presenter/OpenXR 输出适配器现在统一报告 `vulkan_output_image_direct=True`、`vulkan_zero_cpu_readback=True` 和 `vulkan_gpu_to_cpu=False`；针对 Vulkan 输出环、同步交接和运行时契约的回归测试通过（35 passed）。严格端到端 `zero_copy=True` 仍不作虚假声明，因为普通 PyTorch CUDA 输入到 Vulkan 外部输入缓冲仍可能包含一次设备侧复制。
+- 修复本地模式选择“拉伸铺满”后仍出现黑边的问题：Viewer 现在同时识别中文本地化标签和旧英文配置值，`3840×2160` SBS 会使用完整源矩形直接拉伸到 `3840×2400` swapchain，不再因模式解析失败回退到保持比例（完整）布局。
+
+- 修复 RTX 3090 本地 SBS 仅约 1 FPS：实测确认 `auto` 立体合成后端错误地优先选择了 `vulkan_layered_stereo`，其本地 4K 路径发生约 935 ms/帧的主机读回，使合成耗时达到约 1.04 秒，而 TensorRT 深度推理仅约 2 ms。自动选择顺序恢复为厂商 GPU Triton（NVIDIA CUDA/AMD ROCm）→ Vulkan → OpenGL → Torch；Intel 等无 Triton 设备仍使用 Vulkan。
+
+- 重新启用本地 Viewer 的“保持比例/显示适配”选项及 `完整/铺满/拉伸` 热切换：无窗口性能对照已排除该 blit 功能是 1 FPS 的直接原因，实际根因是 NVIDIA 自动立体合成后端错误优先 Vulkan 并发生 4K 主机读回。
+
 ## 2026-08-27
+
+- 修复切换到简体中文后“保持比例”控件仍显示英文 tooltip：语言刷新现在通过 `CompactDropdown.set_tooltip()` 重建下拉控件，使中文显示适配说明实际生效。
+
+- 修复本地 Viewer 启动时 `DISPLAY_MODE` 未从运行时导出模块导入，导致进入推理运行阶段后抛出 `NameError` 并立即退出的问题。
+
+- 优化显示适配控件：移除冗余的“显示适配”标签，直接显示适配选项；中文 tooltip 补充“保持比例（完整/铺满）”与“拉伸铺满”的作用，以及黑边、裁剪和画面变形的区别。
 
 - 修正 Windows Python 环境安装流程：CUDA 与 ROCm 独立安装器现在都直接部署官方 Python 3.12.10 NuGet 完整运行时，不再要求 AMD 用户先运行 CUDA 安装器；每次安装均从全新运行时开始，保留完整 `Lib`、`DLLs`、`include`、`libs` 和 `ensurepip`，其中包含 `_ssl.pyd` 所需的 `libcrypto-3.dll` 与 `libssl-3.dll`。
 - 修复 Windows 跨显示器移动 GUI 时“窗口从 4K 显示器移到 1K 显示器后缩小，但控件和文字不随窗口整体缩放”的问题：根因不是 Flet 版本、Flet 客户端文件、GUI 固定尺寸或捕获子进程中的 `SetProcessDpiAwareness(2)`，而是 Windows 在用户注册表 `HKCU\Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers` 中，针对本工程 `src\python3\python.exe` 路径残留了 `HIGHDPIAWARE` 兼容性覆盖。删除该路径对应的注册表值并彻底重启 Python/Flet 进程后，恢复由 Windows 自动整体缩放窗口内容。诊断此类问题时应先比较新旧可执行文件路径的 AppCompatFlags，避免修改 Flet 文件、恢复 GUI 自行计算 DPI 缩放或删除捕获运行时所需的 DPI 设置。

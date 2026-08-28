@@ -38,8 +38,8 @@ Windows 捕获工具边界：
 
 | 操作系统 | GPU/硬件类型 | 捕获模式 | 首选捕获工具/API | 捕获输出资源 | 首选推理后端 | 推理备用后端 | 首选立体合成后端 | 合成备用后端 | 是否支持零 CPU 回读 | 预计 GPU 复制次数 | 当前实现状态 | 自动选择及回退顺序 | 备注与限制 |
 |---|---|---|---|---|---|---|---|---|---|---:|---|---|---|
-| Windows | NVIDIA | 显示器、窗口 | WindowsCaptureCUDA；显示器也可用 DesktopDuplication | 首选 CUDA GPU Tensor；DesktopDuplication 原生资源为 D3D11 Texture，当前兼容输出仍会 staging readback | 原生 TensorRT | PyTorch CUDA → DirectML → CPU | 目标为 Vulkan | OpenGL → Torch/CPU | 捕获到推理可避免 CPU 回读；推理到 Vulkan 的完整共享链路需按输出模式验证 | 0–1 | 厂商捕获和 NVIDIA 推理已实现；完整跨 API 零回读为部分实现/待验证 | 捕获：WindowsCaptureCUDA → DesktopDuplication → WindowsCapture → DXCamera；推理：原生 TensorRT → PyTorch CUDA → DirectML → CPU；合成：Vulkan → OpenGL → Torch/CPU | OpenGL 当前仅有输出/流媒体兼容实现，真正立体合成能力仍待补齐；完整跨 API 零回读待验证 |
-| Windows | AMD | 显示器、窗口 | WindowsCaptureROCm；显示器也可用 DesktopDuplication | 首选 ROCm/HIP GPU Tensor；DesktopDuplication 为 D3D11 Texture，兼容路径可回读 CPU | MIGraphX/ROCm | PyTorch ROCm → DirectML → CPU | 目标为 Vulkan | OpenGL → Torch/CPU | 厂商捕获到 ROCm 推理具备无 CPU 回读代码基础；端到端仍待 AMD 真机验证 | 0–1 | ROCm 捕获依赖、MIGraphX 和 PyTorch ROCm provider 已实现；硬件闭环待验证 | 捕获：WindowsCaptureROCm → DesktopDuplication → WindowsCapture → DXCamera；推理：MIGraphX → PyTorch ROCm → DirectML → CPU；合成目标：Vulkan → OpenGL → CPU | MIGraphX 当前主要面向 Distill-Any-Depth；模型、驱动和 `wc-rocm` 兼容性必须真机验证 |
+| Windows | NVIDIA | 显示器、窗口 | WindowsCaptureCUDA；显示器也可用 DesktopDuplication | 首选 CUDA GPU Tensor；DesktopDuplication 原生资源为 D3D11 Texture，当前兼容输出仍会 staging readback | 原生 TensorRT | PyTorch CUDA → DirectML → CPU | CUDA Triton | Vulkan → OpenGL → Torch/CPU | CUDA 捕获、推理和 Triton 合成可保持 GPU 驻留；跨 API Vulkan 路径需按输出模式验证 | 0–1 | 厂商捕获、NVIDIA 推理与 Triton 合成已实现；Vulkan 完整跨 API 零回读为部分实现/待验证 | 捕获：WindowsCaptureCUDA → DesktopDuplication → WindowsCapture → DXCamera；推理：原生 TensorRT → PyTorch CUDA → DirectML → CPU；合成：CUDA Triton → Vulkan → OpenGL → Torch/CPU | RTX 3090 实测 Vulkan 本地 4K host readback 约 935 ms/帧，因此自动模式必须先选 Triton；Vulkan 保留为回退或显式选择 |
+| Windows | AMD | 显示器、窗口 | WindowsCaptureROCm；显示器也可用 DesktopDuplication | 首选 ROCm/HIP GPU Tensor；DesktopDuplication 为 D3D11 Texture，兼容路径可回读 CPU | MIGraphX/ROCm | PyTorch ROCm → DirectML → CPU | ROCm Triton（探针成功时） | Vulkan → OpenGL → Torch/CPU | 厂商捕获到 ROCm 推理具备无 CPU 回读代码基础；端到端仍待 AMD 真机验证 | 0–1 | ROCm 捕获依赖、MIGraphX、PyTorch ROCm provider 与 Triton 候选已实现；硬件闭环待验证 | 捕获：WindowsCaptureROCm → DesktopDuplication → WindowsCapture → DXCamera；推理：MIGraphX → PyTorch ROCm → DirectML → CPU；合成：ROCm Triton → Vulkan → OpenGL → CPU | 只有 Triton 运行时探针成功才进入首选；MIGraphX、驱动和 `wc-rocm` 兼容性必须真机验证 |
 | Windows | Intel | 显示器；窗口使用 WindowsCapture | 显示器首选 DesktopDuplication；窗口首选 WindowsCapture | D3D11 BGRA Texture；当前同帧兼容输出仍保留 staging readback | OpenVINO GPU RemoteTensor / D3D11 原生桥 | PyTorch XPU → DirectML → CPU | Vulkan；Intel 专用最终输出可使用 D3D11/oneVPL 路径 | OpenGL → Torch/CPU | 原生输入侧具备零 CPU 回读基础；当前深度输出和部分兼容消费者仍会回读，不能宣称端到端零回读 | 目标 0–1；当前兼容路径至少 1 | D3D11/OpenVINO/oneVPL/Vulkan 互操作组件已实现并由 CI 编译；完整 Intel 真机长跑待验证 | 捕获：DesktopDuplication（显示器）或 WindowsCapture（窗口）→ DXCamera；推理：OpenVINO → XPU → DirectML → CPU；合成：Vulkan或专用 D3D11 → OpenGL → CPU | 必须校验 Desktop Duplication、OpenVINO、Vulkan和 oneVPL 的 Adapter LUID；OpenVINO 输出 ABI 当前仍可能回读 CPU |
 | Windows | 其他支持 DX12/DirectML 的 GPU，包括国产显卡 | 显示器、窗口 | WindowsCapture；显示器可选 DesktopDuplication | 当前通用 WindowsCapture 为 CPU NumPy；目标为 D3D11 Texture，经共享资源或一次 GPU 复制进入 D3D12 | DirectML | CPU | Vulkan | OpenGL → CPU | 当前不支持完整零 CPU 回读；目标支持，但需逐厂商、逐驱动验证 | 目标 0–1；当前通常 1 次 CPU→GPU 上传且伴随 CPU 回读 | DirectML 设备发现和 PyTorch DirectML 计算路径已有基础；D3D11/D3D12/Vulkan 共享闭环为规划 | 捕获：WindowsCapture → DesktopDuplication（仅显示器）→ DXCamera；推理：DirectML → CPU；合成：Vulkan → OpenGL → CPU | “支持 DX12”不等于已经通过 DirectML 模型算子、共享句柄和 Vulkan 外部内存验证；国产显卡均标记待验证 |
 | macOS | Apple Silicon | 显示器、窗口 | ScreenCaptureKit | 当前：CVPixelBuffer 锁定后复制为 CPU NumPy；目标：CVPixelBuffer/IOSurface → MTLTexture | 目标：CoreML；可选 MPSGraph | 当前 PyTorch MPS → CPU | 目标：Metal | CPU | 当前不支持；目标路径支持零 CPU 图像回读 | 目标 0–1；当前至少 1 次 CPU→GPU 上传 | ScreenCaptureKit 和 PyTorch MPS 已实现；CoreML/MPSGraph/Metal 原生桥为规划 | 捕获：ScreenCaptureKit → CoreGraphics；推理目标：CoreML → MPSGraph → PyTorch MPS → CPU；合成：Metal → CPU | 不将 Vulkan/MoltenVK或已废弃的 OpenGL作为 macOS 零拷贝主路径；CoreML 模型转换和 ANE/GPU 调度待验证 |
@@ -96,11 +96,11 @@ Apple Silicon 首选 CoreML，MPSGraph用于需要更细控制或 CoreML 算子�
 - **NVIDIA**
   - 捕获：WindowsCaptureCUDA → DesktopDuplication（显示器）/ WindowsCapture（窗口）→ DXCamera。
   - 推理：原生 TensorRT → PyTorch CUDA → DirectML → CPU。
-  - 合成：Vulkan → OpenGL → Torch/CPU。
+  - 合成：CUDA Triton → Vulkan → OpenGL → Torch/CPU。
 - **AMD**
   - 捕获：WindowsCaptureROCm → DesktopDuplication（显示器）/ WindowsCapture（窗口）→ DXCamera。
   - 推理：MIGraphX → PyTorch ROCm → DirectML → CPU。
-  - 合成：Vulkan → OpenGL → Torch/CPU。
+  - 合成：ROCm Triton（探针成功时）→ Vulkan → OpenGL → Torch/CPU。
 - **Intel**
   - 捕获：DesktopDuplication（显示器）或 WindowsCapture（窗口）→ DXCamera。
   - 推理：OpenVINO D3D11 RemoteTensor → PyTorch XPU → DirectML → CPU。
@@ -234,7 +234,7 @@ zero_copy = false
 |---|---|---|---|
 | Windows DirectML闭环 | 部分实现 | 设备创建、代表性算子探针、自动回退接入 | D3D11/D3D12共享输入、模型级算子覆盖、输出到 Vulkan 的同步与真机验证 |
 | WGC 原生资源契约 | 部分实现 | 原生资源作为 `CapturedFrame.frame`，CPU 兼容帧单独保留；Adapter LUID/格式/尺寸校验与显式 CPU 回退决策 | `windows_capture` 原生对象暴露、DirectML消费者桥和跨 API 同步待验证 |
-| 立体合成自动顺序 | 已调整；OpenGL缺口 | 自动顺序 Vulkan → OpenGL → Torch/CPU；OpenGL 能力探针与回退日志 | 项目现有 OpenGL 仅输出/流媒体兼容，不是立体合成实现 |
+| 立体合成自动顺序 | 已修正；OpenGL缺口 | 厂商 Triton 探针成功时优先，其后 Vulkan → OpenGL → Torch/CPU；Presenter-owned Vulkan 输出已使用 storage image 直通，无 Vulkan 图像 CPU 回读；当前设备已用 96×64 CUDA 输入完成真实 shader 写入、timeline=3 和临时验收读回 | 普通本地 Viewer 的 Vulkan 计算仍保留 host-visible fallback；项目现有 OpenGL 仅输出/流媒体兼容，不是立体合成实现 |
 | Intel 跨 API 闭环 | 部分实现 | D3D11/OpenVINO/Vulkan/oneVPL 入口与 LUID 校验 | Intel 真机句柄、格式、同步、长跑和零回读待验证 |
 | macOS 原生链路 | 本轮排除 | 文档明确不实现、不把目标写成现状 | 由其他项目处理；本项目不修改文档 17 |
 | Linux 原生 GPU 捕获 | 探针已补齐 | MSS/Xlib、Wayland/PipeWire/DMA-BUF 状态探针 | 原生 PipeWire/DMA-BUF、窗口 surface、显式同步待实现 |
@@ -245,7 +245,7 @@ zero_copy = false
 
 1. **Windows DirectML闭环（部分实现）**：已增加 DirectML 设备创建、代表性张量算子探针、模型输出设备检查并纳入 Windows 自动推理回退；WGC 原生帧通过 DirectML 输入准备器按共享句柄/同 LUID/桥接方法实际结果选择 shared、gpu_copy 或显式 CPU compatibility。尚未实现通用 D3D11/D3D12 纹理到 DirectML 的生产桥、模型级完整算子覆盖、DirectML 输出到 Vulkan 的外部内存与同步，因此不得宣称端到端零 CPU 回读。
 2. **Windows Graphics Capture资源契约（部分实现）**：`WindowsCapture` 回调在暴露 D3D11 资源时将原生资源作为 `CapturedFrame.frame`，CPU 兼容帧单独放在 `cpu_compat_frame`，并传递格式、尺寸、Adapter LUID/UUID/PCI BDF 和生命周期；DirectML 输入准备器只在共享句柄/桥接方法完成后采用 GPU 资源，否则显式选择兼容帧并记录 `gpu_to_cpu`、`gpu_copy_count` 和回退原因；`D2S_WGC_NATIVE_RESOURCE_REQUIRED=1` 可用于资源缺失时快速失败。`windows_capture` 包的实际原生对象暴露、跨 API 同步和真机资源导入仍待验证。
-3. **立体合成自动顺序（已调整但 OpenGL 仍是缺口）**：自动解析器已按 Vulkan → OpenGL → Torch/CPU 传递可用性；NVIDIA/AMD 不再在自动模式优先 Triton，Triton 保留为显式/兼容优化路径。当前 OpenGL 探针只识别“立体合成后端”能力；项目已有的 OpenGL 代码是输出/流媒体 fallback，不能当作 GPU 立体合成实现，因此实际自动链仍通常为 Vulkan → Torch/CPU。
+3. **立体合成自动顺序（已修正但 OpenGL 仍是缺口）**：自动解析器按厂商 Triton（运行时探针成功）→ Vulkan → OpenGL → Torch/CPU 选择。Presenter-owned Vulkan 输出通过 `VulkanStereoImageComputeBackend.submit_to_images()` 将合成结果直接写入持久化 `VulkanExportableImage`，由 timeline/外部 semaphore 管理可见性，`vulkan_output_image_direct=true`、`vulkan_zero_cpu_readback=true`；CUDA 输入仍可能需要一次设备侧导入复制，因此不得将其误报为严格 `zero_copy=true`。RTX 3090 同机实测表明，错误优先 Vulkan 时旧的 `vulkan_host_readback_ms` 约 935 ms、合成约 1.04 秒；恢复 CUDA Triton 后稳态合成约 0.50–2.76 ms、总 GPU 计时约 2.38–5.42 ms。Intel 等无 Triton 设备进入 Vulkan 时，网络/Presenter sink 使用图像直通，普通本地 Viewer 仍保留 host-visible fallback。当前 OpenGL 代码只是输出/流媒体 fallback，不能当作 GPU 立体合成实现。
 4. **Intel真机闭环（部分实现/待验证）**：Desktop Duplication、OpenVINO D3D11、Vulkan/D3D11 资源入口、oneVPL 和 Adapter LUID 校验已具备代码基础；新增通用资源共享决策与遥测字段，但尚未完成 Intel 真机的跨 API 句柄、格式、同步、严格零回读和 4K 长时间稳定性验证。
 5. **macOS原生链路（本轮明确排除）**：CoreML depth provider、MPSGraph/CVMetalTextureCache 输入桥和 Metal 立体合成仍由其他项目处理；本项目继续把现有 macOS 路径标记为待验证/兼容回退，不把设计目标写成已实现。
 6. **Linux原生GPU捕获（探针已补齐，原生路径仍缺失）**：新增 Linux 能力探针，明确当前只有 MSS + Xlib CPU 捕获；X11 窗口仅按坐标裁剪，不是窗口 surface 零拷贝。Wayland、PipeWire、DMA-BUF、显式同步、DRM/Vulkan 设备身份和厂商原生捕获均仍未实现，自动模式保留 CPU 兼容回退。后续实施入口应先增加 PipeWire screen-capture consumer，再将 DMA-BUF fd、DRM render node、PCI BDF、Vulkan device UUID 和 fence ownership 纳入同一 `CapturedFrame` 资源契约，完成真实 X11/Wayland 硬件回归后才允许进入自动链。

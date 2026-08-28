@@ -190,6 +190,8 @@ def test_presenter_owned_vulkan_compute_declares_cuda_external_input_path():
     assert 'input_mode = "cuda_external_buffer"' in source
     assert 'input_mode = "host_visible_buffer"' in source
     assert "wait_semaphore=wait_semaphore" in source
+    assert '"vulkan_output_image_direct": True' in source
+    assert '"vulkan_zero_cpu_readback": True' in source
 
 
 def test_vulkan_output_shader_decodes_srgb_before_unorm_store():
