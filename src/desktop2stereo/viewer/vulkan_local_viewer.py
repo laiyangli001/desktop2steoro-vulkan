@@ -1584,14 +1584,15 @@ def run_vulkan_local_viewer(*, runtime_q: Any, shutdown_event: Any, config: Vulk
                 continue
             if config.on_breakdown_inc is not None:
                 config.on_breakdown_inc("viewer_get", 1)
-            while True:
-                try:
-                    result, _started = runtime_q.get_nowait()
-                except queue.Empty:
-                    break
-                if config.on_breakdown_inc is not None:
-                    config.on_breakdown_inc("viewer_get", 1)
-                    config.on_breakdown_inc("viewer_drop", 1)
+            if not bool(getattr(runtime_q, "_d2s_ordered", False)):
+                while True:
+                    try:
+                        result, _started = runtime_q.get_nowait()
+                    except queue.Empty:
+                        break
+                    if config.on_breakdown_inc is not None:
+                        config.on_breakdown_inc("viewer_get", 1)
+                        config.on_breakdown_inc("viewer_drop", 1)
             frame = getattr(result, "sbs", None)
             if frame is None:
                 continue

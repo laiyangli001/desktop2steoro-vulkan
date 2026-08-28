@@ -74,6 +74,9 @@ def _prepare_cuda_dll_search_path() -> None:
     cuda_path = os.environ.get("CUDA_PATH", "").strip()
     if cuda_path:
         runtime_dirs.insert(0, Path(cuda_path) / "bin")
+    nvfruc_runtime = os.environ.get("D2S_NVFRUC_RUNTIME_DIR", "").strip()
+    if nvfruc_runtime:
+        runtime_dirs.insert(0, Path(nvfruc_runtime))
     for runtime_dir in runtime_dirs:
         if not runtime_dir.is_dir():
             continue
@@ -318,8 +321,6 @@ class NvFrucStereoGenerator:
         cuda_stream: int = 0,
         library: Any | None = None,
     ) -> None:
-        import torch
-
         left_argb = _to_argb_hwc(left_eye)
         right_argb = _to_argb_hwc(right_eye)
         if tuple(left_argb.shape) != tuple(right_argb.shape):

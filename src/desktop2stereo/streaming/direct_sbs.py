@@ -196,6 +196,8 @@ class DirectSbsOutputConsumer:
             item = self.runtime_q.get(timeout=0.05)
         except queue.Empty:
             return None
+        if bool(getattr(self.runtime_q, "_d2s_ordered", False)):
+            return item
         while True:
             try:
                 item = self.runtime_q.get_nowait()

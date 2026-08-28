@@ -81,7 +81,10 @@ def resolve_runtime_exports(settings: dict, *, os_name: str) -> RuntimeExports:
         settings["Run Mode"],
         os_name=os_name,
         fix_viewer_aspect=settings["Fix Viewer Aspect"],
-        lossless_scaling_support=settings["Lossless Scaling Support"],
+        lossless_scaling_support=settings.get(
+            "NVIDIA Frame Generation",
+            settings.get("Lossless Scaling Support", False),
+        ),
     )
     depth_settings = resolve_depth_settings(settings, os_name=os_name)
     viewer_settings = resolve_viewer_settings(settings)

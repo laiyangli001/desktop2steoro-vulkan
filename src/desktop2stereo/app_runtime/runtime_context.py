@@ -28,6 +28,8 @@ class AppRuntimeContext:
     openxr_runtime_direct: bool
     raw_q: queue.Queue
     runtime_q: queue.Queue
+    # Ordered queue used when NvFRUC emits real and generated frames.
+    presentation_q: queue.Queue
     settings_update_q: queue.Queue
     runtime_config: object
     stereo_runtime: StereoRuntime
@@ -75,7 +77,12 @@ def _runtime_contract_from_settings(settings: dict, *, os_name: str):
         settings.get("Run Mode", "Local Viewer"),
         os_name=os_name,
         fix_viewer_aspect=bool(settings.get("Fix Viewer Aspect", True)),
-        lossless_scaling_support=bool(settings.get("Lossless Scaling Support", False)),
+        lossless_scaling_support=bool(
+            settings.get(
+                "NVIDIA Frame Generation",
+                settings.get("Lossless Scaling Support", False),
+            )
+        ),
     )
     if run_mode_config.run_mode == "OpenXR":
         return "openxr", "openxr_swapchain"
@@ -121,6 +128,9 @@ def create_runtime_context(
 
     raw_q = queue.Queue(maxsize=1)
     runtime_q = queue.Queue(maxsize=1)
+    presentation_q = queue.Queue(maxsize=6)
+    # Consumers must preserve generated frame ordering instead of coalescing.
+    presentation_q._d2s_ordered = True
     settings_update_q = queue.Queue(maxsize=1)
     runtime_config = runtime_config_from_d2s_settings(
         settings,
@@ -164,6 +174,7 @@ def create_runtime_context(
         openxr_runtime_direct=openxr_runtime_direct,
         raw_q=raw_q,
         runtime_q=runtime_q,
+        presentation_q=presentation_q,
         settings_update_q=settings_update_q,
         runtime_config=runtime_config,
         stereo_runtime=stereo_runtime,

@@ -56,6 +56,9 @@ from .runtime_context import (
     create_runtime_context,
 )
 from .runtime_output import VulkanRuntimeOutputConsumer
+from stereo_runtime.nvfruc import probe_nvfruc
+from stereo_runtime.nvfruc_calibration import output_base_fps
+from stereo_runtime.nvfruc_stage import NvFrucStage
 
 
 def _resolve_filament_environment_paths(
@@ -435,17 +438,30 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
     if direct_stream_mode:
         os.environ["D2S_RUNTIME_OUTPUT_UINT8"] = "1"
     configured_target_fps = target_fps_for_run_mode(settings)
+    nvfruc_requested = bool(
+        settings.get(
+            "NVIDIA Frame Generation",
+            settings.get("Lossless Scaling Support", False),
+        )
+    )
+    base_runtime_fps = output_base_fps(FPS, enabled=nvfruc_requested)
+    if nvfruc_requested:
+        print(
+            "[NvFRUC] FPS semantics: "
+            f"output_target={int(FPS)} base_runtime={base_runtime_fps}",
+            flush=True,
+        )
     adaptive_capture_rate = AdaptiveCaptureRate(
-        FPS,
+        base_runtime_fps,
         enabled=adaptive_capture_enabled_for_mode(
             configured_run_mode, configured_target_fps
         ),
     )
     if is_network_stream_mode(configured_run_mode):
-        probe_capture_fps = adaptive_capture_rate.begin_stream_probe(int(FPS))
+        probe_capture_fps = adaptive_capture_rate.begin_stream_probe(int(base_runtime_fps))
         print(
             "[DirectSbsStream] Stream-rate probe capture headroom: "
-            f"requested={int(FPS)} capture={probe_capture_fps} FPS",
+            f"requested={int(base_runtime_fps)} capture={probe_capture_fps} FPS",
             flush=True,
         )
     context = create_runtime_context(
@@ -456,7 +472,7 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
         device_info=DEVICE_INFO,
         output_resolution=OUTPUT_RESOLUTION,
         render_size_config=RENDER_SIZE_CONFIG,
-        fps=FPS,
+        fps=base_runtime_fps,
         window_title=WINDOW_TITLE,
         capture_mode=CAPTURE_MODE,
         monitor_index=MONITOR_INDEX,
@@ -467,6 +483,22 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
         convergence=CONVERGENCE,
         capture_fps_provider=adaptive_capture_rate.current_fps,
     )
+    if context.nvfruc_frame_generation:
+        nvfruc_probe = probe_nvfruc()
+        if not nvfruc_probe.available:
+            print(
+                "[NvFRUC] Frame generation requested but unavailable: "
+                f"{nvfruc_probe.reason}",
+                flush=True,
+            )
+            shutdown_event.set()
+            close_runtime = getattr(context.stereo_runtime, "close", None)
+            if callable(close_runtime):
+                close_runtime()
+            if stop_request_thread is not None:
+                stop_request_thread.join(timeout=0.2)
+            return 1
+
     callbacks = RuntimeCallbacks(
         context,
         show_fps=bool(SHOW_FPS),
@@ -626,6 +658,26 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
     output_thread = None
     local_viewer_thread = None
     network_output = None
+    nvfruc_stage = None
+    nvfruc_thread = None
+    presentation_q = context.runtime_q
+    if context.nvfruc_frame_generation:
+        nvfruc_stage = NvFrucStage(
+            input_q=context.runtime_q,
+            output_q=context.presentation_q,
+            shutdown_event=shutdown_event,
+            output_format_provider=lambda: getattr(
+                context.runtime_config, "output_format", "half_sbs"
+            ),
+            on_status=lambda message: print(f"[NvFRUC] {message}", flush=True),
+        )
+        presentation_q = context.presentation_q
+        nvfruc_thread = threading.Thread(
+            target=nvfruc_stage.run,
+            name="NvFRUCFrameGeneration",
+            daemon=True,
+        )
+        nvfruc_thread.start()
     capture_thread.start()
     pipeline_thread.start()
     try:
@@ -658,7 +710,7 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
             )
             presenter_thread.start()
             output_consumer = VulkanRuntimeOutputConsumer(
-                runtime_q=context.runtime_q,
+                runtime_q=presentation_q,
                 shutdown_event=shutdown_event,
                 source_stat_inc=callbacks.source_stat_inc,
                 sink=presenter,
@@ -840,7 +892,7 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
             callbacks.set_stream_output(network_output)
             network_output.start()
             output_consumer = DirectSbsOutputConsumer(
-                runtime_q=context.runtime_q,
+                runtime_q=presentation_q,
                 shutdown_event=shutdown_event,
                 output=network_output,
                 source_stat_inc=callbacks.source_stat_inc,
@@ -934,7 +986,7 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
             local_viewer_thread = threading.Thread(
                 target=run_vulkan_local_viewer,
                 kwargs={
-                    "runtime_q": context.runtime_q,
+                    "runtime_q": presentation_q,
                     "shutdown_event": shutdown_event,
                     "config": local_viewer_config,
                 },
@@ -964,6 +1016,11 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
         callbacks.stop_active_capture_session()
         _queue_clear(context.raw_q)
         _queue_clear(context.runtime_q)
+        _queue_clear(context.presentation_q)
+        if nvfruc_stage is not None:
+            nvfruc_stage.close()
+        if nvfruc_thread is not None:
+            nvfruc_thread.join(timeout=2.0)
         pipeline_thread.join(timeout=2.0)
         capture_thread.join(timeout=2.0)
         if output_thread is not None:
