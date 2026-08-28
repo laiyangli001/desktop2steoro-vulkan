@@ -27,6 +27,7 @@ native/filament/build/
 native/filament/bridge/*.obj
 native/filament/bridge/*.exp
 native/filament/bridge/*.lib
+native/nvfruc_bridge/Optical_Flow_SDK_*.zip
 .ci-artifacts/
 .tools/
 artifacts/
