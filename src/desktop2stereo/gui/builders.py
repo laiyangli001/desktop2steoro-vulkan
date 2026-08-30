@@ -989,7 +989,9 @@ class GUIBuilderMixin:
         self.audio_label = ft.Text("Stereo Mix:", size=FONT_SIZE, width=S(150))
         self.audio_dd = CompactDropdown(options=[], min_width=S(130))
         self.audio_row = ft.Row([self.audio_label, self.audio_dd], spacing=1)
-        self.video_backend_label = ft.Text("Video Encoder:", size=FONT_SIZE, width=S(150))
+        self.video_backend_label = ft.Text(
+            UI_MESSAGES[self.locale]["Video Encoder:"], size=FONT_SIZE, width=S(150)
+        )
         self.video_backend_dd = CompactDropdown(
             options=["Auto", "Intel QSV (D3D11)", "FFmpeg", "Vulkan Video", "PyNvVideoCodec"],
             value="Auto",
@@ -1084,8 +1086,8 @@ class GUIBuilderMixin:
     def _get_streamer_row_map():
         return {
             "Local Viewer": [], "3D Monitor": [], "OpenXR Link": [],
-            "MJPEG Streamer": [0, 1],
-            "RTMP Streamer": [0, 1, 2, 3, 4, 6, 7, 8],
+            "MJPEG Streamer": [0, 1, 5],
+            "RTMP Streamer": [0, 1, 2, 3, 4, 5, 6, 7, 8],
         }
 
     # ── data population ──

@@ -243,8 +243,20 @@ def test_advanced_streaming_exposes_shared_calibration_rows() -> None:
     end = source.index("\n    # ── data population ──", start)
     row_map = source[start:end]
 
-    assert '"RTMP Streamer": [0, 1, 2, 3, 4, 6, 7, 8]' in row_map
+    assert '"MJPEG Streamer": [0, 1, 5]' in row_map
+    assert '"RTMP Streamer": [0, 1, 2, 3, 4, 5, 6, 7, 8]' in row_map
     assert '"GPU Streamer"' not in row_map
+
+
+def test_video_encoder_is_localized_and_exposed_in_original_gui() -> None:
+    builder_source = BUILDERS_SOURCE.read_text(encoding="utf-8")
+    handler_source = HANDLERS_SOURCE.read_text(encoding="utf-8")
+    localization = (APP_ROOT / "gui" / "localization.py").read_text(encoding="utf-8")
+
+    assert 'UI_MESSAGES[self.locale]["Video Encoder:"]' in builder_source
+    assert 'self.video_backend_label.value = t["Video Encoder:"]' in handler_source
+    assert '"Video Encoder:": "Video Encoder:"' in localization
+    assert '"Video Encoder:": "视频编码器:"' in localization
 
 
 def test_compact_display_field_adapts_between_minimum_and_maximum_widths() -> None:

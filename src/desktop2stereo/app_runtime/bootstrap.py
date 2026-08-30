@@ -12,6 +12,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--probe", action="store_true", help="Print a JSON capability report and exit")
     parser.add_argument("--version", action="store_true", help="Print the project version and exit")
     parser.add_argument("--gui", action="store_true", help="Launch the Desktop2Stereo Flet GUI")
+    parser.add_argument("--gui2", action="store_true", help="Launch the isolated Desktop2Stereo GUI2")
     parser.add_argument("--runtime", action="store_true", help="Run the migrated processing runtime")
     parser.add_argument(
         "--runtime-seconds",
@@ -34,6 +35,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         from .runtime_entry import run_processing_runtime
 
         return run_processing_runtime(max_seconds=args.runtime_seconds)
+    if args.gui2:
+        from gui2.gui import main as gui2_main
+
+        gui2_main()
+        return 0
     if args.gui or not args.probe:
         from gui.gui import main as gui_main
 

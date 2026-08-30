@@ -840,6 +840,7 @@ class GUIHandlerMixin:
         self.stream_port_label.value = t["Streamer Port:"]
         self.stream_quality_label.value = t["Stream Quality:"]
         self.stream_proto_label.value = t["Stream Protocol:"]
+        self.video_backend_label.value = t["Video Encoder:"]
         self.stream_key_label.value = t["Stream Key"]
         calibration_auto = self._stream_calibration_auto_enabled()
         self.stream_calibration_label.value = t.get(
