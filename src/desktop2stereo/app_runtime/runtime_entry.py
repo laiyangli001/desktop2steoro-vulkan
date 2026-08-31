@@ -61,6 +61,7 @@ from stereo_runtime.nvfruc_calibration import (
     NvFrucCalibrationCache,
     NvFrucCalibrationController,
     calibration_fingerprint,
+    limit_nvfruc_output_fps,
     output_base_fps,
 )
 from stereo_runtime.nvfruc_stage import NvFrucStage
@@ -449,11 +450,16 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
             settings.get("Lossless Scaling Support", False),
         )
     )
-    base_runtime_fps = output_base_fps(FPS, enabled=nvfruc_requested)
+    nvfruc_output_fps = limit_nvfruc_output_fps(
+        FPS,
+        configured_run_mode,
+        enabled=nvfruc_requested,
+    )
+    base_runtime_fps = output_base_fps(nvfruc_output_fps, enabled=nvfruc_requested)
     if nvfruc_requested:
         print(
             "[NvFRUC] FPS semantics: "
-            f"output_target={int(FPS)} base_runtime={base_runtime_fps}",
+            f"output_target={int(nvfruc_output_fps)} base_runtime={base_runtime_fps}",
             flush=True,
         )
     adaptive_capture_rate = AdaptiveCaptureRate(
@@ -530,7 +536,7 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
             )
 
         nvfruc_calibration = NvFrucCalibrationController(
-            output_target_fps=int(FPS),
+            output_target_fps=int(nvfruc_output_fps),
             fingerprint=calibration_fingerprint_value,
             cache=calibration_cache,
             on_limit=apply_nvfruc_limit,
@@ -794,7 +800,9 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
                 ):
                     selected_audio = f"soundcard:{selected_audio}"
                 stream_config = replace(
-                    NetworkStreamSessionConfig.from_settings(settings, fps=int(FPS)),
+                    NetworkStreamSessionConfig.from_settings(
+                        settings, fps=int(nvfruc_output_fps)
+                    ),
                     stereo_mix_device=selected_audio,
                 )
                 output_kwargs = dict(

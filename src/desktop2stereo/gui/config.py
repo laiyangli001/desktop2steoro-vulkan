@@ -96,6 +96,7 @@ def default_base_depth_model():
 
 
 DEFAULTS = {
+    "Startup GUI": "gui2",
     "Capture Mode": "Monitor",
     "Monitor Index": 1,
     "Monitor Identity": None,

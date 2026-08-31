@@ -449,6 +449,10 @@ class GUIConfigMixin:
     def on_stereo_hot_param_change(self, e=None):
         self._schedule_stereo_hot_save()
 
+    def on_window_preview_change(self, e=None):
+        self._schedule_stereo_hot_save()
+        self._fit_window_to_content()
+
     def on_audio_delay_change(self, e=None):
         try:
             delay = float(self.audio_delay_tf.value)
@@ -502,6 +506,8 @@ class GUIConfigMixin:
         display_fit_mode = self._display_to_display_fit(self.display_fit_dd.value)
         cfg.update({
             "Show FPS": bool(self.showfps_cb.value),
+            "XR Preview Window": bool(self.xr_preview_cb.value),
+            "Window Preview": bool(self.window_preview_cb.value),
             "Display Fit Mode": display_fit_mode,
             "Fill 16:9": display_fit_mode == "contain",
             "Fix Viewer Aspect": display_fit_mode != "stretch",

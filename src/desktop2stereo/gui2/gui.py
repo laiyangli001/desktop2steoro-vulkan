@@ -14,12 +14,20 @@ from types import SimpleNamespace
 import flet as ft
 
 from gui.gui import Desktop2StereoGUI
+from gui.startup_splash import configure_startup_splash
 from gui import devices as devices_module
 from gui.config import DEFAULTS
+from gui.controls import S
 from gui.paths import BASE_DIR
 from utils import VERSION
 
-from .community import QQ_GROUP_NUMBER, QQ_INVITE_URL, WEBSITE_URL, qr_asset_path
+from .community import (
+    QQ_GROUP_NUMBER,
+    QQ_INVITE_URL,
+    WEBSITE_URL,
+    qr_asset_path,
+    qr_asset_source,
+)
 from .localization import gui2_text
 from .menu_registry import MenuItemSpec, build_menu_specs
 
@@ -34,13 +42,13 @@ GUI2_NAV_EXPAND_DELAY_SECONDS = 3.0
 GUI2_NAV_COLLAPSE_DELAY_SECONDS = 1.0
 PAGE_DESCRIPTION_KEYS = {
     "home": "home_description",
-    "stereo": "stereo_title",
-    "quality": "quality_title",
-    "performance": "performance_title",
-    "streaming": "streaming_title",
-    "advanced": "advanced_title",
-    "logs": "logs_title",
-    "help": "help_title",
+    "stereo": "stereo_description",
+    "quality": "quality_description",
+    "performance": "performance_description",
+    "streaming": "streaming_description",
+    "advanced": "advanced_description",
+    "logs": "logs_description",
+    "help": "help_description",
 }
 
 
@@ -68,6 +76,8 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
         self._gui2_nav_expanded_width = GUI2_NAV_MIN_EXPANDED_WIDTH
         self._gui2_log_requested = False
         self._gui2_ready = False
+        self._gui2_help_qr_host: ft.Container | None = None
+        self._gui2_help_qr_source = None
 
     async def setup(self):
         await super().setup()
@@ -96,6 +106,13 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
 
         self._gui2_acceleration_rows = depth_rows[-3:]
         self._gui2_advanced_rows = depth_rows[5:-3]
+        # Keep the GPU acceleration choices on one performance row in GUI2.
+        # MIGraphX follows OpenVINO so the vendor backends are easy to compare.
+        acceleration_row = self.row4b.controls[1]
+        migraphx_row = self.row4c.controls[1]
+        acceleration_row.controls.extend(migraphx_row.controls)
+        migraphx_row.controls.clear()
+        self.row4c.visible = False
         self._gui2_performance_rows = [
             device_rows[index] for index in (0, 1, 7, 8, 15)
             if index < len(device_rows)
@@ -111,6 +128,11 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
         # Keep them independent from the legacy "advanced device" checkbox.
         for row in self._gui2_quality_rows:
             row.visible = True
+
+        # Reuse the legacy controls verbatim so labels, colons, widths and
+        # localization behavior remain identical in both menus.
+        self._gui2_language_label = self.lang_label
+        self._gui2_theme_label = self.theme_label
 
         self._gui2_pages = {
             "home": self._build_home_page(device_rows),
@@ -128,17 +150,38 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
             "help": self._build_help_page(),
         }
 
+        # Move the shared shell-switch button from the legacy footer row into
+        # GUI2's Home page, where users can opt back into the legacy menu.
+        for container in (self.lang_group, self._btn_bar):
+            content = getattr(container, "content", None)
+            for row in getattr(content, "controls", []):
+                controls = getattr(row, "controls", []) or []
+                if self.menu_switch_btn in controls:
+                    controls.remove(self.menu_switch_btn)
+        self.menu_switch_btn.on_click = self.switch_to_legacy_gui
+        self.menu_switch_btn.content.value = gui2_text(
+            self.locale, "switch_to_legacy_gui"
+        )
+        home_switch_row = ft.Container(
+            content=ft.Row([
+                ft.Text(size=13, color=ft.Colors.GREY, data="home_tip"),
+                ft.Container(expand=True),
+                self.menu_switch_btn,
+            ], spacing=8),
+            padding=ft.Padding(16, 12, 16, 12),
+        )
+        home_page = self._gui2_pages["home"]
+        home_page.controls[-1] = home_switch_row
+
         self._gui2_page_title = ft.Text(size=20, weight=ft.FontWeight.BOLD)
         self._gui2_page_description = ft.Text(size=12, color=ft.Colors.GREY)
         self._gui2_status = ft.Text(size=12, color=ft.Colors.GREY)
-        self._gui2_language_label = ft.Text(size=12, data="footer_language")
-        self._gui2_theme_label = ft.Text(size=12, data="footer_theme")
         # GUI2 requires an explicit confirmation before changing all settings
         # back to their defaults; the legacy GUI keeps its original behavior.
         self.reset_btn.on_click = self.confirm_reset_defaults
         # The legacy builder gives these controls a fixed width. GUI2 places
-        # them in a compact footer, so let Flet size each box from its content.
-        self._set_gui2_footer_dropdowns_adaptive()
+        # interface controls in a compact settings row.
+        self._set_gui2_interface_dropdowns_compact()
         self._gui2_nav_expanded_width = self._calculate_gui2_nav_expanded_width()
         self._gui2_nav = self._build_navigation()
         self._gui2_nav.left = 0
@@ -173,7 +216,11 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
                             self._gui2_page_description,
                         ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
                         ft.Divider(height=1),
-                        self._page_host,
+                        ft.Container(
+                            content=self._page_host,
+                            expand=True,
+                            padding=ft.Padding(0, 0, 16, 0),
+                        ),
                     ],
                     expand=True,
                     spacing=8,
@@ -186,10 +233,6 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
         footer = ft.Container(
             content=ft.Column([
                 ft.Row([
-                    self._gui2_language_label,
-                    self.lang_dd,
-                    self._gui2_theme_label,
-                    self.theme_dd,
                     ft.Container(expand=True),
                     self.reset_btn,
                     self.stop_btn,
@@ -224,6 +267,12 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
             dropdown._fixed = None
             dropdown._min = 0
             dropdown._max = 0
+            dropdown.reapply_width()
+
+    def _set_gui2_interface_dropdowns_compact(self):
+        """Keep language and theme selectors compact on the Advanced page."""
+        for dropdown in (self.lang_dd, self.theme_dd):
+            dropdown._fixed = S(130)
             dropdown.reapply_width()
 
     def _section_page(self, title_key: str, rows: list[ft.Control], category: str) -> ft.Control:
@@ -354,22 +403,29 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
         return group
 
     def _build_advanced_shortcut_page(self) -> ft.Control:
-        """Keep the Advanced navigation item as a discoverable shortcut."""
+        """Build independent application settings for the Advanced page."""
         return ft.Column(
             controls=[
                 ft.Container(
                     content=ft.Column([
                         ft.Text(
+                            value="Interface settings",
                             size=16,
                             weight=ft.FontWeight.BOLD,
-                            data="advanced_shortcut_title",
+                            data="interface_settings_title",
                         ),
-                        ft.Text(size=13, data="advanced_shortcut_body"),
-                        ft.Button(
-                            content=ft.Text(data="open_advanced_stereo"),
-                            icon=ft.Icons.TUNE,
-                            on_click=self.open_advanced_stereo,
+                        ft.Text(
+                            value="Choose the language and theme used by the GUI.",
+                            size=13,
+                            data="interface_settings_body",
                         ),
+                        ft.Row([
+                            self._gui2_language_label,
+                            self.lang_dd,
+                            ft.Container(width=S(40)),
+                            self._gui2_theme_label,
+                            self.theme_dd,
+                        ], spacing=1, wrap=False),
                     ], spacing=12),
                     padding=ft.Padding(16, 16, 16, 16),
                     border=ft.Border.all(1, ft.Colors.OUTLINE),
@@ -407,11 +463,12 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
 
     def _build_help_page(self) -> ft.Control:
         """Show project links, community material, and version in one panel."""
+        # Building GUI2 creates every page eagerly. Use only the bundled image
+        # here so startup and unrelated pages never touch the network.
         qr_path = qr_asset_path()
-        qr_control = (
-            ft.Image(src=str(qr_path), width=240, height=240, fit=ft.BoxFit.CONTAIN)
-            if qr_path is not None else
-            ft.Text(size=13, color=ft.Colors.GREY, data="help_qr_missing")
+        self._gui2_help_qr_source = qr_path
+        self._gui2_help_qr_host = ft.Container(
+            content=self._make_help_qr_control(qr_path),
         )
         group_number = QQ_GROUP_NUMBER or gui2_text(self.locale, "help_group_missing")
         return ft.Column(
@@ -430,7 +487,7 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
                         ], wrap=True),
                         ft.Divider(height=1),
                         ft.Text(size=14, weight=ft.FontWeight.BOLD, data="help_qq_title"),
-                        qr_control,
+                        self._gui2_help_qr_host,
                         ft.Row([
                             ft.Text(group_number, selectable=True, data="help_group_number"),
                             ft.Button(
@@ -462,6 +519,21 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
             spacing=8,
             data="Help",
         )
+
+    @staticmethod
+    def _make_help_qr_control(source) -> ft.Control:
+        if source is not None:
+            return ft.Image(
+                src=str(source), width=240, height=240, fit=ft.BoxFit.CONTAIN,
+            )
+        return ft.Text(size=13, color=ft.Colors.GREY, data="help_qr_missing")
+
+    def _refresh_help_qr_from_web(self):
+        """Resolve the remote-first QR source only after Help is opened."""
+        source = qr_asset_source()
+        self._gui2_help_qr_source = source
+        if self._gui2_help_qr_host is not None:
+            self._gui2_help_qr_host.content = self._make_help_qr_control(source)
 
     def _on_gui2_navigation_hover(self, e):
         """Schedule delayed navigation expansion or collapse."""
@@ -547,7 +619,7 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
         width_delta = width - previous_width
         if width_delta and self._gui2_ready:
             current_window_width = getattr(self.page.window, "width", None) or 680
-            self.page.window.width = max(680, current_window_width + width_delta)
+            self.page.window.width = max(560, current_window_width + width_delta)
             try:
                 self.page.window.update()
             except RuntimeError:
@@ -602,9 +674,6 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
 
     def _on_gui2_navigation_change(self, e):
         index = int(e.control.selected_index or 0)
-        if PAGE_KEYS[index] == "advanced":
-            self.open_advanced_stereo()
-            return
         self._show_gui2_page(index)
 
     def _sync_gui2_home_streaming_visibility(self):
@@ -760,6 +829,8 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
         index = max(0, min(index, len(PAGE_KEYS) - 1))
         self._gui2_page_index = index
         key = PAGE_KEYS[index]
+        if key == "help" and update:
+            self._refresh_help_qr_from_web()
         if not hasattr(self, "_page_host"):
             self._page_host = ft.Container(expand=True)
         self._page_host.content = self._gui2_pages[key]
@@ -797,11 +868,13 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
                     "streaming_shortcut_body", "open_home_streaming",
                     "advanced_group_hint", "advanced_shortcut_title",
                     "advanced_shortcut_body", "open_advanced_stereo",
+                    "interface_settings_title", "interface_settings_body",
                     "footer_language", "footer_theme",
                     "help_title", "help_panel_title", "help_panel_body",
                     "help_qr_missing", "help_qq_title", "help_website",
                     "help_group_missing", "help_copy_group", "help_open_invite",
                     "help_about_title", "help_about_body",
+                    "switch_to_legacy_gui",
                 ):
                     control.value = gui2_text(self.locale, key)
         help_group_number = getattr(self, "_gui2_pages", {}).get("help")
@@ -809,6 +882,10 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
             for control in self._walk_controls(help_group_number):
                 if getattr(control, "data", None) == "help_group_number":
                     control.value = QQ_GROUP_NUMBER or gui2_text(self.locale, "help_group_missing")
+        if self.menu_switch_btn is not None:
+            self.menu_switch_btn.content.value = gui2_text(
+                self.locale, "switch_to_legacy_gui"
+            )
         self._show_gui2_page(self._gui2_page_index, update=False)
 
     @staticmethod
@@ -853,7 +930,9 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
             self._show_gui2_snackbar(gui2_text(self.locale, "website_open_failed", exc))
 
     def open_qq_group(self, _event=None):
-        qr_path = qr_asset_path()
+        # Opening this legacy dialog must not initiate a background refresh.
+        # It reuses the Help page result when available, otherwise the bundle.
+        qr_path = self._gui2_help_qr_source or qr_asset_path()
         content = [
             ft.Text(gui2_text(self.locale, "qq_missing_qr") if qr_path is None else ""),
         ]
@@ -986,13 +1065,23 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
             mounted = False
         if mounted:
             self.stream_container.update()
+        # Re-read the persisted profile whenever GUI2 remounts the streaming
+        # section, so a completed calibration remains visible after changing
+        # run mode or reopening the Home page.
+        if (
+            getattr(self, "run_mode_key", None) == "RTMP Streamer"
+            and bool(getattr(self.stream_settings_cb, "value", False))
+            and hasattr(self, "_config")
+        ):
+            self._refresh_stream_calibration_status()
         self._fit_window_to_content()
 
     def _fit_window_to_content(self, update=True, resize_window=False):
         # Each GUI2 page has a different control matrix. Recalculate both
         # native dimensions from that page instead of retaining the previous
         # page's geometry or counting controls inside hidden containers.
-        self.page.window.min_width = 680
+        # Let each page use its own natural width; keep only a usable minimum.
+        self.page.window.min_width = 560
         self.page.window.min_height = 480
         if resize_window:
             width, height = self._estimate_gui2_window_size()
@@ -1012,11 +1101,11 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
             return 960, 640
         visible_rows = 0
         visible_groups = 0
-        has_large_visual = False
+        large_visual_height = 0
         max_content_width = 0
 
         def visit(control, parent_visible=True):
-            nonlocal visible_rows, visible_groups, has_large_visual, max_content_width
+            nonlocal visible_rows, visible_groups, large_visual_height, max_content_width
             visible = parent_visible and getattr(control, "visible", True)
             if not visible:
                 return 0
@@ -1034,7 +1123,10 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
             ):
                 visible_groups += 1
             if isinstance(control, ft.Image):
-                has_large_visual = True
+                large_visual_height = max(
+                    large_visual_height,
+                    int(getattr(control, "height", None) or 0),
+                )
             width = self._estimate_gui2_control_width(control)
             max_content_width = max(max_content_width, width)
             children = list(getattr(control, "controls", []) or [])
@@ -1051,28 +1143,52 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
             self._gui2_nav_expanded_width - GUI2_NAV_COLLAPSED_WIDTH
             if self._gui2_nav_hovered else 0
         )
-        width = max(680, min(1600, max_content_width + 120 + nav_extra))
+        # The page host supplies the visible right gutter; keep the natural
+        # content estimate stable so compact pages do not grow unnecessarily.
+        # Account for the bordered group padding and the page host's right
+        # gutter in addition to the measured row content.
+        width = max(560, min(1600, max_content_width + 160 + nav_extra))
         # Compact GUI2 parameter controls occupy about 30 px plus 8 px row
         # spacing. The old 46 px/row and 290 px shell allowance compounded on
         # dense pages and left a large empty strip above the fixed footer.
         # Keep the estimate tied to this page's visible semantic rows while
         # retaining a small allowance for its header, footer, and margins.
         estimate = 220 + visible_rows * 38 + visible_groups * 20
-        if has_large_visual:
-            estimate += 250
+        if large_visual_height:
+            estimate += large_visual_height + 10
+        # The Help page contains a QR image inside a bordered panel. Its
+        # natural height is larger than the semantic-row estimate, so reserve
+        # the image plus the panel/header/footer chrome instead of allowing
+        # the page to be clipped by the native window.
+        if PAGE_KEYS[self._gui2_page_index] == "help":
+            estimate = max(estimate, 460 + large_visual_height)
         return width, max(480, min(1000, estimate))
 
     def _estimate_gui2_control_width(self, control) -> int:
         """Estimate a control's natural width without requiring client layout."""
+        if getattr(control, "visible", True) is False:
+            return 0
         explicit = getattr(control, "width", None)
         if isinstance(explicit, (int, float)) and explicit > 0:
             return int(explicit)
+        if isinstance(control, ft.Container):
+            content = getattr(control, "content", None)
+            if content is None:
+                return int(explicit or 0)
+            return self._estimate_gui2_control_width(content)
         if isinstance(control, ft.Row):
-            children = list(getattr(control, "controls", []) or [])
+            children = [
+                child for child in (getattr(control, "controls", []) or [])
+                if getattr(child, "visible", True) is not False
+            ]
             spacing = getattr(control, "spacing", 0) or 0
             return sum(self._estimate_gui2_control_width(child) for child in children) + max(0, len(children) - 1) * spacing
         if isinstance(control, ft.Column):
-            return max((self._estimate_gui2_control_width(child) for child in control.controls), default=0)
+            return max((
+                self._estimate_gui2_control_width(child)
+                for child in control.controls
+                if getattr(child, "visible", True) is not False
+            ), default=0)
         if isinstance(control, ft.Image):
             return int(getattr(control, "width", None) or 240)
         value = getattr(control, "value", None) or getattr(control, "label", None)
@@ -1104,11 +1220,7 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
 
 
 async def _async_main(page: ft.Page):
-    page.window.width = 960
-    page.window.height = 640
-    page.padding = 16
-    page.add(ft.ProgressRing(width=28, height=28))
-    page.update()
+    await configure_startup_splash(page)
     app = Desktop2StereoGUI2(page)
     await app.setup()
 

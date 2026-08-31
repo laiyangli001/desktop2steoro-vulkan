@@ -295,6 +295,7 @@ class GUIBuilderMixin:
             self.stereo_output_label, self.controller_label, self.lang_label,
             self.stream_url_label, self.stream_port_label,
             self.stream_proto_label, self.audio_label, self.crf_label,
+            self.video_backend_label,
             self.stream_calibration_label,
             self.color_brightness_label, self.color_saturation_label,
             self.color_temperature_label, self.projection_min_lod_label,
@@ -616,16 +617,19 @@ class GUIBuilderMixin:
         self.window_preview_cb = ft.Checkbox(
             scale=SCALE,
             visual_density=ft.VisualDensity.COMPACT,
-            label="Window Preview",
+            label="Depth Map Window",
             value=DEFAULTS.get("Window Preview", False),
-            on_change=lambda e: self._fit_window_to_content(),
+            on_change=self.on_window_preview_change,
         )
         self.target_fps_label = ft.Text("Capture FPS:", size=FONT_SIZE, width=S(130))
         self.target_fps_dd = CompactDropdown(
             options=["Auto"] + [str(fps) for fps in range(5, 95, 5)],
             value="Auto", width=S(74))
-        self.xr_preview_cb = ft.Checkbox(label="XR Preview Window",
-            value=DEFAULTS.get("XR Preview Window", True))
+        self.xr_preview_cb = ft.Checkbox(
+            label="XR Window",
+            value=DEFAULTS.get("XR Preview Window", True),
+            on_change=self.on_stereo_hot_param_change,
+        )
         self.advanced_device_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT,
             label="Advanced Options", value=False, on_change=self.on_advanced_device_change)
         row5 = ft.Row([self.computing_device_label, self.device_dd,
@@ -791,6 +795,11 @@ class GUIBuilderMixin:
         self.theme_dd = CompactDropdown(
             options=["system", "blue", "green", "red", "purple", "orange", "teal", "pink", "grey"],
             value="system", on_select=self.on_theme_change, width=S(130))
+        self.menu_switch_btn = ft.Button(
+            content=ft.Text("New Menu", size=FONT_SIZE),
+            width=S(130),
+            on_click=self.switch_to_gui2,
+        )
         self.reset_btn = ft.Button(content=ft.Text("Reset", size=FONT_SIZE),
             width=S(130), on_click=self.reset_defaults)
         self.stop_btn = ft.Button(content=ft.Text("Stop", size=FONT_SIZE),
@@ -922,7 +931,7 @@ class GUIBuilderMixin:
         )
 
 
-        btn_row = ft.Row([self.reset_btn, ft.Container(expand=True),
+        btn_row = ft.Row([self.menu_switch_btn, self.reset_btn, ft.Container(expand=True),
             ft.Container(content=ft.Row([self.stop_btn, self.run_btn], spacing=S(20)),
                          padding=ft.Padding(0, 0, S(40), 0))])
         self._btn_bar = ft.Container(content=btn_row)
@@ -995,7 +1004,7 @@ class GUIBuilderMixin:
         self.video_backend_dd = CompactDropdown(
             options=["Auto", "Intel QSV (D3D11)", "FFmpeg", "Vulkan Video", "PyNvVideoCodec"],
             value="Auto",
-            min_width=S(130),
+            width=S(130),
         )
         self.video_backend_row = ft.Row(
             [self.video_backend_label, self.video_backend_dd], spacing=1

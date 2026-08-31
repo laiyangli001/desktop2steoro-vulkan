@@ -31,6 +31,11 @@ from .localization import UI_MESSAGES
 from .log_handler import GuiLogHandler
 from utils.logging_setup import _NoisyThirdPartyDebugFilter
 from utils.run_mode import target_fps_setting_key
+from app_runtime.gui_selection import (
+    LEGACY_GUI,
+    MODERN_GUI,
+    save_startup_gui,
+)
 from streaming.stream_calibration import (
     build_calibration_fingerprint,
     calibration_fingerprint_matches,
@@ -1565,6 +1570,64 @@ class GUIProcessMixin:
             self._diag("monitor_task done, status updated")
 
     # ── stop ──
+
+    def switch_to_gui2(self, e=None):
+        self._request_gui_switch(MODERN_GUI)
+
+    def switch_to_legacy_gui(self, e=None):
+        self._request_gui_switch(LEGACY_GUI)
+
+    def _request_gui_switch(self, target_gui):
+        if getattr(self, "_gui_switch_task", None) is not None:
+            return
+        try:
+            self._gui_switch_task = asyncio.create_task(
+                self._switch_gui_process(target_gui)
+            )
+        except RuntimeError:
+            self._gui_switch_task = None
+
+    async def _switch_gui_process(self, target_gui):
+        """Persist the selected shell, launch it, then close this shell."""
+        target_gui = MODERN_GUI if target_gui == MODERN_GUI else LEGACY_GUI
+        ok, error = save_startup_gui(target_gui)
+        if not ok:
+            self.set_status(
+                UI_MESSAGES[self.locale]["Failed to switch startup menu"].format(error)
+            )
+            self._gui_switch_task = None
+            return
+        self._config["Startup GUI"] = target_gui
+        self.set_status(UI_MESSAGES[self.locale]["Switching startup menu"])
+        self.page.update()
+        try:
+            await self._async_stop()
+            launch_args = [
+                sys.executable,
+                os.path.join(BASE_DIR, "main.py"),
+                "--gui2" if target_gui == MODERN_GUI else "--gui",
+            ]
+            launch_env = os.environ.copy()
+            launch_env["PYTHONPATH"] = BASE_DIR
+            launch_env["PYTHON_EXE"] = sys.executable
+            launch_kwargs = {
+                "cwd": BASE_DIR,
+                "env": launch_env,
+            }
+            if OS_NAME == "Windows":
+                launch_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+            subprocess.Popen(launch_args, **launch_kwargs)
+            self._closed = True
+            await self.page.window.destroy()
+        except Exception as exc:
+            self._closed = False
+            logger.exception("Failed to switch startup menu")
+            self.set_status(
+                UI_MESSAGES[self.locale]["Failed to switch startup menu"].format(exc)
+            )
+            self.page.update()
+        finally:
+            self._gui_switch_task = None
 
     def stop_process(self, e=None):
         process = getattr(self, "process", None)

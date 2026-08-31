@@ -7,6 +7,7 @@ from stereo_runtime.nvfruc_calibration import (
     calibration_fingerprint,
     calculate_safe_output_limit,
     downgrade_target_fps,
+    limit_nvfruc_output_fps,
     output_base_fps,
     NvFrucCalibrationController,
 )
@@ -16,6 +17,13 @@ def test_output_base_fps_uses_final_target_semantics():
     assert output_base_fps(60) == 30
     assert output_base_fps(45) == 23
     assert output_base_fps(60, enabled=False) == 60
+
+
+def test_nvfruc_network_output_is_capped_at_30_fps():
+    assert limit_nvfruc_output_fps(60, "RTMP Streamer", enabled=True) == 30
+    assert limit_nvfruc_output_fps(30, "RTMP Streamer", enabled=True) == 30
+    assert limit_nvfruc_output_fps(60, "Local Viewer", enabled=True) == 60
+    assert limit_nvfruc_output_fps(60, "RTMP Streamer", enabled=False) == 60
 
 
 def test_safe_limit_uses_p95_bottleneck_and_headroom():

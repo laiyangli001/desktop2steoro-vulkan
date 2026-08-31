@@ -10,6 +10,7 @@ sys.path.insert(0, "src/desktop2stereo")
 
 import gui2.gui as gui2_module
 from gui2.gui import Desktop2StereoGUI2, GUI2_NAV_COLLAPSED_WIDTH, PAGE_KEYS
+from gui.controls import S
 
 
 class _Window:
@@ -73,6 +74,9 @@ def test_gui2_builds_shell_and_all_navigation_pages():
     assert app._gui2_nav.destinations[PAGE_KEYS.index("help")].icon == ft.Icons.HELP_OUTLINED
     assert app._gui2_nav.destinations[PAGE_KEYS.index("help")].label == "Help"
     assert app._gui2_pages["help"].data == "Help"
+    assert app.menu_switch_btn in app._walk_controls(app._gui2_pages["home"])
+    assert app.menu_switch_btn.on_click == app.switch_to_legacy_gui
+    assert app.menu_switch_btn.content.value == "Legacy Menu"
     assert "streaming" not in [destination.label for destination in app._gui2_nav.destinations]
     app._gui2_page_index = PAGE_KEYS.index("home")
     home_height = app._estimate_gui2_window_size()[1]
@@ -92,12 +96,16 @@ def test_gui2_builds_shell_and_all_navigation_pages():
     assert status_box.bgcolor == ft.Colors.SURFACE_CONTAINER_HIGHEST
     assert status_box.border_radius == 6
     footer_actions = footer_column.controls[0].controls
-    assert footer_actions[:4] == [
+    assert footer_actions[0].expand is True
+    advanced_panel = app._gui2_pages["advanced"].controls[0].content
+    assert advanced_panel.controls[2].controls[0:2] == [
         app._gui2_language_label, app.lang_dd,
+    ]
+    assert advanced_panel.controls[2].controls[3:] == [
         app._gui2_theme_label, app.theme_dd,
     ]
-    assert app.lang_dd.width is None
-    assert app.theme_dd.width is None
+    assert app.lang_dd.width == S(130)
+    assert app.theme_dd.width == S(130)
     assert app._gui2_status not in footer_column.controls[0].controls
     assert isinstance(app._gui2_shell.controls[-2], ft.Divider)
 
@@ -224,16 +232,12 @@ def test_gui2_builds_shell_and_all_navigation_pages():
     assert app.stream_settings_cb.visible is False
     assert app.stream_container.visible is False
 
-    # The Advanced navigation item remains available as a shortcut, while
-    # the parameter controls themselves live only under Stereo.
+    # Advanced is an independent page for application-level settings.
     app._on_gui2_navigation_change(SimpleNamespace(
         control=SimpleNamespace(selected_index=PAGE_KEYS.index("advanced")),
     ))
-    assert app._page_host.content is app._gui2_pages["stereo"]
-    assert app._gui2_nav.selected_index == PAGE_KEYS.index("stereo")
-    assert app.advanced_stereo_cb.value is True
-    assert all(row.visible is True for row in app._gui2_advanced_rows)
-    assert app._gui2_advanced_stereo_group.visible is True
+    assert app._page_host.content is app._gui2_pages["advanced"]
+    assert app._gui2_nav.selected_index == PAGE_KEYS.index("advanced")
 
     app.advanced_device_cb.value = False
     app._sync_device_advanced_visibility("Local Viewer")
@@ -277,7 +281,7 @@ def test_gui2_navigation_hover_uses_delayed_cancellable_transitions(monkeypatch)
     asyncio.run(exercise_hover_delays())
 
 
-def test_gui2_qq_dialog_has_safe_missing_material_state():
+def test_gui2_qq_dialog_shows_group_qr_and_number():
     page = _Page()
     app = Desktop2StereoGUI2(page)
     app.build_ui()
@@ -285,9 +289,35 @@ def test_gui2_qq_dialog_has_safe_missing_material_state():
 
     dialog = page.dialog
     assert dialog.title.value == "QQ group"
-    assert any("QR" in getattr(control, "value", "") for control in dialog.content.controls)
-    assert dialog.content.controls[-1].controls[0].disabled is True
+    assert isinstance(dialog.content.controls[0], ft.Image)
+    assert dialog.content.controls[1].value == "621378639"
+    assert dialog.content.controls[-1].controls[0].disabled is False
     assert dialog.content.controls[-1].controls[1].disabled is True
+
+
+def test_gui2_remote_qq_image_is_loaded_only_when_help_opens(monkeypatch):
+    remote_source = "https://d2s.site/d2s_qq.jpg"
+    remote_calls = []
+    monkeypatch.setattr(
+        gui2_module,
+        "qr_asset_source",
+        lambda: remote_calls.append(remote_source) or remote_source,
+    )
+
+    page = _Page()
+    app = Desktop2StereoGUI2(page)
+    app.build_ui()
+
+    assert remote_calls == []
+    app._show_gui2_page(PAGE_KEYS.index("performance"))
+    assert remote_calls == []
+
+    app._show_gui2_page(PAGE_KEYS.index("help"))
+    assert remote_calls == [remote_source]
+    assert app._gui2_help_qr_host.content.src == remote_source
+
+    app._refresh_gui2_texts()
+    assert remote_calls == [remote_source]
 
 
 def test_gui2_reset_requires_confirmation():
@@ -307,7 +337,8 @@ def test_gui2_language_and_theme_menu_actions_refresh_shell():
 
     app.select_language_cn()
     assert app.locale == "CN"
-    assert app._gui2_nav.destinations[0].label == "首页 / 运行"
+    assert app._gui2_nav.destinations[0].label == "首页运行"
+    assert app.menu_switch_btn.content.value == "旧版菜单"
     app.select_theme_red()
     assert app._current_theme_key() == "red"
 
@@ -315,3 +346,21 @@ def test_gui2_language_and_theme_menu_actions_refresh_shell():
     app.on_theme_change(SimpleNamespace(control=app.theme_dd))
     assert app.page.theme_mode == ft.ThemeMode.SYSTEM
     assert app.theme_dd.value == "主题"
+
+
+def test_gui2_performance_width_ignores_hidden_recompile_controls():
+    page = _Page()
+    app = Desktop2StereoGUI2(page)
+    app.build_ui()
+
+    for control in (
+        app.recompile_coreml_cb,
+        app.recompile_openvino_cb,
+        app.recompile_migraphx_cb,
+    ):
+        control.visible = False
+
+    app._gui2_page_index = PAGE_KEYS.index("performance")
+
+    assert app._estimate_gui2_control_width(app._accel_spacer) == 0
+    assert app._estimate_gui2_window_size()[0] > 560

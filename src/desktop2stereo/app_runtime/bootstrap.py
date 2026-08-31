@@ -5,6 +5,7 @@ import json
 from collections.abc import Sequence
 
 from .probe import build_capability_report
+from .gui_selection import LEGACY_GUI, MODERN_GUI, read_startup_gui
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -35,13 +36,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         from .runtime_entry import run_processing_runtime
 
         return run_processing_runtime(max_seconds=args.runtime_seconds)
-    if args.gui2:
+    selected_gui = (
+        MODERN_GUI if args.gui2
+        else LEGACY_GUI if args.gui
+        else read_startup_gui()
+    )
+    if selected_gui == MODERN_GUI:
         from gui2.gui import main as gui2_main
 
         gui2_main()
         return 0
-    if args.gui or not args.probe:
-        from gui.gui import main as gui_main
+    from gui.gui import main as gui_main
 
-        gui_main()
-        return 0
+    gui_main()
+    return 0

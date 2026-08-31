@@ -776,9 +776,9 @@ class GUIHandlerMixin:
         headset_key = display_to_xr_headset(self.xr_headset_dd.value)
         self.xr_headset_dd.options = xr_headset_options(self.locale)
         self.xr_headset_dd.value = xr_headset_to_display(headset_key, self.locale)
-        self.xr_preview_cb.label = t.get("XR Preview Window", "XR画面预览窗口" if self.locale == "CN" else "XR Preview Window")
+        self.xr_preview_cb.label = t.get("XR Preview Window", "XR窗口" if self.locale == "CN" else "XR Window")
         self.local_vsync_cb.label = t.get("VSync", "VSync")
-        self.window_preview_cb.label = t.get("Window Preview", "Window Preview")
+        self.window_preview_cb.label = t.get("Window Preview", "Depth Map Window")
         self.target_fps_label.value = t.get("Capture FPS:", "Capture FPS:")
         target_fps_value = self._target_fps_from_display(self.target_fps_dd.value)
         self.target_fps_dd.options = [t["Auto"]] + [str(fps) for fps in range(5, 95, 5)]
@@ -864,6 +864,7 @@ class GUIHandlerMixin:
         self.reset_btn.content.value = t["Reset"]
         self.stop_btn.content.value = t["Stop"]
         self.run_btn.content.value = t["Run"]
+        self.menu_switch_btn.content.value = t["Switch to new menu"]
         self.report_issue_btn.content.value = t.get("Report issue", "Report bug")
         self.open_log_file_btn.content.value = t.get("Open log file", "Open log")
         self._sync_log_visibility_link()

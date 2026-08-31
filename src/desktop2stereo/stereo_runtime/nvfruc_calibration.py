@@ -32,6 +32,19 @@ def output_base_fps(output_target_fps: float, enabled: bool = True) -> int:
     return max(1, int(math.ceil(target / 2.0))) if enabled else int(math.ceil(target))
 
 
+def limit_nvfruc_output_fps(
+    output_target_fps: float,
+    run_mode: str,
+    *,
+    enabled: bool,
+) -> int:
+    """Cap NvFRUC network output at 30 FPS for browser streaming."""
+    target = max(1, int(float(output_target_fps)))
+    if enabled and str(run_mode).strip() == "RTMP Streamer":
+        return min(target, 30)
+    return target
+
+
 def _p95(values: Iterable[float]) -> float:
     samples = [float(value) for value in values if float(value) > 0.0]
     if not samples:

@@ -2,6 +2,7 @@ import asyncio
 from pathlib import Path
 
 import flet as ft
+import pytest
 
 from path_config import APP_ROOT
 
@@ -14,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 BUILDERS_SOURCE = APP_ROOT / "gui" / "builders.py"
 HANDLERS_SOURCE = APP_ROOT / "gui" / "handlers.py"
 GUI_SOURCE = APP_ROOT / "gui" / "gui.py"
+CONFIG_MGR_SOURCE = APP_ROOT / "gui" / "config_mgr.py"
 
 
 def test_left_settings_area_uses_a_bounded_scroll_viewport() -> None:
@@ -53,16 +55,21 @@ def test_native_window_uses_a_visible_compact_startup_surface() -> None:
     app_start = source.index("app = Desktop2StereoGUI(page)", async_main_start)
     bootstrap = source[async_main_start:app_start]
 
+    assert "configure_startup_splash(page)" in bootstrap
+    assert "_write_gui_ready_flag()" not in bootstrap
     assert "page.window.visible = False" not in bootstrap
-    assert "page.window.width = S(520)" in bootstrap
-    assert "page.window.height = S(300)" in bootstrap
-    assert "ft.ProgressRing" in bootstrap
-    assert "Desktop2Stereo is starting..." in bootstrap
-    assert "page.update()" in bootstrap
-    assert "await asyncio.sleep(0.1)" in bootstrap
-    assert bootstrap.index("await asyncio.sleep(0.1)") < bootstrap.index(
-        "_write_gui_ready_flag()"
-    )
+
+    setup_start = source.index("async def setup(self):")
+    setup_end = source.index("def _signal_gui_ready", setup_start)
+    assert "self.page.window.frameless = False" in source[setup_start:setup_end]
+
+
+def test_startup_splash_preserves_aspect_and_uses_quarter_display_area() -> None:
+    from gui.startup_splash import STARTUP_IMAGE_ASPECT, startup_window_size
+
+    width, height = startup_window_size((3840, 2160))
+    assert abs(width / height - STARTUP_IMAGE_ASPECT) < 0.01
+    assert width * height == pytest.approx(3840 * 2160 * 0.25, rel=0.1)
 
 
 def test_startup_audio_detection_is_deferred_until_after_window_show() -> None:
@@ -311,6 +318,41 @@ def test_window_preview_is_an_independent_advanced_checkbox_after_vsync() -> Non
     assert "self.local_vsync_cb" in row_source
     assert "self.window_preview_cb" in row_source
     assert row_source.index("self.local_vsync_cb") < row_source.index("self.window_preview_cb")
+
+
+def test_new_menu_button_is_next_to_reset_in_legacy_footer() -> None:
+    source = BUILDERS_SOURCE.read_text(encoding="utf-8")
+    row_start = source.index("btn_row = ft.Row(")
+    row_end = source.index("self._btn_bar", row_start)
+    row_source = source[row_start:row_end]
+
+    assert row_source.index("self.menu_switch_btn") < row_source.index("self.reset_btn")
+    assert row_source.index("self.reset_btn") < row_source.index("ft.Container(expand=True)")
+
+
+def test_video_encoder_label_uses_the_shared_left_column_alignment() -> None:
+    source = BUILDERS_SOURCE.read_text(encoding="utf-8")
+    align_start = source.index("left_labels = [")
+    align_end = source.index("right_labels = [", align_start)
+    assert "self.video_backend_label" in source[align_start:align_end]
+
+
+def test_preview_window_labels_and_checkbox_changes_are_persisted() -> None:
+    builders = BUILDERS_SOURCE.read_text(encoding="utf-8")
+    config_mgr = CONFIG_MGR_SOURCE.read_text(encoding="utf-8")
+    localization = (APP_ROOT / "gui" / "localization.py").read_text(encoding="utf-8")
+    hot_save_start = config_mgr.index("def _save_stereo_hot_params(self):")
+    hot_save_end = config_mgr.index("# ── stereo preset values", hot_save_start)
+    hot_save = config_mgr[hot_save_start:hot_save_end]
+
+    assert 'label="XR Window"' in builders
+    assert 'on_change=self.on_stereo_hot_param_change' in builders
+    assert 'label="Depth Map Window"' in builders
+    assert 'on_change=self.on_window_preview_change' in builders
+    assert '"XR Preview Window": bool(self.xr_preview_cb.value)' in hot_save
+    assert '"Window Preview": bool(self.window_preview_cb.value)' in hot_save
+    assert '"XR Preview Window": "XR窗口"' in localization
+    assert '"Window Preview": "深度图窗口"' in localization
 
 
 def test_reset_defaults_disable_depth_antialiasing() -> None:

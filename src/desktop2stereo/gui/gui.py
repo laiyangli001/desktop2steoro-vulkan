@@ -23,6 +23,7 @@ from .config import DEFAULTS
 from .controls import S
 from .paths import BASE_DIR, GUI_READY_FILE, LOG_DIR
 from .localization import UI_MESSAGES
+from .startup_splash import configure_startup_splash
 
 
 logger = logging.getLogger(__name__)
@@ -90,6 +91,7 @@ class Desktop2StereoGUI(
         self._audio_startup_task = None
         self._startup_defer_devices = True
         self._device_startup_task = None
+        self._gui_switch_task = None
 
     async def setup(self):
         self.gui_log_handler = _setup_console_logging()
@@ -157,6 +159,13 @@ class Desktop2StereoGUI(
         # default / restored width on the first render, which is why the
         # hide-log window opened wider than its fitted width on first launch.
         self._fit_window_to_content(update=False, resize_window=True)
+        self.page.window.frameless = False
+        self.page.window.resizable = True
+        self.page.window.shadow = True
+        self.page.window.min_width = S(520)
+        self.page.window.max_width = None
+        self.page.window.min_height = S(300)
+        self.page.window.max_height = None
         self.page.window.visible = True
         self.page.update()
         self._device_startup_task = asyncio.create_task(
@@ -212,32 +221,7 @@ def main():
 
 
 async def _async_main(page: ft.Page):
-    # Keep the native window visible to avoid hide/show ordering races. Replace
-    # Flet's large blank default frame with a compact startup surface while
-    # synchronous configuration and hardware discovery are still running.
-    page.window.width = S(520)
-    page.window.height = S(300)
-    page.padding = S(24)
-    page.add(
-        ft.Container(
-            content=ft.Column(
-                [
-                    ft.ProgressRing(width=S(28), height=S(28)),
-                    ft.Text("Desktop2Stereo is starting...", size=S(14)),
-                ],
-                alignment=ft.MainAxisAlignment.CENTER,
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                spacing=S(12),
-            ),
-            expand=True,
-            alignment=ft.Alignment.CENTER,
-        )
-    )
-    page.update()
-    await asyncio.sleep(0.1)
-    # The launcher only needs confirmation that a visible GUI surface exists;
-    # compute/audio discovery and full menu construction continue afterward.
-    _write_gui_ready_flag()
+    await configure_startup_splash(page)
     app = Desktop2StereoGUI(page)
     await app.setup()
 

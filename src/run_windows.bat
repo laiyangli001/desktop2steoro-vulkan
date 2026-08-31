@@ -30,9 +30,9 @@ if not exist "%PYTHON_EXE%" (
     exit /b 1
 )
 
-if not exist "%APP_DIR%\gui\gui.py" (
-    echo [Error] [EN] %APP_DIR%\gui\gui.py not found.
-    echo [Error] [CN] 初始化 Python 环境 ...失败，未找到 %APP_DIR%\gui\gui.py
+if not exist "%APP_DIR%\main.py" (
+    echo [Error] [EN] %APP_DIR%\main.py not found.
+    echo [Error] [CN] 初始化 Python 环境 ...失败，未找到 %APP_DIR%\main.py
     pause
     exit /b 1
 )
@@ -59,7 +59,7 @@ echo       [CN] 收到 GUI 就绪标志后，此 CMD 窗口会自动关闭。
 set "PYTHONPATH=%APP_DIR%"
 set "PYTHON_EXE=%PYTHON_EXE%"
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:PYTHONPATH='%APP_DIR%'; $env:PYTHON_EXE='%PYTHON_EXE%'; $p = Start-Process -FilePath '%PYTHON_EXE%' -ArgumentList '-m','gui' -WorkingDirectory '%APP_DIR%' -WindowStyle Hidden -RedirectStandardOutput '%LAUNCH_STDOUT%' -RedirectStandardError '%LAUNCH_STDERR%' -PassThru; $deadline = (Get-Date).AddSeconds(60); while ((Get-Date) -lt $deadline) { if (Test-Path -LiteralPath '%GUI_READY_FILE%') { exit 0 }; if ($p.HasExited) { exit 1 }; Start-Sleep -Milliseconds 250 }; exit 2"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:PYTHONPATH='%APP_DIR%'; $env:PYTHON_EXE='%PYTHON_EXE%'; $p = Start-Process -FilePath '%PYTHON_EXE%' -ArgumentList '%APP_DIR%\main.py' -WorkingDirectory '%APP_DIR%' -WindowStyle Hidden -RedirectStandardOutput '%LAUNCH_STDOUT%' -RedirectStandardError '%LAUNCH_STDERR%' -PassThru; $deadline = (Get-Date).AddSeconds(60); while ((Get-Date) -lt $deadline) { if (Test-Path -LiteralPath '%GUI_READY_FILE%') { exit 0 }; if ($p.HasExited) { exit 1 }; Start-Sleep -Milliseconds 250 }; exit 2"
 if errorlevel 2 goto launch_timeout
 if errorlevel 1 goto launch_failed
 exit /b 0
