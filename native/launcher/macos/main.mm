@@ -69,6 +69,8 @@
         [self.timer invalidate];
         [self.splashWindow orderOut:nil];
         [self.splashWindow close];
+        // The GUI process is intentionally independent; only the bootstrap exits.
+        [NSApp terminate:nil];
         return;
     }
     if (!self.task.isRunning || [self.deadline timeIntervalSinceNow] <= 0) {
