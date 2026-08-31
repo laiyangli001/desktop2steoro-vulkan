@@ -4,16 +4,13 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <filesystem>
-
-namespace fs = std::filesystem;
 
 @interface D2SDelegate : NSObject <NSApplicationDelegate>
 @property(nonatomic, strong) NSWindow* splashWindow;
 @property(nonatomic, strong) NSTask* task;
 @property(nonatomic, strong) NSTimer* timer;
 @property(nonatomic, copy) NSString* readyPath;
-@property(nonatomic) NSDate* deadline;
+@property(nonatomic, strong) NSDate* deadline;
 @end
 
 @implementation D2SDelegate

@@ -4,6 +4,9 @@ project(Desktop2StereoMacLauncher LANGUAGES OBJCXX)
 add_executable(Desktop2Stereo MACOSX_BUNDLE main.mm)
 set_target_properties(Desktop2Stereo PROPERTIES
     OUTPUT_NAME "Desktop2Stereo"
+    CXX_STANDARD 17
+    OBJCXX_STANDARD 17
+    OBJCXX_STANDARD_REQUIRED YES
     MACOSX_BUNDLE_GUI_IDENTIFIER "site.d2s.desktop2stereo.launcher"
     MACOSX_BUNDLE_BUNDLE_NAME "Desktop2Stereo"
     MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/Info.plist")
