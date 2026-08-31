@@ -14,7 +14,6 @@ from types import SimpleNamespace
 import flet as ft
 
 from gui.gui import Desktop2StereoGUI
-from gui.startup_splash import configure_startup_splash
 from gui import devices as devices_module
 from gui.config import DEFAULTS
 from gui.controls import S
@@ -30,6 +29,7 @@ from .community import (
 )
 from .localization import gui2_text
 from .menu_registry import MenuItemSpec, build_menu_specs
+from .update_service import UpdateService
 
 
 PAGE_KEYS = (
@@ -55,6 +55,8 @@ PAGE_DESCRIPTION_KEYS = {
 class Desktop2StereoGUI2(Desktop2StereoGUI):
     """GUI2 presentation shell with the legacy runtime contract intact."""
 
+    GUI_PAGE_PADDING = S(0)
+
     def __init__(self, page: ft.Page):
         super().__init__(page)
         self._gui2_page_index = 0
@@ -78,6 +80,9 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
         self._gui2_ready = False
         self._gui2_help_qr_host: ft.Container | None = None
         self._gui2_help_qr_source = None
+        self._gui2_help_qr_refresh_task = None
+        self._update_service = UpdateService()
+        self._gui2_update_button: ft.OutlinedButton | None = None
 
     async def setup(self):
         await super().setup()
@@ -87,6 +92,10 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
         # Build every legacy control first. The legacy root is removed before
         # the same control rows are mounted in the GUI2 page containers.
         super().build_ui()
+        # GUI2 gives the log its own bounded viewport. GUI1 keeps its
+        # established layout, where the surrounding row already constrains
+        # the log panel height.
+        self.log_viewport.tight = False
         legacy_root = self._root_row
         try:
             self.page.remove(legacy_root)
@@ -146,7 +155,15 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
                 "performance_title", self._gui2_performance_rows, "Performance",
             ),
             "advanced": self._build_advanced_shortcut_page(),
-            "logs": self._section_page("logs_title", [self.log_panel], "Logs"),
+            # The log panel already owns its border. Do not wrap it in the
+            # generic bordered section container, otherwise GUI2 renders two
+            # nested frames around the same log view.
+            "logs": ft.Column(
+                controls=[self.log_panel],
+                expand=True,
+                spacing=0,
+                data="Logs",
+            ),
             "help": self._build_help_page(),
         }
 
@@ -199,8 +216,8 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
             clip_behavior=ft.ClipBehavior.HARD_EDGE,
         )
         self._set_gui2_navigation_layout(False)
-        # GUI2 no longer renders a top menu bar. Keep the menu registry and
-        # builders available for a future command surface without mounting it.
+        # GUI2 uses the left navigation and bottom action area as its command
+        # surface; keep the legacy top menu unmounted.
         self._gui2_menu = None
         self._page_host = ft.Container(expand=True)
 
@@ -404,6 +421,14 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
 
     def _build_advanced_shortcut_page(self) -> ft.Control:
         """Build independent application settings for the Advanced page."""
+        self._gui2_update_button = ft.OutlinedButton(
+            content=gui2_text(self.locale, "check_updates"),
+            icon=ft.Icons.SYSTEM_UPDATE_ALT,
+            disabled=not self._update_service.enabled,
+            tooltip=gui2_text(self.locale, "updates_disabled_tooltip"),
+            data="check_updates",
+            on_click=self._on_check_updates,
+        )
         return ft.Column(
             controls=[
                 ft.Container(
@@ -426,6 +451,25 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
                             self._gui2_theme_label,
                             self.theme_dd,
                         ], spacing=1, wrap=False),
+                    ], spacing=12),
+                    padding=ft.Padding(16, 16, 16, 16),
+                    border=ft.Border.all(1, ft.Colors.OUTLINE),
+                    border_radius=8,
+                ),
+                ft.Container(
+                    content=ft.Column([
+                        ft.Text(
+                            value=gui2_text(self.locale, "updates_title"),
+                            size=16,
+                            weight=ft.FontWeight.BOLD,
+                            data="updates_title",
+                        ),
+                        ft.Text(
+                            value=gui2_text(self.locale, "updates_body"),
+                            size=13,
+                            data="updates_body",
+                        ),
+                        ft.Row([self._gui2_update_button], spacing=8),
                     ], spacing=12),
                     padding=ft.Padding(16, 16, 16, 16),
                     border=ft.Border.all(1, ft.Colors.OUTLINE),
@@ -463,8 +507,8 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
 
     def _build_help_page(self) -> ft.Control:
         """Show project links, community material, and version in one panel."""
-        # Building GUI2 creates every page eagerly. Use only the bundled image
-        # here so startup and unrelated pages never touch the network.
+        # Building GUI2 creates every page eagerly. Use only the local bundle
+        # or cache so startup and navigation never touch the network.
         qr_path = qr_asset_path()
         self._gui2_help_qr_source = qr_path
         self._gui2_help_qr_host = ft.Container(
@@ -528,12 +572,37 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
             )
         return ft.Text(size=13, color=ft.Colors.GREY, data="help_qr_missing")
 
-    def _refresh_help_qr_from_web(self):
-        """Resolve the remote-first QR source only after Help is opened."""
-        source = qr_asset_source()
-        self._gui2_help_qr_source = source
-        if self._gui2_help_qr_host is not None:
-            self._gui2_help_qr_host.content = self._make_help_qr_control(source)
+    async def _refresh_help_qr_in_background(self):
+        try:
+            source = await asyncio.to_thread(qr_asset_source)
+            self._gui2_help_qr_source = source
+            if self._gui2_help_qr_host is not None:
+                self._gui2_help_qr_host.content = self._make_help_qr_control(source)
+                self._safe_update(self._gui2_help_qr_host)
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            return
+        finally:
+            self._gui2_help_qr_refresh_task = None
+
+    def _schedule_help_qr_refresh(self):
+        task = self._gui2_help_qr_refresh_task
+        if task is not None and not task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # Direct non-Flet callers have no event loop; retain synchronous
+            # behavior for tooling and tests only.
+            source = qr_asset_source()
+            self._gui2_help_qr_source = source
+            if self._gui2_help_qr_host is not None:
+                self._gui2_help_qr_host.content = self._make_help_qr_control(source)
+            return
+        self._gui2_help_qr_refresh_task = loop.create_task(
+            self._refresh_help_qr_in_background()
+        )
 
     def _on_gui2_navigation_hover(self, e):
         """Schedule delayed navigation expansion or collapse."""
@@ -601,7 +670,7 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
         self._gui2_nav.extended = True
         self._gui2_nav.label_type = ft.NavigationRailLabelType.NONE
         self._set_gui2_navigation_layout(expanded)
-        self.page.update()
+        self._safe_update(self._gui2_nav_host, self._gui2_nav)
 
     def _set_gui2_navigation_layout(self, expanded: bool):
         """Change only the clipped viewport width; never constrain the rail."""
@@ -617,7 +686,14 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
         # window by the same delta, the expanded navigation only squeezes the
         # page instead of moving it as one block.
         width_delta = width - previous_width
-        if width_delta and self._gui2_ready:
+        running = (
+            getattr(self, "_starting", False)
+            or (
+                getattr(self, "process", None) is not None
+                and getattr(self.process, "returncode", None) is None
+            )
+        )
+        if width_delta and self._gui2_ready and not running:
             current_window_width = getattr(self.page.window, "width", None) or 680
             self.page.window.width = max(560, current_window_width + width_delta)
             try:
@@ -674,7 +750,40 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
 
     def _on_gui2_navigation_change(self, e):
         index = int(e.control.selected_index or 0)
+        if index == PAGE_KEYS.index("help") and self._gui2_runtime_is_active():
+            # Flet 0.86 does not expose a disabled property on
+            # NavigationRailDestination. Keep the previous selection and
+            # restore it visually so Help is functionally disabled.
+            e.control.selected_index = self._gui2_page_index
+            self._safe_update(e.control)
+            return
         self._show_gui2_page(index)
+
+    def _gui2_runtime_is_active(self) -> bool:
+        return bool(
+            getattr(self, "_starting", False)
+            or (
+                getattr(self, "process", None) is not None
+                and getattr(self.process, "returncode", None) is None
+            )
+        )
+
+    def _set_gui2_help_navigation_enabled(self, enabled: bool):
+        nav = getattr(self, "_gui2_nav", None)
+        if nav is None or len(nav.destinations) <= PAGE_KEYS.index("help"):
+            return
+        destination = nav.destinations[PAGE_KEYS.index("help")]
+        if enabled:
+            destination.icon = ft.Icons.HELP_OUTLINED
+            destination.selected_icon = ft.Icons.HELP
+        else:
+            destination.icon = ft.Icon(ft.Icons.HELP_OUTLINED, color=ft.Colors.GREY)
+            destination.selected_icon = ft.Icon(ft.Icons.HELP, color=ft.Colors.GREY)
+        self._safe_update(nav)
+
+    def _set_running_ui(self, running: bool):
+        super()._set_running_ui(running)
+        self._set_gui2_help_navigation_enabled(not running)
 
     def _sync_gui2_home_streaming_visibility(self):
         """Keep the Home Streaming/XR section mounted and sync mode-only rows."""
@@ -829,8 +938,10 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
         index = max(0, min(index, len(PAGE_KEYS) - 1))
         self._gui2_page_index = index
         key = PAGE_KEYS[index]
-        if key == "help" and update:
-            self._refresh_help_qr_from_web()
+        if key == "help" and update and not self._gui2_runtime_is_active():
+            # Refresh only while idle. During a runtime session the Help page
+            # remains static and never performs network or file replacement.
+            self._schedule_help_qr_refresh()
         if not hasattr(self, "_page_host"):
             self._page_host = ft.Container(expand=True)
         self._page_host.content = self._gui2_pages[key]
@@ -847,8 +958,28 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
         if update:
             # Commit the new page first, then resize its native window. This
             # avoids fitting against the previous page's client-side layout.
-            self.page.update()
-            self._fit_window_to_content(update=False, resize_window=True)
+            # Update only the controls whose values/content changed. A full
+            # page update re-submits the shared footer and runtime controls;
+            # during an active run that can make Flet remount the shell and
+            # race the child-process lifecycle.
+            self._safe_update(
+                self._page_host,
+                self._gui2_nav,
+                self._gui2_page_title,
+                self._gui2_page_description,
+                self._gui2_status,
+            )
+            # A running child owns its own display/runtime lifecycle. Do not
+            # resize the GUI2 native window while navigating between pages:
+            # the resize event can race the shared runtime state update and
+            # make a running session appear to stop when Home is selected.
+            running = self._gui2_runtime_is_active()
+            if not running:
+                self._fit_window_to_content(update=False, resize_window=True)
+            if key == "logs":
+                # The log text may already contain entries when this page is
+                # opened. Pin it to the newest entry after the page is mounted.
+                self._schedule_log_scroll_to_end()
 
     def _refresh_gui2_texts(self):
         if self._gui2_menu is not None:
@@ -869,6 +1000,7 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
                     "advanced_group_hint", "advanced_shortcut_title",
                     "advanced_shortcut_body", "open_advanced_stereo",
                     "interface_settings_title", "interface_settings_body",
+                    "updates_title", "updates_body",
                     "footer_language", "footer_theme",
                     "help_title", "help_panel_title", "help_panel_body",
                     "help_qr_missing", "help_qq_title", "help_website",
@@ -886,7 +1018,19 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
             self.menu_switch_btn.content.value = gui2_text(
                 self.locale, "switch_to_legacy_gui"
             )
+        if self._gui2_update_button is not None:
+            self._gui2_update_button.content = gui2_text(
+                self.locale, "check_updates"
+            )
+            self._gui2_update_button.tooltip = gui2_text(
+                self.locale, "updates_disabled_tooltip"
+            )
         self._show_gui2_page(self._gui2_page_index, update=False)
+
+    def _on_check_updates(self, _event=None):
+        """Handle the reserved update entry without invoking the old script."""
+        result = self._update_service.check_for_updates()
+        self.set_status(gui2_text(self.locale, result.message_key))
 
     @staticmethod
     def _walk_controls(control):
@@ -1220,10 +1364,9 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
 
 
 async def _async_main(page: ft.Page):
-    await configure_startup_splash(page)
     app = Desktop2StereoGUI2(page)
     await app.setup()
 
 
 def main():
-    ft.run(_async_main)
+    ft.run(_async_main, view=ft.AppView.FLET_APP_HIDDEN)

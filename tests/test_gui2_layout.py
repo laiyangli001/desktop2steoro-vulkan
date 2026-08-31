@@ -106,6 +106,10 @@ def test_gui2_builds_shell_and_all_navigation_pages():
     ]
     assert app.lang_dd.width == S(130)
     assert app.theme_dd.width == S(130)
+    assert app._gui2_update_button is not None
+    assert app._gui2_update_button.content == "Check for updates"
+    assert app._gui2_update_button.disabled is True
+    assert app._gui2_update_button in app._walk_controls(app._gui2_pages["advanced"])
     assert app._gui2_status not in footer_column.controls[0].controls
     assert isinstance(app._gui2_shell.controls[-2], ft.Divider)
 
@@ -295,7 +299,7 @@ def test_gui2_qq_dialog_shows_group_qr_and_number():
     assert dialog.content.controls[-1].controls[1].disabled is True
 
 
-def test_gui2_remote_qq_image_is_loaded_only_when_help_opens(monkeypatch):
+def test_gui2_qq_image_refreshes_when_help_opens_while_idle(monkeypatch):
     remote_source = "https://d2s.site/d2s_qq.jpg"
     remote_calls = []
     monkeypatch.setattr(
@@ -308,16 +312,27 @@ def test_gui2_remote_qq_image_is_loaded_only_when_help_opens(monkeypatch):
     app = Desktop2StereoGUI2(page)
     app.build_ui()
 
-    assert remote_calls == []
     app._show_gui2_page(PAGE_KEYS.index("performance"))
-    assert remote_calls == []
-
     app._show_gui2_page(PAGE_KEYS.index("help"))
     assert remote_calls == [remote_source]
     assert app._gui2_help_qr_host.content.src == remote_source
 
-    app._refresh_gui2_texts()
-    assert remote_calls == [remote_source]
+
+def test_gui2_qq_image_does_not_refresh_while_running(monkeypatch):
+    remote_calls = []
+    monkeypatch.setattr(
+        gui2_module,
+        "qr_asset_source",
+        lambda: remote_calls.append(True),
+    )
+    page = _Page()
+    app = Desktop2StereoGUI2(page)
+    app.build_ui()
+    app._starting = True
+
+    app._show_gui2_page(PAGE_KEYS.index("help"))
+
+    assert remote_calls == []
 
 
 def test_gui2_reset_requires_confirmation():
@@ -328,6 +343,17 @@ def test_gui2_reset_requires_confirmation():
     assert app.reset_btn.on_click == app.confirm_reset_defaults
     app.reset_btn.on_click(None)
     assert page.dialog.title.value == "Restore defaults?"
+
+
+def test_gui2_update_entry_is_disabled_without_running_legacy_updater():
+    page = _Page()
+    app = Desktop2StereoGUI2(page)
+    app.build_ui()
+
+    result = app._update_service.check_for_updates()
+    assert result.available is False
+    assert result.message_key == "update_feature_disabled"
+    assert app._gui2_update_button.disabled is True
 
 
 def test_gui2_language_and_theme_menu_actions_refresh_shell():

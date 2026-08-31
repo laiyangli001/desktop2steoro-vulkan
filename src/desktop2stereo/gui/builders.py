@@ -902,7 +902,10 @@ class GUIBuilderMixin:
         self.log_viewport = ft.Column(
             [self.log_scroll_row],
             scroll=ft.Scrollbar(orientation=ft.ScrollbarOrientation.RIGHT),
-            auto_scroll=True,
+            # Logs are updated inside one Text control (via spans), rather
+            # than appended as child controls. Explicitly following the tail
+            # is therefore more reliable than Flet's child-add auto_scroll.
+            auto_scroll=False,
             expand=True,
             tight=True,
             spacing=0,

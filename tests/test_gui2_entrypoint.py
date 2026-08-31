@@ -32,6 +32,7 @@ def test_gui2_shell_is_separate_from_legacy_gui_file() -> None:
     source = GUI2.read_text(encoding="utf-8")
     assert "class Desktop2StereoGUI2" in source
     assert "from gui.gui import Desktop2StereoGUI" in source
+    assert "ft.run(_async_main, view=ft.AppView.FLET_APP_HIDDEN)" in source
     assert LEGACY_GUI.exists()
     assert not (ROOT / "src" / "desktop2stereo" / "gui2" / "flet_packages").exists()
 
@@ -57,3 +58,20 @@ def test_startup_gui_preference_defaults_to_gui2_and_preserves_settings(tmp_path
     ok, error = save_startup_gui(MODERN_GUI_ID, settings_path)
     assert ok, error
     assert read_startup_gui(settings_path) == MODERN_GUI_ID
+
+
+def test_gui_switch_relaunches_through_native_launcher_and_reads_saved_choice() -> None:
+    source = (ROOT / "src" / "desktop2stereo" / "gui" / "process.py").read_text(
+        encoding="utf-8"
+    )
+    switch_start = source.index("async def _switch_gui_process")
+    switch_source = source[switch_start:]
+    assert "save_startup_gui(target_gui)" in switch_source
+    assert '"Desktop2Stereo.exe"' in switch_source
+    assert '"Desktop2Stereo-linux"' in switch_source
+    assert '"Desktop2Stereo-macos"' in switch_source
+    assert 'launch_args = [launcher_path]' in switch_source
+    assert 'launch_args = [sys.executable, os.path.join(BASE_DIR, "main.py")]' in switch_source
+    assert '"--gui2"' not in switch_source
+    assert '"--gui"' not in switch_source
+    assert switch_source.index('subprocess.Popen(launch_args, **launch_kwargs)') < switch_source.index('await self.page.window.destroy()')

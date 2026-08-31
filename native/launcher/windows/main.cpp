@@ -219,7 +219,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     windowClass.lpfnWndProc = WindowProc;
     windowClass.lpszClassName = kWindowClass;
     RegisterClassW(&windowClass);
-    g_window = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+    g_window = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW |
+        WS_EX_NOACTIVATE | WS_EX_TOPMOST,
         kWindowClass, L"Desktop2Stereo", WS_POPUP,
         0, 0, g_width, g_height, nullptr, nullptr, instance, nullptr);
     if (!g_window) {
@@ -229,6 +230,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     }
     PresentBitmap();
     ShowWindow(g_window, SW_SHOWNOACTIVATE);
+    // Keep the startup artwork above other applications without activating
+    // it or stealing keyboard focus from the user's current window.
+    SetWindowPos(g_window, HWND_TOPMOST, 0, 0, 0, 0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
     UpdateWindow(g_window);
     if (!StartPython()) {
         CoUninitialize();

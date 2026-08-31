@@ -23,7 +23,6 @@ from .config import DEFAULTS
 from .controls import S
 from .paths import BASE_DIR, GUI_READY_FILE, LOG_DIR
 from .localization import UI_MESSAGES
-from .startup_splash import configure_startup_splash
 
 
 logger = logging.getLogger(__name__)
@@ -45,6 +44,10 @@ class Desktop2StereoGUI(
     GUIProcessMixin,
 ):
     """Flet GUI for Desktop2Stereo — full equivalent of tk ConfigGUI."""
+
+    # GUI1 keeps the legacy 24 px page inset. Presentation shells can
+    # override this before the shared setup builds and measures the page.
+    GUI_PAGE_PADDING = S(24)
     def __init__(self, page: ft.Page):
         self.page = page
         self._loop = None
@@ -101,7 +104,7 @@ class Desktop2StereoGUI(
 
         self.page.title = f"Desktop2Stereo v{VERSION}"
         self.page.window.icon = os.path.join(BASE_DIR, "icon.ico")
-        self.page.padding = S(24)
+        self.page.padding = self.GUI_PAGE_PADDING
         self.page.horizontal_alignment = ft.CrossAxisAlignment.STRETCH
         if OS_NAME == "Windows":
             font = "Microsoft YaHei"
@@ -166,6 +169,14 @@ class Desktop2StereoGUI(
         self.page.window.max_width = None
         self.page.window.min_height = S(300)
         self.page.window.max_height = None
+        # Match the old GUI startup order: commit the fully built page while
+        # hidden. Flet's hidden app view creates the native client
+        # asynchronously; wait until that client has a real window before
+        # centering and revealing it. Without this barrier, the fast legacy
+        # GUI can be shown as the native client's tiny blank bootstrap window.
+        self.page.update()
+        await self.page.window.wait_until_ready_to_show()
+        await self.page.window.center()
         self.page.window.visible = True
         self.page.update()
         self._device_startup_task = asyncio.create_task(
@@ -217,11 +228,10 @@ class Desktop2StereoGUI(
 def main():
     """Entry point for the GUI application."""
     _setup_console_logging()
-    ft.run(_async_main)
+    ft.run(_async_main, view=ft.AppView.FLET_APP_HIDDEN)
 
 
 async def _async_main(page: ft.Page):
-    await configure_startup_splash(page)
     app = Desktop2StereoGUI(page)
     await app.setup()
 

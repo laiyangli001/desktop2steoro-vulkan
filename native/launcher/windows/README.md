@@ -1,6 +1,7 @@
 # Windows native launcher
 
 `Desktop2Stereo.exe` is a native Win32 launcher. It displays `d2s_blur.png`
+as a non-activating topmost startup window
 before loading Python, starts `src/python3/python.exe`, and closes the layered
 Splash after `src/desktop2stereo/logs/gui_ready.flag` is written.
 

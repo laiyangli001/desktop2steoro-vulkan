@@ -55,21 +55,13 @@ def test_native_window_uses_a_visible_compact_startup_surface() -> None:
     app_start = source.index("app = Desktop2StereoGUI(page)", async_main_start)
     bootstrap = source[async_main_start:app_start]
 
-    assert "configure_startup_splash(page)" in bootstrap
     assert "_write_gui_ready_flag()" not in bootstrap
     assert "page.window.visible = False" not in bootstrap
+    assert "ft.run(_async_main, view=ft.AppView.FLET_APP_HIDDEN)" in source
 
     setup_start = source.index("async def setup(self):")
     setup_end = source.index("def _signal_gui_ready", setup_start)
     assert "self.page.window.frameless = False" in source[setup_start:setup_end]
-
-
-def test_startup_splash_preserves_aspect_and_uses_quarter_display_area() -> None:
-    from gui.startup_splash import STARTUP_IMAGE_ASPECT, startup_window_size
-
-    width, height = startup_window_size((3840, 2160))
-    assert abs(width / height - STARTUP_IMAGE_ASPECT) < 0.01
-    assert width * height == pytest.approx(3840 * 2160 * 0.25, rel=0.1)
 
 
 def test_startup_audio_detection_is_deferred_until_after_window_show() -> None:
@@ -79,6 +71,7 @@ def test_startup_audio_detection_is_deferred_until_after_window_show() -> None:
     setup_source = source[setup_start:setup_end]
 
     show_index = setup_source.index("self.page.window.visible = True")
+    assert setup_source.index("self.page.update()") < setup_source.index("await self.page.window.center()") < show_index
     audio_index = setup_source.index("self.populate_audio_devices_after_startup()")
     assert show_index < audio_index
 

@@ -1588,7 +1588,7 @@ class GUIProcessMixin:
             self._gui_switch_task = None
 
     async def _switch_gui_process(self, target_gui):
-        """Persist the selected shell, launch it, then close this shell."""
+        """Persist the selected shell, relaunch through the splash, then exit."""
         target_gui = MODERN_GUI if target_gui == MODERN_GUI else LEGACY_GUI
         ok, error = save_startup_gui(target_gui)
         if not ok:
@@ -1602,22 +1602,40 @@ class GUIProcessMixin:
         self.page.update()
         try:
             await self._async_stop()
-            launch_args = [
-                sys.executable,
-                os.path.join(BASE_DIR, "main.py"),
-                "--gui2" if target_gui == MODERN_GUI else "--gui",
-            ]
+            # The native launcher owns d2s_blur.png and waits for the GUI
+            # ready flag, so switching shells gets the same startup surface
+            # as a cold launch. It reads Startup GUI from settings.yaml;
+            # falling back to Python keeps source-tree development usable.
+            project_root = os.path.dirname(BASE_DIR)
+            launcher_name = {
+                "Windows": "Desktop2Stereo.exe",
+                "Linux": "Desktop2Stereo-linux",
+                "Darwin": "Desktop2Stereo-macos",
+            }.get(OS_NAME)
+            launcher_path = (
+                os.path.join(project_root, launcher_name)
+                if launcher_name
+                else None
+            )
+            if launcher_path and os.path.isfile(launcher_path):
+                launch_args = [launcher_path]
+                launch_cwd = os.path.dirname(project_root)
+            else:
+                launch_args = [sys.executable, os.path.join(BASE_DIR, "main.py")]
+                launch_cwd = BASE_DIR
             launch_env = os.environ.copy()
             launch_env["PYTHONPATH"] = BASE_DIR
             launch_env["PYTHON_EXE"] = sys.executable
             launch_kwargs = {
-                "cwd": BASE_DIR,
+                "cwd": launch_cwd,
                 "env": launch_env,
             }
-            if OS_NAME == "Windows":
+            if OS_NAME == "Windows" and not (launcher_path and os.path.isfile(launcher_path)):
                 launch_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
             subprocess.Popen(launch_args, **launch_kwargs)
             self._closed = True
+            # Destroy the old Flet window after the replacement process has
+            # been spawned so switching cannot terminate the launch flow.
             await self.page.window.destroy()
         except Exception as exc:
             self._closed = False
@@ -2017,15 +2035,49 @@ class GUIProcessMixin:
                 pass
             if changed:
                 self._fit_window_to_content(update=False)
-                self._safe_update(
-                    getattr(self, "log_viewport", None),
-                    getattr(self, "log_scroll_row", None),
-                    log_text,
-                    getattr(self, "download_progress_panel", None),
-                    getattr(self, "log_title", None),
-                    getattr(self, "report_issue_btn", None),
-                )
+                # GUI2 keeps all pages built, but only the selected page is
+                # mounted. Do not submit hidden log controls while Help (or
+                # another page) is visible; doing so makes the visible page
+                # look as if it is being refreshed on every log line.
+                gui2_page = getattr(self, "_gui2_page_index", None)
+                logs_page_visible = gui2_page is None or gui2_page == 5
+                if logs_page_visible:
+                    self._safe_update(
+                        getattr(self, "log_viewport", None),
+                        getattr(self, "log_scroll_row", None),
+                        log_text,
+                        getattr(self, "download_progress_panel", None),
+                        getattr(self, "log_title", None),
+                        getattr(self, "report_issue_btn", None),
+                    )
+                    await self._scroll_log_to_end()
             await asyncio.sleep(0.1)
+
+    async def _scroll_log_to_end(self):
+        """Keep the log viewport pinned to the newest entry."""
+        viewport = getattr(self, "log_viewport", None)
+        if viewport is None or not getattr(self, "log_body", None) or not self.log_body.visible:
+            return
+        try:
+            # Text spans are laid out by the Flet client asynchronously after
+            # page.update(). Retry after the layout passes so offset=-1 is
+            # calculated from the real content height, not the old height.
+            for delay in (0, 0.05, 0.15):
+                if delay:
+                    await asyncio.sleep(delay)
+                await viewport.scroll_to(offset=-1, duration=0)
+        except (RuntimeError, AssertionError):
+            # The page may be changing navigation or closing at this point.
+            return
+
+    def _schedule_log_scroll_to_end(self):
+        """Schedule tail-following only when the Flet asyncio loop is active."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        if not loop.is_closed():
+            loop.create_task(self._scroll_log_to_end())
 
     def _set_log_problem_state(self):
         if getattr(self, "log_title", None) is None:
@@ -2060,6 +2112,7 @@ class GUIProcessMixin:
             getattr(self, "log_scroll_row", None),
             self.log_text,
         )
+        self._schedule_log_scroll_to_end()
 
     def on_log_clear(self, e=None):
         self.log_text.spans = []
