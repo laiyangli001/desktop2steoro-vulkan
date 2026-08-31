@@ -33,6 +33,11 @@ static fs::path executable_dir() {
     return fs::path(buffer).parent_path();
 }
 
+static fs::path project_root(fs::path executable_directory) {
+    if (executable_directory.filename() == "src") return executable_directory.parent_path();
+    return executable_directory;
+}
+
 static fs::path find_asset(const fs::path& root) {
     for (const auto& candidate : {root / "src/desktop2stereo/d2s_blur.png",
                                   root / "d2s_blur.png",
@@ -95,7 +100,7 @@ static bool load_png(const fs::path& path, int target_width, int target_height, 
 static bool ready(const fs::path& path) { return fs::is_regular_file(path); }
 
 int main() {
-    const auto root = executable_dir();
+    const auto root = project_root(executable_dir());
     const auto app = root / "src/desktop2stereo";
     const auto python = root / "src/python3/bin/python";
     const auto main_script = app / "main.py";

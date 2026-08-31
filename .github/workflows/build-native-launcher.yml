@@ -23,9 +23,9 @@ jobs:
       - name: Package launcher
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path dist/Desktop2Stereo | Out-Null
-          Copy-Item build/native-launcher/Release/Desktop2Stereo.exe dist/Desktop2Stereo/
-          Copy-Item src/desktop2stereo/d2s_blur.png dist/Desktop2Stereo/
+          New-Item -ItemType Directory -Force -Path dist/Desktop2Stereo/src/desktop2stereo | Out-Null
+          Copy-Item build/native-launcher/Release/Desktop2Stereo.exe dist/Desktop2Stereo/src/
+          Copy-Item src/desktop2stereo/d2s_blur.png dist/Desktop2Stereo/src/desktop2stereo/
           Copy-Item native/launcher/windows/README.md dist/Desktop2Stereo/
 
       - name: Upload Windows launcher
@@ -51,9 +51,9 @@ jobs:
 
       - name: Package launcher
         run: |
-          mkdir -p dist/Desktop2Stereo
-          cp build/native-launcher-linux/Desktop2Stereo dist/Desktop2Stereo/
-          cp src/desktop2stereo/d2s_blur.png dist/Desktop2Stereo/
+          mkdir -p dist/Desktop2Stereo/src/desktop2stereo
+          cp build/native-launcher-linux/Desktop2Stereo dist/Desktop2Stereo/src/
+          cp src/desktop2stereo/d2s_blur.png dist/Desktop2Stereo/src/desktop2stereo/
           cp native/launcher/linux/README.md dist/Desktop2Stereo/
 
       - name: Upload Linux launcher
@@ -76,16 +76,13 @@ jobs:
 
       - name: Package launcher
         run: |
-          mkdir -p dist
-          cp -R build/native-launcher-macos/Desktop2Stereo.app dist/
-          cp src/desktop2stereo/d2s_blur.png dist/
-          cp native/launcher/macos/README.md dist/
+          mkdir -p dist/Desktop2Stereo/src/desktop2stereo
+          cp -R build/native-launcher-macos/Desktop2Stereo.app dist/Desktop2Stereo/src/
+          cp src/desktop2stereo/d2s_blur.png dist/Desktop2Stereo/src/desktop2stereo/
+          cp native/launcher/macos/README.md dist/Desktop2Stereo/
 
       - name: Upload macOS launcher
         uses: actions/upload-artifact@v4
         with:
           name: Desktop2Stereo-macos-launcher-${{ github.sha }}
-          path: |
-            dist/Desktop2Stereo.app
-            dist/d2s_blur.png
-            dist/README.md
+          path: dist/Desktop2Stereo

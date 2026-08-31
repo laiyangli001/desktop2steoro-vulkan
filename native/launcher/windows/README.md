@@ -9,10 +9,11 @@ Build from a Visual Studio Developer PowerShell:
 ```powershell
 cmake -S native/launcher/windows -B native/launcher/windows/build -A x64
 cmake --build native/launcher/windows/build --config Release
-Copy-Item native/launcher/windows/build/Release/Desktop2Stereo.exe .
+Copy-Item native/launcher/windows/build/Release/Desktop2Stereo.exe src/
 ```
 
-The executable can be placed in the repository root or the root of a release
-directory. It resolves all runtime paths relative to its own location. License
+The executable is placed in `src/` beside `python3/` and `desktop2stereo/`. It
+also accepts a repository-root placement for compatibility and resolves all
+runtime paths relative to its own location. License
 checking is intentionally not implemented yet; the process boundary is ready
 for the licensing state machine described in document 13.

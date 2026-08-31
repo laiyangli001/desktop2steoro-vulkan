@@ -28,6 +28,11 @@ int g_width = 0;
 int g_height = 0;
 std::filesystem::path g_root;
 
+std::filesystem::path ResolveProjectRoot(std::filesystem::path executableDir) {
+    if (executableDir.filename() == L"src") executableDir = executableDir.parent_path();
+    return executableDir;
+}
+
 std::filesystem::path FindAsset(const std::filesystem::path& root) {
     const std::filesystem::path candidates[] = {
         root / L"src" / L"desktop2stereo" / L"d2s_blur.png",
@@ -186,7 +191,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     wchar_t modulePath[MAX_PATH]{};
     GetModuleFileNameW(nullptr, modulePath, MAX_PATH);
-    g_root = std::filesystem::path(modulePath).parent_path();
+    g_root = ResolveProjectRoot(std::filesystem::path(modulePath).parent_path());
     const auto image = FindAsset(g_root);
     if (image.empty()) {
         ShowFailure(L"d2s_blur.png was not found.");

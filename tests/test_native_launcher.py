@@ -60,3 +60,10 @@ def test_remote_build_workflow_covers_all_native_launcher_platforms():
     assert "macos-14" in workflow
     assert "Desktop2Stereo-linux-launcher" in workflow
     assert "Desktop2Stereo-macos-launcher" in workflow
+    assert "dist/Desktop2Stereo/src/" in workflow
+
+
+def test_launchers_normalize_src_directory_to_project_root():
+    assert 'filename() == L"src"' in WINDOWS_SOURCE.read_text(encoding="utf-8")
+    assert 'filename() == "src"' in LINUX_SOURCE.read_text(encoding="utf-8")
+    assert 'caseInsensitiveCompare:@"src"' in MACOS_SOURCE.read_text(encoding="utf-8")

@@ -19,6 +19,9 @@
     (void)notification;
     NSString* root = [[NSBundle mainBundle] bundlePath];
     root = [root stringByDeletingLastPathComponent];
+    if ([root.lastPathComponent caseInsensitiveCompare:@"src"] == NSOrderedSame) {
+        root = [root stringByDeletingLastPathComponent];
+    }
     NSString* app = [root stringByAppendingPathComponent:@"src/desktop2stereo"];
     NSString* python = [root stringByAppendingPathComponent:@"src/python3/bin/python"];
     NSString* script = [app stringByAppendingPathComponent:@"main.py"];
