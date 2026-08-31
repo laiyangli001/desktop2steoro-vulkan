@@ -14,3 +14,8 @@ All platform launchers follow the same contract:
    secret, or token is implemented in this bootstrap layer yet.
 
 The ready flag is a startup handshake only; it is not an authorization proof.
+
+`launcher_contract.h` defines the stable status values reserved for future
+licensing integration. Platform launchers may add an injected
+`D2SLicenseCheck` implementation later; the current binaries do not perform a
+license check and do not contain credentials.

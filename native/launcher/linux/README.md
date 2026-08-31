@@ -1,7 +1,8 @@
-# Linux launcher placeholder
+# Desktop2Stereo Linux launcher
 
-The Linux launcher is planned as a native X11-first executable with a GTK or
-Qt transparent, borderless Splash. Wayland support must be validated against
-the active compositor before being marked complete. It must implement the
-common launcher contract in `../common/README.md` and must not depend on
-Python for the Splash window.
+`Desktop2Stereo` is a native, Python-independent X11-first launcher. Place the
+executable beside the project root so that `src/python3/bin/python`,
+`src/desktop2stereo/main.py`, and `src/desktop2stereo/d2s_blur.png` are found
+relative to it. Build dependencies are X11, libpng, and pkg-config. Wayland
+compositors may run the XWayland path; native transparent Wayland behavior is
+still marked as pending validation.

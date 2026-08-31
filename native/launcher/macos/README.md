@@ -1,7 +1,10 @@
-# macOS launcher placeholder
+# Desktop2Stereo macOS launcher
 
-The macOS launcher is planned as an AppKit `.app` with a borderless,
-transparent `NSWindow`. Separate Intel and Apple Silicon builds, plus a
-Universal package, must be validated before release. It must implement the
-common launcher contract in `../common/README.md` and must not depend on
-Python for the Splash window.
+`Desktop2Stereo.app` uses AppKit to show a borderless transparent Splash before
+launching the bundled project Python runtime. The release layout places the
+app bundle beside `src/`; the launcher resolves `src/python3/bin/python`,
+`src/desktop2stereo/main.py`, and `d2s_blur.png` without relying on the caller's
+working directory. CMake can produce a Universal (`x86_64;arm64`) build.
+
+Native licensing checks remain an extension point and are not implemented in
+this bootstrap binary yet.
