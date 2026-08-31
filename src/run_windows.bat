@@ -11,6 +11,13 @@ set "LAUNCH_STDOUT=%LOG_DIR%\launcher_stdout.log"
 set "LAUNCH_STDERR=%LOG_DIR%\launcher_stderr.log"
 set "APP_LOG=%LOG_DIR%\desktop2stereo.log"
 
+rem Prefer the native launcher when a release build is present. The Python
+rem fallback below remains available for development and diagnostics.
+if exist "%SRC_DIR%Desktop2Stereo.exe" (
+    start "Desktop2Stereo" "%SRC_DIR%Desktop2Stereo.exe"
+    exit /b 0
+)
+
 rem Formal launcher must not inherit diagnostic overrides from a reused shell.
 set "D2S_FILAMENT_CONTROLLER_EYE_DIAGNOSTIC="
 set "D2S_FILAMENT_EYE_DIAGNOSTIC="

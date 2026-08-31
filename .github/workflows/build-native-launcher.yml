@@ -1,0 +1,35 @@
+name: Build native launchers
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "native/launcher/**"
+      - ".github/workflows/build-native-launcher.yml"
+
+jobs:
+  windows-launcher:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S native/launcher/windows -B build/native-launcher -A x64
+
+      - name: Build
+        run: cmake --build build/native-launcher --config Release --parallel
+
+      - name: Package launcher
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/Desktop2Stereo | Out-Null
+          Copy-Item build/native-launcher/Release/Desktop2Stereo.exe dist/Desktop2Stereo/
+          Copy-Item src/desktop2stereo/d2s_blur.png dist/Desktop2Stereo/
+          Copy-Item native/launcher/windows/README.md dist/Desktop2Stereo/
+
+      - name: Upload Windows launcher
+        uses: actions/upload-artifact@v4
+        with:
+          name: Desktop2Stereo-windows-launcher-${{ github.sha }}
+          path: dist/Desktop2Stereo
