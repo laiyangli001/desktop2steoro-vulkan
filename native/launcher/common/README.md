@@ -10,12 +10,13 @@ All platform launchers follow the same contract:
    release-layout path) before closing Splash.
 5. Monitor the child process and report startup failures with a platform-native
    error dialog.
-6. Keep the licensing check as an injectable interface. No license state,
-   secret, or token is implemented in this bootstrap layer yet.
+6. Keep licensing in the Python/Flet authorization gate. The native bootstrap
+   layer only starts that gate, observes its startup handshake, and never
+   stores license state, secrets, or tokens.
 
 The ready flag is a startup handshake only; it is not an authorization proof.
 
-`launcher_contract.h` defines the stable status values reserved for future
-licensing integration. Platform launchers may add an injected
-`D2SLicenseCheck` implementation later; the current binaries do not perform a
-license check and do not contain credentials.
+`launcher_contract.h` defines stable startup status values. The current
+platform launchers deliberately do not implement licensing themselves: they
+start `desktop2stereo.main`, which runs the independent Flet authorization GUI
+and the Python-side double-check before importing GUI1 or GUI2.

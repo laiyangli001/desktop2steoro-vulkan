@@ -115,8 +115,9 @@ void PresentBitmap() {
 }
 
 bool ReadyFileExists() {
-    return std::filesystem::is_regular_file(
-        g_root / L"src" / L"desktop2stereo" / L"logs" / L"gui_ready.flag");
+    const auto logs = g_root / L"src" / L"desktop2stereo" / L"logs";
+    return std::filesystem::is_regular_file(logs / L"auth_ready.flag") ||
+           std::filesystem::is_regular_file(logs / L"gui_ready.flag");
 }
 
 void ShowFailure(const wchar_t* message) {
@@ -134,6 +135,7 @@ bool StartPython() {
     const auto logDir = g_root / L"src" / L"desktop2stereo" / L"logs";
     std::error_code ec;
     std::filesystem::create_directories(logDir, ec);
+    std::filesystem::remove(logDir / L"auth_ready.flag", ec);
     std::filesystem::remove(logDir / L"gui_ready.flag", ec);
     std::wstring command = L"\"" + python.wstring() + L"\" \"" + script.wstring() + L"\"";
     std::vector<wchar_t> mutableCommand(command.begin(), command.end());

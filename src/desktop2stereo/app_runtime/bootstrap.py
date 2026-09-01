@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from collections.abc import Sequence
 
 from .probe import build_capability_report
@@ -33,14 +34,51 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(build_capability_report(), ensure_ascii=False, indent=2, sort_keys=True))
         return 0
     if args.runtime:
-        from .runtime_entry import run_processing_runtime
+        try:
+            from desktop2stereo.auth.gate import validate_saved_authentication
+            from desktop2stereo.auth.lease import RuntimeLease
+            from desktop2stereo.auth.client import AuthError
+        except ModuleNotFoundError:
+            from auth.gate import validate_saved_authentication
+            from auth.lease import RuntimeLease
+            from auth.client import AuthError
 
-        return run_processing_runtime(max_seconds=args.runtime_seconds)
+        try:
+            session = validate_saved_authentication()
+        except AuthError as exc:
+            print(f"[AUTH] {exc} ({exc.code})", file=sys.stderr, flush=True)
+            return 1
+        lease = RuntimeLease(session) if session.access_token else None
+        if lease is not None:
+            lease.start()
+        from .runtime_entry import run_processing_runtime
+        try:
+            return run_processing_runtime(max_seconds=args.runtime_seconds, lease_lost=lease.lost if lease else None)
+        finally:
+            if lease is not None:
+                lease.close()
     selected_gui = (
         MODERN_GUI if args.gui2
         else LEGACY_GUI if args.gui
         else read_startup_gui()
     )
+    # Authenticate before importing GUI1/GUI2. The login launcher is an
+    # independent Flet application and does not load Torch, CUDA, Vulkan, or
+    # either runtime GUI until the server accepts the session.
+    try:
+        from desktop2stereo.auth.gate import require_authentication
+        from desktop2stereo.auth.client import AuthError
+    except ModuleNotFoundError:
+        # Keep direct `python src/desktop2stereo/main.py` compatible with the
+        # existing source launch path, where sibling packages are top-level.
+        from auth.gate import require_authentication
+        from auth.client import AuthError
+
+    try:
+        require_authentication()
+    except AuthError as exc:
+        print(f"[AUTH] {exc} ({exc.code})", file=sys.stderr, flush=True)
+        return 1
     if selected_gui == MODERN_GUI:
         from gui2.gui import main as gui2_main
 

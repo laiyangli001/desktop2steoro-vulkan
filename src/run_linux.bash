@@ -10,6 +10,12 @@ set -e  # exit on error, but we handle errors manually below
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# Prefer the packaged native splash/auth launcher when a release artifact is
+# present. The Python path below remains useful for source-tree diagnostics.
+if [ -x "${SCRIPT_DIR}/Desktop2Stereo" ]; then
+    exec "${SCRIPT_DIR}/Desktop2Stereo"
+fi
+
 # ----------------------------------------------------------------------
 # Configuration
 # ----------------------------------------------------------------------
@@ -38,11 +44,8 @@ fi
 
 mkdir -p "${LOG_DIR}"
 
-echo "[Preflight] [EN] Force-killing existing Python processes before Desktop2Stereo starts."
-echo "             [CN] 启动 Desktop2Stereo 前强制结束所有现有 Python 进程."
-
-# Kill any running Python processes (be careful: this kills ALL python processes)
-pkill -f python 2>/dev/null || true
+echo "[Preflight] [EN] Starting Desktop2Stereo without touching other Python processes."
+echo "             [CN] 启动 Desktop2Stereo，不影响系统中的其他 Python 进程."
 
 # Remove old flag and log files
 rm -f "${GUI_READY_FILE}" "${LAUNCH_STDOUT}" "${LAUNCH_STDERR}" 2>/dev/null
@@ -60,18 +63,18 @@ echo "       [CN] 收到 GUI 就绪标志后，此终端窗口会自动关闭."
 # Launch the GUI in the background
 # ----------------------------------------------------------------------
 # Set PYTHONPATH so the 'gui' module is found
-export PYTHONPATH="${APP_DIR}"
+export PYTHONPATH="${SCRIPT_DIR}"
 
 # Start the GUI process, redirect stdout/stderr to log files, run in background
-"${PYTHON_EXE}" -m gui > "${LAUNCH_STDOUT}" 2> "${LAUNCH_STDERR}" &
+"${PYTHON_EXE}" -m desktop2stereo.main > "${LAUNCH_STDOUT}" 2> "${LAUNCH_STDERR}" &
 GUI_PID=$!
 
 # ----------------------------------------------------------------------
 # Wait for the ready flag (timeout after 60 seconds)
 # ----------------------------------------------------------------------
 timeout_seconds=60
-elapsed=0
-while [ $elapsed -lt $timeout_seconds ]; do
+deadline=$((SECONDS + timeout_seconds))
+while [ $SECONDS -lt $deadline ]; do
     if [ -f "${GUI_READY_FILE}" ]; then
         # GUI is ready – exit cleanly
         exit 0
@@ -93,7 +96,6 @@ while [ $elapsed -lt $timeout_seconds ]; do
         exit 1
     fi
     sleep 0.25
-    elapsed=$((elapsed + 1))   # rough count, 0.25s increments
 done
 
 # If we get here, timeout occurred

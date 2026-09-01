@@ -173,6 +173,7 @@
 - `POST /api/v1/auth/logout`
 - `POST /api/v1/auth/password-reset/request`
 - `POST /api/v1/auth/password-reset/confirm`
+- `POST /api/v1/auth/password-change`
 
 设备码接口：
 
@@ -185,6 +186,7 @@
 
 - `GET /api/v1/license/list`
 - `GET /api/v1/license/status`
+- `POST /api/v1/license/offline/extend`
 - `POST /api/v1/license/activate`
 - `POST /api/v1/license/switch`
 - `POST /api/v1/license/renew`
@@ -275,6 +277,7 @@
 - 客户端内置当前和上一版本公钥。
 - 使用 `key_id` 支持密钥轮换。
 - 签名凭证不能通过修改本地 JSON 延长有效期。
+- 原生启动器发布 CI 从仓库变量 `D2S_LICENSE_PUBLIC_KEY_JSON` 注入服务器公钥清单；变量缺失或包含私钥时发布直接失败，不生成无法离线验签的发布包。
 
 ### 6.2 刷新令牌
 
@@ -421,7 +424,7 @@ macOS arm64：
 
 - Windows EXE。
 - Linux AppImage。
-- macOS App/DMG。
+- macOS 独立可执行文件 `Desktop2Stereo-macos`，直接位于发布包 `src/`，不保留 `.app` 文件夹；如未来需要 DMG，只能将该独立启动器作为发布文件纳入，不改变启动器目录契约。
 - 单实例、子进程、日志和 GUI 就绪处理。
 - 三平台 CI 构建、安装和启动冒烟测试。
 - 从正式发布包移除 BAT/Bash 用户入口。
@@ -507,7 +510,7 @@ macOS arm64：
 - 到期授权不能启动 Runtime。
 - 启动器不会结束用户其他 Python 进程。
 - 三平台授权状态与服务端记录一致。
-- Windows EXE、Linux AppImage、macOS App/DMG 都能完成登录、授权选择和 Runtime 启动。
+- Windows EXE、Linux AppImage、macOS `Desktop2Stereo-macos` 都能完成登录、授权选择和 Runtime 启动；发布包不包含 `.app` 文件夹。
 - 安装包、二进制和签名清单可追溯到同一 Git 提交。
 
 ## 12. 工程同步规则
@@ -518,4 +521,4 @@ macOS arm64：
 - 服务端和客户端分别维护 API、数据库迁移、密钥和发布版本。
 - `src/desktop2stereo/settings.yaml` 不保存密码、刷新令牌、原始设备指纹或私钥。
 - `src/desktop2stereo/settings.yaml` 不保存区域、余额、邀请关系、授权编号、支付或提现资料。
-- 正式发布入口只允许 EXE、AppImage 和 DMG；脚本仅用于开发和诊断。
+- 正式发布入口允许 Windows EXE、Linux AppImage 和直接位于 macOS `src/` 的 `Desktop2Stereo-macos`；脚本仅用于开发和诊断，发布包不得包含 `.app` 文件夹。

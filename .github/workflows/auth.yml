@@ -1,0 +1,58 @@
+name: Authorization checks
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'src/desktop2stereo/auth/**'
+      - 'src/desktop2stereo/app_runtime/bootstrap.py'
+      - 'tests/test_auth.py'
+      - 'tests/test_native_launcher.py'
+      - 'scripts/install-public-key.mjs'
+      - '.github/workflows/auth.yml'
+  pull_request:
+    paths:
+      - 'src/desktop2stereo/auth/**'
+      - 'src/desktop2stereo/app_runtime/bootstrap.py'
+      - 'tests/test_auth.py'
+      - 'tests/test_native_launcher.py'
+      - 'scripts/install-public-key.mjs'
+      - '.github/workflows/auth.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  client:
+    name: Client authorization and launcher tests
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-14]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install authorization test dependencies
+        run: python -m pip install --disable-pip-version-check pytest httpx flet pyyaml cryptography
+
+      - name: Test authorization and native launcher contracts
+        env:
+          PYTHONPATH: src
+        run: python -m pytest -q tests/test_auth.py tests/test_native_launcher.py
+
+      - name: Compile authorization modules
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import py_compile
+          files = list(Path("src/desktop2stereo/auth").rglob("*.py"))
+          files.append(Path("src/desktop2stereo/app_runtime/bootstrap.py"))
+          for path in files:
+              py_compile.compile(str(path), doraise=True)
+          PY

@@ -97,7 +97,9 @@ static bool load_png(const fs::path& path, int target_width, int target_height, 
     return true;
 }
 
-static bool ready(const fs::path& path) { return fs::is_regular_file(path); }
+static bool ready(const fs::path& auth_path, const fs::path& gui_path) {
+    return fs::is_regular_file(auth_path) || fs::is_regular_file(gui_path);
+}
 
 int main() {
     const auto root = project_root(executable_dir());
@@ -106,6 +108,7 @@ int main() {
     const auto main_script = app / "main.py";
     const auto log_dir = app / "logs";
     const auto ready_file = log_dir / "gui_ready.flag";
+    const auto auth_ready_file = log_dir / "auth_ready.flag";
     const auto image_path = find_asset(root);
     if (!fs::is_regular_file(python) || !fs::is_regular_file(main_script) || image_path.empty()) {
         std::cerr << "Desktop2Stereo launcher: runtime, main.py, or d2s_blur.png is missing\n";
@@ -114,6 +117,7 @@ int main() {
     std::error_code ec;
     fs::create_directories(log_dir, ec);
     fs::remove(ready_file, ec);
+    fs::remove(auth_ready_file, ec);
 
     Display* display = XOpenDisplay(nullptr);
     if (!display) {
@@ -176,7 +180,7 @@ int main() {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
     int status = 0;
     while (std::chrono::steady_clock::now() < deadline) {
-        if (ready(ready_file)) break;
+        if (ready(auth_ready_file, ready_file)) break;
         if (waitpid(child, &status, WNOHANG) == child) {
             std::cerr << "Desktop2Stereo launcher: GUI exited before ready\n";
             XDestroyWindow(display, window);
@@ -186,9 +190,9 @@ int main() {
         while (XPending(display)) { XEvent event{}; XNextEvent(display, &event); }
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
-    if (!ready(ready_file)) std::cerr << "Desktop2Stereo launcher: GUI ready timeout\n";
+    if (!ready(auth_ready_file, ready_file)) std::cerr << "Desktop2Stereo launcher: GUI ready timeout\n";
     XDestroyWindow(display, window);
     XFreeColormap(display, colormap);
     XCloseDisplay(display);
-    return ready(ready_file) ? 0 : 7;
+    return ready(auth_ready_file, ready_file) ? 0 : 7;
 }

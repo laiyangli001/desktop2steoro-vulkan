@@ -10,6 +10,7 @@
 @property(nonatomic, strong) NSTask* task;
 @property(nonatomic, strong) NSTimer* timer;
 @property(nonatomic, copy) NSString* readyPath;
+@property(nonatomic, copy) NSString* authReadyPath;
 @property(nonatomic, strong) NSDate* deadline;
 @end
 
@@ -17,10 +18,17 @@
 
 - (void)applicationDidFinishLaunching:(NSNotification*)notification {
     (void)notification;
-    NSString* root = [[NSBundle mainBundle] bundlePath];
-    root = [root stringByDeletingLastPathComponent];
-    if ([root.lastPathComponent caseInsensitiveCompare:@"src"] == NSOrderedSame) {
+    NSString* executable = [[[NSBundle mainBundle] executablePath] stringByStandardizingPath];
+    NSString* location = [executable stringByDeletingLastPathComponent];
+    NSString* root = location;
+    // Release packages contain the standalone executable directly in src/.
+    // Keep accepting an older app bundle when users launch one that is already
+    // installed, but never create or package a bundle for new builds.
+    if ([location.lastPathComponent caseInsensitiveCompare:@"MacOS"] == NSOrderedSame) {
+        root = [[location stringByDeletingLastPathComponent] stringByDeletingLastPathComponent];
         root = [root stringByDeletingLastPathComponent];
+    } else if ([location.lastPathComponent caseInsensitiveCompare:@"src"] == NSOrderedSame) {
+        root = [location stringByDeletingLastPathComponent];
     }
     NSString* app = [root stringByAppendingPathComponent:@"src/desktop2stereo"];
     NSString* python = [root stringByAppendingPathComponent:@"src/python3/bin/python"];
@@ -28,12 +36,14 @@
     NSString* imagePath = [app stringByAppendingPathComponent:@"d2s_blur.png"];
     if (![[NSFileManager defaultManager] fileExistsAtPath:imagePath]) imagePath = [root stringByAppendingPathComponent:@"d2s_blur.png"];
     self.readyPath = [app stringByAppendingPathComponent:@"logs/gui_ready.flag"];
+    self.authReadyPath = [app stringByAppendingPathComponent:@"logs/auth_ready.flag"];
     if (![[NSFileManager defaultManager] fileExistsAtPath:python] || ![[NSFileManager defaultManager] fileExistsAtPath:script] || ![[NSFileManager defaultManager] fileExistsAtPath:imagePath]) {
         [[NSAlert alertWithMessageText:@"Desktop2Stereo 启动失败" defaultButton:@"确定" alternateButton:nil otherButton:nil informativeTextWithFormat:@"运行时、main.py 或启动图片缺失。"] runModal];
         [NSApp terminate:nil];
         return;
     }
     [[NSFileManager defaultManager] removeItemAtPath:self.readyPath error:nil];
+    [[NSFileManager defaultManager] removeItemAtPath:self.authReadyPath error:nil];
     NSScreen* screen = [NSScreen mainScreen];
     NSRect visible = screen.visibleFrame;
     const double aspect = 1672.0 / 941.0;
@@ -68,7 +78,8 @@
 
 - (void)poll:(NSTimer*)timer {
     (void)timer;
-    if ([[NSFileManager defaultManager] fileExistsAtPath:self.readyPath]) {
+    if ([[NSFileManager defaultManager] fileExistsAtPath:self.readyPath] ||
+        [[NSFileManager defaultManager] fileExistsAtPath:self.authReadyPath]) {
         [self.timer invalidate];
         [self.splashWindow orderOut:nil];
         [self.splashWindow close];

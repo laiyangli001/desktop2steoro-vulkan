@@ -39,6 +39,11 @@ if errorlevel 1 (
 )
 if exist "%PYTHON_ARCHIVE%" del /f /q "%PYTHON_ARCHIVE%" >nul 2>nul
 :python_ready
+if not exist "%PYTHON_EXE%" (
+    echo Failed to validate the project-local Python runtime at %PYTHON_EXE%
+    pause
+    exit /b 1
+)
 
 REM --- Get AMD GPUs sorted by AdapterRAM (largest first) ---
 for /f "usebackq delims=" %%i in (`powershell -NoProfile -Command "Get-CimInstance Win32_VideoController | Where-Object Name -like '*AMD*' | Sort-Object AdapterRAM -Descending | ForEach-Object { $_.Name }"`) do (

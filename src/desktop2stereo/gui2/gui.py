@@ -81,6 +81,7 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
         self._gui2_help_qr_host: ft.Container | None = None
         self._gui2_help_qr_source = None
         self._gui2_help_qr_refresh_task = None
+        self._gui2_help_qr_checked = False
         self._update_service = UpdateService()
         self._gui2_update_button: ft.OutlinedButton | None = None
 
@@ -587,9 +588,12 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
             self._gui2_help_qr_refresh_task = None
 
     def _schedule_help_qr_refresh(self):
+        if self._gui2_help_qr_checked:
+            return
         task = self._gui2_help_qr_refresh_task
         if task is not None and not task.done():
             return
+        self._gui2_help_qr_checked = True
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:

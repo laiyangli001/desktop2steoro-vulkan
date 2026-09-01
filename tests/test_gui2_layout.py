@@ -316,6 +316,9 @@ def test_gui2_qq_image_refreshes_when_help_opens_while_idle(monkeypatch):
     app._show_gui2_page(PAGE_KEYS.index("help"))
     assert remote_calls == [remote_source]
     assert app._gui2_help_qr_host.content.src == remote_source
+    app._show_gui2_page(PAGE_KEYS.index("performance"))
+    app._show_gui2_page(PAGE_KEYS.index("help"))
+    assert remote_calls == [remote_source]
 
 
 def test_gui2_qq_image_does_not_refresh_while_running(monkeypatch):

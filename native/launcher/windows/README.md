@@ -15,6 +15,8 @@ Copy-Item native/launcher/windows/build/Release/Desktop2Stereo.exe src/
 
 The executable is placed in `src/` beside `python3/` and `desktop2stereo/`. It
 also accepts a repository-root placement for compatibility and resolves all
-runtime paths relative to its own location. License
-checking is intentionally not implemented yet; the process boundary is ready
-for the licensing state machine described in document 13.
+runtime paths relative to its own location. The native process only owns the
+startup artwork and process boundary; Python starts the independent Flet
+authorization GUI first, then loads GUI1 or GUI2 only after authorization.
+`auth_ready.flag` releases the artwork after the login window is visible and
+`gui_ready.flag` is reserved for the selected runtime GUI.

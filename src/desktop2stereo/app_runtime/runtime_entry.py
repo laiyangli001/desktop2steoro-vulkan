@@ -418,7 +418,7 @@ def _wait_for_runtime_ready(
     return False
 
 
-def run_processing_runtime(*, max_seconds: float | None = None) -> int:
+def run_processing_runtime(*, max_seconds: float | None = None, lease_lost: threading.Event | None = None) -> int:
     """Run capture, inference, and pipeline threads until shutdown is requested."""
 
     shutdown_event.clear()
@@ -1059,6 +1059,10 @@ def run_processing_runtime(*, max_seconds: float | None = None) -> int:
             else time.monotonic() + max(0.0, max_seconds)
         )
         while not shutdown_event.is_set():
+            if lease_lost is not None and lease_lost.is_set():
+                print("[AUTH] Online authorization lease expired; stopping runtime.", flush=True)
+                shutdown_event.set()
+                break
             if deadline is not None and time.monotonic() >= deadline:
                 break
             time.sleep(0.05)

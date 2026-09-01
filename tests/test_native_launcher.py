@@ -10,6 +10,7 @@ LINUX_CMAKE = ROOT / "native" / "launcher" / "linux" / "CMakeLists.txt"
 MACOS_SOURCE = ROOT / "native" / "launcher" / "macos" / "main.mm"
 MACOS_CMAKE = ROOT / "native" / "launcher" / "macos" / "CMakeLists.txt"
 WORKFLOW = ROOT / ".github" / "workflows" / "build-native-launcher.yml"
+PUBLIC_KEY_INSTALLER = ROOT / "scripts" / "install-public-key.mjs"
 
 
 def test_windows_launcher_uses_native_layered_splash_and_ready_handshake():
@@ -31,6 +32,26 @@ def test_batch_prefers_native_launcher_when_present():
     source = RUN_WINDOWS.read_text(encoding="utf-8")
     assert 'if exist "%SRC_DIR%Desktop2Stereo.exe"' in source
     assert 'start "Desktop2Stereo" "%SRC_DIR%Desktop2Stereo.exe"' in source
+    assert "taskkill" not in source
+    assert "-m desktop2stereo.main" in source
+
+
+def test_source_launchers_do_not_kill_unrelated_python_processes():
+    for path in (ROOT / "src/run_linux.bash", ROOT / "src/run_mac"):
+        source = path.read_text(encoding="utf-8")
+        assert "pkill" not in source
+        assert "-m desktop2stereo.main" in source
+        assert "deadline=$((SECONDS + timeout_seconds))" in source
+
+
+def test_posix_source_launchers_prefer_the_matching_standalone_native_binary():
+    linux = (ROOT / "src/run_linux.bash").read_text(encoding="utf-8")
+    macos = (ROOT / "src/run_mac").read_text(encoding="utf-8")
+    assert 'if [ -x "${SCRIPT_DIR}/Desktop2Stereo" ]; then' in linux
+    assert 'exec "${SCRIPT_DIR}/Desktop2Stereo"' in linux
+    assert 'if [ -x "${SCRIPT_DIR}/Desktop2Stereo-macos" ]; then' in macos
+    assert 'exec "${SCRIPT_DIR}/Desktop2Stereo-macos"' in macos
+    assert "Desktop2Stereo.app" not in macos
 
 
 def test_linux_launcher_has_native_x11_png_and_ready_handshake():
@@ -49,7 +70,9 @@ def test_macos_launcher_has_appkit_splash_and_task_handshake():
     assert "NSWindowStyleMaskBorderless" in source
     assert "NSTask" in source
     assert "gui_ready.flag" in source
-    assert "MACOSX_BUNDLE" in cmake
+    assert "add_executable(Desktop2Stereo main.mm)" in cmake
+    assert 'OUTPUT_NAME "Desktop2Stereo-macos"' in cmake
+    assert "MACOSX_BUNDLE" not in cmake
     assert "AppKit" in cmake
 
 
@@ -60,6 +83,8 @@ def test_remote_build_workflow_covers_all_native_launcher_platforms():
     assert "macos-14" in workflow
     assert "Desktop2Stereo-linux-launcher" in workflow
     assert "Desktop2Stereo-macos-launcher" in workflow
+    assert "Desktop2Stereo-macos dist/Desktop2Stereo/src/" in workflow
+    assert "Desktop2Stereo.app" not in workflow
     assert "dist/Desktop2Stereo/src/" in workflow
 
 
@@ -67,3 +92,39 @@ def test_launchers_normalize_src_directory_to_project_root():
     assert 'filename() == L"src"' in WINDOWS_SOURCE.read_text(encoding="utf-8")
     assert 'filename() == "src"' in LINUX_SOURCE.read_text(encoding="utf-8")
     assert 'caseInsensitiveCompare:@"src"' in MACOS_SOURCE.read_text(encoding="utf-8")
+
+
+def test_native_launchers_start_the_authenticated_python_entrypoint():
+    for path in (WINDOWS_SOURCE, LINUX_SOURCE, MACOS_SOURCE):
+        source = path.read_text(encoding="utf-8")
+        assert "main.py" in source
+        assert "gui_ready.flag" in source
+        assert "auth_ready.flag" in source
+        assert "taskkill" not in source.lower()
+        assert "pkill" not in source.lower()
+
+
+def test_native_launcher_package_workflow_includes_independent_auth_sources():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    auth_workflow = (ROOT / ".github" / "workflows" / "auth.yml").read_text(encoding="utf-8")
+    for module in ("src/desktop2stereo/auth", "src/desktop2stereo/app_runtime", "src/desktop2stereo/gui", "src/desktop2stereo/gui2"):
+        assert module in workflow
+    for runner in ("windows-latest", "ubuntu-latest", "macos-14"):
+        assert runner in auth_workflow
+    assert "write-release-manifest.mjs" in workflow
+
+
+def test_release_packaging_requires_and_installs_server_public_key():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    installer = PUBLIC_KEY_INSTALLER.read_text(encoding="utf-8")
+    assert "D2S_LICENSE_PUBLIC_KEY_JSON" in workflow
+    assert "install-public-key.mjs" in workflow
+    assert "required for release packaging" in workflow
+    assert "BEGIN PUBLIC KEY" in installer
+    assert "PRIVATE KEY" in installer
+
+
+def test_native_build_reacts_to_authentication_source_changes():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    for path in ("src/desktop2stereo/auth/**", "src/desktop2stereo/app_runtime/**", "scripts/install-public-key.mjs"):
+        assert path in workflow

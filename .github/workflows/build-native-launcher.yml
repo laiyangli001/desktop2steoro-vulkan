@@ -5,6 +5,11 @@ on:
   push:
     paths:
       - "native/launcher/**"
+      - "src/desktop2stereo/auth/**"
+      - "src/desktop2stereo/app_runtime/**"
+      - "src/desktop2stereo/main.py"
+      - "scripts/install-public-key.mjs"
+      - "scripts/write-release-manifest.mjs"
       - ".github/workflows/build-native-launcher.yml"
 
 jobs:
@@ -22,11 +27,18 @@ jobs:
 
       - name: Package launcher
         shell: pwsh
+        env:
+          D2S_LICENSE_PUBLIC_KEY_JSON: ${{ vars.D2S_LICENSE_PUBLIC_KEY_JSON }}
         run: |
+          if (-not $env:D2S_LICENSE_PUBLIC_KEY_JSON) { throw "Repository variable D2S_LICENSE_PUBLIC_KEY_JSON is required for release packaging." }
+          node scripts/install-public-key.mjs src/desktop2stereo/auth/public_keys.py
           New-Item -ItemType Directory -Force -Path dist/Desktop2Stereo/src/desktop2stereo | Out-Null
           Copy-Item build/native-launcher/Release/Desktop2Stereo.exe dist/Desktop2Stereo/src/
+          Copy-Item src/desktop2stereo/main.py dist/Desktop2Stereo/src/desktop2stereo/
+          Copy-Item src/desktop2stereo/app_runtime,src/desktop2stereo/auth,src/desktop2stereo/gui,src/desktop2stereo/gui2 dist/Desktop2Stereo/src/desktop2stereo/ -Recurse
           Copy-Item src/desktop2stereo/d2s_blur.png dist/Desktop2Stereo/src/desktop2stereo/
           Copy-Item native/launcher/windows/README.md dist/Desktop2Stereo/
+          node scripts/write-release-manifest.mjs dist/Desktop2Stereo
 
       - name: Upload Windows launcher
         uses: actions/upload-artifact@v4
@@ -50,11 +62,18 @@ jobs:
         run: cmake --build build/native-launcher-linux --parallel
 
       - name: Package launcher
+        env:
+          D2S_LICENSE_PUBLIC_KEY_JSON: ${{ vars.D2S_LICENSE_PUBLIC_KEY_JSON }}
         run: |
+          test -n "$D2S_LICENSE_PUBLIC_KEY_JSON"
+          node scripts/install-public-key.mjs src/desktop2stereo/auth/public_keys.py
           mkdir -p dist/Desktop2Stereo/src/desktop2stereo
           cp build/native-launcher-linux/Desktop2Stereo dist/Desktop2Stereo/src/
+          cp src/desktop2stereo/main.py dist/Desktop2Stereo/src/desktop2stereo/
+          cp -R src/desktop2stereo/app_runtime src/desktop2stereo/auth src/desktop2stereo/gui src/desktop2stereo/gui2 dist/Desktop2Stereo/src/desktop2stereo/
           cp src/desktop2stereo/d2s_blur.png dist/Desktop2Stereo/src/desktop2stereo/
           cp native/launcher/linux/README.md dist/Desktop2Stereo/
+          node scripts/write-release-manifest.mjs dist/Desktop2Stereo
 
       - name: Upload Linux launcher
         uses: actions/upload-artifact@v4
@@ -75,11 +94,18 @@ jobs:
         run: cmake --build build/native-launcher-macos --config Release --parallel
 
       - name: Package launcher
+        env:
+          D2S_LICENSE_PUBLIC_KEY_JSON: ${{ vars.D2S_LICENSE_PUBLIC_KEY_JSON }}
         run: |
+          test -n "$D2S_LICENSE_PUBLIC_KEY_JSON"
+          node scripts/install-public-key.mjs src/desktop2stereo/auth/public_keys.py
           mkdir -p dist/Desktop2Stereo/src/desktop2stereo
-          cp -R build/native-launcher-macos/Desktop2Stereo.app dist/Desktop2Stereo/src/
+          cp build/native-launcher-macos/Desktop2Stereo-macos dist/Desktop2Stereo/src/
+          cp src/desktop2stereo/main.py dist/Desktop2Stereo/src/desktop2stereo/
+          cp -R src/desktop2stereo/app_runtime src/desktop2stereo/auth src/desktop2stereo/gui src/desktop2stereo/gui2 dist/Desktop2Stereo/src/desktop2stereo/
           cp src/desktop2stereo/d2s_blur.png dist/Desktop2Stereo/src/desktop2stereo/
           cp native/launcher/macos/README.md dist/Desktop2Stereo/
+          node scripts/write-release-manifest.mjs dist/Desktop2Stereo
 
       - name: Upload macOS launcher
         uses: actions/upload-artifact@v4

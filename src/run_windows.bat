@@ -46,10 +46,8 @@ if not exist "%APP_DIR%\main.py" (
 
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 
-echo [Preflight] [EN] Force-killing existing Python processes before Desktop2Stereo starts.
-echo             [CN] 启动 Desktop2Stereo 前强制结束所有现有 Python 进程。
-taskkill /f /t /im python.exe >nul 2>nul
-taskkill /f /t /im pythonw.exe >nul 2>nul
+echo [Preflight] [EN] Starting Desktop2Stereo without touching other Python processes.
+echo             [CN] 启动 Desktop2Stereo，不影响系统中的其他 Python 进程。
 
 if exist "%GUI_READY_FILE%" del /f /q "%GUI_READY_FILE%" >nul 2>nul
 if exist "%LAUNCH_STDOUT%" del /f /q "%LAUNCH_STDOUT%" >nul 2>nul
@@ -63,10 +61,10 @@ echo       [CN] 正在等待 GUI 就绪标志。首次运行的编译和加载�
 echo       [EN] This CMD window will close automatically after the GUI reports ready.
 echo       [CN] 收到 GUI 就绪标志后，此 CMD 窗口会自动关闭。
 
-set "PYTHONPATH=%APP_DIR%"
+set "PYTHONPATH=%SRC_DIR%"
 set "PYTHON_EXE=%PYTHON_EXE%"
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:PYTHONPATH='%APP_DIR%'; $env:PYTHON_EXE='%PYTHON_EXE%'; $p = Start-Process -FilePath '%PYTHON_EXE%' -ArgumentList '%APP_DIR%\main.py' -WorkingDirectory '%APP_DIR%' -WindowStyle Hidden -RedirectStandardOutput '%LAUNCH_STDOUT%' -RedirectStandardError '%LAUNCH_STDERR%' -PassThru; $deadline = (Get-Date).AddSeconds(60); while ((Get-Date) -lt $deadline) { if (Test-Path -LiteralPath '%GUI_READY_FILE%') { exit 0 }; if ($p.HasExited) { exit 1 }; Start-Sleep -Milliseconds 250 }; exit 2"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:PYTHONPATH='%SRC_DIR%'; $env:PYTHON_EXE='%PYTHON_EXE%'; $p = Start-Process -FilePath '%PYTHON_EXE%' -ArgumentList '-m desktop2stereo.main' -WorkingDirectory '%SRC_DIR%' -WindowStyle Hidden -RedirectStandardOutput '%LAUNCH_STDOUT%' -RedirectStandardError '%LAUNCH_STDERR%' -PassThru; $deadline = (Get-Date).AddSeconds(60); while ((Get-Date) -lt $deadline) { if (Test-Path -LiteralPath '%GUI_READY_FILE%') { exit 0 }; if ($p.HasExited) { exit 1 }; Start-Sleep -Milliseconds 250 }; exit 2"
 if errorlevel 2 goto launch_timeout
 if errorlevel 1 goto launch_failed
 exit /b 0
