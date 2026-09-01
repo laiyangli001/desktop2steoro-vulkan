@@ -20,3 +20,8 @@ startup artwork and process boundary; Python starts the independent Flet
 authorization GUI first, then loads GUI1 or GUI2 only after authorization.
 `auth_ready.flag` releases the artwork after the login window is visible and
 `gui_ready.flag` is reserved for the selected runtime GUI.
+
+The current development executable starts Python with `D2S_SKIP_AUTH=1`, so
+double-clicking `src/Desktop2Stereo.exe` bypasses account and license checks.
+Remove this development-only environment assignment before producing a
+production release.

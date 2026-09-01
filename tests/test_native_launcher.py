@@ -28,6 +28,12 @@ def test_windows_launcher_build_definition_is_native_executable():
     assert "windowscodecs" in cmake
 
 
+def test_windows_development_launcher_passes_auth_bypass_to_python():
+    source = WINDOWS_SOURCE.read_text(encoding="utf-8")
+    assert 'SetEnvironmentVariableW(L"D2S_SKIP_AUTH", L"1")' in source
+    assert "production build" in source
+
+
 def test_batch_prefers_native_launcher_when_present():
     source = RUN_WINDOWS.read_text(encoding="utf-8")
     assert 'if exist "%SRC_DIR%Desktop2Stereo.exe"' in source

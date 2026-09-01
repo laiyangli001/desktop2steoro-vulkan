@@ -387,6 +387,19 @@ def test_bootstrap_reports_auth_error_without_loading_gui(monkeypatch, capsys):
     assert capsys.readouterr().err.count("[AUTH] 服务器不可用 (network_error)") == 2
 
 
+def test_bootstrap_skip_auth_flag_does_not_load_auth_gate(monkeypatch):
+    from desktop2stereo.app_runtime import bootstrap
+
+    events = []
+    monkeypatch.setattr(bootstrap, "read_startup_gui", lambda: bootstrap.MODERN_GUI)
+    fake_gui = types.ModuleType("gui2.gui")
+    fake_gui.main = lambda: events.append("gui")
+    monkeypatch.setitem(sys.modules, "gui2.gui", fake_gui)
+    monkeypatch.setattr(bootstrap, "os", types.SimpleNamespace(environ={}))
+    assert bootstrap.main(["--gui2", "--skip-auth"]) == 0
+    assert events == ["gui"]
+
+
 def test_gui_module_entrypoints_delegate_to_bootstrap(monkeypatch):
     from desktop2stereo.gui import __main__ as gui_entry
     from desktop2stereo.gui2 import __main__ as gui2_entry
