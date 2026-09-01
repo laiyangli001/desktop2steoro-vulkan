@@ -660,7 +660,25 @@ class GUIHandlerMixin:
             self.page.theme = ft.Theme(color_scheme_seed="blue", font_family=font)
         else:
             self.page.theme = ft.Theme(color_scheme_seed=color, font_family=font)
+        self._sync_theme_toggle()
         self.page.update()
+
+    def toggle_theme_mode(self, _event=None):
+        """Toggle the GUI1 page between explicit light and dark modes."""
+        is_dark = self.page.theme_mode == ft.ThemeMode.DARK
+        self.page.theme_mode = ft.ThemeMode.LIGHT if is_dark else ft.ThemeMode.DARK
+        self._sync_theme_toggle()
+        self.page.update()
+
+    def _sync_theme_toggle(self):
+        control = getattr(self, "theme_label", None)
+        if control is None or not isinstance(control, ft.IconButton):
+            return
+        is_dark = self.page.theme_mode == ft.ThemeMode.DARK
+        control.selected = is_dark
+        control.tooltip = UI_MESSAGES[self.locale][
+            "tooltip_theme_toggle_to_light" if is_dark else "tooltip_theme_toggle_to_dark"
+        ]
 
     def on_language_change(self, e):
         lang_display = e.control.value
@@ -801,7 +819,7 @@ class GUIHandlerMixin:
         self.upscaler_sharpness_dd.value = "0.00"
         self.stereo_output_label.value = t["Stereo Output:"]
         self.update_stereo_monitor_menu()
-        self.theme_label.value = t["Theme:"]
+        self._sync_theme_toggle()
         theme_display = ["System", "Blue", "Green", "Red", "Purple", "Orange", "Teal", "Pink", "Grey"]
         self.theme_dd.options = [t.get(k.lower(), k) for k in theme_display]
         cur = self.theme_dd.value

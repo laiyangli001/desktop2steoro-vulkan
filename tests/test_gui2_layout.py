@@ -96,7 +96,9 @@ def test_gui2_builds_shell_and_all_navigation_pages():
     assert status_box.bgcolor == ft.Colors.SURFACE_CONTAINER_HIGHEST
     assert status_box.border_radius == 6
     footer_actions = footer_column.controls[0].controls
-    assert footer_actions[0].expand is True
+    assert footer_actions[2].expand is True
+    assert footer_actions[1] is app._gui2_theme_toggle
+    assert footer_actions[0].width == S(16)
     advanced_panel = app._gui2_pages["advanced"].controls[0].content
     assert advanced_panel.controls[2].controls[0:2] == [
         app._gui2_language_label, app.lang_dd,

@@ -37,6 +37,33 @@ def test_gui2_shell_is_separate_from_legacy_gui_file() -> None:
     assert not (ROOT / "src" / "desktop2stereo" / "gui2" / "flet_packages").exists()
 
 
+def test_gui2_footer_places_flet_theme_toggle_before_reset_button() -> None:
+    source = GUI2.read_text(encoding="utf-8")
+    assert "self._gui2_theme_toggle = ft.IconButton(" in source
+    assert "icon=ft.Icons.DARK_MODE" in source
+    assert "selected_icon=ft.Icons.LIGHT_MODE" in source
+    assert "self._gui2_theme_toggle," in source
+    assert "self.reset_btn," in source
+    footer_source = source[source.index("footer = ft.Container("):]
+    assert 'ft.Container(width=S(16), data="theme_toggle_leading_space")' in footer_source
+    assert footer_source.index("theme_toggle_leading_space") < footer_source.index("self._gui2_theme_toggle,")
+
+
+def test_gui1_replaces_theme_label_with_flet_theme_toggle_icon() -> None:
+    builders = (ROOT / "src" / "desktop2stereo" / "gui" / "builders.py").read_text(encoding="utf-8")
+    handlers = (ROOT / "src" / "desktop2stereo" / "gui" / "handlers.py").read_text(encoding="utf-8")
+    assert "self.theme_label = ft.IconButton(" in builders
+    assert "icon=ft.Icons.DARK_MODE" in builders
+    assert "selected_icon=ft.Icons.LIGHT_MODE" in builders
+    theme_source = builders[builders.index("self.theme_label = ft.IconButton("):]
+    assert "width=S(40)," in theme_source
+    assert "self._theme_toggle_spacer = ft.Container" in theme_source
+    assert "self.theme_label, self._theme_toggle_spacer, self.theme_dd" in theme_source
+    assert "final_w - (self.theme_label.width or 0)" in builders
+    assert "on_click=self.toggle_theme_mode" in builders
+    assert "def toggle_theme_mode" in handlers
+
+
 def test_app_runtime_does_not_eagerly_import_processing_runtime() -> None:
     source = (ROOT / "src" / "desktop2stereo" / "app_runtime" / "__init__.py").read_text(
         encoding="utf-8"

@@ -84,6 +84,7 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
         self._gui2_help_qr_checked = False
         self._update_service = UpdateService()
         self._gui2_update_button: ft.OutlinedButton | None = None
+        self._gui2_theme_toggle: ft.IconButton | None = None
 
     async def setup(self):
         await super().setup()
@@ -142,7 +143,11 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
         # Reuse the legacy controls verbatim so labels, colons, widths and
         # localization behavior remain identical in both menus.
         self._gui2_language_label = self.lang_label
-        self._gui2_theme_label = self.theme_label
+        self._gui2_theme_label = ft.Text(
+            gui2_text(self.locale, "footer_theme"),
+            size=13,
+            data="footer_theme",
+        )
 
         self._gui2_pages = {
             "home": self._build_home_page(device_rows),
@@ -197,6 +202,14 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
         # GUI2 requires an explicit confirmation before changing all settings
         # back to their defaults; the legacy GUI keeps its original behavior.
         self.reset_btn.on_click = self.confirm_reset_defaults
+        self._gui2_theme_toggle = ft.IconButton(
+            icon=ft.Icons.DARK_MODE,
+            selected_icon=ft.Icons.LIGHT_MODE,
+            selected=self.page.theme_mode == ft.ThemeMode.DARK,
+            tooltip=gui2_text(self.locale, "theme_toggle_to_dark"),
+            on_click=self._toggle_gui2_theme,
+            data="theme_toggle",
+        )
         # The legacy builder gives these controls a fixed width. GUI2 places
         # interface controls in a compact settings row.
         self._set_gui2_interface_dropdowns_compact()
@@ -251,6 +264,8 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
         footer = ft.Container(
             content=ft.Column([
                 ft.Row([
+                    ft.Container(width=S(16), data="theme_toggle_leading_space"),
+                    self._gui2_theme_toggle,
                     ft.Container(expand=True),
                     self.reset_btn,
                     self.stop_btn,
@@ -1029,6 +1044,7 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
             self._gui2_update_button.tooltip = gui2_text(
                 self.locale, "updates_disabled_tooltip"
             )
+        self._sync_gui2_theme_toggle()
         self._show_gui2_page(self._gui2_page_index, update=False)
 
     def _on_check_updates(self, _event=None):
@@ -1062,6 +1078,23 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
         super().on_theme_change(SimpleNamespace(control=self.theme_dd))
         self._refresh_gui2_texts()
         self.page.update()
+
+    def _toggle_gui2_theme(self, _event=None):
+        """Toggle the page between explicit light and dark Flet themes."""
+        is_dark = self.page.theme_mode == ft.ThemeMode.DARK
+        self.page.theme_mode = ft.ThemeMode.LIGHT if is_dark else ft.ThemeMode.DARK
+        self._sync_gui2_theme_toggle()
+        self.page.update()
+
+    def _sync_gui2_theme_toggle(self):
+        if self._gui2_theme_toggle is None:
+            return
+        is_dark = self.page.theme_mode == ft.ThemeMode.DARK
+        self._gui2_theme_toggle.selected = is_dark
+        self._gui2_theme_toggle.tooltip = gui2_text(
+            self.locale,
+            "theme_toggle_to_light" if is_dark else "theme_toggle_to_dark",
+        )
 
     def __getattr__(self, name):
         if name.startswith("select_theme_"):
@@ -1185,6 +1218,7 @@ class Desktop2StereoGUI2(Desktop2StereoGUI):
         super().on_theme_change(e)
         if restore_theme_label:
             e.control.value = gui2_text(self.locale, "theme_system")
+        self._sync_gui2_theme_toggle()
         self._refresh_gui2_texts()
 
     def update_ui_texts(self):

@@ -306,7 +306,7 @@ class GUIBuilderMixin:
             self.edge_threshold_label, self.anaglyph_label,
             self.render_scale_label, self.render_max_pixels_label, self.render_align_label,
             self.display_mode_label, self.environment_label,
-            self.theme_label, self.stream_quality_label, self.stream_key_label,
+            self.stream_quality_label, self.stream_key_label,
             self.audio_delay_label, self.color_contrast_label,
             self.color_gamma_label, self.color_tint_label, self.projection_max_lod_label,
             self.projection_rcas_sharpness_label,
@@ -333,6 +333,9 @@ class GUIBuilderMixin:
         if hasattr(self, '_accel_spacer'):
             self._accel_spacer.width = final_w
             self._safe_update(self._accel_spacer)
+        if hasattr(self, '_theme_toggle_spacer'):
+            self._theme_toggle_spacer.width = max(0, final_w - (self.theme_label.width or 0))
+            self._safe_update(self._theme_toggle_spacer)
         self._labels_aligned = True
 
     # ── UI construction ──
@@ -368,7 +371,7 @@ class GUIBuilderMixin:
         self.parallel_inference_dd = CompactDropdown(
             options=self._parallel_inference_options(),
             value=self._parallel_inference_to_display(1),
-            width=S(130),
+            width=S(40),
             on_select=self.on_stereo_hot_param_change,
             tooltip=parallel_inference_tooltip,
         )
@@ -791,7 +794,16 @@ class GUIBuilderMixin:
         self.lang_label = ft.Text("Set Language:", size=FONT_SIZE, width=S(130))
         self.lang_dd = CompactDropdown(options=["English", "简体中文"],
             value="English", on_select=self.on_language_change, width=S(130))
-        self.theme_label = ft.Text("Theme:", size=FONT_SIZE, width=S(130))
+        self.theme_label = ft.IconButton(
+            icon=ft.Icons.DARK_MODE,
+            selected_icon=ft.Icons.LIGHT_MODE,
+            selected=self.page.theme_mode == ft.ThemeMode.DARK,
+            width=S(40),
+            tooltip=UI_MESSAGES[self.locale]["tooltip_theme_toggle_to_dark"],
+            on_click=self.toggle_theme_mode,
+            data="theme_toggle",
+        )
+        self._theme_toggle_spacer = ft.Container(width=max(0, S(130) - S(40)))
         self.theme_dd = CompactDropdown(
             options=["system", "blue", "green", "red", "purple", "orange", "teal", "pink", "grey"],
             value="system", on_select=self.on_theme_change, width=S(130))
@@ -807,7 +819,7 @@ class GUIBuilderMixin:
         self.run_btn = ft.Button(content=ft.Text("Run", size=FONT_SIZE),
             width=S(130), on_click=self.save_and_run, disabled=True)
         lang_row = ft.Row([self.lang_label, self.lang_dd, ft.Container(width=S(40)),
-            self.theme_label, self.theme_dd], spacing=1)
+            self.theme_label, self._theme_toggle_spacer, self.theme_dd], spacing=1)
 
         self.status_text = ft.Text("", italic=True, size=FONT_SIZE)
         self.backend_status_text = ft.Text(
