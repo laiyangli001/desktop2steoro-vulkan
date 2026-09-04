@@ -13,6 +13,7 @@ MATRIX = ROOT / "docs" / "requirements-matrix.md"
 VALID_STATUSES = {"planned", "in_progress", "implemented", "verified", "accepted"}
 REQUIRED_COLUMNS = ("ID", "领域", "必须遵循的要求", "规范来源", "代码映射", "测试/验收", "状态")
 COMPLETED_STATUSES = {"verified", "accepted"}
+EXTERNAL_REPO_PREFIXES = ("../desktop2stereo-site/",)
 
 
 def _cells(line: str) -> list[str]:
@@ -52,6 +53,12 @@ def _validate_path(value: str, *, row_id: str, label: str, strict: bool, errors:
         # ``desktop2steoro`` to ``desktop2stereo``. Keep older matrix rows
         # valid while the documentation is migrated incrementally.
         path = path.replace("src/desktop2steoro", "src/desktop2stereo")
+        # Cross-repository evidence is verified by that repository's own CI.
+        # A single-repository checkout cannot stat sibling paths, so only the
+        # explicitly registered sibling is accepted here; arbitrary traversal
+        # remains subject to the local existence check below.
+        if path.startswith(EXTERNAL_REPO_PREFIXES):
+            continue
         if (
             not path
             or path.startswith(("实机", "CI", "Actions"))
