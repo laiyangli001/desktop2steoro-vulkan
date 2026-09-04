@@ -72,7 +72,9 @@ TENCENTCLOUD_VERIFY_TEMPLATE_ID_EN=214123
 TENCENTCLOUD_RESET_TEMPLATE_ID_EN=214124
 ```
 
-四个模板必须审核通过后才能进行真实发送。模板正文使用单一变量 `{{link}}`；服务端根据请求的 `Accept-Language` 选择中文或英文模板，并通过腾讯云 SES `SendEmail` 的 TC3-HMAC-SHA256 签名请求发送。
+四个模板必须审核通过后才能进行真实发送。模板正文使用单一变量 `{{token}}`，并将链接固定写成
+`https://d2s.site/verify-email?token={{token}}` 或
+`https://d2s.site/reset-password?token={{token}}`；服务端根据请求的 `Accept-Language` 选择中文或英文模板，并通过腾讯云 SES `SendEmail` 的 TC3-HMAC-SHA256 签名请求发送。
 
 腾讯云地域、模板 ID、发信地址可以作为 `wrangler.json` 的 `vars`；`SecretId` 和 `SecretKey` 不得写入 `wrangler.json`、源码、GitHub 普通变量或聊天记录。
 

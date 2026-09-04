@@ -138,9 +138,6 @@ bool StartPython() {
     std::filesystem::remove(logDir / L"auth_ready.flag", ec);
     std::filesystem::remove(logDir / L"gui_ready.flag", ec);
     std::wstring command = L"\"" + python.wstring() + L"\" \"" + script.wstring() + L"\"";
-    // Development-only bypass so the native launcher behaves like
-    // `--skip-auth`; remove before producing a production build.
-    SetEnvironmentVariableW(L"D2S_SKIP_AUTH", L"1");
     std::vector<wchar_t> mutableCommand(command.begin(), command.end());
     mutableCommand.push_back(L'\0');
     STARTUPINFOW startup{};

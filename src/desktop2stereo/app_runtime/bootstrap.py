@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from collections.abc import Sequence
 
@@ -18,11 +17,6 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--gui2", action="store_true", help="Launch the isolated Desktop2Stereo GUI2")
     parser.add_argument("--runtime", action="store_true", help="Run the migrated processing runtime")
     parser.add_argument(
-        "--skip-auth",
-        action="store_true",
-        help="Skip the authentication gate for local development only",
-    )
-    parser.add_argument(
         "--runtime-seconds",
         type=float,
         default=None,
@@ -33,7 +27,6 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
-    skip_auth = args.skip_auth or os.environ.get("D2S_SKIP_AUTH", "").strip().lower() in {"1", "true", "yes", "on"}
     if args.version:
         print("desktop2steoro-vulkan 0.1.0")
         return 0
@@ -41,10 +34,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(build_capability_report(), ensure_ascii=False, indent=2, sort_keys=True))
         return 0
     if args.runtime:
-        if skip_auth:
-            print("[AUTH] Authentication skipped (local development mode)", file=sys.stderr, flush=True)
-            from .runtime_entry import run_processing_runtime
-            return run_processing_runtime(max_seconds=args.runtime_seconds)
         try:
             from desktop2stereo.auth.gate import validate_saved_authentication
             from desktop2stereo.auth.lease import RuntimeLease
@@ -76,23 +65,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     # Authenticate before importing GUI1/GUI2. The login launcher is an
     # independent Flet application and does not load Torch, CUDA, Vulkan, or
     # either runtime GUI until the server accepts the session.
-    if skip_auth:
-        print("[AUTH] Authentication skipped (local development mode)", file=sys.stderr, flush=True)
-    else:
-        try:
-            from desktop2stereo.auth.gate import require_authentication
-            from desktop2stereo.auth.client import AuthError
-        except ModuleNotFoundError:
-            # Keep direct `python src/desktop2stereo/main.py` compatible with the
-            # existing source launch path, where sibling packages are top-level.
-            from auth.gate import require_authentication
-            from auth.client import AuthError
+    try:
+        from desktop2stereo.auth.gate import require_authentication
+        from desktop2stereo.auth.client import AuthError
+    except ModuleNotFoundError:
+        # Keep direct `python src/desktop2stereo/main.py` compatible with the
+        # existing source launch path, where sibling packages are top-level.
+        from auth.gate import require_authentication
+        from auth.client import AuthError
 
-        try:
-            require_authentication()
-        except AuthError as exc:
-            print(f"[AUTH] {exc} ({exc.code})", file=sys.stderr, flush=True)
-            return 1
+    try:
+        require_authentication()
+    except AuthError as exc:
+        print(f"[AUTH] {exc} ({exc.code})", file=sys.stderr, flush=True)
+        return 1
     if selected_gui == MODERN_GUI:
         from gui2.gui import main as gui2_main
 

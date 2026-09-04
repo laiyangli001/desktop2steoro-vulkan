@@ -13,7 +13,6 @@ set "APP_LOG=%LOG_DIR%\desktop2stereo.log"
 
 rem Prefer the native launcher when a release build is present. The Python
 rem fallback below remains available for development and diagnostics.
-rem Set D2S_SKIP_AUTH=1 before launching only for local development.
 if exist "%SRC_DIR%Desktop2Stereo.exe" (
     start "Desktop2Stereo" "%SRC_DIR%Desktop2Stereo.exe"
     exit /b 0

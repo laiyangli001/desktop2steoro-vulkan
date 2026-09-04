@@ -28,10 +28,10 @@ def test_windows_launcher_build_definition_is_native_executable():
     assert "windowscodecs" in cmake
 
 
-def test_windows_development_launcher_passes_auth_bypass_to_python():
+def test_windows_release_launcher_does_not_bypass_authentication():
     source = WINDOWS_SOURCE.read_text(encoding="utf-8")
-    assert 'SetEnvironmentVariableW(L"D2S_SKIP_AUTH", L"1")' in source
-    assert "production build" in source
+    assert 'SetEnvironmentVariableW(L"D2S_SKIP_AUTH", L"1")' not in source
+    assert "skip-auth" not in source
 
 
 def test_batch_prefers_native_launcher_when_present():
