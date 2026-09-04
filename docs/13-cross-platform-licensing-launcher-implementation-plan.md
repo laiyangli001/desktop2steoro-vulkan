@@ -1,524 +1,230 @@
-# Desktop2Stereo 完整跨平台授权、支付与登录启动器实施计划
-
-## 1. 目标与范围
+# Desktop2Stereo 跨平台授权客户端与启动器实施计划
 
-本计划一次性定义最终授权系统的完整功能，阶段划分只表示实现顺序，不表示删除后续功能。
+## 1. 文档范围
 
-最终系统包括：
+本文只负责 `desktop2stereo-vulkan` 客户端：Windows、Linux、macOS 启动器，设备身份，
+安全存储，授权选择，离线凭证验证，在线租约，Runtime 二次门禁，以及三平台打包发布。
 
-- 账号注册、邮箱验证、登录、退出和密码找回。
-- 30 天完整功能试用。
-- 7 天、14 天、30 天三档离线授权。
-- 在线授权模式和永久设备绑定模式。
-- 免费撤销、付费撤销、人工解绑和离线延长包。
-- 支付渠道决定的 CN/INTL 定价和账号区域锁定。
-- 一个账号购买多份单设备授权，每份授权独立管理。
-- 邀请奖励、余额抵扣、CN 支付宝提现、拒付冲正和完整账务流水。
-- 用户中心、管理员后台、订单、拒付和审计。
-- Windows、Linux、macOS 独立登录验证启动程序。
-- 客户端离线验签、设备绑定、时钟回拨检测和 Runtime 二次验证。
-- 三平台构建、签名、安装、发布和回滚流程。
+服务器端账号、授权状态机、订单、支付、余额、邀请、提现、管理后台和部署由
+`desktop2stereo-site/docs/13-cross-platform-licensing-server-implementation-plan.md` 负责；
+服务器部署以 `desktop2stereo-site/docs/d2s.site.md` 为唯一基准。本文不再维护服务器表结构、
+支付实现或腾讯云/Cloudflare 部署步骤。
 
-服务端沿用 `desktop2steoro-server` 的 Astro + Cloudflare Workers 架构；客户端沿用 `desktop2steoro-vulkan` 的 Python/Flet/Vulkan Runtime。BAT、Bash 和 `run_mac` 只保留为开发或诊断入口，不再作为正式用户启动方式。
+截至 2026-09-04，Windows 启动器已有基础实现，但仍需迁移到 `desktop2stereo-site` 的
+`/api/v1` 契约并重新验收；Linux x86_64、macOS arm64 正式启动器、生产公钥和三平台发布
+流水线尚未完成。全部验收门通过前，不得把客户端标记为生产可用。
 
-不支持用户主动退款或授权转让。支付渠道发生拒付、撤销或欺诈回退时，暂停对应授权并冲正关联邀请奖励。系统不采用“返回错误密钥并静默生成错误画面”的毒化策略；启动器和 Runtime 双重验证授权，失败时明确阻止受保护 Runtime 初始化。
+## 2. 客户端目标与边界
 
-## 2. 用户授权功能
-
-### 2.1 账号系统
+- Windows x86_64、Linux x86_64、macOS arm64 提供一致的登录、授权选择和启动体验。
+- 支持设备码登录、一个账号多份授权、在线、7/14/30 天离线和永久绑定模式。
+- 离线时只信任服务端 ES256 签名凭证和本地可信时间，不信任本地可编辑配置。
+- 在线模式持有短期租约并定期续期；租约到期后安全停止受保护 Runtime。
+- 启动器和 Runtime 各执行一次授权检查，不能通过直接运行 Python/EXE 绕过。
+- 凭证失效时明确阻止受保护功能并给出可操作错误，不使用毒化模型或错误画面。
+- 客户端不计算可信价格、不确认支付成功、不修改授权状态、不包含服务端私钥或支付 Secret。
 
-- 使用邮箱和密码注册，注册后必须完成邮箱验证。
-- 支持登录、退出、修改密码、忘记密码和重置密码。
-- 官网会话使用 HttpOnly、Secure、SameSite Cookie。
-- 密码使用 Web Crypto `PBKDF2-HMAC-SHA256`，每个账号独立随机盐，服务端 Pepper 保存于 Cloudflare Secret。
-- 注册、登录、找回密码和高风险操作接入 Cloudflare Turnstile。
-- 对邮箱、IP、设备码和失败次数分别限流，并记录安全审计。
+## 3. 组件边界
 
-### 2.2 区域与定价
+### 3.1 共享授权核心
 
-- 未购买账号的 `region` 为 `NULL`；试用状态、IP、手机号和用户自选都不决定区域。
-- 首次成功外部支付按实际支付方式锁定账号区域：
-  - 支付宝、微信支付：`CN`、`CNY`、每份正式授权 `¥99`。
-  - Creem、PayPal、Stripe、Paddle 等其它渠道：`INTL`、`USD`、每份正式授权 `$29.9`。
-- 区域锁定后，服务端拒绝不匹配的渠道和币种，支付页面只显示该区域可用渠道。
-- 用户不能自行切换区域。管理员仅可在余额为零、没有待处理订单或提现时人工调整，并写入审计日志。
-- 所有金额使用整数最小货币单位和 ISO 4217 货币代码，禁止使用浮点金额。
-- 价格和商品由服务器返回，客户端不得自行计算价格或判定支付成功。
-
-### 2.3 试用与多授权模型
-
-- 新账号获得一份 30 天完整功能试用授权，从服务器首次激活时间开始计算。
-- 每个账号最多一份试用授权；试用授权不可转让、出售、复制或增加设备数。
-- 试用期绑定一台设备并允许一次免费撤销；到期后保留账号和购买功能，但禁止启动受保护 Runtime。
-- 一份正式授权只能绑定一台设备，一个账号可以购买任意多份正式授权。
-- 新购买授权初始状态为 `unbound`，登录启动器后从账号授权列表中选择并绑定当前设备。
-- 只有一份可用授权时自动选择；存在多份时显示授权、设备、模式和到期时间供用户选择。
-- `license_code` 仅作为用户展示和客服查询编号，不作为认证秘密，不要求用户手工输入激活码。
-- 每份授权独立维护模式、设备绑定、离线期限、免费撤销冷却期、每月付费撤销额度、在线租约、永久绑定和人工解绑状态。
-- 不允许自助或人工转移授权所有权；撤销设备只改变绑定，不改变购买账号。
-
-### 2.4 离线授权模式
-
-用户联网续期时选择以下档位：
-
-| 档位 | 免验证时间 | 免费撤销冷却期 |
-|---|---:|---:|
-| 短期 | 7 天 | 7 天 |
-| 标准 | 14 天 | 14 天 |
-| 长期 | 30 天 | 30 天 |
+在 `src/desktop2stereo/auth/` 维护无 UI 的共享模块：
 
-- 有效期内可以完全断网运行。
-- 每份授权同一时间只能绑定一台设备；账号可通过多份授权同时使用多台设备。
-- 到期后必须联网续期。
-- 可购买 `+30 天` 离线延长包，时间叠加到当前截止日期，不重置撤销冷却期。
-- 离线档位切换不能重置已有撤销冷却期。
-
-### 2.5 在线模式
-
-- 每次启动必须联网验证。
-- 可以在不同设备之间切换，不永久绑定设备。
-- 每份授权同一时间只允许一个活动 Runtime 会话；多份授权可以分别运行在不同设备上。
-- 启动时获得 15 分钟运行租约，运行中每 5 分钟续期。
-- 网络短暂中断时允许使用当前租约，租约到期仍无法联网则安全停止 Runtime。
-- 本地最多缓存 1 小时登录状态，不能绕过活动会话检查。
-
-### 2.6 永久绑定模式
-
-- 永久绑定指定 `license_id` 和当前设备，可永久离线运行。
-- 选择时必须输入确认文字并二次确认不可自行换机。
-- 永久绑定不能使用普通免费或付费撤销。
-- 每个账号一生允许申请一次人工解绑，须提交购买凭证和设备更换说明，由管理员审核。
-
-## 3. 撤销与换机规则
-
-### 3.1 免费撤销
-
-- 每份授权的 7 天、14 天、30 天档位分别对应 7 天、14 天、30 天冷却期。
-- 每份授权每个周期提供一次免费撤销机会。
-- 冷却期从撤销成功时间开始计算，不能通过切换档位重置。
-- 撤销后旧设备不能获得新凭证；旧离线凭证最多使用到原签名到期时间。
-
-### 3.2 付费撤销
-
-每份授权每个自然月最多购买 3 次，按该授权当月次数阶梯收费：
-
-| 次数 | 国际价格 | 中国大陆价格 |
-|---:|---:|---:|
-| 第 1 次 | `$2.99` | `¥19.9` |
-| 第 2 次 | `$4.99` | `¥34.9` |
-| 第 3 次 | `$9.99` | `¥69.9` |
-
-- 第 4 次起拒绝购买，等待下个自然月。
-- 付费撤销不重置免费撤销冷却期。
-- 永久绑定模式不能购买普通付费撤销。
-- 永久绑定、免费撤销、付费撤销和离线延长都必须指定 `license_id`。
-- 每笔撤销必须绑定唯一订单、授权和操作，禁止重复消费支付回调。
-
-## 4. 服务端架构
-
-### 4.1 Cloudflare 组件
-
-- Astro：产品官网、登录、设备确认、用户中心和管理员页面。
-- Cloudflare Workers：账号、设备、授权、订单和支付 API。
-- D1：账号、授权、设备、订单和审计的权威数据源。
-- KV：限流、短期验证码和非权威缓存，不保存最终授权状态。
-- Secrets：密码 Pepper、签名私钥和支付 Webhook Secret。
-- Cron Trigger：清理过期设备码、会话、租约、重置令牌和临时风控记录。
-- Turnstile：注册、登录、密码重置和高风险操作保护。
-
-不新增 PostgreSQL、Redis 或独立 FastAPI 服务。
-
-### 4.2 D1 数据模型
-
-建立版本化迁移，核心表包括：
-
-- `users`：邮箱、密码参数、验证状态、试用时间、`region` 和 `region_locked_at`。
-- `email_verifications`、`password_reset_tokens`：邮箱验证和密码重置。
-- `web_sessions`：官网会话。
-- `device_codes`：设备码、用户码、过期时间和消费状态。
-- `licenses`：一对多授权、展示编号、所有者、产品、试用/购买、模式、绑定、期限和状态。
-- `license_events`：激活、撤销、模式切换、永久绑定和人工解绑记录。
-- `device_bindings`：每份授权当前绑定设备及指纹版本。
-- `offline_entitlements`：离线凭证签发记录。
-- `online_leases`：按 `license_id` 管理的在线 Runtime 运行租约。
-- `refresh_tokens`：令牌哈希和轮换族。
-- `free_revoke_cooldowns`、`paid_revoke_quotas`：按 `license_id` 管理的撤销额度和冷却期。
-- `manual_unbind_requests`：人工解绑申请和审核结果。
-- `invite_codes`、`invite_records`：稳定邀请码、邀请归属、首次购买订单和奖励状态。
-- `balance_accounts`：按用户和币种汇总的可用、预留及负余额。
-- `balance_transactions`：邀请奖励、预留、抵扣、释放、提现和拒付冲正的不可变流水。
-- `withdrawal_requests`：CN 用户支付宝提现申请和管理员处理结果。
-- `orders`：区域、币种、原价、余额预留、网关金额、商品和目标 `license_id` 的结算快照。
-- `payment_events`、`chargeback_events`：支付和拒付事件。
-- `audit_events`：账号、授权、设备、管理员和风控日志。
-- `signing_keys`：公钥版本、`key_id` 和轮换状态。
-
-设备绑定使用唯一约束和原子批处理保证一份授权只有一个活动设备、同一设备不能同时占用两份活动授权。每个受邀账号只能产生一次奖励，每个支付事件只能处理一次。所有时间使用 UTC，所有外部事件使用不可预测 ID 和幂等键；金额统一存储为整数最小货币单位。
-
-### 4.3 授权状态机
-
-统一状态包括：
-
-`unlicensed`、`trial`、`paid`、`offline_active`、`online_active`、`permanent_bound`、`expired`、`suspended`、`revoked`、`clock_suspect`、`manual_review`。
-
-激活、续期、撤销、支付和人工审核只能通过状态机服务执行，API 路由不得直接修改授权字段。
-
-### 4.4 API
-
-账号接口：
-
-- `POST /api/v1/auth/register`
-- `POST /api/v1/auth/verify-email`
-- `POST /api/v1/auth/login`
-- `POST /api/v1/auth/logout`
-- `POST /api/v1/auth/password-reset/request`
-- `POST /api/v1/auth/password-reset/confirm`
-- `POST /api/v1/auth/password-change`
-
-设备码接口：
-
-- `POST /api/v1/device/authorize`
-- `POST /api/v1/device/approve`
-- `POST /api/v1/device/token`
-- `POST /api/v1/device/cancel`
-
-授权接口：
-
-- `GET /api/v1/license/list`
-- `GET /api/v1/license/status`
-- `POST /api/v1/license/offline/extend`
-- `POST /api/v1/license/activate`
-- `POST /api/v1/license/switch`
-- `POST /api/v1/license/renew`
-- `POST /api/v1/license/change-mode`
-- `POST /api/v1/license/revoke/free`
-- `POST /api/v1/license/revoke/paid`
-- `POST /api/v1/license/online/heartbeat`
-- `POST /api/v1/license/online/logout`
-- `POST /api/v1/license/permanent/confirm`
-
-订单、邀请与余额接口：
-
-- `POST /api/v1/orders/preview`
-- `POST /api/v1/orders/create`
-- `GET /api/v1/orders/{id}`
-- `GET /api/v1/invite/info`
-- `GET /api/v1/invite/records`
-- `GET /api/v1/balance/info`
-- `GET /api/v1/balance/transactions`
-- `POST /api/v1/withdrawal/request`
-- `GET /api/v1/withdrawal/status`
-- `POST /api/v1/webhooks/creem`
-- `POST /api/v1/webhooks/paymentfm`
-- `POST /api/v1/webhooks/paypal`
-- `POST /api/v1/webhooks/paddle`
-- `POST /api/v1/webhooks/stripe`
-
-管理员接口：
-
-- `GET /api/v1/admin/withdrawals`
-- `PUT /api/v1/admin/withdrawals/{id}`
-- `GET /api/v1/admin/licenses`
-- `PUT /api/v1/admin/users/{id}/region`
-
-所有授权操作必须携带 `license_id`。订单预览只返回服务器计算结果，创建订单时必须重新计算，不能信任客户端金额。所有响应采用版本化 JSON、稳定错误码、请求 ID 和审计 ID，客户端不得通过自然语言判断状态。
-
-## 5. 支付、邀请与余额系统
-
-### 5.1 支付渠道与区域锁定
-
-- 首次成功外部支付按实际渠道原子写入 `users.region` 和 `region_locked_at`。
-- 支付 FM 的支付宝、微信支付订单使用 CN/CNY；Creem、PayPal、Stripe、Paddle 使用 INTL/USD。
-- 账号锁区后，订单服务端拒绝错误区域、币种或渠道，不依赖前端隐藏实现安全限制。
-- 当前国内渠道使用支付 FM；未来迁移支付宝和微信官方商户号时保持订单和授权 API 不变。
-
-### 5.2 邀请奖励
-
-- 只有邮箱已验证、区域已锁定且至少拥有一份有效付费授权的用户可以成为邀请人。
-- 每个邀请人获得稳定邀请链接和邀请码；每个受邀账号只能归属一个邀请人。
-- 禁止自邀、循环邀请、同支付账户或明显相同设备批量邀请。
-- 奖励只在受邀账号首次购买正式授权成功时发放一次；额外授权、撤销和延长包不重复奖励。
-- 支付渠道确认成功后立即到账：
-  - CN：每人 `¥10`，可抵扣，并可在余额达到 `¥50` 后申请支付宝提现。
-  - INTL：每人 `$1.4`，可抵扣但不能提现。
-- 项目不提供用户主动退款。发生拒付、支付撤销或欺诈回退时，暂停对应授权并写入反向奖励流水。
-- 冲正后余额不足允许形成负余额；负余额账号禁止提现和余额抵扣，直至补足或管理员处理。
-
-### 5.3 余额抵扣与提现
-
-- 余额可用于购买新授权、离线延长包和付费设备撤销。
-- CN 余额只使用 CNY，INTL 余额只使用 USD，不兑换、不跨区域合并。
-- 用户可以选择全额、部分或不使用余额。
-- 创建外部支付订单时原子预留余额；Webhook 成功后转为正式扣款，订单过期、失败或取消时释放预留。
-- 余额足以支付全部金额时创建内部零网关订单并原子完成授权或附加服务。
-- 外部剩余金额必须达到对应渠道最低支付金额，否则要求调整抵扣额。
-- `balance_transactions` 是账务事实来源，`orders` 只保存结算快照。
-- CN 提现保存支付宝账号、真实姓名、申请金额、管理员处理记录和支付时间；管理员手工转账后确认完成。
-- INTL 页面明确显示余额不可提现。
-
-### 5.4 Webhook 要求
-
-- 验证提供商签名。
-- 校验真实支付金额和币种。
-- 以提供商事件 ID 幂等处理。
-- 保存事件摘要和处理结果。
-- 支持成功、拒付、支付撤销、取消和争议状态。
-- 客户端不直接判定支付成功。
-
-## 6. 签名凭证与本地安全
-
-### 6.1 离线凭证
-
-服务器使用 ES256 私钥签发 JWS，字段固定为：
-
-`version`、`key_id`、`entitlement_id`、`license_id`、`product`、`device_hash`、`mode`、`features`、`issued_at`、`not_before`、`expires_at`、`trial`、`offline_period_days`。
-
-- 私钥只存在于 Cloudflare Secret。
-- 客户端内置当前和上一版本公钥。
-- 使用 `key_id` 支持密钥轮换。
-- 签名凭证不能通过修改本地 JSON 延长有效期。
-- 原生启动器发布 CI 从仓库变量 `D2S_LICENSE_PUBLIC_KEY_JSON` 注入服务器公钥清单；变量缺失或包含私钥时发布直接失败，不生成无法离线验签的发布包。
-
-### 6.2 刷新令牌
-
-- 使用至少 256 位随机值。
-- 服务端只保存令牌哈希。
-- 每次刷新立即轮换。
-- 旧令牌重复使用视为重放攻击，撤销整个令牌族并要求重新登录。
-- 刷新令牌只进入操作系统安全存储。
-
-### 6.3 设备指纹
-
-- Windows：MachineGuid + SMBIOS UUID。
-- Linux：machine-id + DMI product UUID。
-- macOS：IOPlatformUUID。
-- 标准化后加入产品盐计算 SHA-256，只上传摘要。
-- 指纹结构带版本号。
-- 字段缺失时使用安全存储中的安装 UUID。
-- 普通驱动更新、显卡更换或显示器变化不应改变设备绑定。
-
-### 6.4 平台安全存储
-
-- Windows：Credential Manager / DPAPI。
+- API 客户端与稳定错误码映射。
+- 设备指纹标准化与摘要。
+- Device Authorization Grant 轮询状态机。
+- Access Token 内存管理、Refresh Token 安全存储和刷新。
+- 公钥清单、ES256 JWS 验证、授权选择与本地可信时间。
+- 在线租约申请、续期、退出和到期通知。
+- Runtime 门禁结果与诊断事件。
+
+共享核心不能直接依赖 Flet 页面，也不能在日志中输出访问令牌、刷新令牌、完整凭证、设备
+原始标识或个人支付资料。
+
+### 3.2 启动器
+
+启动器负责登录 UI、授权列表、设备/模式操作、购买入口、安全存储、单实例锁、Runtime
+子进程启动和退出清理。启动器只管理自己创建的进程，不搜索或结束系统中的其它 Python
+进程。
+
+### 3.3 Runtime 二次门禁
+
+`app_runtime.bootstrap` 和实际受保护运行入口必须重新读取授权上下文并验证：产品、授权 ID、
+设备摘要、模式、签名、有效期和在线租约。只设置环境变量、命令行参数、标志文件或篡改
+`settings.yaml` 不能绕过门禁。
+
+## 4. 服务器 API 对接
+
+权威契约为 `desktop2stereo-site/docs/desktop2stereo-api.md`，基础地址生产使用
+`https://d2s.site/api/v1`。客户端至少对接：
+
+- `POST /device/authorize`、`/device/token`、`/device/cancel`。
+- `GET /license/list`、`/license/status`、`/license/keys`。
+- `POST /license/activate`、`/switch`、`/change-mode`、`/renew`。
+- `POST /license/offline/issue`、`/offline/extend`。
+- `POST /license/revoke/free`、`/revoke/paid`。
+- `POST /license/online/heartbeat`、`/online/logout`。
+- `POST /license/permanent/confirm`、`/license/manual-unbind`。
+- 需要打开网页时使用 d2s.site 的订单、邀请、余额和提现页面，不在客户端复制收银台。
+
+所有响应按 `version`、`success`、`request_id` 和稳定 `error.code` 解析。未知版本或未知关键
+字段必须安全失败，并显示 `request_id` 供客服排查。网络超时、401、403、409、429 和 5xx
+必须分别处理，不能都显示“网络错误”。
+
+## 5. 设备身份
+
+各平台只采集稳定、非用户可编辑的系统标识，标准化后加入固定产品域分隔符并使用 SHA-256：
+
+- Windows：优先系统 MachineGuid，使用受限 API 读取。
+- Linux：优先 `/etc/machine-id` 或 `/var/lib/dbus/machine-id`。
+- macOS：优先 IOPlatformUUID。
+
+上传内容仅为 64 字符小写十六进制摘要和 `fingerprint_version`。原始标识不得上传、写日志或
+写入普通配置。读取失败时显示诊断并阻止永久绑定；不得随机生成一个会在重启后变化的设备
+身份冒充稳定指纹。
+
+指纹算法升级必须支持版本并存和受控迁移，不能让旧版本客户端静默占用新设备授权。
+
+## 6. 登录与令牌存储
+
+设备码流程：
+
+1. 启动器请求设备码，显示 `user_code`、验证网址和二维码。
+2. 打开系统浏览器，用户在网页完成登录、邮箱验证和批准。
+3. 启动器按服务端 `interval` 轮询；处理 pending、slow_down、expired、denied 和成功。
+4. 成功后 Access Token 仅留内存，Refresh Token 写入平台安全存储。
+5. 退出时调用授权在线退出和账号退出，清除安全存储、内存令牌与本地会话缓存。
+
+平台安全存储：
+
+- Windows：Credential Manager 或 DPAPI。
 - macOS：Keychain。
-- Linux：Secret Service。
-- 离线 JWS 可存于应用数据目录，因为签名可防篡改。
-- Linux 无 Secret Service 时不持久化刷新令牌，到期后重新登录。
+- Linux：Secret Service/libsecret；服务不可用时只提供本次会话登录，不将 Refresh Token
+  降级保存到明文文件。
 
-### 6.5 时钟回拨
+日志、崩溃转储和遥测必须对 Authorization、Cookie、JWS 和设备摘要做脱敏。
 
-- 保存服务器签名时间和本地最高可信时间。
-- 当前时间明显早于最高可信时间时进入 `clock_suspect`。
-- 允许小范围 NTP 调整。
-- 可疑时钟必须联网重新校时。
+## 7. 离线凭证验证
 
-## 7. 三平台登录启动器
+发布包内置“当前键 + 上一键”公钥清单，按 `key_id` 选择 P-256 公钥验证 ES256 紧凑 JWS。
+必须验证：
 
-### 7.1 共享实现
+- 算法固定为 ES256，拒绝 `none`、算法替换和未知键。
+- `version`、`product=desktop2stereo`、`license_id`、`device_hash` 和模式匹配。
+- `not_before <= trusted_now < expires_at`，并对边界条件做自动化测试。
+- 试用、离线天数和 features 只能来自已验证 claims。
 
-- 新建独立 Flet 登录启动器。
-- 使用 Nuitka 在目标平台原生构建。
-- 启动器只加载登录、授权、安全存储和进程控制，不加载 Torch、CUDA、Vulkan 或模型。
-- 使用浏览器设备码登录：启动器申请设备码，打开官网登录确认页，轮询授权结果。
-- 登录成功后获取账号授权列表，显示未绑定、当前设备、其它设备、模式和离线到期时间。
-- 只有一份可用授权时自动选择；多份授权时由用户选择当前设备使用的 `license_id`。
-- 登录页面显示授权状态、设备码、验证地址、模式、到期时间和错误信息。
-- 支持现有中英文 i18n 资源。
+客户端记录最近服务端签名时间和最高可信本地时间。时钟明显回拨时进入 `clock_suspect`，只允许
+联网校时和重新授权；不能通过删除普通缓存恢复离线运行。凭证缓存应使用平台安全存储或受
+完整性保护的本地数据，删除缓存只会要求重新联网，不会产生新权限。
 
-### 7.2 平台产物
+## 8. 在线租约与运行期行为
 
-Windows x86_64：
+- Runtime 启动前申请租约；租约有效期 15 分钟，正常每 5 分钟续期。
+- 同一授权被占用时显示占用状态和处理建议，不自动踢掉另一运行实例。
+- 临时断网可运行到已签发租约截止；截止前持续重试并采用有上限的退避。
+- 到期后停止新帧提交、保存可安全保存的本地设置并退出受保护 Runtime。
+- 正常退出调用 `/license/online/logout`；异常退出依靠短租约自然回收。
+- 系统睡眠/唤醒、网络切换和本地时钟变化后立即重新确认租约。
 
-- 正式入口为 `Desktop2Stereo.exe`。
-- 提供签名安装程序。
-- 不出现 CMD 或 PowerShell 窗口。
-- 启动现有 `src/python3` Runtime。
-- 使用 Authenticode 签名。
+在线租约令牌只驻留当前运行会话，不写入 `settings.yaml` 或长期安全存储。
 
-Linux x86_64：
+## 9. 三平台启动器与打包
 
-- 正式入口为 `Desktop2Stereo-x86_64.AppImage`。
-- 支持桌面菜单、图标和 Secret Service。
-- 启动发布包内 Python 环境。
+### Windows x86_64
 
-macOS arm64：
+- 正式入口：`Desktop2Stereo.exe`，无控制台窗口。
+- 使用 Authenticode 签名；安装包、卸载、升级和 SmartScreen 行为需要实机测试。
+- 准备完成后写 `auth_ready.flag`，Runtime GUI 完成后写 `gui_ready.flag`。
 
-- 正式入口为 `Desktop2Stereo.app`。
-- 通过 DMG 发布。
-- 使用 Developer ID 签名并完成 notarization。
-- 使用 Keychain 和 `.app/Contents/Resources` 内 Runtime。
+### Linux x86_64
 
-### 7.3 启动和进程管理
+- 正式入口：`Desktop2Stereo-x86_64.AppImage`。
+- 对 Ubuntu LTS 和至少一个常用发行版验证 Secret Service、Wayland/X11、Vulkan 和桌面入口。
+- 无 Secret Service 时不持久化登录，不要求用户关闭系统密钥服务安全策略。
 
-- 创建单实例锁。
-- 读取并验证本地授权。
-- 有效授权直接启动现有 Flet GUI。
-- 无授权、过期或设备变化时显示设备码登录。
-- 只管理自己创建的 GUI 和 Runtime 子进程。
-- 不再结束系统中所有 Python 进程。
-- 保留日志目录、GUI 就绪标志、启动超时和错误报告能力。
-- BAT、Bash 和 `run_mac` 仅放入开发和诊断目录，不进入正式发布包。
+### macOS arm64
 
-## 8. 客户端双重验证
+- 当前目录契约中的正式入口为 `src/Desktop2Stereo-macos`；未来 DMG 只包装独立启动器。
+- 使用 Developer ID 签名并公证，验证 Gatekeeper、Keychain、Apple Silicon 和 Vulkan/MoltenVK
+  相关依赖。
+- 不依赖用户手动执行 `xattr` 绕过正式发布安全检查。
 
-- 启动器首先验证本地凭证。
-- `app_runtime.bootstrap` 在加载 GUI 前再次验证。
-- 用户点击“运行”时，Runtime 再验证能力票据。
-- 直接执行 `main.py`、`python -m gui` 或旧脚本不能绕过授权。
-- 使用 Cython 编译平台授权核心：
-  - Windows `.pyd`
-  - Linux `.so`
-  - macOS `.so`
-- 验签使用 `cryptography` 原生实现。
-- Python 层只接收允许启动、模式、到期时间、功能位和错误码。
-- 验证失败时明确阻止受保护 Runtime 初始化，不生成错误画面或错误模型结果。
+BAT、Bash、`run_mac` 和 Python 入口只用于开发/诊断，不进入正式用户发布包。
 
-## 9. 用户中心和管理员后台
+## 10. 错误码与用户体验
 
-### 用户中心
+至少提供下列可操作状态：未登录、邮箱未验证、设备码待批准/过期、无授权、授权到期、设备
+不匹配、授权被占用、撤销冷却、永久绑定锁定、时钟异常、签名/公钥异常、服务器限流、服务
+暂不可用和安全存储不可用。
 
-- “我的授权”按授权展示购买状态、设备摘要、模式、期限和订单。
-- 购买新授权并查看待绑定授权。
-- 为指定 `license_id` 选择 7、14、30 天离线档位、切换在线模式或发起永久绑定。
-- 为指定授权使用免费撤销、购买付费撤销或购买离线延长包。
-- 查看每份授权剩余免费撤销冷却期和当月付费撤销次数。
-- 查看邀请链接、邀请记录、奖励余额和余额流水。
-- CN 用户申请支付宝提现并查看处理记录；INTL 用户显示余额不可提现。
-- 提交人工解绑申请。
-- 注销所有网页登录会话。
+错误页保留“重试”“重新登录”“打开 d2s.site”“复制 request_id”“退出”中的适用操作；
+不得无限轮询、自动重复下单或隐藏永久绑定不可逆提示。
 
-### 管理员后台
+## 11. 实施阶段与验收门
 
-- 查询用户、授权、设备和订单。
-- 暂停、恢复或撤销授权。
-- 审核人工解绑。
-- 处理补单、拒付、支付撤销和奖励冲正。
-- 查看邀请关系、奖励流水、负余额和异常邀请。
-- 审核并确认 CN 支付宝提现。
-- 查看异常登录、设备切换和时钟回拨。
-- 配置区域价格、渠道最低支付金额和商品状态。
-- 在余额为零且无待处理订单或提现时人工调整账号区域。
-- 管理签名公钥版本和轮换。
-- 所有管理员操作必须二次认证并写入不可覆盖审计日志。
+### C1：API 契约迁移
 
-## 10. 分阶段实现
+状态：`in_progress`。
 
-### 阶段一：服务端基础
+- 将旧 `desktop2stereo-server` 地址和响应解析迁到 `desktop2stereo-site /api/v1`。
+- 对齐设备码、授权列表、稳定错误码、公钥、离线 claims 和租约。
+- 使用模拟服务器覆盖正常、超时、限流、401、409、5xx 和未知版本。
 
-- D1、KV、Secrets、迁移和 Wrangler 本地环境。
-- 注册、邮箱验证、登录、退出、密码重置。
-- 官网用户中心基础页面。
-- Turnstile、限流和审计。
-- ES256 密钥生成、签发和轮换框架。
+### C2：共享授权核心与 Runtime 门禁
 
-### 阶段二：授权核心和设备码
+状态：已有基础实现，需按新契约重验。
 
-- 设备码浏览器登录。
-- Cython 授权核心。
-- 设备指纹和平台安全存储。
-- 30 天试用。
-- 离线凭证签发和验证。
-- Runtime 双重授权门禁。
+- 完成设备指纹、安全存储、JWS、可信时间、租约和退出清理。
+- `bootstrap` 与运行入口二次检查，不接受单纯环境变量或标志文件授权。
+- 覆盖凭证篡改、错误设备、过期、回拨、未知键和直接入口绕过测试。
 
-### 阶段三：三平台启动器
+### C3：Linux 与 macOS 启动器
 
-- Windows EXE。
-- Linux AppImage。
-- macOS 独立可执行文件 `Desktop2Stereo-macos`，直接位于发布包 `src/`，不保留 `.app` 文件夹；如未来需要 DMG，只能将该独立启动器作为发布文件纳入，不改变启动器目录契约。
-- 单实例、子进程、日志和 GUI 就绪处理。
-- 三平台 CI 构建、安装和启动冒烟测试。
-- 从正式发布包移除 BAT/Bash 用户入口。
+状态：`planned`。
 
-### 阶段四：完整授权模式与多授权
+- 抽离共享核心，完成 Linux x86_64 和 macOS arm64 原生外壳与安全存储适配。
+- 三平台保持相同业务状态机，平台差异只位于设备、安全存储和进程管理适配层。
 
-- 7、14、30 天离线档位。
-- 对应免费撤销冷却期。
-- 每月最多 3 次阶梯付费撤销。
-- 在线模式和活动会话租约。
-- 永久绑定和人工解绑。
-- `+30 天` 离线延长包。
-- 账号多授权、启动器授权选择和每份授权独立状态。
+### C4：发布流水线
 
-### 阶段五：区域支付、邀请和余额
+状态：`planned`。
 
-- Creem。
-- 支付 FM。
-- PayPal。
-- Paddle。
-- Stripe。
-- 首次支付锁区、渠道币种校验和订单金额重算。
-- 邀请归属、即时奖励、不可变余额流水和拒付冲正。
-- 余额原子预留、部分/全额抵扣和零网关订单。
-- CN 提现和 INTL 不可提现规则。
+- 锁定依赖、生成 SBOM、构建可追溯产物并执行恶意软件/Secret 扫描。
+- Windows 签名、macOS 签名公证、Linux AppImage 构建均在隔离发布环境完成。
+- CI 缺少公钥、包含私钥、键版本不匹配或测试失败时必须阻止发布。
 
-### 阶段六：用户中心和管理后台
+### C5：端到端与实机验收
 
-- 用户授权列表、购买、邀请、余额、提现和设备管理页面。
-- 管理员授权、订单、风控、负余额、提现和人工解绑后台。
-- 三平台启动器接入授权列表和 `license_id` 选择。
+状态：`planned`。
 
-### 阶段七：安全和正式发布
+- 在三种真实系统对接生产等价服务器，覆盖注册批准、试用、购买、绑定、模式、撤销、租约、
+  离线、退出、升级和卸载。
+- 覆盖断网、睡眠唤醒、代理、服务端故障、并发运行、时钟回拨和安全存储不可用。
+- 启动器显示版本、Git SHA、服务器环境和可脱敏导出的诊断信息。
 
-- 密钥轮换演练。
-- 重放、篡改、暴力登录和并发激活测试。
-- Windows 签名。
-- macOS 签名和公证。
-- Linux AppImage 签名清单。
-- 灰度发布、监控、告警、备份和灾难恢复。
+只有 C1-C5 全部达到 `verified` 且服务器端上线门禁同时通过，才允许正式发布。
 
-## 11. 测试与验收
+## 12. 自动化与实机测试清单
 
-### 服务端测试
+- 单元：设备摘要、错误映射、JWS、时间边界、租约退避、授权选择和状态转换。
+- 集成：设备码单次消费、令牌刷新/重放、离线签发、在线冲突、撤销和退出清理。
+- 安全：篡改 JWS、替换公钥、未知算法、明文 Secret 扫描、直接 Runtime 入口和参数注入。
+- 打包：正式产物不包含开发入口、私钥、测试令牌、`.env` 或用户本地设置。
+- 实机：Windows 11 x86_64、Linux x86_64、macOS arm64 的安装、首次运行、升级和卸载。
 
-- 注册、邮箱验证、登录、退出和密码重置。
-- 密码暴力破解限流。
-- 设备码过期、重复兑换和并发批准。
-- 一个账号多份授权并发激活，每份授权状态互不影响。
-- 同一设备不能同时占用两份活动授权，授权所有权不能转移。
-- 三种授权模式切换。
-- 按 `license_id` 独立计算 7/14/30 天免费撤销冷却期。
-- 每份授权第 1、2、3 次付费撤销价格和第 4 次拒绝。
-- 刷新令牌轮换和重放检测。
-- 首次支付宝/微信支付锁定 CN，其它渠道锁定 INTL，锁定后错误渠道被拒绝。
-- 邀请奖励每个受邀付费账号只发一次，自邀、循环邀请和重复 Webhook 不产生奖励。
-- CN 奖励可抵扣和满 `¥50` 提现，INTL 奖励只能抵扣。
-- 并发订单不能重复使用余额，失败订单释放预留，全余额订单不调用支付网关。
-- 支付 Webhook 伪造、重复、乱序和拒付；拒付暂停授权、冲正奖励并正确形成负余额。
-- ES256 密钥轮换。
-- 管理员权限和审计日志。
+测试证据、当前实现路径和状态同步维护在 `docs/requirements-matrix.md`。
 
-### 客户端测试
+## 13. 当前待决策
 
-- 在线登录和浏览器设备码批准。
-- 单授权自动选择、多授权列表选择和待绑定授权激活。
-- 断网使用 7、14、30 天授权。
-- 授权过期、设备不匹配和永久绑定。
-- 时钟回拨。
-- 本地凭证篡改。
-- 安全存储不可用。
-- 服务端宕机和在线租约到期。
-- 直接运行 Python 入口和旧脚本的绕过测试。
-- 单实例、子进程和退出清理。
-- 中文、英文和 Unicode 安装路径。
+- 确定 Linux 首发支持的发行版与 Secret Service 不可用时的产品提示。
+- 确定 macOS 首发包装形式和 Developer ID 公证账号。
+- 确定生产 P-256 公钥、轮换窗口和客户端旧键保留周期。
+- 确定租约到期时 Runtime 的安全退出体验及可保存数据范围。
 
-### 发布验收
+## 14. 文档同步规则
 
-- Windows x86_64、Linux x86_64、macOS arm64 真实系统安装。
-- 启动时不出现终端窗口。
-- 浏览器设备码登录成功后自动启动 GUI。
-- 有效离线授权断网启动成功。
-- 到期授权不能启动 Runtime。
-- 启动器不会结束用户其他 Python 进程。
-- 三平台授权状态与服务端记录一致。
-- Windows EXE、Linux AppImage、macOS `Desktop2Stereo-macos` 都能完成登录、授权选择和 Runtime 启动；发布包不包含 `.app` 文件夹。
-- 安装包、二进制和签名清单可追溯到同一 Git 提交。
-
-## 12. 工程同步规则
-
-- 本文件作为完整授权系统的主计划书。
-- 实现授权、启动器或服务端功能时，必须同步更新 `requirements-matrix.md`。
-- 每个阶段完成后更新 `changelog.md`，记录用户可见结果和发布影响。
-- 服务端和客户端分别维护 API、数据库迁移、密钥和发布版本。
-- `src/desktop2stereo/settings.yaml` 不保存密码、刷新令牌、原始设备指纹或私钥。
-- `src/desktop2stereo/settings.yaml` 不保存区域、余额、邀请关系、授权编号、支付或提现资料。
-- 正式发布入口允许 Windows EXE、Linux AppImage 和直接位于 macOS `src/` 的 `Desktop2Stereo-macos`；脚本仅用于开发和诊断，发布包不得包含 `.app` 文件夹。
+- 客户端行为或契约变化时同步本文、`docs/requirements-matrix.md` 和 `changelog.md`。
+- 服务端 API 变化先更新 `desktop2stereo-site/docs/desktop2stereo-api.md`，再更新客户端适配。
+- 部署变化只更新 `desktop2stereo-site/docs/d2s.site.md`，不复制到本文。
+- `src/desktop2stereo/settings.yaml` 不保存密码、令牌、设备原始标识、区域、余额、支付资料或私钥。
